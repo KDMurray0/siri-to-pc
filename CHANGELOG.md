@@ -1,5 +1,17 @@
 # CHANGELOG -
 
+## 2026-08-16 (pt 5) — Groq parsing, smarter resolution, better voice, standalone .exe
+
+- **Groq LLM parsing (optional):** with a free Groq key (`use_groq` + `groq_api_key`), requests are parsed by an LLM into structured intent (`interpret.py`) — much better at casual phrasing. Any failure falls back to the local grammar parser, so it always works.
+- **Search songs first:** an exact song title now beats a loose genre-word overlap, so "sultans of swing" plays the Dire Straits song instead of a "swing" mix. Fixed an album-resolution crash on `m:ss` durations.
+- **Album/artist stay pure:** requesting an album or artist fills the queue with only that until it runs out, then the endless radio resumes. The queue also biases toward the **same band** more than the same genre (`queue_same_artist_boost`).
+- **Requesting a song un-pauses** the player.
+- **Better announce voice:** edge-tts neural voices (`tts_voice`, default `en-US-AriaNeural`), falling back to the offline Windows voice.
+- **Auto-generated key + IP toggle:** `api_key` is created on first run if blank; the IP allow-list is now an opt-in **Lock to my devices** toggle (off by default) rather than always-on.
+- **mpv hygiene:** orphaned mpv from a crash/force-close is killed on startup, and a single-instance mutex stops a second launch spawning a rival server/mpv.
+- **UI:** the setup-page **Copy** button works over plain http; Settings is a full-height slide-up sheet (no more cramped panel); the now-playing bars **freeze when paused**; the **volume slider goes to 150 and updates live while dragging**; the Save button confirms success.
+- **Standalone .exe:** `MusicRequestServer.spec` builds a one-folder `MusicRequestServer.exe` that runs the whole thing in one process (mpv/yt-dlp/node stay external). `src/paths.py` makes config/data live next to the .exe.
+
 ## 2026-08-16 (pt 4) — Siri endpoint, boot/announce, genre-aware picking, refactor
 
 - **iOS-Shortcut endpoint:** `/` now accepts the shortcut's `POST {"input": "…"}` and runs it; a browser visit shows step-by-step Shortcut setup (`setup.html`). The old form-based web interface (`index.html`, `static/`) is gone.
