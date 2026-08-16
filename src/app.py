@@ -160,16 +160,17 @@ def startup():
         print("=" * 60)
         sys.exit(1)
 
-    # Groq LLM parsing (optional)
+    # Groq LLM parsing — on whenever a key is present.
+    _groq_key = (_config.get("groq_api_key") or "").strip()
     interpret.configure(
-        api_key=_config.get("groq_api_key", ""),
+        api_key=_groq_key,
         model=_config.get("groq_model") or None,
-        enabled=_config.get("use_groq"),
+        enabled=bool(_groq_key),
     )
     if interpret.available():
         print(f"Groq interpretation enabled ({interpret._cfg['model']}).")
     else:
-        print("Groq interpretation off (no key) — using local parser.")
+        print("Groq interpretation off — using local parser.")
 
     # Initialise search cache from config
     search_module.init_cache(

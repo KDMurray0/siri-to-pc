@@ -1,6 +1,8 @@
 {
   "api_key": "CHANGE-THIS-TO-A-LONG-RANDOM-SECRET",
-  "allowed_ips": ["127.0.0.1"],
+  "allowed_ips": [
+    "127.0.0.1"
+  ],
   "lock_ips": false,
   "host": "0.0.0.0",
   "port": 5000,
@@ -12,9 +14,9 @@
   "ytdl_raw_options": [],
   "announce": true,
   "tts_voice": "en-US-AriaNeural",
-  "use_groq": false,
+  "use_groq": true,
   "groq_api_key": "",
-  "groq_model": "llama-3.3-70b-versatile",
+  "groq_model": "llama-3.1-8b-instant",
   "auto_queue": true,
   "auto_queue_batch": 4,
   "auto_queue_threshold": 2,

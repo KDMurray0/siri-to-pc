@@ -13,7 +13,7 @@ _API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 _cfg = {
     "key": "",
-    "model": "llama-3.3-70b-versatile",
+    "model": "llama-3.1-8b-instant",
     "enabled": False,
     "timeout": 6,
 }
@@ -87,7 +87,9 @@ def _call_groq(text):
     req = urllib.request.Request(
         _API_URL, data=body, method="POST",
         headers={"Authorization": f"Bearer {_cfg['key']}",
-                 "Content-Type": "application/json"},
+                 "Content-Type": "application/json",
+                 # Cloudflare fronts the API and 403s the default urllib UA.
+                 "User-Agent": "MusicRequestServer/1.0"},
     )
     with urllib.request.urlopen(req, timeout=_cfg["timeout"]) as r:
         payload = json.loads(r.read().decode())
