@@ -74,8 +74,29 @@ _config_path = os.path.join(_here, "config.json") if FROZEN \
 
 
 def _load_config():
+    if not os.path.exists(_config_path) and FROZEN:
+        # First run of the .exe with no config yet: generate one (fresh key).
+        try:
+            import auth
+            auth.ensure_config()
+        except Exception:
+            pass
     with open(_config_path) as f:
         return json.load(f)
+
+
+def _kill_mpv():
+    # Kill our mpv (matches the pipe name). subprocess.terminate() on the server
+    # skips its atexit cleanup, so mpv would otherwise be orphaned on quit.
+    try:
+        ps = ("Get-CimInstance Win32_Process -Filter \"Name='mpv.exe'\" | "
+              "Where-Object { $_.CommandLine -match 'mpvsocket' } | ForEach-Object "
+              "{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }")
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps], timeout=10,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       creationflags=0x08000000)
+    except Exception:
+        pass
 
 
 # ── server: in-process thread when frozen, subprocess from source ────
@@ -126,19 +147,17 @@ def _start_server():
 def _stop_server():
     global _server_process, _running
     if FROZEN:
-        # mpv is our own child here; kill it explicitly (os._exit skips atexit).
         try:
             if _server_app is not None:
                 _server_app.player_manager.stop()
         except Exception:
             pass
-        _running = False
-        return
-    if _server_process is not None:
+    elif _server_process is not None:
         try:
             _server_process.terminate(); _server_process.wait(timeout=10)
         except Exception:
             pass
+    _kill_mpv()          # ensure no mpv is left running after we quit
     _running = False
 
 
@@ -192,6 +211,28 @@ class Flyout:
             if hwnd:
                 val = ctypes.c_int(2)  # DWMWCP_ROUND
                 ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(val), ctypes.sizeof(val))
+        except Exception:
+            pass
+
+    def hide_from_taskbar(self):
+        # Make it a tool window: no taskbar button, no alt-tab entry — a flyout.
+        try:
+            hwnd = self._find_hwnd()
+            if not hwnd:
+                return
+            GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW = -20, 0x80, 0x40000
+            u = ctypes.windll.user32
+            u.GetWindowLongW.restype = ctypes.c_long
+            u.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            u.SetWindowLongW.restype = ctypes.c_long
+            u.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
+            style = u.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            u.SetWindowLongW(hwnd, GWL_EXSTYLE,
+                             (style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW)
+            if self._visible:            # hide/show so the taskbar drops the button
+                u.ShowWindow(hwnd, 0)
+                u.ShowWindow(hwnd, 5)
+                u.SetForegroundWindow(hwnd)
         except Exception:
             pass
 
@@ -280,6 +321,7 @@ def _acquire_singleton():
 def _after_start():
     time.sleep(0.4)
     _flyout.round_corners()
+    _flyout.hide_from_taskbar()
     threading.Thread(target=_flyout.focus_watch, daemon=True).start()
     threading.Thread(target=_tray, daemon=True).start()
 
