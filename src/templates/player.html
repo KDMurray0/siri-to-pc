@@ -365,8 +365,13 @@ $("addqueue").onclick=()=>doSearch("queue");
 const VOL_MAX=150;                                   // mpv boosts above 100
 function volFromEvent(e){const r=$("volslider").getBoundingClientRect();
   return Math.max(0,Math.min(VOL_MAX,Math.round((e.clientX-r.left)/r.width*VOL_MAX)));}
-$("volslider").addEventListener("mousedown",e=>{volDrag=true;setVol(volFromEvent(e));});
-window.addEventListener("mousemove",e=>{if(volDrag)setVol(volFromEvent(e));});
+let volSendT=0;
+function sendVolLive(){                               // throttle live drags
+  const now=Date.now();
+  if(now-volSendT>=110){volSendT=now;api("/api/control/volume?value="+curVol);}
+}
+$("volslider").addEventListener("mousedown",e=>{volDrag=true;setVol(volFromEvent(e));sendVolLive();});
+window.addEventListener("mousemove",e=>{if(volDrag){setVol(volFromEvent(e));sendVolLive();}});
 window.addEventListener("mouseup",()=>{if(volDrag){volDrag=false;api("/api/control/volume?value="+curVol);}});
 function volIcon(v){
   const body='<path d="M3 9.2v5.6h3.8L11.5 19V5l-4.7 4.2z"/>';
