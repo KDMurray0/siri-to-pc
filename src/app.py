@@ -669,9 +669,9 @@ def api_control(action):
 
 
 @app.route("/api/ping", methods=["GET"])
-@require_auth
 def api_ping():
-    """Health check."""
+    # Unauthenticated health check (no sensitive data) so the launcher can
+    # detect the server is up without the key.
     return jsonify({"status": "ok", "uptime": time.monotonic()})
 
 
