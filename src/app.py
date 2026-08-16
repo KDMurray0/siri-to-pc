@@ -19,15 +19,17 @@ from flask import Flask, jsonify, request, render_template
 from auth import require_auth, get_config, check_ip, check_api_key
 from player import PlayerManager
 from matching import build_search_plan, match_transport, match_command
+from paths import data_dir, resource_dir
 import search as search_module
+import interpret
 
 
 # ── App globals ───────────────────────────────────────────────────
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder=os.path.join(resource_dir(), "templates"))
 _config = get_config()
 player_manager = PlayerManager()
-recent_requests_file = os.path.join(os.path.dirname(__file__), "recent_requests.json")
+recent_requests_file = os.path.join(data_dir(), "recent_requests.json")
 
 
 # ── Logging filter: redact API key from werkzeug request logs ─────
@@ -158,6 +160,17 @@ def startup():
         print("=" * 60)
         sys.exit(1)
 
+    # Groq LLM parsing (optional)
+    interpret.configure(
+        api_key=_config.get("groq_api_key", ""),
+        model=_config.get("groq_model") or None,
+        enabled=_config.get("use_groq"),
+    )
+    if interpret.available():
+        print(f"Groq interpretation enabled ({interpret._cfg['model']}).")
+    else:
+        print("Groq interpretation off (no key) — using local parser.")
+
     # Initialise search cache from config
     search_module.init_cache(
         max_size=_config.get("search_cache_max_size", 500),
@@ -192,6 +205,19 @@ def startup():
 
 
 # ── Routes ────────────────────────────────────────────────────────
+
+# Playback controls Groq may return as kind="command".
+_GROQ_CMD = {
+    "pause": "pause", "stop": "pause", "resume": "resume", "play": "resume",
+    "next": "next", "skip": "next", "previous": "previous", "back": "previous",
+}
+
+
+def _strip_play(text):
+    """Drop a leading play-verb so a variant search keeps its 'remix'/'live'."""
+    return re.sub(r'^\s*(?:play|put\s+on|throw\s+on|start(?:\s+playing)?)\s+',
+                  '', (text or "").strip(), flags=re.IGNORECASE)
+
 
 def _run_play(query, artist=None, type_hint="auto", shuffle_requested=None,
               mode="play", source=None):
@@ -272,14 +298,49 @@ def _run_play(query, artist=None, type_hint="auto", shuffle_requested=None,
             return {"status": "error",
                     "message": "Please provide a query using the q or song parameter"}
 
-        # Build search plan from the spoken phrase
-        plan = build_search_plan(
-            query,
-            artist=artist,
-            type_hint=type_hint,
-            shuffle=shuffle_requested,
-            mode=mode,
-        )
+        # Groq parse for ambiguous "auto" requests; any failure -> local parser.
+        gi = None
+        if query and type_hint == "auto" and not artist:
+            try:
+                gi = interpret.interpret(query)
+            except Exception:
+                gi = None
+
+        if gi and gi.get("kind") == "command":
+            act = _GROQ_CMD.get(gi.get("command"))
+            if act:
+                try:
+                    r = player_manager.control(act)
+                    msg = r.get("message", "OK")
+                    log_request(query, {"status": "ok", "message": msg})
+                    return {"status": "ok", "message": msg}
+                except Exception:
+                    gi = None
+            else:
+                gi = None
+
+        if gi and gi.get("kind") in ("song", "album", "artist", "genre"):
+            q = gi["query"]
+            if gi["kind"] == "song" and gi.get("variant"):
+                q = _strip_play(query)          # keep "remix"/"live"/"acoustic"
+            plan = {
+                "query": q,
+                "artist": (gi.get("artist") or None),
+                "kind": gi["kind"],
+                "shuffle": shuffle_requested if shuffle_requested is not None
+                           else gi.get("shuffle"),
+                "mode": mode,
+                "spoken": q,
+            }
+        else:
+            # Build search plan from the spoken phrase (local grammar fallback)
+            plan = build_search_plan(
+                query,
+                artist=artist,
+                type_hint=type_hint,
+                shuffle=shuffle_requested,
+                mode=mode,
+            )
 
         # Feed the resolver your taste so same-titled songs resolve toward
         # artists you actually listen to (liked + recently played through).
@@ -487,7 +548,24 @@ def api_settings():
     try:
         return jsonify({"status": "ok", "source": _runtime_source[0],
                         "start_on_boot": _get_boot(),
+                        "lock_ips": bool(_config.get("lock_ips", False)),
                         **player_manager.get_settings()})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+
+@app.route("/api/lockips", methods=["GET"])
+@require_auth
+def api_lockips():
+    """Toggle the IP allow-list. Off (default) lets any LAN device connect."""
+    try:
+        from auth import save_config_value
+        val = request.args.get("enabled")
+        enabled = (val in ("1", "true", "on")) if val is not None \
+            else not bool(_config.get("lock_ips", False))
+        save_config_value("lock_ips", bool(enabled))
+        _config["lock_ips"] = bool(enabled)
+        return jsonify({"status": "ok", "lock_ips": bool(enabled)})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
@@ -517,6 +595,9 @@ _BOOT_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
 def _boot_command():
+    # Frozen build: the .exe is itself the launcher.
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}" --hidden'
     py = _config.get("python_path") or sys.executable
     pyw = py.replace("python.exe", "pythonw.exe")
     if not os.path.exists(pyw):

@@ -9,11 +9,24 @@ pip install -r requirements.txt
 copy config.example.json src\config.json
 ```
 
-Edit `src\config.json` (set `api_key`, `python_path`, and `cookies_file`), then just **double-click `launcher.pyw`** — it starts the server and opens the player. Or run the server directly:
+Edit `src\config.json` (set `python_path` and `cookies_file`), then just **double-click `launcher.pyw`** — it starts the server and opens the player. Or run the server directly:
 
 ```bash
 python src/app.py
 ```
+
+If `api_key` is left blank (or missing), a random secret is generated on first run and saved back to `config.json`. Open `http://<pc-ip>:5000/` to see the endpoint URL (with the key) and the Siri Shortcut steps.
+
+### Or build a standalone .exe
+
+No Python needed on the target machine (mpv, yt-dlp and Node must still be on PATH):
+
+```bash
+pip install pyinstaller
+pyinstaller --noconfirm MusicRequestServer.spec
+```
+
+The build lands in `dist\MusicRequestServer\`. Put a `config.json` next to `MusicRequestServer.exe` (or let it generate one on first run) and run the exe — it starts the server in-process and shows the tray player.
 
 The player is a desktop flyout (from the tray). To control it from your phone, open `http://<pc-ip>:5000/` on the same network for step-by-step **Siri Shortcut** setup.
 
@@ -35,15 +48,22 @@ Edit `config.json` before first run:
 {
   "host": "0.0.0.0",
   "port": 5000,
-  "api_key": "CHANGE-THIS-TO-A-RANDOM-SECRET",
+  "api_key": "",
   "python_path": "",
+  "cookies_file": "C:\\path\\to\\youtube_cookies.txt",
+  "js_runtime": "node",
+  "player_client": "tv",
   "allowed_ips": [],
-  "artist_track_count": 20,
-  "album_track_count": 0,
-  "search_cache_ttl": 1800,
-  "search_cache_max_size": 500
+  "lock_ips": false,
+  "announce": true,
+  "tts_voice": "en-US-AriaNeural",
+  "use_groq": false,
+  "groq_api_key": "",
+  "auto_queue": true
 }
 ```
+
+See `config.example.json` for the full list. `api_key` blank ⇒ auto-generated on first run.
 
 | Field | Description |
 |-------|-------------|
@@ -54,13 +74,15 @@ Edit `config.json` before first run:
 | `cookies_file` | Path to a Netscape-format `youtube_cookies.txt` exported from a logged-in YouTube session. Required for playback. If the file is missing it is ignored (with a warning). |
 | `cookies_from_browser` | Alternative to `cookies_file`: a browser name yt-dlp reads live cookies from, e.g. `firefox`. **Chrome/Edge do not work on Windows** (App-Bound Encryption). Leave empty if using `cookies_file`. |
 | `js_runtime` | JavaScript runtime yt-dlp uses to solve the signature challenge. Set to `node` (yt-dlp only auto-enables Deno otherwise). Required for audio to resolve. |
-| `playback_mode` | `download` (default, recommended) downloads each track then plays the local file — robust against YouTube's stream 403s. `stream` hands URLs to mpv's ytdl hook (legacy; may 403). |
 | `player_client` | YouTube player client for yt-dlp. **Default `tv`** — it returns a progressive stream (itag 18) that downloads without a PO token. Leaving it empty lets yt-dlp pick `android_vr`, whose audio format currently 403s. |
+| `use_groq` / `groq_api_key` / `groq_model` | Optional. With a free [Groq](https://console.groq.com) key, requests are parsed by an LLM (far better at casual phrasing than the regex grammar). Empty key = local parser. Model defaults to `llama-3.3-70b-versatile`. |
+| `announce` / `tts_voice` | `announce` speaks the song when *you* request one (auto-queued ones stay silent). `tts_voice` is an [edge-tts](https://github.com/rany2/edge-tts) neural voice (default `en-US-AriaNeural`); falls back to the offline Windows voice if edge-tts/network is unavailable. |
+| `lock_ips` | `false` (default) lets any LAN device connect. `true` enforces the `allowed_ips` whitelist. Toggle live from the player's Settings. |
 | `auto_queue` | `true` (default) keeps playing forever, Spotify-style: when the queue is nearly empty it appends songs seeded from the recent listening *context* (several songs you didn't skip), ranked toward your taste. |
 | `auto_queue_batch` | How many related songs to append per refill (default 5). |
 | `auto_queue_threshold` | Refill when this many tracks remain (default 2 — two from the end). |
 | `history_size` | How many recent plays to remember and keep out of the queue, for smart-shuffle no-repeats (default 100). |
-| `queue_liked_boost` / `queue_playthrough` / `queue_skip_penalty` / `queue_song_play` / `queue_jitter` / `queue_liked_seed_prob` / `queue_context_songs` | Smart-shuffle weights — how hard the queue biases toward liked and played-through songs vs. discovery. |
+| `queue_liked_boost` / `queue_same_artist_boost` / `queue_playthrough` / `queue_skip_penalty` / `queue_song_play` / `queue_jitter` / `queue_liked_seed_prob` / `queue_context_songs` | Smart-shuffle weights. `queue_same_artist_boost` (default 3.0, higher than `liked_boost`) biases the endless queue toward the *same band* you're playing, more than just the same genre. |
 | `ytdl_raw_options` | Optional list of extra yt-dlp options as `"key=value"` strings (advanced). |
 | `allowed_ips` | List of allowed client IPs. Empty `[]` allows all (for testing) |
 | `artist_track_count` | Number of tracks to play when requesting an artist (default: 20) |
@@ -96,7 +118,7 @@ The server uses a two-stage architecture:
 
 2. **Playback stage (download-then-play):** For each resolved video ID, the server runs `yt-dlp` (with your cookies and Node) to download the audio to a local cache file, then hands that file to a persistent `mpv` process over a Windows named-pipe IPC connection. The first track downloads before playback starts (~1–2 s); the rest are prefetched in the background. Downloading avoids the HTTP 403 that `mpv`/`ffmpeg` hit when fetching YouTube stream URLs directly.
 
-This separation means search results have accurate metadata immediately, and playback is handled by a mature media player rather than COM automation. (A legacy direct-`stream` mode still exists via `playback_mode`, but YouTube may 403 it.)
+This separation means search results have accurate metadata immediately, and playback is handled by a mature media player rather than COM automation.
 
 **Note:** Streaming audio from YouTube Music is outside YouTube's terms of service for playback. This server is intended for personal use only. Also, `ytmusicapi` is an unofficial client against a reverse-engineered API and may need updating when YouTube changes its internals.
 
@@ -184,10 +206,10 @@ The server will start when you log in and run headless (no console window). mpv 
 Double-click `launcher.pyw` to launch everything. It:
 
 - **Auto-starts the server** as a subprocess using the interpreter in config `python_path`.
-- Opens a compact, **borderless, rounded, always-on-top "music bar"** (built with customtkinter) that behaves like a Windows flyout: current song and artist, a live progress bar, ⏮ / play-pause / ⏭, a volume slider, an **Auto-queue** switch, and an expandable **Queue** list. It polls `/api/status` and drives the `/api/control/*` endpoints. **Click anywhere outside it and it hides.**
-- Adds a **system-tray icon** — click it (or "Show Player" in the menu) to pop the bar back up near the tray. The menu also has Start / Stop / Quit and options to open the web page or copy the server URL / API key.
+- Opens a compact, **borderless, rounded, always-on-top player** (a `pywebview` flyout rendering `/player`) that behaves like a Windows flyout: album art, song and artist, a live progress bar, transport controls, a volume slider (0–150), like/save, search, the queue, and a full-height Settings sheet (themes, EQ, crossfade, normalize, announce, start-on-boot, IP lock, sleep timer). **Click anywhere outside it and it hides.**
+- Adds a **system-tray icon** — click it (or "Show Player") to pop the player back up near the tray. The menu also opens the phone/browser page and can Quit.
 
-> The launcher runs under whatever Python opens `.pyw` files (often a different install from `python_path`). That interpreter needs `customtkinter`, `pystray`, and `Pillow`: `pip install customtkinter pystray Pillow`.
+> The launcher runs under whatever Python opens `.pyw` files. If that isn't the one with the deps, it re-execs itself under config `python_path` (which needs `pywebview`, `pystray`, and `Pillow`).
 
 ## Auto-Queue (endless play)
 
@@ -207,7 +229,7 @@ mpv is launched with `--media-controls=yes`, so the player registers with the **
 
 ## A note on streaming vs. downloading
 
-YouTube's 2026 anti-bot stack (SABR, PO tokens, session-bound URLs) means a stream URL that `yt-dlp` resolves will typically return **HTTP 403 when `mpv`/`ffmpeg` tries to fetch it directly** — regardless of format or client. `yt-dlp` itself downloads reliably, so this server **downloads each track, then plays the local file** (`playback_mode: download`). It's the consistent path; the first track takes a few seconds, and everything after is prefetched. The legacy `stream` mode is kept for completeness but is expected to 403.
+YouTube's 2026 anti-bot stack (SABR, PO tokens, session-bound URLs) means a stream URL that `yt-dlp` resolves will typically return **HTTP 403 when `mpv`/`ffmpeg` tries to fetch it directly** — regardless of format or client. `yt-dlp` itself downloads reliably, so this server **downloads each track, then plays the local file**. It's the consistent path; the first track takes a few seconds, and everything after is prefetched.
 
 ## Important: Sleep and Lock
 
@@ -276,29 +298,23 @@ Say any of these to Siri (through a Shortcut):
 
 ```
 itunes_request_server/
-  launcher.pyw          Double-click entry: tray icon + webview player, starts the server
-  config.example.json   Copy to src/config.json and edit
-  requirements.txt      Python dependencies
+  launcher.pyw           Double-click entry: tray icon + webview player, starts the server
+  MusicRequestServer.spec  PyInstaller build spec (-> standalone .exe)
+  config.example.json    Copy to src/config.json and edit
+  requirements.txt       Python dependencies
   README.md / CHANGELOG.md
   src/
-    app.py              Flask routes + startup (run: python src/app.py)
-    auth.py             API key + IP allowlist checks
-    matching.py         Query parsing, grammar, natural-language commands
-    search.py           YouTube Music search + smart interpretation (ytmusicapi)
-    player.py           Dual-mpv playback: download-then-play, crossfade, smart-shuffle
-    config.json         Your settings (gitignored)
+    app.py               Flask routes + startup (run: python src/app.py)
+    auth.py              API key (auto-gen) + IP allowlist checks
+    paths.py             Source-vs-frozen file locations
+    matching.py          Query parsing, grammar, natural-language commands
+    interpret.py         Optional Groq LLM request parsing
+    search.py            YouTube Music search + smart interpretation (ytmusicapi)
+    player.py            Dual-mpv playback: download-then-play, crossfade, smart-shuffle
+    config.json          Your settings (gitignored)
     templates/
-      player.html       The desktop player UI
-      setup.html        Siri-Shortcut setup instructions (served at /)
-```
-
-## Testing
-
-Run the test suite (no mpv or YouTube connection required):
-
-```bash
-cd tests
-python test_matching.py
+      player.html        The desktop player UI
+      setup.html         Siri-Shortcut setup instructions (served at /)
 ```
 
 ## Troubleshooting
@@ -310,7 +326,6 @@ python test_matching.py
 | `ModuleNotFoundError: No module named 'flask'` at launch | Launcher ran `app.py` under a Python that lacks the deps | Set `config.json` → `python_path` to the interpreter where you `pip install`ed everything |
 | "Sign in to confirm you're not a bot" / nothing plays | No/expired cookies, or IP rate-limited | Export a fresh `youtube_cookies.txt` (see [YouTube Authentication](#youtube-authentication)); if it was working, wait for the rate limit to clear |
 | Track starts then instantly stops / "only images available" | Node not installed or `js_runtime` not set | Install Node.js and set `config.json` → `js_runtime: "node"` |
-| Plays via `yt-dlp` but mpv gives HTTP 403 | `playback_mode: stream` hitting YouTube's PO-token/SABR gate | Use `playback_mode: "download"` (default) |
 | "ytmusicapi validation failed" | YouTube changed its internal API; ytmusicapi is out of date | Run `pip install --upgrade ytmusicapi` and check the package's GitHub for notes |
 | No search results | Query too vague or artist name misspelled by dictation | Try a more specific phrase, e.g. "the song Yellow by Coldplay" |
 | Region-locked or premium-only track | The chosen video is unavailable in your region | Check the spoken error message; the server tries alternate results automatically for song requests |

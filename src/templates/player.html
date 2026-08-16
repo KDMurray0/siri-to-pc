@@ -145,6 +145,30 @@ select,.chip{background:var(--panel);border:1px solid var(--line);color:var(--fg
 .toggle .dot{position:absolute;top:2.5px;left:2.5px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .2s}
 .toggle.on .dot{left:19.5px}
 .muted{color:var(--sub);font-size:11px;text-align:center;padding:14px}
+/* freeze the now-playing bars while paused */
+body.paused .q .eq i{animation-play-state:paused}
+
+/* queue header + settings gear (replaces the cramped tab panel) */
+.qhead{display:flex;align-items:center;justify-content:space-between;margin-top:14px;
+  border-top:1px solid var(--line);padding-top:10px}
+.qhead-t{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--sub)}
+.gear{background:none;border:0;color:var(--sub);cursor:pointer;width:30px;height:30px;
+  display:grid;place-items:center;border-radius:8px;transition:.15s}
+.gear:hover{color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.gear svg{width:18px;height:18px;fill:currentColor}
+
+/* settings slide-up sheet — full height so everything is reachable */
+.sheet{position:absolute;inset:0;z-index:6;background:var(--bg);display:flex;flex-direction:column;
+  transform:translateY(100%);transition:transform .3s cubic-bezier(.2,.8,.2,1)}
+.sheet.open{transform:translateY(0)}
+.sheet-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px 12px;
+  font-weight:800;font-size:16px;border-bottom:1px solid var(--line)}
+.sheet-x{background:none;border:0;color:var(--sub);font-size:16px;cursor:pointer;width:30px;height:30px;
+  border-radius:8px;transition:.15s}
+.sheet-x:hover{color:var(--fg);background:var(--panel)}
+.sheet-body{flex:1;overflow-y:auto;padding:6px 18px 22px}
+.sheet-body::-webkit-scrollbar{width:6px}
+.sheet-body::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
 </style>
 </head>
 <body>
@@ -193,12 +217,20 @@ select,.chip{background:var(--panel);border:1px solid var(--line);color:var(--fg
       </div>
     </div>
 
-    <div class="tabs">
-      <button class="tab active" data-panel="queue">Queue</button>
-      <button class="tab" data-panel="settings">Settings</button>
+    <div class="qhead">
+      <span class="qhead-t">Queue</span>
+      <button class="gear" id="openSettings" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24"><path d="M19.14 12.94a7.5 7.5 0 000-1.88l2.03-1.58-2-3.46-2.39.96a7.4 7.4 0 00-1.62-.94L14.8 2.5h-4l-.39 2.54c-.58.23-1.13.55-1.62.94l-2.39-.96-2 3.46 2.03 1.58a7.5 7.5 0 000 1.88l-2.03 1.58 2 3.46 2.39-.96c.49.39 1.04.71 1.62.94l.39 2.54h4l.39-2.54c.58-.23 1.13-.55 1.62-.94l2.39.96 2-3.46-2.03-1.58zM12 15.5A3.5 3.5 0 1112 8.5a3.5 3.5 0 010 7z"/></svg>
+      </button>
     </div>
     <div class="panel open" id="panel-queue"></div>
-    <div class="panel" id="panel-settings">
+  </div>
+
+  <!-- settings slide-up sheet (full height, scrolls cleanly) -->
+  <div class="sheet" id="sheet">
+    <div class="sheet-head"><span>Settings</span>
+      <button class="sheet-x" id="closeSettings" aria-label="Close">✕</button></div>
+    <div class="sheet-body">
       <div class="set"><span class="lbl">Theme</span>
         <div class="swatches" id="swatches"></div></div>
       <div class="set"><span class="lbl">EQ</span>
@@ -211,6 +243,8 @@ select,.chip{background:var(--panel);border:1px solid var(--line);color:var(--fg
         <div class="toggle" id="announce"><div class="dot"></div></div></div>
       <div class="set"><span class="lbl">Start on boot</span>
         <div class="toggle" id="boot"><div class="dot"></div></div></div>
+      <div class="set"><span class="lbl">Lock to my devices (IP)</span>
+        <div class="toggle" id="lockips"><div class="dot"></div></div></div>
       <div class="set"><span class="lbl">Crossfade</span>
         <div class="chips" id="crossfade"></div></div>
       <div class="set"><span class="lbl">Sleep timer</span>
@@ -303,7 +337,17 @@ $("prev").onclick=()=>api("/api/control/previous");
 $("shuffle").onclick=()=>{$("shuffle").classList.add("on");setTimeout(()=>$("shuffle").classList.remove("on"),400);api("/api/control/shuffle");};
 $("repeat").onclick=()=>api("/api/control/repeat");
 $("like").onclick=()=>api("/api/control/like");
-$("download").onclick=()=>{const b=$("download");b.classList.add("on");setTimeout(()=>b.classList.remove("on"),600);api("/api/download");};
+$("download").onclick=async()=>{
+  const b=$("download"), orig=b.innerHTML;
+  b.classList.add("on"); b.title="Saving…";
+  const r=await api("/api/download");
+  const ok = r && r.ok;
+  b.innerHTML = ok
+    ? '<svg viewBox="0 0 24 24"><path d="M9 16.2l-3.5-3.5-1.4 1.4L9 19 20 8l-1.4-1.4z"/></svg>'   // check
+    : orig;
+  b.title = ok ? (r.message||"Saved") : (r&&r.message ? r.message : "Nothing playing to save");
+  setTimeout(()=>{b.classList.remove("on"); b.innerHTML=orig; b.title="Save to Music";}, 1200);
+};
 async function doSearch(mode){
   const t=$("q").value.trim(); if(!t) return;
   $("spin").classList.add("on");
@@ -318,8 +362,9 @@ $("q").addEventListener("input",()=>$("qactions").classList.toggle("show",!!$("q
 $("addnext").onclick=()=>doSearch("next");
 $("addqueue").onclick=()=>doSearch("queue");
 
+const VOL_MAX=150;                                   // mpv boosts above 100
 function volFromEvent(e){const r=$("volslider").getBoundingClientRect();
-  return Math.max(0,Math.min(100,Math.round((e.clientX-r.left)/r.width*100)));}
+  return Math.max(0,Math.min(VOL_MAX,Math.round((e.clientX-r.left)/r.width*VOL_MAX)));}
 $("volslider").addEventListener("mousedown",e=>{volDrag=true;setVol(volFromEvent(e));});
 window.addEventListener("mousemove",e=>{if(volDrag)setVol(volFromEvent(e));});
 window.addEventListener("mouseup",()=>{if(volDrag){volDrag=false;api("/api/control/volume?value="+curVol);}});
@@ -333,19 +378,17 @@ function volIcon(v){
   if(v>=67)w+=arc('M18.8 4.7a10.4 10.4 0 010 14.6');
   return '<svg viewBox="0 0 24 24">'+body+w+'</svg>';
 }
-function setVol(v){curVol=v;$("sfill").style.width=v+"%";$("knob").style.left=v+"%";
+function setVol(v){curVol=v;const pct=v/VOL_MAX*100;
+  $("sfill").style.width=pct+"%";$("knob").style.left=pct+"%";
   $("volicon").innerHTML=volIcon(v);}
 document.querySelector(".bar").addEventListener("click",e=>{
   const r=e.currentTarget.getBoundingClientRect();const p=(e.clientX-r.left)/r.width;
   if(lastDur)api("/api/seek?pos="+Math.round(p*lastDur));
 });
 
-/* ── tabs ── */
-document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
-  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
-  document.querySelectorAll(".panel").forEach(x=>x.classList.remove("open"));
-  t.classList.add("active"); $("panel-"+t.dataset.panel).classList.add("open");
-});
+/* ── settings sheet ── */
+$("openSettings").onclick=()=>$("sheet").classList.add("open");
+$("closeSettings").onclick=()=>$("sheet").classList.remove("open");
 
 /* ── settings widgets ── */
 function buildChips(id,vals,fn){const box=$(id);box.innerHTML="";vals.forEach(v=>{
@@ -359,6 +402,7 @@ function markChips(id,v){document.querySelectorAll("#"+id+" .chip").forEach(c=>c
 $("normalize").onclick=()=>{const on=!$("normalize").classList.contains("on");$("normalize").classList.toggle("on",on);api("/api/audio?normalize="+(on?1:0));};
 $("announce").onclick=()=>{const on=!$("announce").classList.contains("on");$("announce").classList.toggle("on",on);api("/api/announce?enabled="+(on?1:0));};
 $("boot").onclick=()=>{const on=!$("boot").classList.contains("on");$("boot").classList.toggle("on",on);api("/api/boot?enabled="+(on?1:0));};
+$("lockips").onclick=()=>{const on=!$("lockips").classList.contains("on");$("lockips").classList.toggle("on",on);api("/api/lockips?enabled="+(on?1:0));};
 $("eq").onchange=()=>api("/api/audio?eq="+encodeURIComponent($("eq").value));
 $("source").onchange=()=>api("/api/source?value="+$("source").value);
 
@@ -370,6 +414,7 @@ function loadSettings(s){
   $("normalize").classList.toggle("on",!!s.normalize);
   $("announce").classList.toggle("on",s.announce!==false);
   $("boot").classList.toggle("on",!!s.start_on_boot);
+  $("lockips").classList.toggle("on",!!s.lock_ips);
   markChips("crossfade",s.crossfade||0);
 }
 
@@ -404,6 +449,7 @@ async function tick(){
     const pct=lastDur?Math.min(100,(t.position||0)/lastDur*100):0;
     $("fill").style.width=pct+"%";$("cur").textContent=fmt(t.position);$("dur").textContent=fmt(t.duration);
     $("play").innerHTML=(d.state==="playing")?ICON.pause:ICON.play;
+    document.body.classList.toggle("paused", d.state!=="playing");
     if(!volDrag && d.volume!=null)setVol(Math.round(d.volume));
     $("repeat").classList.toggle("on",(d.repeat&&d.repeat!=="off"));
     $("like").classList.toggle("liked",!!t.liked);

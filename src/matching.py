@@ -243,9 +243,9 @@ def match_command(query):
     q = normalise_query(query)
     m = _VOL_SET_RE.search(q) or _VOL_PCT_RE.search(q)
     if m:
-        return {"command": "volume", "value": max(0, min(100, int(m.group(1))))}
+        return {"command": "volume", "value": max(0, min(150, int(m.group(1))))}
     if _MAXVOL_RE.search(q):
-        return {"command": "volume", "value": 100}
+        return {"command": "volume", "value": 150}
     if _MUTE_RE.match(q):
         return {"command": "volume", "value": 0}
     if _VOL_UP_RE.search(q):

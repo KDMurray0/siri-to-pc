@@ -31,6 +31,8 @@ import time
 from concurrent.futures import Future
 from ctypes import wintypes
 
+from paths import data_dir
+
 
 # --------------------------------------------------------------------------
 # Windows API helpers (ctypes) - used to open named pipes.
@@ -159,6 +161,21 @@ def _write(handle, data_bytes):
             _KERNEL32.CloseHandle(event)
 
 
+def _kill_stray_mpv():
+    # Kill orphaned mpv from a prior crash/force-close. Matches our pipe name
+    # only, so the user's own mpv windows are left alone.
+    try:
+        ps = ("Get-CimInstance Win32_Process -Filter \"Name='mpv.exe'\" | "
+              "Where-Object { $_.CommandLine -match 'mpvsocket' } | "
+              "ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
+              "-ErrorAction SilentlyContinue }")
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                       timeout=12, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, creationflags=0x08000000)
+    except Exception:
+        pass
+
+
 # --------------------------------------------------------------------------
 # PlayerManager
 # --------------------------------------------------------------------------
@@ -196,8 +213,10 @@ class PlayerManager:
         self._autoqueue_lock = threading.Lock()
         self._played_ids = []             # ordered history of video_ids (dedup radio)
         self._monitor_thread = None
+        self._autoqueue_hold = False      # album/artist: no radio until exhausted
+        self._seed_artists = []           # bias next radio batch to these bands
         # Audio / persistent settings
-        self._state_file = os.path.join(os.path.dirname(__file__), "player_state.json")
+        self._state_file = os.path.join(data_dir(), "player_state.json")
         self._settings = {
             "volume": 70, "eq": "flat", "normalize": False,
             "crossfade": 0, "repeat": "off",
@@ -206,13 +225,14 @@ class PlayerManager:
         self._sleep_timer = None          # threading.Timer
         self._sleep_deadline = None       # monotonic ts when sleep fires
         self._announce_enabled = True     # speak the song when you request one
+        self._tts_voice = "en-US-AriaNeural"   # edge-tts neural voice
         # Liked songs (drives taste-based recommendations)
-        self._liked_file = os.path.join(os.path.dirname(__file__), "liked_songs.json")
+        self._liked_file = os.path.join(data_dir(), "liked_songs.json")
         self._liked = []                  # [{video_id,title,artist,album,thumbnail,ts}]
         self._liked_ids = set()
         self._liked_lock = threading.Lock()
         # Play history + skip stats (preference engine / smart shuffle)
-        self._stats_file = os.path.join(os.path.dirname(__file__), "play_stats.json")
+        self._stats_file = os.path.join(data_dir(), "play_stats.json")
         self._history = []                # recent listened-to ids (no-repeat + context)
         self._history_size = 100          # tunable via config
         self._song_stats = {}             # video_id -> [plays, skips]
@@ -222,7 +242,7 @@ class PlayerManager:
         self._weights = {
             "liked_boost": 2.0, "playthrough": 0.5, "skip_penalty": 0.8,
             "song_play": 0.4, "jitter": 1.0, "liked_seed_prob": 0.35,
-            "context_songs": 3,
+            "context_songs": 3, "same_artist_boost": 3.0,
         }
         # currently-watched track (to detect skip vs play-through)
         self._watch_id = None
@@ -248,11 +268,16 @@ class PlayerManager:
         self._load_state()          # persisted volume / EQ / normalize / repeat
         self._history_size = int(config.get("history_size", 100) or 100)
         self._announce_enabled = bool(config.get("announce", True))
+        self._tts_voice = (config.get("tts_voice") or "en-US-AriaNeural").strip()
         for k in self._weights:
             if config.get(f"queue_{k}") is not None:
                 self._weights[k] = type(self._weights[k])(config[f"queue_{k}"])
         self._load_liked()          # persistent taste profile
         self._load_stats()          # play history + skip stats
+        # A previous run that was force-closed can leave orphaned mpv processes
+        # holding our pipes. Kill any that belong to us before starting fresh.
+        _kill_stray_mpv()
+
         mpv_path = shutil.which("mpv")
         if not mpv_path:
             raise RuntimeError(
@@ -266,6 +291,7 @@ class PlayerManager:
         cmd = [
             mpv_path,
             "--no-video", "--idle=yes", "--no-terminal",
+            "--volume-max=150",                       # allow boosting above 100
             f"--volume={int(self._settings.get('volume', 70))}",
             "--media-controls=yes", "--input-media-keys=yes",
             r"--input-ipc-server=\\.\pipe\mpvsocket",
@@ -712,13 +738,20 @@ class PlayerManager:
         self._secondary("stop")
 
     def _start_tail(self, out_path, out_pos, cf):
-        """On the secondary mpv, play *out_path* from *out_pos*, fading out."""
+        # Secondary mpv plays the outgoing tail, fading out. Seek must wait for
+        # the file to load, else it lands on nothing (this broke crossfade).
         vol = int(self._settings.get("volume", 70))
-        self._secondary("loadfile", out_path, "replace")
-        self._secondary("seek", out_pos, "absolute")
-        self._secondary("set_property", "volume", vol)
         self._crossfade_until = time.monotonic() + cf + 1.0
-        threading.Thread(target=self._ramp_secondary_out, args=(vol, cf), daemon=True).start()
+        self._secondary("loadfile", out_path, "replace")
+
+        def _tail():
+            time.sleep(0.18)                                  # let the file load
+            self._secondary("set_property", "volume", vol)
+            self._secondary("seek", out_pos, "absolute")
+            self._secondary("set_property", "af", f"afade=t=out:st=0:d={cf}")
+            self._ramp_secondary_out(vol, cf)
+
+        threading.Thread(target=_tail, daemon=True).start()
 
     def _crossfade_replace(self, path):
         """Load *path* on the primary. When crossfade is on and something is
@@ -809,11 +842,16 @@ class PlayerManager:
         mode = plan.get("mode", "play")
         shuffle = plan.get("shuffle", False)
         fallbacks = list(plan.get("fallbacks", []))
+        kind = plan.get("kind")
 
         if shuffle:
             import random
             tracks = list(tracks)
             random.shuffle(tracks)
+
+        # Album/artist: hold radio until the pure queue runs out.
+        if mode == "play":
+            self._autoqueue_hold = kind in ("album", "artist") and len(tracks) > 1
 
         # New generation: cancels any in-flight prefetch from a prior request.
         with self._lock:
@@ -827,6 +865,7 @@ class PlayerManager:
                         "message": "Could not download the first track from YouTube"}
             self._cmd("playlist-clear")
             self._crossfade_replace(first)   # fade out current, swap, fade in
+            self._cmd("set_property", "pause", False)  # a request always plays
             self._remember_played(tracks[0]["video_id"])
             rest = tracks[1:]
         elif mode == "next":
@@ -878,6 +917,18 @@ class PlayerManager:
             meta = self._track_meta.get(path)
         return meta.get("video_id") if meta else None
 
+    def _current_artist(self):
+        """Lower-cased primary artist of the currently-playing file, if known."""
+        props = self._get_properties(["path"])
+        path = props.get("path")
+        if not path:
+            return None
+        with self._meta_lock:
+            meta = self._track_meta.get(path)
+        if not meta:
+            return None
+        return (meta.get("artist") or "").split(",")[0].strip().lower() or None
+
     def _autoqueue_loop(self):
         """Background: keep the queue full when auto-queue is on.
 
@@ -902,7 +953,13 @@ class PlayerManager:
                 pos = props.get("playlist-pos")
                 if pos is None or pos < 0:
                     continue
-                if (count - pos - 1) > self._autoqueue_threshold:
+                remaining = count - pos - 1
+                # Hold: no radio until the pure album/artist queue is exhausted.
+                if self._autoqueue_hold:
+                    if remaining > 0:
+                        continue
+                    self._autoqueue_hold = False
+                if remaining > self._autoqueue_threshold:
                     continue
 
                 if not self._current_video_id():
@@ -1067,9 +1124,8 @@ class PlayerManager:
             return {"ok": False, "message": str(e)}
 
     def announce(self, text):
-        """Speak *text* over the PC's speakers using the built-in Windows voice
-        (System.Speech — offline, no model download), ducking the music while
-        it talks. Called only for songs you request, not auto-queued ones."""
+        # Speak the song (requested tracks only), ducking the music. edge-tts
+        # neural voice, falling back to the offline System.Speech voice.
         if not self._announce_enabled or not text:
             return
 
@@ -1079,22 +1135,57 @@ class PlayerManager:
                 self._cmd("set_property", "volume", max(8, int(vol * 0.25)))
             except Exception:
                 pass
-            try:
-                ps = ("Add-Type -AssemblyName System.Speech;"
-                      "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
-                      "$s.Speak([Console]::In.ReadToEnd())")
-                subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                               input=text, text=True, timeout=25,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               creationflags=0x08000000)
-            except Exception:
-                pass
+            if not self._speak_neural(text):
+                self._speak_desktop(text)
             try:
                 self._cmd("set_property", "volume", vol)
             except Exception:
                 pass
 
         threading.Thread(target=_run, daemon=True).start()
+
+    def _speak_neural(self, text):
+        """Speak via edge-tts neural voice. Returns True on success."""
+        try:
+            import asyncio
+            import edge_tts
+        except Exception:
+            return False
+        mp3 = os.path.join(tempfile.gettempdir(), f"mrs_tts_{os.getpid()}.mp3")
+        try:
+            async def _gen():
+                await edge_tts.Communicate(text, self._tts_voice).save(mp3)
+            asyncio.run(_gen())
+            if not os.path.isfile(mp3) or os.path.getsize(mp3) < 256:
+                return False
+            mpv_path = shutil.which("mpv")
+            if not mpv_path:
+                return False
+            subprocess.run(
+                [mpv_path, "--no-video", "--really-quiet", "--no-terminal", mp3],
+                timeout=30, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=0x08000000)
+            return True
+        except Exception:
+            return False
+        finally:
+            try:
+                os.remove(mp3)
+            except Exception:
+                pass
+
+    def _speak_desktop(self, text):
+        """Offline fallback: the built-in Windows System.Speech voice."""
+        try:
+            ps = ("Add-Type -AssemblyName System.Speech;"
+                  "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+                  "$s.Speak([Console]::In.ReadToEnd())")
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                           input=text, text=True, timeout=25,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           creationflags=0x08000000)
+        except Exception:
+            pass
 
     def adjust_volume(self, delta):
         """Nudge the volume by *delta* (e.g. "turn it up"). Returns the message."""
@@ -1103,7 +1194,7 @@ class PlayerManager:
             cur = int(cur if cur is not None else self._settings.get("volume", 70))
         except Exception:
             cur = int(self._settings.get("volume", 70))
-        vol = max(0, min(100, cur + int(delta)))
+        vol = max(0, min(150, cur + int(delta)))
         self._cmd("set_property", "volume", vol)
         self._settings["volume"] = vol
         self._save_state()
@@ -1357,6 +1448,7 @@ class PlayerManager:
         except Exception:
             is_derivative = lambda t: False
         w = self._weights
+        seed_artists = set(self._seed_artists or [])
         scored = []
         seen = set()
         for t in tracks:
@@ -1366,6 +1458,8 @@ class PlayerManager:
             seen.add(vid)
             artist = (t.get("artist") or "").split(",")[0].strip().lower()
             score = random.random() * w["jitter"]
+            if artist and artist in seed_artists:
+                score += w["same_artist_boost"]       # same band > same genre
             if artist and artist in liked_artists:
                 score += w["liked_boost"]
             if is_derivative(t.get("title")):
@@ -1399,6 +1493,19 @@ class PlayerManager:
         for s in seeds:
             if s and s not in uniq:
                 uniq.append(s)
+        # Bias next batch to the current bands (same artist > same genre).
+        with self._meta_lock:
+            id2artist = {m.get("video_id"): (m.get("artist") or "").split(",")[0].strip().lower()
+                         for m in self._track_meta.values() if m.get("video_id")}
+        seed_artists = []
+        cur_artist = self._current_artist()
+        if cur_artist:
+            seed_artists.append(cur_artist)
+        for v in uniq:
+            a = id2artist.get(v)
+            if a and a not in seed_artists:
+                seed_artists.append(a)
+        self._seed_artists = seed_artists
         candidates = []
         for s in uniq[:4]:
             candidates += self._autoqueue_provider(s, exclude) or []
@@ -1466,7 +1573,7 @@ class PlayerManager:
             return {"action": action, "ok": True, "message": "Previous track"}
 
         elif action == "volume":
-            vol = max(0, min(100, int(value or 50)))
+            vol = max(0, min(150, int(value or 50)))
             self._cmd("set_property", "volume", vol)
             self._settings["volume"] = vol
             self._save_state()

@@ -38,7 +38,7 @@ code{background:#0b0c14;border:1px solid var(--line);border-radius:6px;padding:1
   <div class="card">
     <div class="tag">Your endpoint</div>
     <div class="url"><span id="url">http://{{ host }}:{{ port }}/?key={{ api_key }}</span>
-      <button onclick="copyUrl()">Copy</button></div>
+      <button id="copyBtn" onclick="copyUrl(this)">Copy</button></div>
     <p class="small">Keep this key private — anyone on your network with it can control playback.</p>
   </div>
 
@@ -64,7 +64,29 @@ code{background:#0b0c14;border:1px solid var(--line);border-radius:6px;padding:1
   </div>
 </div>
 <script>
-function copyUrl(){navigator.clipboard.writeText(document.getElementById('url').textContent);}
+function copyUrl(btn){
+  var text = document.getElementById('url').textContent.trim();
+  function done(ok){
+    if(!btn) return;
+    var old = btn.textContent;
+    btn.textContent = ok ? 'Copied!' : 'Copy failed';
+    setTimeout(function(){ btn.textContent = old; }, 1400);
+  }
+  // navigator.clipboard only works over https/localhost; fall back for plain
+  // http on the LAN (which is how phones reach this page).
+  if(navigator.clipboard && window.isSecureContext){
+    navigator.clipboard.writeText(text).then(function(){done(true);}, function(){fallback();});
+  } else { fallback(); }
+  function fallback(){
+    try{
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      var ok = document.execCommand('copy');
+      document.body.removeChild(ta); done(ok);
+    }catch(e){ done(false); }
+  }
+}
 </script>
 </body>
 </html>

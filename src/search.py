@@ -382,7 +382,7 @@ def _resolve_album(client, query, artist=None):
             "title": t.get("title", ""),
             "artist": t.get("artist", album_data.get("artists", [{}])[0].get("name", "")),
             "album": album_data.get("title", ""),
-            "duration": int(t.get("duration", 0) or 0),
+            "duration": _parse_duration(t),
         })
 
     return tracks
@@ -469,11 +469,11 @@ def _mood_categories(client):
     return _mood_categories_cache
 
 
-def _match_mood_category(client, query):
-    """Match *query* to a YouTube Music mood/genre category (no hardcoded list).
+def _match_mood_category(client, query, strict=False):
+    """Match *query* to a live YTM mood/genre category; return its params/None.
 
-    Returns the category ``params`` or None. Comparison is done against the
-    live category titles, so whatever genres/moods YTM offers are supported.
+    strict: only a whole-query match ("jazz"=="Jazz"), never a loose token
+    overlap ("swing" in "sultans of swing") — that must not beat a real song.
     """
     qsq = _squash(query)
     qtokens = set(_norm(query).split())
@@ -486,9 +486,10 @@ def _match_mood_category(client, query):
                 continue
             if tsq == qsq:                       # jazz == Jazz, hiphop == Hip-Hop
                 return cat.get("params")
-            ttokens = set(_norm(title).split())
-            if qtokens & ttokens:                # "country" ~ "Country & Americana"
-                loose = loose or cat.get("params")
+            if not strict:
+                ttokens = set(_norm(title).split())
+                if qtokens & ttokens:            # "country" ~ "Country & Americana"
+                    loose = loose or cat.get("params")
     return loose
 
 
@@ -570,17 +571,16 @@ def _smart_auto(client, query, artist=None):
     # Decades ("80s", "2000s") are themes, even though songs of that name exist.
     if _re.match(r'^(19|20)?\d0s$', qsq):
         return "genre", _resolve_theme(client, query), []
-    if _match_mood_category(client, query):
-        return "genre", _resolve_theme(client, query), []
 
-    try:
-        arts = client.search(query, filter="artists", limit=2)
-    except Exception:
-        arts = []
+    # Songs first: a real title must beat a loose genre-word overlap.
     try:
         songs = [s for s in client.search(query, filter="songs", limit=8) if s.get("videoId")]
     except Exception:
         songs = []
+    try:
+        arts = client.search(query, filter="artists", limit=2)
+    except Exception:
+        arts = []
 
     artist_exact = bool(qsq) and any(_squash(_artist_name(a)) == qsq for a in arts[:2])
 
@@ -593,7 +593,14 @@ def _smart_auto(client, query, artist=None):
         strong = bool(tt) and tt <= qtokens and bool(at & qtokens)
         return exact, strong, tt, at
 
-    song_hits = [s for s in songs if (lambda sc: sc[0] or sc[1])(song_score(s))]
+    scored = [(song_score(s), s) for s in songs]
+    exact_hit = any(sc[0] for sc, _ in scored)
+    song_hits = [s for sc, s in scored if sc[0] or sc[1]]
+
+    # Whole-query genre ("jazz", "punk") -> theme, unless an exact song matches.
+    if not exact_hit and _match_mood_category(client, query, strict=True):
+        return "genre", _resolve_theme(client, query), []
+
     if song_hits:
         # Conflict resolution: weigh popularity + your taste (your artists /
         # genre) and avoid remixes/covers unless you asked for one.
@@ -666,20 +673,28 @@ def _apply_shuffle(kind, shuffle):
         return {"shuffle": shuffle if shuffle is not None else False}
 
 
+def _parse_duration(result):
+    """Seconds from a ytmusicapi result: int ``duration_seconds`` or "m:ss"."""
+    duration = result.get("duration_seconds")
+    if isinstance(duration, int):
+        return duration
+    duration_str = result.get("duration") or "0:00"
+    if isinstance(duration_str, (int, float)):
+        return int(duration_str)
+    try:
+        secs = 0
+        for part in str(duration_str).split(":"):
+            secs = secs * 60 + int(part)
+        return secs
+    except (ValueError, IndexError):
+        return 0
+
+
 def _track_dict(result):
     """Convert a ytmusicapi search result to a track dict."""
     video_id = result.get("videoId", "")
     title = result.get("title", "")
-
-    # Prefer duration_seconds (int) when available, fall back to parsing duration string
-    duration = result.get("duration_seconds")
-    if duration is None:
-        duration_str = result.get("duration", "0:00")
-        dur_parts = duration_str.split(":") if duration_str else ["0"]
-        try:
-            duration = int(dur_parts[0]) * 60 + (int(dur_parts[1]) if len(dur_parts) > 1 else 0)
-        except (ValueError, IndexError):
-            duration = 0
+    duration = _parse_duration(result)
 
     # ytmusicapi returns "artists" as a list of dicts with "name" and "id"
     artist_list = result.get("artists", [])

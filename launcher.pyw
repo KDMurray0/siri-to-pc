@@ -14,11 +14,26 @@ import json
 import os
 import sys
 
-_here = os.path.dirname(os.path.abspath(__file__))
+FROZEN = getattr(sys, "frozen", False)
+
+if FROZEN:
+    # Frozen: server runs in-process; config/data sit next to the .exe.
+    _here = os.path.dirname(sys.executable)
+    # No console in a windowed .exe -> send prints to a log, not a None stdout.
+    try:
+        _logf = open(os.path.join(_here, "server.log"), "a", buffering=1,
+                     encoding="utf-8", errors="replace")
+        sys.stdout = sys.stderr = _logf
+    except Exception:
+        pass
+else:
+    _here = os.path.dirname(os.path.abspath(__file__))
 
 
 def _reexec_if_needed():
     """Relaunch under config python_path if webview isn't importable here."""
+    if FROZEN:
+        return False
     try:
         import webview  # noqa: F401
         return False
@@ -54,7 +69,8 @@ from pystray import Icon as TrayIcon
 from pystray import Menu, MenuItem
 from PIL import Image, ImageDraw
 
-_config_path = os.path.join(_here, "src", "config.json")
+_config_path = os.path.join(_here, "config.json") if FROZEN \
+    else os.path.join(_here, "src", "config.json")
 
 
 def _load_config():
@@ -62,14 +78,33 @@ def _load_config():
         return json.load(f)
 
 
-# ── server subprocess ───────────────────────────────────────────────
+# ── server: in-process thread when frozen, subprocess from source ────
 
 _server_process = None
+_server_app = None       # the imported app module (frozen path only)
 _running = False
 
 
 def _run_server():
-    global _server_process, _running
+    global _server_process, _server_app, _running
+    if FROZEN:
+        _running = True
+        try:
+            import app as server_app          # bundled server modules
+            _server_app = server_app
+            server_app.startup()
+            cfg = _load_config()
+            server_app.app.run(host=cfg.get("host", "0.0.0.0"),
+                               port=cfg.get("port", 5000),
+                               threaded=True, debug=False, use_reloader=False)
+        except SystemExit:
+            pass                                # startup() aborts on missing mpv
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        finally:
+            _running = False
+        return
     py = _load_config().get("python_path") or sys.executable
     try:
         _server_process = subprocess.Popen(
@@ -90,6 +125,15 @@ def _start_server():
 
 def _stop_server():
     global _server_process, _running
+    if FROZEN:
+        # mpv is our own child here; kill it explicitly (os._exit skips atexit).
+        try:
+            if _server_app is not None:
+                _server_app.player_manager.stop()
+        except Exception:
+            pass
+        _running = False
+        return
     if _server_process is not None:
         try:
             _server_process.terminate(); _server_process.wait(timeout=10)
@@ -221,6 +265,18 @@ def _tray():
 
 # ── main ─────────────────────────────────────────────────────────────
 
+def _acquire_singleton():
+    # Named mutex: stops a second launch spawning a rival server/mpv.
+    # Returns a handle to keep alive, or None if already running.
+    try:
+        h = ctypes.windll.kernel32.CreateMutexW(None, False, "MusicRequestServer_singleton")
+        if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            return None
+        return h or True
+    except Exception:
+        return True                       # never block startup on a mutex error
+
+
 def _after_start():
     time.sleep(0.4)
     _flyout.round_corners()
@@ -229,6 +285,10 @@ def _after_start():
 
 
 if __name__ == "__main__":
+    _singleton = _acquire_singleton()
+    if _singleton is None:
+        sys.exit(0)                      # another instance is already running
+
     config = _load_config()
     port = config.get("port", 5000)
     key = config.get("api_key", "")

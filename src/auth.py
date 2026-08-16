@@ -1,16 +1,67 @@
 """Authentication and authorization for iTunes Request Server."""
 
 import hmac
+import json
 import os
+import secrets
 from flask import request, jsonify
+
+_PLACEHOLDER_KEY = "CHANGE-THIS-TO-A-LONG-RANDOM-SECRET"
+
+# Written on first run when no config.json exists. Secret filled in below.
+_DEFAULT_CONFIG = {
+    "api_key": "",
+    "allowed_ips": [],
+    "lock_ips": False,
+    "host": "0.0.0.0",
+    "port": 5000,
+    "cookies_from_browser": "",
+    "cookies_file": "",
+    "js_runtime": "node",
+    "player_client": "tv",
+    "ytdl_raw_options": [],
+    "announce": True,
+    "tts_voice": "en-US-AriaNeural",
+    "auto_queue": True,
+    "auto_queue_batch": 5,
+    "auto_queue_threshold": 2,
+    "history_size": 100,
+    "source": "youtube",
+    "use_groq": False,
+    "groq_api_key": "",
+    "groq_model": "llama-3.3-70b-versatile",
+}
+
+
+def ensure_config():
+    # Load config.json; create it and/or a random api_key if missing, then save.
+    from paths import config_path
+    path = config_path()
+    changed = False
+    if os.path.isfile(path):
+        with open(path, "r") as f:
+            cfg = json.load(f)
+    else:
+        cfg = dict(_DEFAULT_CONFIG)
+        changed = True
+
+    key = (cfg.get("api_key") or "").strip()
+    if not key or key == _PLACEHOLDER_KEY:
+        cfg["api_key"] = secrets.token_urlsafe(24)
+        changed = True
+
+    if changed:
+        try:
+            with open(path, "w") as f:
+                json.dump(cfg, f, indent=2)
+        except Exception:
+            pass
+    return cfg
 
 
 def load_config():
-    """Load configuration from config.json."""
-    import json
-    config_path = os.path.join(os.path.dirname(__file__), "config.json")
-    with open(config_path, "r") as f:
-        return json.load(f)
+    """Load configuration from config.json (auto-creating key/file as needed)."""
+    return ensure_config()
 
 
 _config = None
@@ -28,9 +79,27 @@ def reload_config():
     _config = load_config()
 
 
+def save_config_value(key, value):
+    """Persist a single setting to config.json and update the in-memory copy."""
+    from paths import config_path
+    cfg = get_config()
+    cfg[key] = value
+    try:
+        with open(config_path(), "w") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception:
+        pass
+    return cfg
+
+
 def check_ip():
     """Check if the requesting IP is allowed. Returns True if allowed."""
     config = get_config()
+
+    # IP lock explicitly disabled -> any device on the LAN may connect.
+    if config.get("lock_ips") is False:
+        return True
+
     allowed_ips = config.get("allowed_ips", [])
 
     # Empty list means allow all
