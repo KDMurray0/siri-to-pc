@@ -572,6 +572,18 @@ def _smart_auto(client, query, artist=None):
     if _re.match(r'^(19|20)?\d0s$', qsq):
         return "genre", _resolve_theme(client, query), []
 
+    # YTM's unfiltered top result encodes prominence: for a bare artist name
+    # ("queen", "korn") the top hit is the ARTIST, which should win over an
+    # obscure song that merely shares the title. Only fires when the whole query
+    # equals the artist's name, so "bohemian rhapsody queen" is unaffected.
+    try:
+        top = client.search(query, limit=3)
+    except Exception:
+        top = []
+    if top and top[0].get("resultType") == "artist" \
+            and _squash(_artist_name(top[0])) == qsq:
+        return "artist", _resolve_artist(client, query), []
+
     # Songs first: a real title must beat a loose genre-word overlap.
     try:
         songs = [s for s in client.search(query, filter="songs", limit=8) if s.get("videoId")]
