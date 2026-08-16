@@ -310,8 +310,14 @@ def _acquire_singleton():
     # Named mutex: stops a second launch spawning a rival server/mpv.
     # Returns a handle to keep alive, or None if already running.
     try:
-        h = ctypes.windll.kernel32.CreateMutexW(None, False, "MusicRequestServer_singleton")
-        if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        # use_last_error so get_last_error() reflects THIS CreateMutexW call, not
+        # a stale value the (windowed) PyInstaller bootloader left behind — that
+        # stale 183 made the sole instance think it was a duplicate and exit.
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateMutexW.restype = ctypes.c_void_p
+        k32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+        h = k32.CreateMutexW(None, False, "MusicRequestServer_singleton")
+        if ctypes.get_last_error() == 183:   # ERROR_ALREADY_EXISTS
             return None
         return h or True
     except Exception:
