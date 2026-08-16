@@ -162,18 +162,19 @@ def _write(handle, data_bytes):
 
 
 def _kill_stray_mpv():
-    # Kill orphaned mpv from a prior crash/force-close. Matches our pipe name
-    # only, so the user's own mpv windows are left alone.
+    # Kill orphaned mpv from a prior crash/force-close (matches our pipe name
+    # only). Returns True if any were killed.
     try:
-        ps = ("Get-CimInstance Win32_Process -Filter \"Name='mpv.exe'\" | "
-              "Where-Object { $_.CommandLine -match 'mpvsocket' } | "
-              "ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
-              "-ErrorAction SilentlyContinue }")
-        subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                       timeout=12, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, creationflags=0x08000000)
+        ps = ("$p=Get-CimInstance Win32_Process -Filter \"Name='mpv.exe'\" | "
+              "Where-Object { $_.CommandLine -match 'mpvsocket' }; "
+              "$p | ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
+              "-ErrorAction SilentlyContinue }; ($p | Measure-Object).Count")
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                             timeout=12, capture_output=True, text=True,
+                             creationflags=0x08000000)
+        return (out.stdout or "").strip() not in ("", "0")
     except Exception:
-        pass
+        return False
 
 
 # --------------------------------------------------------------------------
@@ -278,9 +279,10 @@ class PlayerManager:
                 self._weights[k] = type(self._weights[k])(config[f"queue_{k}"])
         self._load_liked()          # persistent taste profile
         self._load_stats()          # play history + skip stats
-        # A previous run that was force-closed can leave orphaned mpv processes
-        # holding our pipes. Kill any that belong to us before starting fresh.
-        _kill_stray_mpv()
+        # Kill orphaned mpv from a force-close, then let Windows release the pipe
+        # names before the new mpv binds them (avoids a restart pipe race).
+        if _kill_stray_mpv():
+            time.sleep(0.6)
 
         mpv_path = shutil.which("mpv")
         if not mpv_path:
