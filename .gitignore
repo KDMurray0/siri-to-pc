@@ -1,0 +1,24 @@
+# ── Secrets & personal data (never commit) ──
+src/config.json
+youtube_cookies.txt
+COOOOKIES.txt
+*cookies*.txt
+
+# ── Runtime state / user data ──
+src/player_state.json
+src/liked_songs.json
+src/play_stats.json
+src/recent_requests.json
+src/ui_prefs.json
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ── Logs / misc ──
+*.log
+.DS_Store
+Thumbs.db

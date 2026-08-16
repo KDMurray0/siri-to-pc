@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Set up the Shortcut</title>
+<style>
+:root{--bg:#0e0f16;--panel:#171826;--fg:#f3f2f7;--sub:#8b8ea6;--line:#252739;--accent:#6d8bff}
+*{margin:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:"Segoe UI",system-ui,sans-serif;
+  line-height:1.5;padding:40px 20px;display:flex;justify-content:center}
+.wrap{max-width:600px;width:100%}
+h1{font-size:26px;font-weight:800;letter-spacing:-.02em}
+.lead{color:var(--sub);margin:8px 0 28px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px;margin-bottom:16px}
+.url{display:flex;gap:8px;align-items:center;background:#0b0c14;border:1px solid var(--line);
+  border-radius:10px;padding:12px 14px;font-family:ui-monospace,Consolas,monospace;font-size:13px;
+  word-break:break-all;color:var(--accent)}
+button{background:var(--accent);color:#0b0c12;border:0;border-radius:8px;padding:8px 14px;
+  font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap}
+button:hover{filter:brightness(1.08)}
+ol{margin:6px 0 0 0;padding-left:20px}
+li{margin:9px 0}
+code{background:#0b0c14;border:1px solid var(--line);border-radius:6px;padding:1px 6px;
+  font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:#c9d4ff}
+.kv{color:var(--sub)}
+.tag{display:inline-block;background:var(--accent);color:#0b0c12;font-weight:700;font-size:11px;
+  padding:2px 8px;border-radius:20px;margin-right:6px}
+.small{color:var(--sub);font-size:12.5px;margin-top:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎧 Music Request</h1>
+  <p class="lead">This isn't a web page — it's the endpoint your iPhone talks to.
+     Build a one-tap Siri Shortcut and just say what you want to hear.</p>
+
+  <div class="card">
+    <div class="tag">Your endpoint</div>
+    <div class="url"><span id="url">http://{{ host }}:{{ port }}/?key={{ api_key }}</span>
+      <button onclick="copyUrl()">Copy</button></div>
+    <p class="small">Keep this key private — anyone on your network with it can control playback.</p>
+  </div>
+
+  <div class="card">
+    <div class="tag">Build the Shortcut</div>
+    <ol>
+      <li>Open <b>Shortcuts</b> → <b>+</b> to create a new one. Name it something Siri hears
+        clearly, like <code>Play Music</code>.</li>
+      <li>Add <b>Ask for Text</b> — prompt: <span class="kv">"What would you like?"</span></li>
+      <li>Add <b>Get Contents of URL</b>:
+        <ul>
+          <li><span class="kv">URL:</span> the endpoint above</li>
+          <li><span class="kv">Method:</span> <code>POST</code></li>
+          <li><span class="kv">Request Body:</span> <code>JSON</code></li>
+          <li><span class="kv">Field:</span> <code>input</code> = <b>Dictated Text</b> (the Ask-for-Text result)</li>
+        </ul>
+      </li>
+      <li>Add <b>Get Dictionary Value</b> — key <code>message</code>.</li>
+      <li>Add <b>Speak Text</b> (or Show Notification) with that value, so Siri reads back what's playing.</li>
+    </ol>
+    <p class="small">Then just say "Hey Siri, Play Music" and speak a song, artist, or vibe —
+      "play some punk", "coming undone by korn", "turn it up", "more like this", "surprise me".</p>
+  </div>
+</div>
+<script>
+function copyUrl(){navigator.clipboard.writeText(document.getElementById('url').textContent);}
+</script>
+</body>
+</html>
