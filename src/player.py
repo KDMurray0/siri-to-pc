@@ -231,6 +231,7 @@ class PlayerManager:
         self._sleep_deadline = None       # monotonic ts when sleep fires
         self._announce_enabled = True     # speak the song when you request one
         self._tts_voice = "en-US-AriaNeural"   # edge-tts neural voice
+        self._ducking = False             # true while announce lowers the volume
         # Liked songs (drives taste-based recommendations)
         self._liked_file = os.path.join(data_dir(), "liked_songs.json")
         self._liked = []                  # [{video_id,title,artist,album,thumbnail,ts}]
@@ -337,7 +338,8 @@ class PlayerManager:
             print("WARNING: yt-dlp not found on PATH; playback will fail.")
 
         self._mpv_process = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            creationflags=0x08000000,   # CREATE_NO_WINDOW (mpv resolves to mpv.com)
         )
         print(f"mpv launched (pid={self._mpv_process.pid})")
 
@@ -372,7 +374,8 @@ class PlayerManager:
                     "--no-config", "--media-controls=no", "--volume=100",
                     r"--input-ipc-server=\\.\pipe\mpvsocket2"]
             self._mpv2_process = subprocess.Popen(
-                cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                creationflags=0x08000000)   # CREATE_NO_WINDOW
             for _ in range(20):
                 time.sleep(0.3)
                 try:
@@ -916,6 +919,22 @@ class PlayerManager:
     def set_autoqueue_enabled(self, enabled):
         self._autoqueue_enabled = bool(enabled)
 
+    def _persist_volume_if_changed(self):
+        # Save the volume whenever it changes (slider, media keys, mixer) so it
+        # survives a restart. Skip while announce is ducking it.
+        if self._ducking:
+            return
+        try:
+            v = self._get_properties(["volume"]).get("volume")
+        except Exception:
+            return
+        if v is None:
+            return
+        v = int(round(v))
+        if abs(v - int(self._settings.get("volume", 70))) >= 1:
+            self._settings["volume"] = v
+            self._save_state()
+
     def _current_video_id(self):
         """video_id of the currently-playing file, via its cached metadata."""
         props = self._get_properties(["path"])
@@ -951,6 +970,7 @@ class PlayerManager:
             # the auto-advance crossfade check.
             self._watch_track()
             self._maybe_crossfade()
+            self._persist_volume_if_changed()
             if not self._autoqueue_enabled or not self._autoqueue_provider:
                 continue
             try:
@@ -1153,6 +1173,7 @@ class PlayerManager:
 
         def _run():
             vol = int(self._settings.get("volume", 70))
+            self._ducking = True          # don't let the monitor persist the duck
             try:
                 self._cmd("set_property", "volume", max(8, int(vol * 0.25)))
             except Exception:
@@ -1163,6 +1184,7 @@ class PlayerManager:
                 self._cmd("set_property", "volume", vol)
             except Exception:
                 pass
+            self._ducking = False
 
         threading.Thread(target=_run, daemon=True).start()
 
