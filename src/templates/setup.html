@@ -62,6 +62,21 @@ code{background:#0b0c14;border:1px solid var(--line);border-radius:6px;padding:1
     <p class="small">Then just say "Hey Siri, Play Music" and speak a song, artist, or vibe —
       "play some punk", "coming undone by korn", "turn it up", "more like this", "surprise me".</p>
   </div>
+
+  <div class="card">
+    <div class="tag">Optional setup</div>
+    <ol>
+      <li><b>Smarter understanding (recommended)</b> — add a free <a href="https://console.groq.com" style="color:var(--accent)">Groq</a>
+        key so requests are understood by an AI (knows "queen" is a band, "punk" is a genre).
+        In <code>config.json</code> set <code>"groq_api_key"</code> to your key. On by default once a key is present.</li>
+      <li><b>Start on boot (off by default)</b> — opt in from the player's <b>Settings</b> (gear icon) →
+        <b>Start on boot</b>. It then launches hidden to the tray when you sign in.</li>
+      <li><b>Announce &amp; more</b> — the same Settings sheet has spoken now-playing, crossfade,
+        EQ, volume normalize, sleep timer, and a "Lock to my devices" toggle (off = any device on your Wi-Fi).</li>
+    </ol>
+    <p class="small">Your settings live in <code>%LOCALAPPDATA%\MusicRequestServer\config.json</code>
+      and persist across updates.</p>
+  </div>
 </div>
 <script>
 function copyUrl(btn){

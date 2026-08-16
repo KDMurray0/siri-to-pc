@@ -609,8 +609,11 @@ def _smart_auto(client, query, artist=None):
     exact_hit = any(sc[0] for sc, _ in scored)
     song_hits = [s for sc, s in scored if sc[0] or sc[1]]
 
-    # Whole-query genre ("jazz", "punk") -> theme, unless an exact song matches.
-    if not exact_hit and _match_mood_category(client, query, strict=True):
+    # A genre/mood term -> theme. A single word ("punk", "jazz") only needs a
+    # loose category match and beats an obscure same-named song; multi-word
+    # queries need a whole-query match and no exact song ("sultans of swing").
+    single = len(qtokens) == 1
+    if _match_mood_category(client, query, strict=not single) and (single or not exact_hit):
         return "genre", _resolve_theme(client, query), []
 
     if song_hits:

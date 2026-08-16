@@ -69,8 +69,12 @@ from pystray import Icon as TrayIcon
 from pystray import Menu, MenuItem
 from PIL import Image, ImageDraw
 
-_config_path = os.path.join(_here, "config.json") if FROZEN \
-    else os.path.join(_here, "src", "config.json")
+if FROZEN:
+    import paths as _paths
+    _paths.migrate_legacy_data()          # move old next-to-exe data to stable dir
+    _config_path = _paths.config_path()   # %LOCALAPPDATA%\MusicRequestServer
+else:
+    _config_path = os.path.join(_here, "src", "config.json")
 
 
 def _load_config():
@@ -325,6 +329,15 @@ def _acquire_singleton():
 
 
 def _after_start():
+    # Boot / --hidden: squash any flash — force the window hidden right away.
+    if not _flyout._visible:
+        _flyout.hide()
+        try:
+            hwnd = _flyout._find_hwnd()
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 0)   # SW_HIDE
+        except Exception:
+            pass
     time.sleep(0.4)
     _flyout.round_corners()
     _flyout.hide_from_taskbar()

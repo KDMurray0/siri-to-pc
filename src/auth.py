@@ -35,7 +35,8 @@ _DEFAULT_CONFIG = {
 
 def ensure_config():
     # Load config.json; create it and/or a random api_key if missing, then save.
-    from paths import config_path
+    from paths import config_path, migrate_legacy_data
+    migrate_legacy_data()          # pull old next-to-exe data into the stable dir
     path = config_path()
     changed = False
     if os.path.isfile(path):

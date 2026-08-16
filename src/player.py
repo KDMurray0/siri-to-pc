@@ -211,8 +211,9 @@ class PlayerManager:
         self._autoqueue_provider = None   # callable(seed_video_id, exclude_ids) -> [track dicts]
         self._autoqueue_threshold = 2     # emergency floor: refill now if this few remain
         self._autoqueue_batch = 4         # songs added per refill
-        self._autoqueue_target = 12       # keep ~this many queued ahead
-        self._autoqueue_interval = 40.0   # min seconds between paced refills
+        self._autoqueue_target = 15       # base lookahead (grows while you skip)
+        self._aq_min_interval = 8.0       # refill delay when near the end
+        self._aq_max_interval = 60.0      # refill delay when well-buffered
         self._skip_times = []             # recent skip timestamps (accelerate refills)
         self._last_refill_ts = 0.0
         self._autoqueue_lock = threading.Lock()
@@ -392,14 +393,15 @@ class PlayerManager:
         self._autoqueue_enabled = bool(config.get("auto_queue", True))
         self._autoqueue_batch = int(config.get("auto_queue_batch", 4) or 4)
         self._autoqueue_threshold = int(config.get("auto_queue_threshold", 2) or 2)
-        self._autoqueue_target = int(config.get("auto_queue_target", 12) or 12)
-        self._autoqueue_interval = float(config.get("auto_queue_interval", 40) or 40)
+        self._autoqueue_target = int(config.get("auto_queue_target", 15) or 15)
+        self._aq_min_interval = float(config.get("auto_queue_min_interval", 8) or 8)
+        self._aq_max_interval = float(config.get("auto_queue_max_interval", 60) or 60)
         self._monitor_thread = threading.Thread(target=self._autoqueue_loop, daemon=True)
         self._monitor_thread.start()
         if self._autoqueue_enabled:
-            print(f"Auto-queue enabled (keep ~{self._autoqueue_target} ahead, "
-                  f"+{self._autoqueue_batch} every {self._autoqueue_interval:.0f}s, "
-                  f"faster while skipping)")
+            print(f"Auto-queue enabled (keep ~{self._autoqueue_target}+ ahead, "
+                  f"+{self._autoqueue_batch} per refill, "
+                  f"{self._aq_min_interval:.0f}-{self._aq_max_interval:.0f}s pacing)")
 
         # Restore persisted volume / EQ / normalization / repeat.
         self.apply_saved_settings()
@@ -988,17 +990,21 @@ class PlayerManager:
                     if remaining > 0:
                         continue
                     self._autoqueue_hold = False
-                # Keep ~target songs queued ahead.
-                if remaining >= self._autoqueue_target:
-                    continue
-                # Pace refills (~batch every interval) so we're not downloading a
-                # huge burst — but the more you've skipped recently, the faster we
-                # top up, and if the queue is about to run dry we refill now.
                 now = time.monotonic()
                 recent_skips = sum(1 for t in self._skip_times if now - t < 60)
-                interval = self._autoqueue_interval
+                # Queue grows dynamically — the more you're skipping, the deeper
+                # the buffer we keep ahead of you.
+                target = self._autoqueue_target + min(12, recent_skips * 3)
+                if remaining >= target:
+                    continue
+                # Refill delay scales with how much buffer is left: short near the
+                # end, long when well-stocked, shorter still while skipping. Never
+                # let it actually run dry.
+                frac = remaining / float(max(1, target))
+                interval = self._aq_min_interval + \
+                    (self._aq_max_interval - self._aq_min_interval) * frac
                 if recent_skips >= 2:
-                    interval = max(6.0, self._autoqueue_interval / (recent_skips + 1))
+                    interval /= recent_skips
                 if remaining > self._autoqueue_threshold and \
                         (now - self._last_refill_ts) < interval:
                     continue
@@ -1512,7 +1518,7 @@ class PlayerManager:
             if artist and artist in liked_artists:
                 score += w["liked_boost"]
             if is_derivative(t.get("title")):
-                score -= 1.5                          # avoid remixes/covers
+                continue                              # queue clean, popular versions only
             ap = artist_stats.get(artist)
             if ap:
                 score += w["playthrough"] * ap[0] - w["skip_penalty"] * ap[1]
