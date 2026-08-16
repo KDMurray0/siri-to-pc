@@ -442,18 +442,27 @@ def api_play():
 def api_play_video(youtube_id):
     """Play a specific YouTube video ID (for the web page candidate list)."""
     try:
+        track = {"video_id": youtube_id}
+        for k, arg in (("title", "title"), ("artist", "artist"), ("art", "art")):
+            v = request.args.get(arg)
+            if v:
+                track[k] = v
         plan = {
-            "tracks": [{"video_id": youtube_id}],
+            "tracks": [track],
             "fallbacks": [],
             "shuffle": False,
-            "mode": "play",
+            "mode": request.args.get("mode", "play"),
             "spoken": f"Playing video {youtube_id}",
         }
         player_manager.play(plan)
+        msg = (f"Streaming {track.get('title')} by {track['artist']}"
+               if track.get("title") and track.get("artist")
+               else f"Playing video {youtube_id}")
+        player_manager.announce(msg) if track.get("title") else None
         return jsonify({
             "status": "played",
             "resolved_type": "song",
-            "message": f"Playing video {youtube_id}",
+            "message": msg,
             "target": {"id": youtube_id, "type": "video"},
         })
     except Exception as e:
@@ -589,6 +598,140 @@ def api_liked():
         return jsonify({"status": "ok", "liked": player_manager.get_liked()})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
+
+
+@app.route("/api/lyrics", methods=["GET"])
+@require_auth
+def api_lyrics():
+    """Synced (or plain) lyrics for the current track, via LRCLIB."""
+    try:
+        import lyrics
+        st = player_manager.get_status()
+        t = (st.get("track") or {}) if isinstance(st, dict) else {}
+        data = lyrics.get_lyrics(t.get("name", ""), t.get("artist", ""),
+                                 duration=int(t.get("duration") or 0))
+        return jsonify({"status": "ok", "lyrics": data,
+                        "for": {"title": t.get("name"), "artist": t.get("artist")}})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+
+@app.route("/api/search", methods=["GET"])
+@require_auth
+def api_search():
+    """Return top song matches to pick from (does not play)."""
+    try:
+        q = (request.args.get("q") or "").strip()
+        if not q:
+            return jsonify({"status": "error", "message": "q required"})
+        return jsonify({"status": "ok", "results": search_module.search_candidates(q)})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+
+@app.route("/api/queue/move", methods=["GET"])
+@require_auth
+def api_queue_move():
+    return jsonify(player_manager.queue_move(request.args.get("from"), request.args.get("to")))
+
+
+@app.route("/api/queue/remove", methods=["GET"])
+@require_auth
+def api_queue_remove():
+    return jsonify(player_manager.queue_remove(request.args.get("index")))
+
+
+@app.route("/api/queue/jump", methods=["GET"])
+@require_auth
+def api_queue_jump():
+    return jsonify(player_manager.queue_jump(request.args.get("index")))
+
+
+@app.route("/api/radio", methods=["GET"])
+@require_auth
+def api_radio():
+    """Extend the queue with a radio seeded from the current track."""
+    return jsonify(player_manager.start_radio())
+
+
+@app.route("/api/history", methods=["GET"])
+@require_auth
+def api_history():
+    """Recently played tracks + your top artists."""
+    try:
+        return jsonify({"status": "ok",
+                        "history": player_manager.get_history(),
+                        "top_artists": player_manager.top_artists()})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+
+@app.route("/api/playlists", methods=["GET"])
+@require_auth
+def api_playlists():
+    return jsonify({"status": "ok", "playlists": player_manager.get_playlists()})
+
+
+@app.route("/api/playlist/add", methods=["GET"])
+@require_auth
+def api_playlist_add():
+    name = (request.args.get("name") or "").strip()
+    if not name:
+        return jsonify({"ok": False, "message": "Playlist name required"})
+    return jsonify(player_manager.playlist_add_current(name))
+
+
+@app.route("/api/playlist/delete", methods=["GET"])
+@require_auth
+def api_playlist_delete():
+    return jsonify(player_manager.playlist_delete((request.args.get("name") or "").strip()))
+
+
+@app.route("/api/playlist/play", methods=["GET"])
+@require_auth
+def api_playlist_play():
+    name = (request.args.get("name") or "").strip()
+    tracks = player_manager.get_playlist_tracks(name)
+    if not tracks:
+        return jsonify({"status": "not_found", "message": "Empty or unknown playlist"})
+    plan = {"tracks": [{"video_id": t["video_id"], "title": t.get("title", ""),
+                        "artist": t.get("artist", ""), "album": t.get("album", ""),
+                        "thumbnail": t.get("art", "")} for t in tracks],
+            "fallbacks": [], "shuffle": request.args.get("shuffle") == "1", "mode": "play"}
+    player_manager.play(plan)
+    return jsonify({"status": "played", "message": f"Playing {name} ({len(tracks)} tracks)"})
+
+
+@app.route("/api/diag", methods=["GET"])
+@require_auth
+def api_diag():
+    """Quick health check: binaries, cookies, Groq."""
+    import shutil as _sh
+    import subprocess as _sp
+
+    def _ver(cmd):
+        try:
+            out = _sp.run(cmd, capture_output=True, text=True, timeout=8,
+                          creationflags=0x08000000).stdout.strip()
+            return out.splitlines()[0][:40] if out else None
+        except Exception:
+            return None
+
+    cookies = _config.get("cookies_file") or ""
+    ck_ok = bool(cookies and os.path.isfile(cookies))
+    ck_age = None
+    if ck_ok:
+        try:
+            ck_age = int((time.time() - os.path.getmtime(cookies)) / 86400)
+        except Exception:
+            pass
+    return jsonify({"status": "ok",
+                    "mpv": bool(_sh.which("mpv")),
+                    "yt_dlp": _ver(["yt-dlp", "--version"]),
+                    "node": _ver(["node", "--version"]),
+                    "cookies_ok": ck_ok, "cookies_age_days": ck_age,
+                    "groq": interpret.available(),
+                    "groq_model": interpret._cfg.get("model") if interpret.available() else None})
 
 
 _BOOT_NAME = "MusicRequestServer"

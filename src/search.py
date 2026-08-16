@@ -734,6 +734,24 @@ def _track_dict(result):
     }
 
 
+def search_candidates(query, limit=6):
+    """Top song matches for a 'pick the right one' list (no playback)."""
+    try:
+        rows = get_client().search(query, filter="songs", limit=limit)
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        if not r.get("videoId"):
+            continue
+        t = _track_dict(r)
+        out.append({"video_id": t["video_id"], "title": t["title"],
+                    "artist": t["artist"], "album": t["album"], "art": t["thumbnail"]})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _best_thumb(thumbs):
     """Return the largest thumbnail URL from a ytmusicapi thumbnails list."""
     if not thumbs or not isinstance(thumbs, list):

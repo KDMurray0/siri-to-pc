@@ -244,7 +244,12 @@ class PlayerManager:
         self._history_size = 100          # tunable via config
         self._song_stats = {}             # video_id -> [plays, skips]
         self._artist_stats = {}           # artist(lower) -> [plays, skips]
+        self._recent = []                 # recently-played w/ metadata (newest last)
         self._stats_lock = threading.Lock()
+        # Named playlists (your own collections, beyond Liked)
+        self._playlists_file = os.path.join(data_dir(), "playlists.json")
+        self._playlists = {}              # name -> [track dicts]
+        self._playlists_lock = threading.Lock()
         # Tunable smart-shuffle weights (overridable from config)
         self._weights = {
             "liked_boost": 2.0, "playthrough": 0.5, "skip_penalty": 0.8,
@@ -281,6 +286,7 @@ class PlayerManager:
                 self._weights[k] = type(self._weights[k])(config[f"queue_{k}"])
         self._load_liked()          # persistent taste profile
         self._load_stats()          # play history + skip stats
+        self._load_playlists()      # named playlists
         # Kill orphaned mpv from a force-close, then let Windows release the pipe
         # names before the new mpv binds them (avoids a restart pipe race).
         if _kill_stray_mpv():
@@ -1034,6 +1040,106 @@ class PlayerManager:
                 pass
 
     # ------------------------------------------------------------------
+    # Queue editing
+    # ------------------------------------------------------------------
+
+    def queue_move(self, frm, to):
+        # mpv: move item at `frm` to sit before index `to`.
+        try:
+            self._cmd("playlist-move", int(frm), int(to))
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "message": str(e)}
+
+    def queue_remove(self, index):
+        try:
+            self._cmd("playlist-remove", int(index))
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "message": str(e)}
+
+    def queue_jump(self, index):
+        try:
+            self._cmd("set_property", "playlist-pos", int(index))
+            self._cmd("set_property", "pause", False)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "message": str(e)}
+
+    def start_radio(self, count=8):
+        """Extend the queue with songs seeded from the current track."""
+        self._autoqueue_hold = False       # let radio flow
+        r = self.queue_similar(count=count)
+        return r if isinstance(r, dict) else {"ok": True, "message": "Started a radio"}
+
+    # ------------------------------------------------------------------
+    # Recently played + stats
+    # ------------------------------------------------------------------
+
+    def get_history(self, limit=40):
+        with self._stats_lock:
+            rec = list(reversed(self._recent))[:limit]     # newest first
+        return rec
+
+    def top_artists(self, limit=12):
+        with self._stats_lock:
+            items = sorted(self._artist_stats.items(),
+                           key=lambda kv: kv[1][0], reverse=True)
+        return [{"artist": a, "plays": p} for a, (p, s) in items if p > 0][:limit]
+
+    # ------------------------------------------------------------------
+    # Named playlists
+    # ------------------------------------------------------------------
+
+    def _load_playlists(self):
+        try:
+            with open(self._playlists_file) as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                self._playlists = d
+        except Exception:
+            pass
+
+    def _save_playlists(self):
+        try:
+            with open(self._playlists_file, "w") as f:
+                json.dump(self._playlists, f)
+        except Exception:
+            pass
+
+    def get_playlists(self):
+        with self._playlists_lock:
+            return [{"name": n, "count": len(t)} for n, t in self._playlists.items()]
+
+    def playlist_add_current(self, name):
+        vid = self._current_video_id()
+        if not vid:
+            return {"ok": False, "message": "Nothing playing"}
+        props = self._get_properties(["path"])
+        with self._meta_lock:
+            m = dict(self._track_meta.get(props.get("path"), {}))
+        track = {"video_id": vid, "title": m.get("title", ""),
+                 "artist": m.get("artist", ""), "album": m.get("album", ""),
+                 "art": m.get("art", "")}
+        with self._playlists_lock:
+            lst = self._playlists.setdefault(name, [])
+            if any(t.get("video_id") == vid for t in lst):
+                return {"ok": True, "message": f"Already in {name}"}
+            lst.append(track)
+            self._save_playlists()
+        return {"ok": True, "message": f"Added to {name}"}
+
+    def playlist_delete(self, name):
+        with self._playlists_lock:
+            self._playlists.pop(name, None)
+            self._save_playlists()
+        return {"ok": True}
+
+    def get_playlist_tracks(self, name):
+        with self._playlists_lock:
+            return list(self._playlists.get(name, []))
+
+    # ------------------------------------------------------------------
     # Queue introspection
     # ------------------------------------------------------------------
 
@@ -1395,6 +1501,7 @@ class PlayerManager:
             self._history = d.get("history", [])[-self._history_size:]
             self._song_stats = d.get("songs", {})
             self._artist_stats = d.get("artists", {})
+            self._recent = d.get("recent", [])[-100:]
         except Exception:
             pass
 
@@ -1402,7 +1509,8 @@ class PlayerManager:
         try:
             with open(self._stats_file, "w") as f:
                 json.dump({"history": self._history[-self._history_size:],
-                           "songs": self._song_stats, "artists": self._artist_stats}, f)
+                           "songs": self._song_stats, "artists": self._artist_stats,
+                           "recent": self._recent[-100:]}, f)
         except Exception:
             pass
 
@@ -1417,6 +1525,14 @@ class PlayerManager:
             if artist:
                 a = self._artist_stats.setdefault(artist, [0, 0])
                 a[0 if completed else 1] += 1
+            if completed:
+                # recently-played, newest last, deduped, capped
+                self._recent = [r for r in self._recent if r.get("video_id") != video_id]
+                self._recent.append({
+                    "video_id": video_id, "title": meta.get("title", ""),
+                    "artist": meta.get("artist", ""), "art": meta.get("art", ""),
+                    "ts": time.time()})
+                self._recent = self._recent[-100:]
             # The no-repeat history + queue context only track songs you
             # actually listened to (>=30%). Skipped songs are ignored here, so
             # they can come back later (the skip only counts against them in the
