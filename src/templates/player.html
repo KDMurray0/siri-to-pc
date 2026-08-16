@@ -157,10 +157,13 @@ body.paused .q .eq i{animation-play-state:paused}
 .gear:hover{color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
 .gear svg{width:18px;height:18px;fill:currentColor}
 
-/* settings slide-up sheet — full height so everything is reachable */
+/* settings slide-up sheet — full height so everything is reachable.
+   translate3d + will-change forces its own GPU layer so a stage reflow (e.g.
+   entering lyrics mode) can't leave it half-painted. */
 .sheet{position:absolute;inset:0;z-index:6;background:var(--bg);display:flex;flex-direction:column;
-  transform:translateY(100%);transition:transform .3s cubic-bezier(.2,.8,.2,1)}
-.sheet.open{transform:translateY(0)}
+  transform:translate3d(0,100%,0);transition:transform .3s cubic-bezier(.2,.8,.2,1);
+  will-change:transform;backface-visibility:hidden}
+.sheet.open{transform:translate3d(0,0,0)}
 .sheet-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px 12px;
   font-weight:800;font-size:16px;border-bottom:1px solid var(--line)}
 .sheet-x{background:none;border:0;color:var(--sub);font-size:16px;cursor:pointer;width:30px;height:30px;
@@ -190,13 +193,13 @@ body.paused .q .eq i{animation-play-state:paused}
 .qc svg{width:13px;height:13px;fill:currentColor}
 .q.clickable{cursor:pointer}
 
-/* lyrics mode: reclaim vertical space so the lyrics can breathe */
-body.lyrics-mode .art-wrap{display:none}
+/* lyrics mode: collapse the art + volume row so the lyrics get the lower half.
+   Animated max-height (not display:none) keeps the reflow small and smooth. */
+.art-wrap,.row2{overflow:hidden;max-height:280px;
+  transition:max-height .3s ease,opacity .22s ease,margin .3s ease}
+body.lyrics-mode .art-wrap,body.lyrics-mode .row2{max-height:0;opacity:0;margin-top:0;pointer-events:none}
 body.lyrics-mode .meta{margin-top:2px;min-height:0}
 body.lyrics-mode .prog{margin-top:10px}
-body.lyrics-mode .row2{display:none}
-body.lyrics-mode .search{display:none}
-body.lyrics-mode .nav{margin-top:10px}
 
 /* lyrics */
 .lyrics{padding:4px 2px;text-align:center}
