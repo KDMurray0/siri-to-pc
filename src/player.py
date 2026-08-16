@@ -208,8 +208,12 @@ class PlayerManager:
         # Auto-queue (Spotify-style radio)
         self._autoqueue_enabled = False
         self._autoqueue_provider = None   # callable(seed_video_id, exclude_ids) -> [track dicts]
-        self._autoqueue_threshold = 1     # refill when this many tracks remain
-        self._autoqueue_batch = 5         # how many to add per refill
+        self._autoqueue_threshold = 2     # emergency floor: refill now if this few remain
+        self._autoqueue_batch = 4         # songs added per refill
+        self._autoqueue_target = 12       # keep ~this many queued ahead
+        self._autoqueue_interval = 40.0   # min seconds between paced refills
+        self._skip_times = []             # recent skip timestamps (accelerate refills)
+        self._last_refill_ts = 0.0
         self._autoqueue_lock = threading.Lock()
         self._played_ids = []             # ordered history of video_ids (dedup radio)
         self._monitor_thread = None
@@ -381,13 +385,16 @@ class PlayerManager:
 
         # Auto-queue config + monitor thread
         self._autoqueue_enabled = bool(config.get("auto_queue", True))
-        self._autoqueue_batch = int(config.get("auto_queue_batch", 5) or 5)
-        self._autoqueue_threshold = int(config.get("auto_queue_threshold", 1) or 1)
+        self._autoqueue_batch = int(config.get("auto_queue_batch", 4) or 4)
+        self._autoqueue_threshold = int(config.get("auto_queue_threshold", 2) or 2)
+        self._autoqueue_target = int(config.get("auto_queue_target", 12) or 12)
+        self._autoqueue_interval = float(config.get("auto_queue_interval", 40) or 40)
         self._monitor_thread = threading.Thread(target=self._autoqueue_loop, daemon=True)
         self._monitor_thread.start()
         if self._autoqueue_enabled:
-            print(f"Auto-queue enabled (refill {self._autoqueue_batch} when "
-                  f"{self._autoqueue_threshold} left)")
+            print(f"Auto-queue enabled (keep ~{self._autoqueue_target} ahead, "
+                  f"+{self._autoqueue_batch} every {self._autoqueue_interval:.0f}s, "
+                  f"faster while skipping)")
 
         # Restore persisted volume / EQ / normalization / repeat.
         self.apply_saved_settings()
@@ -959,8 +966,21 @@ class PlayerManager:
                     if remaining > 0:
                         continue
                     self._autoqueue_hold = False
-                if remaining > self._autoqueue_threshold:
+                # Keep ~target songs queued ahead.
+                if remaining >= self._autoqueue_target:
                     continue
+                # Pace refills (~batch every interval) so we're not downloading a
+                # huge burst — but the more you've skipped recently, the faster we
+                # top up, and if the queue is about to run dry we refill now.
+                now = time.monotonic()
+                recent_skips = sum(1 for t in self._skip_times if now - t < 60)
+                interval = self._autoqueue_interval
+                if recent_skips >= 2:
+                    interval = max(6.0, self._autoqueue_interval / (recent_skips + 1))
+                if remaining > self._autoqueue_threshold and \
+                        (now - self._last_refill_ts) < interval:
+                    continue
+                self._last_refill_ts = now
 
                 if not self._current_video_id():
                     continue
@@ -1403,7 +1423,12 @@ class PlayerManager:
             if self._watch_id and self._watch_dur:
                 ratio = (self._watch_pos or 0) / self._watch_dur
                 # A "skip" only counts against a song if you bailed before ~30%.
-                self._record_play(self._watch_id, self._watch_meta, completed=ratio >= 0.30)
+                completed = ratio >= 0.30
+                if not completed:
+                    now = time.monotonic()
+                    self._skip_times = [t for t in self._skip_times if now - t < 90][-19:]
+                    self._skip_times.append(now)
+                self._record_play(self._watch_id, self._watch_meta, completed=completed)
             self._watch_id = cur_id
             self._watch_meta = cur_meta
             self._watch_pos = 0

@@ -27,3 +27,6 @@ server.log
 *.log
 .DS_Store
 Thumbs.db
+
+# ── Not for the repo ──
+SKILL.md
