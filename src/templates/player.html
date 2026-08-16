@@ -190,6 +190,14 @@ body.paused .q .eq i{animation-play-state:paused}
 .qc svg{width:13px;height:13px;fill:currentColor}
 .q.clickable{cursor:pointer}
 
+/* lyrics mode: reclaim vertical space so the lyrics can breathe */
+body.lyrics-mode .art-wrap{display:none}
+body.lyrics-mode .meta{margin-top:2px;min-height:0}
+body.lyrics-mode .prog{margin-top:10px}
+body.lyrics-mode .row2{display:none}
+body.lyrics-mode .search{display:none}
+body.lyrics-mode .nav{margin-top:10px}
+
 /* lyrics */
 .lyrics{padding:4px 2px;text-align:center}
 .lyrics .lrow{font-size:14px;line-height:1.5;color:var(--sub);padding:5px 4px;transition:color .2s,transform .2s;
@@ -510,6 +518,7 @@ document.querySelectorAll(".navtab[data-panel]").forEach(t=>t.onclick=()=>{
   document.querySelectorAll(".navtab[data-panel]").forEach(x=>x.classList.toggle("on",x===t));
   document.querySelectorAll(".panel").forEach(p=>p.classList.remove("open"));
   $("panel-"+activePanel).classList.add("open");
+  document.body.classList.toggle("lyrics-mode", activePanel==="lyrics");
   if(activePanel==="lyrics")loadLyrics(true);
   if(activePanel==="recent")loadRecent();
   if(activePanel==="lists")loadLists();
