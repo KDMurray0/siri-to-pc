@@ -1,5 +1,14 @@
 # CHANGELOG -
 
+## 2026-08-16 (pt 4) — Siri endpoint, boot/announce, genre-aware picking, refactor
+
+- **iOS-Shortcut endpoint:** `/` now accepts the shortcut's `POST {"input": "…"}` and runs it; a browser visit shows step-by-step Shortcut setup (`setup.html`). The old form-based web interface (`index.html`, `static/`) is gone.
+- **Song picking = popularity + taste + genre, minus junk:** same-title conflicts weigh YouTube Music's ranking (popularity), whether it's by an artist you listen to (which captures your genre — into punk → your punk artists win), and penalise remixes / sped-up / covers unless you ask for one (`_pick_song`, `is_derivative`). Also handles "song + artist" phrasing with no "by" ("coming undone korn").
+- **Skip rule + history:** a play only counts as a *skip* if you bailed before ~30%; the no-repeat/context history ignores skipped songs so they can come back.
+- **Start on boot:** a Settings toggle registers the launcher to start hidden-to-tray on Windows sign-in (`/api/boot`, HKCU Run key).
+- **Spoken announcements:** when you *request* a song it's announced over the speakers with the built-in Windows voice (ducking the music); auto-queued songs stay quiet (`/api/announce`).
+- **Refactor:** code moved under `src/`, dead stream-mode path removed, testing tools deleted, secrets git-ignored with a `config.example.json`.
+
 ## 2026-08-16 (pt 3) — True crossfade, context-aware queue, tunable weights
 
 - **True overlapping crossfade (dual mpv):** a second, hidden mpv (`--media-controls=no`) plays the outgoing track's tail fading out while the primary jumps to the next song fading in (via the audio filter) — a real overlap with no echo or double-play, and the primary stays the single source of truth for the queue, Windows media controls, and status. Works for both auto-advance (`_maybe_crossfade`) and manual/searched song changes (`_crossfade_replace`). Enabled by the Crossfade setting.
