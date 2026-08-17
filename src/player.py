@@ -790,6 +790,18 @@ class PlayerManager:
         self._start_tail(props.get("path"), props.get("time-pos") or 0, cf)
         self._cmd("loadfile", path, "replace")   # new track fades in (afade)
 
+    def _skip_crossfade(self, cmd):
+        # Manual next/prev: crossfade the skip too when crossfade is on.
+        cf = self._settings.get("crossfade") or 0
+        if cf > 0 and self._pipe2_handle:
+            try:
+                props = self._get_properties(["path", "time-pos", "pause"])
+                if props.get("path") and not props.get("pause"):
+                    self._start_tail(props["path"], props.get("time-pos") or 0, cf)
+            except Exception:
+                pass
+        self._cmd(cmd)
+
     def _maybe_crossfade(self):
         """Auto-advance crossfade: when the current track is within *cf* seconds
         of the end and the next track is ready, start the tail on the secondary
@@ -1736,11 +1748,11 @@ class PlayerManager:
             return {"action": action, "ok": True, "message": "Toggled play/pause"}
 
         elif action == "next":
-            self._cmd("playlist-next")
+            self._skip_crossfade("playlist-next")
             return {"action": action, "ok": True, "message": "Skipped to next track"}
 
         elif action == "previous":
-            self._cmd("playlist-prev")
+            self._skip_crossfade("playlist-prev")
             return {"action": action, "ok": True, "message": "Previous track"}
 
         elif action == "volume":

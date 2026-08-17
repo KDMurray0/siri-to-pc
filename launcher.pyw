@@ -196,11 +196,25 @@ class Flyout:
         self._visible = True
         self._shown_at = time.monotonic()
         self._hwnd = None
+        self._pinned = False          # popped out: stays put, never auto-hides
 
     # JS bridge
     def on_blur(self):
+        if self._pinned:
+            return
         if not os.environ.get("MRS_NO_AUTOHIDE"):
             self.hide()
+
+    def set_pinned(self, on):
+        # Pop-out: keep the window open on top and stop auto-hiding on blur.
+        self._pinned = bool(on)
+        try:
+            if self._pinned:
+                self.window.show()
+                self._visible = True
+        except Exception:
+            pass
+        return self._pinned
 
     def _find_hwnd(self):
         if self._hwnd:
@@ -263,7 +277,7 @@ class Flyout:
         while True:
             time.sleep(0.25)
             try:
-                if os.environ.get("MRS_NO_AUTOHIDE"):
+                if self._pinned or os.environ.get("MRS_NO_AUTOHIDE"):
                     continue
                 if self._visible and (time.monotonic() - self._shown_at) > 0.6:
                     hwnd = self._find_hwnd()

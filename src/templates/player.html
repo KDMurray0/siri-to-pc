@@ -40,6 +40,12 @@ body{
   background:linear-gradient(to bottom, transparent 0%, transparent 22%, var(--bg) 62%)}
 
 .drag{-webkit-app-region:drag; app-region:drag}
+/* pop-out (pin): stays on top, never auto-hides */
+.pin{position:absolute;top:9px;right:11px;z-index:5;background:none;border:0;color:var(--sub);cursor:pointer;
+  width:28px;height:28px;display:grid;place-items:center;border-radius:8px;opacity:.55;transition:opacity .15s,color .15s;-webkit-app-region:no-drag}
+.pin:hover{opacity:1;color:var(--accent)}
+.pin.on{opacity:1;color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
+.pin svg{width:15px;height:15px;fill:currentColor}
 .stage{position:relative; z-index:2; padding:20px 22px 12px; flex:1; display:flex; flex-direction:column; min-height:0}
 
 /* now playing */
@@ -161,9 +167,11 @@ body.paused .q .eq i{animation-play-state:paused}
    translate3d + will-change forces its own GPU layer so a stage reflow (e.g.
    entering lyrics mode) can't leave it half-painted. */
 .sheet{position:absolute;inset:0;z-index:6;background:var(--bg);display:flex;flex-direction:column;
-  transform:translate3d(0,100%,0);transition:transform .3s cubic-bezier(.2,.8,.2,1);
+  transform:translate3d(0,100%,0);visibility:hidden;pointer-events:none;
+  transition:transform .3s cubic-bezier(.2,.8,.2,1),visibility 0s linear .3s;
   will-change:transform;backface-visibility:hidden}
-.sheet.open{transform:translate3d(0,0,0)}
+.sheet.open{transform:translate3d(0,0,0);visibility:visible;pointer-events:auto;
+  transition:transform .3s cubic-bezier(.2,.8,.2,1)}
 .sheet-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px 12px;
   font-weight:800;font-size:16px;border-bottom:1px solid var(--line)}
 .sheet-x{background:none;border:0;color:var(--sub);font-size:16px;cursor:pointer;width:30px;height:30px;
@@ -192,20 +200,30 @@ body.paused .q .eq i{animation-play-state:paused}
 .qc:hover{color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
 .qc svg{width:13px;height:13px;fill:currentColor}
 .q.clickable{cursor:pointer}
+/* played-this-session history, tucked behind a toggle to keep the queue clean */
+.qhistory{width:100%;background:none;border:0;border-bottom:1px solid var(--line);color:var(--sub);
+  cursor:pointer;font-family:inherit;font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
+  padding:8px 4px 9px;text-align:left;margin-bottom:4px;transition:color .15s}
+.qhistory:hover{color:var(--accent)}
+.qhist{opacity:.62;padding-bottom:4px;margin-bottom:6px;border-bottom:1px solid var(--line)}
+.qhist .qn{color:var(--sub)}
 
 /* lyrics mode: collapse the art + volume row so the lyrics get the lower half.
    Animated max-height (not display:none) keeps the reflow small and smooth. */
 .art-wrap,.row2{overflow:hidden;max-height:280px;
   transition:max-height .3s ease,opacity .22s ease,margin .3s ease}
-body.lyrics-mode .art-wrap,body.lyrics-mode .row2{max-height:0;opacity:0;margin-top:0;pointer-events:none}
-body.lyrics-mode .meta{margin-top:2px;min-height:0}
-body.lyrics-mode .prog{margin-top:10px}
+body.lyrics-mode .art-wrap,body.lyrics-mode .row2,
+body.queue-expand .art-wrap,body.queue-expand .row2{max-height:0;opacity:0;margin-top:0;pointer-events:none}
+body.lyrics-mode .meta,body.queue-expand .meta{margin-top:2px;min-height:0}
+body.lyrics-mode .prog,body.queue-expand .prog{margin-top:10px}
 
 /* lyrics */
 .lyrics{padding:4px 2px;text-align:center}
 .lyrics .lrow{font-size:14px;line-height:1.5;color:var(--sub);padding:5px 4px;transition:color .2s,transform .2s;
   opacity:.55}
 .lyrics .lrow.active{color:var(--fg);font-weight:700;opacity:1;transform:scale(1.03)}
+.lyrics:not(.plain) .lrow{cursor:pointer;border-radius:8px}
+.lyrics:not(.plain) .lrow:hover{color:var(--fg);opacity:.9;background:color-mix(in srgb,var(--accent) 10%,transparent)}
 .lyrics.plain .lrow{text-align:left;opacity:.85}
 
 /* recent + lists rows */
@@ -246,6 +264,9 @@ body.lyrics-mode .prog{margin-top:10px}
 </head>
 <body>
 <div class="frame" id="frame">
+  <button class="pin" id="pin" title="Pop out (stay on top)" aria-label="Pop out">
+    <svg viewBox="0 0 24 24"><path d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z"/></svg>
+  </button>
   <div class="ambient" id="ambient"></div>
   <div class="stage">
     <div class="art-wrap drag">
@@ -425,6 +446,14 @@ $("shuffle").onclick=()=>{$("shuffle").classList.add("on");setTimeout(()=>$("shu
 $("repeat").onclick=()=>api("/api/control/repeat");
 $("like").onclick=async()=>{const r=await api("/api/control/like");if(r&&r.message)toast(r.message);};
 $("radio").onclick=async()=>{toast("Starting radio…");const r=await api("/api/radio");toast((r&&r.message)||"Started a radio");};
+let pinned=false;
+$("pin").onclick=()=>{
+  pinned=!pinned;
+  $("pin").classList.toggle("on",pinned);
+  $("pin").title = pinned ? "Pinned on top — click to unpin" : "Pop out (stay on top)";
+  try{ if(window.pywebview&&window.pywebview.api&&window.pywebview.api.set_pinned) window.pywebview.api.set_pinned(pinned); }catch(e){}
+  toast(pinned ? "Popped out — stays on top" : "Unpinned");
+};
 $("download").onclick=async()=>{
   const b=$("download"), orig=b.innerHTML;
   b.classList.add("on");
@@ -522,6 +551,7 @@ document.querySelectorAll(".navtab[data-panel]").forEach(t=>t.onclick=()=>{
   document.querySelectorAll(".panel").forEach(p=>p.classList.remove("open"));
   $("panel-"+activePanel).classList.add("open");
   document.body.classList.toggle("lyrics-mode", activePanel==="lyrics");
+  if(activePanel!=="queue")document.body.classList.remove("queue-expand");
   if(activePanel==="lyrics")loadLyrics(true);
   if(activePanel==="recent")loadRecent();
   if(activePanel==="lists")loadLists();
@@ -557,28 +587,38 @@ function loadSettings(s){
   markChips("crossfade",s.crossfade||0);
 }
 
-/* ── render queue (tap a row to jump; hover for reorder / remove) ── */
-let lastQSig="";
+/* ── render queue: current + up-next stay; already-played tucked behind a toggle ── */
+let lastQSig="", histOpen=false, lastQ=[];
+function qRow(t,idx){
+  const art=t.art?`<img class="qi" src="${t.art}">`:`<div class="qi"></div>`;
+  const eq=t.current?'<div class="eq"><i></i><i></i><i></i></div>':'';
+  return `<div class="q clickable${t.current?" cur":""}" data-idx="${idx}">${art}`+
+    `<div class="qt"><div class="qn">${esc(t.title)}</div><div class="qa">${esc(t.artist||"")}</div></div>${eq}`+
+    `<div class="qctl">`+
+      `<button class="qc" data-act="up" data-i="${idx}" title="Move up">↑</button>`+
+      `<button class="qc" data-act="down" data-i="${idx}" title="Move down">↓</button>`+
+      `<button class="qc" data-act="del" data-i="${idx}" title="Remove">✕</button>`+
+    `</div></div>`;
+}
 function renderQueue(q){
-  const sig=q.map(x=>x.title+(x.current?"*":"")).join("|");
+  lastQ=q;
+  const sig=histOpen+"|"+q.map(x=>x.title+(x.current?"*":"")).join("|");
   if(sig===lastQSig)return; lastQSig=sig;
   const box=$("panel-queue");
   if(!q.length){box.innerHTML='<div class="muted">Queue is empty. Play something or ask for a vibe.</div>';return;}
-  box.innerHTML="";
-  q.forEach((t,i)=>{
-    const d=document.createElement("div");d.className="q clickable"+(t.current?" cur":"");d.dataset.idx=i;
-    const art=t.art?`<img class="qi" src="${t.art}">`:`<div class="qi"></div>`;
-    const eq=t.current?'<div class="eq"><i></i><i></i><i></i></div>':'';
-    d.innerHTML=`${art}<div class="qt"><div class="qn">${esc(t.title)}</div><div class="qa">${esc(t.artist||"")}</div></div>${eq}`+
-      `<div class="qctl">`+
-        `<button class="qc" data-act="up" data-i="${i}" title="Move up">↑</button>`+
-        `<button class="qc" data-act="down" data-i="${i}" title="Move down">↓</button>`+
-        `<button class="qc" data-act="del" data-i="${i}" title="Remove">✕</button>`+
-      `</div>`;
-    box.appendChild(d);
-  });
+  const cur=q.findIndex(x=>x.current), cut=cur<0?0:cur;
+  const played=q.slice(0,cut), upcoming=q.slice(cut);
+  let html="";
+  if(played.length){
+    html+=`<button class="qhistory" id="qHist">${histOpen?"▾":"▸"} ${played.length} already played</button>`;
+    if(histOpen)html+='<div class="qhist">'+played.map((t,i)=>qRow(t,i)).join("")+'</div>';
+  }
+  html+=upcoming.map((t,i)=>qRow(t,cut+i)).join("");
+  box.innerHTML=html;
+  const h=$("qHist"); if(h)h.onclick=(e)=>{e.stopPropagation();histOpen=!histOpen;renderQueue(lastQ);};
 }
 $("panel-queue").addEventListener("click",e=>{
+  if(e.target.closest(".qhistory"))return;
   const btn=e.target.closest(".qc"); const row=e.target.closest(".q.clickable");
   const n=$("panel-queue").querySelectorAll(".q").length;
   if(btn){e.stopPropagation();const i=+btn.dataset.i, a=btn.dataset.act;
@@ -587,6 +627,11 @@ $("panel-queue").addEventListener("click",e=>{
     else if(a==="del")api("/api/queue/remove?index="+i);
     lastQSig="";return;}
   if(row){const i=+row.dataset.idx;if(!isNaN(i)){api("/api/queue/jump?index="+i);lastQSig="";}}
+});
+/* double-click the queue to expand it (collapses the now-playing chrome) */
+$("panel-queue").addEventListener("dblclick",e=>{
+  if(e.target.closest(".qc")||e.target.closest(".qhistory"))return;
+  document.body.classList.toggle("queue-expand");
 });
 function esc(s){return (s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 
@@ -619,6 +664,12 @@ function syncLyrics(pos){
   rows.forEach((r,i)=>r.classList.toggle("active",i===idx));
   if(rows[idx])rows[idx].scrollIntoView({block:"center",behavior:"smooth"});
 }
+/* click a synced line to jump there (300ms early so you don't miss the word) */
+$("panel-lyrics").addEventListener("click",e=>{
+  const row=e.target.closest(".lrow[data-t]"); if(!row)return;
+  const t=parseFloat(row.dataset.t);
+  if(!isNaN(t)){api("/api/seek?pos="+Math.max(0,t-0.3));lastLine=-1;}
+});
 
 /* ── recently played + top artists ── */
 async function loadRecent(){
