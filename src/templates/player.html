@@ -39,15 +39,26 @@ body{
 .frame::after{content:"";position:absolute;inset:0;z-index:1;pointer-events:none;
   background:linear-gradient(to bottom, transparent 0%, transparent 22%, var(--bg) 62%)}
 
-.drag{-webkit-app-region:drag; app-region:drag}
-/* always-present drag strip at the top so the window moves even when pinned */
-.topdrag{position:absolute;top:0;left:0;right:0;height:24px;z-index:4;-webkit-app-region:drag}
-/* pop-out (pin): stays on top, never auto-hides */
+/* window drag is driven by JS + a native move loop (WebView2 ignores app-region) */
+.drag,.topdrag{cursor:move}
+.topdrag{position:absolute;top:0;left:0;right:0;height:24px;z-index:4}
+/* pop-out (pin) + shrink buttons */
 .pin{position:absolute;top:9px;right:11px;z-index:5;background:none;border:0;color:var(--sub);cursor:pointer;
-  width:28px;height:28px;display:grid;place-items:center;border-radius:8px;opacity:.55;transition:opacity .15s,color .15s;-webkit-app-region:no-drag}
+  width:28px;height:28px;display:grid;place-items:center;border-radius:8px;opacity:.55;transition:opacity .15s,color .15s}
 .pin:hover{opacity:1;color:var(--accent)}
 .pin.on{opacity:1;color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
 .pin svg{width:15px;height:15px;fill:currentColor}
+#shrink{right:44px}
+
+/* mini / shrunk mode — just the art + name */
+body.mini .ambient,body.mini .prog,body.mini .controls,body.mini .row2,body.mini .search,
+body.mini .nav,body.mini .panel,body.mini .toast,body.mini .frame::after{display:none}
+body.mini .stage{flex-direction:row;align-items:center;gap:12px;padding:12px 48px 12px 14px;flex:1}
+body.mini .art-wrap{margin:0;max-height:none;overflow:visible;flex:0 0 auto}
+body.mini .art{width:72px;height:72px;border-radius:12px}
+body.mini .meta{margin:0;text-align:left;min-height:0;flex:1;min-width:0}
+body.mini .title{font-size:14px}
+body.mini .artist{font-size:11.5px}
 .stage{position:relative; z-index:2; padding:20px 22px 12px; flex:1; display:flex; flex-direction:column; min-height:0}
 
 /* now playing */
@@ -269,7 +280,10 @@ body.lyrics-mode .prog,body.queue-expand .prog{margin-top:10px}
 </head>
 <body>
 <div class="frame" id="frame">
-  <div class="topdrag drag"></div>
+  <div class="topdrag"></div>
+  <button class="pin" id="shrink" title="Shrink to mini" aria-label="Shrink">
+    <svg viewBox="0 0 24 24"><path d="M5 15h4v4H7v-2H5v-2zm10 0h2v2h2v2h-4v-4zM5 5h4v2H7v2H5V5zm12 0v4h-2V7h-2V5h4z"/></svg>
+  </button>
   <button class="pin" id="pin" title="Pop out (stay on top)" aria-label="Pop out">
     <svg viewBox="0 0 24 24"><path d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z"/></svg>
   </button>
@@ -454,13 +468,26 @@ $("shuffle").onclick=()=>{$("shuffle").classList.add("on");setTimeout(()=>$("shu
 $("repeat").onclick=()=>api("/api/control/repeat");
 $("like").onclick=async()=>{const r=await api("/api/control/like");if(r&&r.message)toast(r.message);};
 $("radio").onclick=async()=>{toast("Starting radio…");const r=await api("/api/radio");toast((r&&r.message)||"Started a radio");};
+function _bridge(){ return (window.pywebview&&window.pywebview.api)||null; }
 let pinned=false;
 $("pin").onclick=()=>{
   pinned=!pinned;
   $("pin").classList.toggle("on",pinned);
   $("pin").title = pinned ? "Pinned on top — click to unpin" : "Pop out (stay on top)";
-  try{ if(window.pywebview&&window.pywebview.api&&window.pywebview.api.set_pinned) window.pywebview.api.set_pinned(pinned); }catch(e){}
+  const b=_bridge(); if(b&&b.set_pinned)b.set_pinned(pinned);
   toast(pinned ? "Popped out — stays on top" : "Unpinned");
+};
+/* native window drag from the top strip / album art / title */
+document.querySelectorAll(".drag, .topdrag").forEach(el=>{
+  el.addEventListener("mousedown",e=>{ if(e.button===0){const b=_bridge(); if(b&&b.begin_move)b.begin_move();} });
+});
+/* shrink to a mini art+name chip */
+let mini=false;
+$("shrink").onclick=()=>{
+  mini=!mini;
+  document.body.classList.toggle("mini",mini);
+  $("shrink").title = mini ? "Restore" : "Shrink to mini";
+  const b=_bridge(); if(b&&b.set_mini)b.set_mini(mini);
 };
 $("download").onclick=async()=>{
   const b=$("download"), orig=b.innerHTML;
@@ -647,7 +674,7 @@ $("panel-queue").addEventListener("click",e=>{
   if(row){
     const i=+row.dataset.idx;
     if(qClickTimer){clearTimeout(qClickTimer);qClickTimer=null;return;}  // 2nd click → dblclick handles it
-    qClickTimer=setTimeout(()=>{qClickTimer=null;if(!isNaN(i)){api("/api/queue/jump?index="+i);lastQSig="";}},250);
+    qClickTimer=setTimeout(()=>{qClickTimer=null;if(!isNaN(i))api("/api/queue/jump?index="+i);},260);  // no re-render (tick refreshes)
   }
 });
 /* double-click the queue (anywhere) to expand it; again to restore */

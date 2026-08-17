@@ -58,6 +58,7 @@ if _reexec_if_needed():
     sys.exit(0)
 
 import ctypes
+from ctypes import wintypes
 import socket
 import subprocess
 import threading
@@ -197,6 +198,7 @@ class Flyout:
         self._shown_at = time.monotonic()
         self._hwnd = None
         self._pinned = False          # popped out: stays put, never auto-hides
+        self._moving = False          # native drag loop active
 
     # JS bridge
     def on_blur(self):
@@ -222,6 +224,41 @@ class Flyout:
         except Exception:
             pass
         return self._pinned
+
+    def begin_move(self):
+        # Native drag: follow the cursor while the left button is held. Reliable
+        # even where WebView2 ignores -webkit-app-region:drag.
+        if self._moving:
+            return
+        self._moving = True
+        threading.Thread(target=self._move_loop, daemon=True).start()
+
+    def _move_loop(self):
+        try:
+            u = ctypes.windll.user32
+            hwnd = self._find_hwnd()
+            if not hwnd:
+                return
+            pt = wintypes.POINT(); u.GetCursorPos(ctypes.byref(pt))
+            r = wintypes.RECT(); u.GetWindowRect(hwnd, ctypes.byref(r))
+            ox, oy = pt.x - r.left, pt.y - r.top
+            while u.GetAsyncKeyState(0x01) & 0x8000:      # VK_LBUTTON held
+                u.GetCursorPos(ctypes.byref(pt))
+                u.SetWindowPos(hwnd, 0, pt.x - ox, pt.y - oy, 0, 0, 0x0001 | 0x0004)  # NOSIZE|NOZORDER
+                time.sleep(0.008)
+        except Exception:
+            pass
+        finally:
+            self._moving = False
+
+    def set_mini(self, on):
+        # Shrink to a compact art + title chip (or restore full size).
+        try:
+            if self.window:
+                self.window.resize(300, 120) if on else self.window.resize(Flyout.W, Flyout.H)
+        except Exception:
+            pass
+        return bool(on)
 
     def _find_hwnd(self):
         if self._hwnd:
@@ -305,6 +342,13 @@ class _Bridge:
 
     def set_pinned(self, on):
         return _flyout.set_pinned(on) if _flyout else False
+
+    def begin_move(self):
+        if _flyout:
+            _flyout.begin_move()
+
+    def set_mini(self, on):
+        return _flyout.set_mini(on) if _flyout else False
 
 
 # ── tray ─────────────────────────────────────────────────────────────
