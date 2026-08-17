@@ -161,6 +161,14 @@ def _write(handle, data_bytes):
             _KERNEL32.CloseHandle(event)
 
 
+# WinErrors that mean "the pipe's other end is gone" (mpv died / closing).
+_PIPE_DEAD_ERRNOS = {232, 109, 233, 6, 2}  # NO_DATA, BROKEN_PIPE, PIPE_NOT_CONNECTED, INVALID_HANDLE, FILE_NOT_FOUND
+
+
+def _is_pipe_dead(exc):
+    return isinstance(exc, OSError) and getattr(exc, "winerror", None) in _PIPE_DEAD_ERRNOS
+
+
 def _kill_stray_mpv():
     # Kill orphaned mpv from a prior crash/force-close (matches our pipe name
     # only). Returns True if any were killed.
@@ -193,6 +201,12 @@ class PlayerManager:
         self._reader_stop = threading.Event()
         self._reader_thread = None
         self._read_event = None
+        # crash recovery: bump the generation so a stale reader thread exits
+        self._mpv_gen = 0
+        self._mpv_path = None
+        self._pipe_broken = False
+        self._restarting = False
+        self._restart_lock = threading.Lock()
         # Secondary mpv: plays the outgoing track's tail during a true crossfade
         self._mpv2_process = None
         self._pipe2_handle = None
@@ -298,19 +312,6 @@ class PlayerManager:
                 "mpv not found on PATH. Install with: winget install mpv"
             )
 
-        # mpv only ever plays LOCAL files (each track is downloaded first), so
-        # it needs no ytdl/cookie options. media-controls registers it with the
-        # Windows media overlay + hardware media keys; it reads the title/artist
-        # from each file's embedded tags.
-        cmd = [
-            mpv_path,
-            "--no-video", "--idle=yes", "--no-terminal",
-            "--volume-max=150",                       # allow boosting above 100
-            f"--volume={int(self._settings.get('volume', 70))}",
-            "--media-controls=yes", "--input-media-keys=yes",
-            r"--input-ipc-server=\\.\pipe\mpvsocket",
-        ]
-
         # Options used to DOWNLOAD each track with yt-dlp: cookies (to pass the
         # bot check), a JS runtime (Node — solves YouTube's signature challenge)
         # and the player client (tv gives a fetchable progressive stream).
@@ -344,56 +345,8 @@ class PlayerManager:
         if not self._ytdlp_path:
             print("WARNING: yt-dlp not found on PATH; playback will fail.")
 
-        self._mpv_process = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            creationflags=0x08000000,   # CREATE_NO_WINDOW (mpv resolves to mpv.com)
-        )
-        print(f"mpv launched (pid={self._mpv_process.pid})")
-
-        pipe_name = r"\\.\pipe\mpvsocket"
-
-        # Wait for the pipe to appear - try each 0.5s
-        pipe_handle = None
-        for _ in range(20):
-            time.sleep(0.5)
-            try:
-                pipe_handle = _open_pipe(pipe_name)
-                print("Connected to mpv IPC pipe (single R/W handle).")
-                break
-            except Exception:
-                pipe_handle = None
-
-        if not pipe_handle:
-            raise RuntimeError("mpv IPC pipe did not appear within 10 s")
-
-        self._pipe_handle = pipe_handle
-        # Manual-reset event dedicated to the reader thread's overlapped reads.
-        self._read_event = _KERNEL32.CreateEventW(None, True, False, None)
-        self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
-        self._reader_thread.start()
-
-        # ── Secondary mpv (true-crossfade tail player) ──
-        # Plays the outgoing track's final seconds, fading out, while the
-        # primary jumps to the next track fading in. media-controls off so it
-        # never creates a competing Windows media session.
-        try:
-            cmd2 = [mpv_path, "--no-video", "--idle=yes", "--no-terminal",
-                    "--no-config", "--media-controls=no", "--volume=100",
-                    r"--input-ipc-server=\\.\pipe\mpvsocket2"]
-            self._mpv2_process = subprocess.Popen(
-                cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                creationflags=0x08000000)   # CREATE_NO_WINDOW
-            for _ in range(20):
-                time.sleep(0.3)
-                try:
-                    self._pipe2_handle = _open_pipe(r"\\.\pipe\mpvsocket2")
-                    break
-                except Exception:
-                    self._pipe2_handle = None
-            if self._pipe2_handle:
-                print("Crossfade engine ready (secondary mpv connected).")
-        except Exception:
-            self._pipe2_handle = None
+        self._mpv_path = mpv_path
+        self._spawn_mpv()
 
         # Auto-queue config + monitor thread
         self._autoqueue_enabled = bool(config.get("auto_queue", True))
@@ -449,10 +402,123 @@ class PlayerManager:
         self._mpv2_process = None
 
     # ------------------------------------------------------------------
+    # mpv process + IPC (launch / restart)
+    # ------------------------------------------------------------------
+
+    def _spawn_mpv(self):
+        """Launch mpv (primary + crossfade secondary), open pipes, start reader.
+
+        Used by start() and by _restart_mpv() after mpv dies. Bumps the
+        generation so any stale reader thread exits.
+        """
+        self._mpv_gen += 1
+        gen = self._mpv_gen
+        mpv_path = self._mpv_path
+        vol = int(self._settings.get("volume", 70))
+        cmd = [mpv_path, "--no-video", "--idle=yes", "--no-terminal",
+               "--volume-max=150", f"--volume={vol}",
+               "--media-controls=yes", "--input-media-keys=yes",
+               r"--input-ipc-server=\\.\pipe\mpvsocket"]
+        self._mpv_process = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            creationflags=0x08000000)   # CREATE_NO_WINDOW (mpv resolves to mpv.com)
+        print(f"mpv launched (pid={self._mpv_process.pid})")
+
+        pipe_handle = None
+        for _ in range(20):
+            time.sleep(0.5)
+            try:
+                pipe_handle = _open_pipe(r"\\.\pipe\mpvsocket")
+                break
+            except Exception:
+                pipe_handle = None
+        if not pipe_handle:
+            raise RuntimeError("mpv IPC pipe did not appear within 10 s")
+        print("Connected to mpv IPC pipe.")
+
+        if self._read_event:
+            try: _KERNEL32.CloseHandle(self._read_event)
+            except Exception: pass
+        self._pipe_handle = pipe_handle
+        self._read_event = _KERNEL32.CreateEventW(None, True, False, None)
+        self._pipe_broken = False
+        self._reader_thread = threading.Thread(target=self._reader_loop,
+                                               args=(gen,), daemon=True)
+        self._reader_thread.start()
+
+        # Secondary mpv (true-crossfade tail player).
+        try:
+            cmd2 = [mpv_path, "--no-video", "--idle=yes", "--no-terminal",
+                    "--no-config", "--media-controls=no", "--volume=100",
+                    r"--input-ipc-server=\\.\pipe\mpvsocket2"]
+            self._mpv2_process = subprocess.Popen(
+                cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                creationflags=0x08000000)
+            for _ in range(20):
+                time.sleep(0.3)
+                try:
+                    self._pipe2_handle = _open_pipe(r"\\.\pipe\mpvsocket2")
+                    break
+                except Exception:
+                    self._pipe2_handle = None
+            if self._pipe2_handle:
+                print("Crossfade engine ready (secondary mpv connected).")
+        except Exception:
+            self._pipe2_handle = None
+
+    def _restart_mpv(self):
+        """Recover after mpv dies: tear down the old process/pipes, relaunch."""
+        with self._restart_lock:
+            if self._restarting or self._reader_stop.is_set():
+                return
+            self._restarting = True
+        try:
+            print("mpv IPC lost — restarting mpv…")
+            old = (self._pipe_handle, self._pipe2_handle)
+            self._pipe_handle = None
+            self._pipe2_handle = None
+            for h in old:
+                if h:
+                    try: _KERNEL32.CancelIoEx(h, None)
+                    except Exception: pass
+                    try: _KERNEL32.CloseHandle(h)
+                    except Exception: pass
+            for p in (self._mpv_process, self._mpv2_process):
+                if p:
+                    try: p.terminate()
+                    except Exception: pass
+            _kill_stray_mpv()
+            with self._lock:
+                for f in self._pending.values():
+                    if not f.done():
+                        f.cancel()
+                self._pending.clear()
+            time.sleep(0.6)
+            self._spawn_mpv()
+            self.apply_saved_settings()
+            # Resume what was playing (the queue is rebuilt by auto-queue).
+            try:
+                vid = self._watch_id
+                path = self._cached_path(vid) if vid else None
+                if path:
+                    self._cmd("loadfile", path, "replace")
+                    self._cmd("set_property", "pause", False)
+                    if self._watch_pos and self._watch_pos > 3:
+                        time.sleep(0.4)
+                        self._cmd("seek", float(self._watch_pos), "absolute")
+            except Exception:
+                pass
+            print("mpv restarted.")
+        except Exception as e:
+            print(f"mpv restart failed: {e}")
+        finally:
+            self._restarting = False
+
+    # ------------------------------------------------------------------
     # IPC reader thread
     # ------------------------------------------------------------------
 
-    def _reader_loop(self):
+    def _reader_loop(self, gen=None):
         """Background thread: continuously read from the pipe via overlapped ReadFile.
 
         Uses overlapped I/O with a dedicated event so this blocking read does
@@ -463,7 +529,7 @@ class PlayerManager:
         buf = ctypes.create_string_buffer(buf_size)
         partial = b""
 
-        while not self._reader_stop.is_set():
+        while not self._reader_stop.is_set() and (gen is None or gen == self._mpv_gen):
             try:
                 _KERNEL32.ResetEvent(self._read_event)
                 ol = _OVERLAPPED()
@@ -566,9 +632,19 @@ class PlayerManager:
         payload = json.dumps(msg) + "\n"
         if os.environ.get("MRS_IPC_DEBUG"):
             print(f"[cmd] send id={req_id} {command} {converted}", flush=True)
+        handle = self._pipe_handle
+        if handle is None:                        # mpv down / restarting
+            with self._lock:
+                self._pending.pop(req_id, None)
+            return None
         try:
-            _write(self._pipe_handle, payload.encode("utf-8"))
+            _write(handle, payload.encode("utf-8"))
         except Exception as exc:
+            with self._lock:
+                self._pending.pop(req_id, None)
+            if _is_pipe_dead(exc):
+                self._pipe_broken = True          # watchdog restarts mpv
+                return None
             if not future.done():
                 future.set_exception(exc)
             raise
@@ -578,12 +654,10 @@ class PlayerManager:
             if os.environ.get("MRS_IPC_DEBUG"):
                 print(f"[cmd] recv id={req_id} {command} -> {r!r}", flush=True)
             return r
-        except Exception as exc:
+        except Exception:
             with self._lock:
                 self._pending.pop(req_id, None)
-            if os.environ.get("MRS_IPC_DEBUG"):
-                print(f"[cmd] TIMEOUT id={req_id} {command} pending={sorted(self._pending)}", flush=True)
-            raise TimeoutError(f"mpv IPC command '{command}' timed out") from exc
+            return None                           # soft-fail: never crash a caller
 
     def _get_properties(self, names):
         """Read multiple mpv properties in one IPC exchange.
@@ -609,9 +683,13 @@ class PlayerManager:
             }
             payload = json.dumps(msg) + "\n"
             try:
-                _write(self._pipe_handle, payload.encode("utf-8"))
-            except Exception:
-                pass
+                if self._pipe_handle is None:
+                    self._pipe_broken = True
+                else:
+                    _write(self._pipe_handle, payload.encode("utf-8"))
+            except Exception as exc:
+                if _is_pipe_dead(exc):
+                    self._pipe_broken = True
 
         result = {}
         for name, (req_id, future) in futures.items():
@@ -986,6 +1064,11 @@ class PlayerManager:
         """
         while not self._reader_stop.is_set():
             time.sleep(1)
+            # Watchdog: if mpv died or the IPC pipe broke, restart mpv.
+            if self._pipe_broken or (
+                    self._mpv_process and self._mpv_process.poll() is not None):
+                self._restart_mpv()
+                continue
             # Always track plays vs skips (feeds the preference engine) and run
             # the auto-advance crossfade check.
             self._watch_track()
