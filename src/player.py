@@ -762,7 +762,7 @@ class PlayerManager:
                 "title": meta.get("title") or "",
                 "artist": meta.get("artist") or "",
                 "album": meta.get("album") or "",
-                "art": meta.get("thumbnail") or "",
+                "art": meta.get("art") or meta.get("thumbnail") or "",
             }
 
     @staticmethod
@@ -935,7 +935,7 @@ class PlayerManager:
         for tr in tracks:
             if self._reader_stop.is_set() or seq != self._append_seq:
                 return
-            path = self._download_track(tr["video_id"], tr)
+            path = self._download_with_fallbacks(tr, [])   # YouTube → SoundCloud
             if not path or seq != self._append_seq:
                 if seq != self._append_seq:
                     return
@@ -988,10 +988,19 @@ class PlayerManager:
             seq = self._append_seq
 
         if mode == "play":
-            first = self._download_with_fallbacks(tracks[0], fallbacks)
+            # Try YouTube → SoundCloud for each track; skip to the next if both
+            # fail, so a single dead song never stalls the whole request.
+            first = None
+            while tracks:
+                first = self._download_with_fallbacks(tracks[0], fallbacks)
+                if first:
+                    break
+                print(f"Skipping (no source): {tracks[0].get('title')}")
+                tracks.pop(0)
+                fallbacks = []
             if not first:
                 return {"status": "error",
-                        "message": "Could not download the first track from YouTube"}
+                        "message": "Couldn't get that from YouTube or SoundCloud"}
             self._cmd("playlist-clear")
             self._crossfade_replace(first)   # fade out current, swap, fade in
             self._cmd("set_property", "pause", False)  # a request always plays

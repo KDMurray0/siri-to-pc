@@ -169,6 +169,8 @@ def startup():
     )
     if interpret.available():
         print(f"Groq interpretation enabled ({interpret._cfg['model']}).")
+        import threading as _t
+        _t.Thread(target=interpret.test, daemon=True).start()   # confirm it works
     else:
         print("Groq interpretation off — using local parser.")
 
@@ -560,6 +562,7 @@ def api_settings():
                         "start_on_boot": _get_boot(),
                         "lock_ips": bool(_config.get("lock_ips", False)),
                         "groq_set": bool((_config.get("groq_api_key") or "").strip()),
+                        "groq_working": bool(interpret._cfg.get("working")),
                         **player_manager.get_settings()})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
@@ -578,7 +581,8 @@ def api_groqkey():
         _config["use_groq"] = bool(key)
         interpret.configure(api_key=key, model=_config.get("groq_model") or None,
                             enabled=bool(key))
-        return jsonify({"status": "ok", "groq": interpret.available()})
+        working = interpret.test() if interpret.available() else False
+        return jsonify({"status": "ok", "groq": interpret.available(), "working": working})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 

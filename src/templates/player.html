@@ -19,6 +19,12 @@
 [data-theme="ocean"]  {--bg:#0a121c;--panel:#12202f;--fg:#e9f2fb;--sub:#7f9bb5;--line:#1d3247;--accent:#4aa8ff;}
 
 *{margin:0;padding:0;box-sizing:border-box}
+/* themed scrollbars everywhere (was a default grey Windows bar) */
+*{scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:9px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:var(--sub);background-clip:content-box}
 html,body{height:100%;overflow:hidden;background:var(--bg)}
 body{
   font-family:"Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
@@ -157,6 +163,8 @@ select,.chip{background:var(--panel);border:1px solid var(--line);color:var(--fg
 .keyin{background:var(--panel);border:1px solid var(--line);color:var(--fg);border-radius:9px;
   padding:6px 10px;font-family:inherit;font-size:12px;outline:none;width:150px;max-width:52%}
 .keyin:focus{border-color:var(--accent)}
+.gtick{font-size:11px;font-weight:700;letter-spacing:0}
+.gtick.ok{color:#3fd48a}.gtick.bad{color:#ff6b6b}.gtick.test{color:var(--sub)}
 .chips{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}
 .chip.sel{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .swatches{display:flex;gap:7px}
@@ -360,7 +368,7 @@ body.lyrics-mode .prog,body.queue-expand .prog{margin-top:10px}
         <select id="eq"></select></div>
       <div class="set"><span class="lbl">Source</span>
         <select id="source"><option>youtube</option><option>soundcloud</option><option>bandcamp</option></select></div>
-      <div class="set"><span class="lbl">Groq key <span style="opacity:.6">(smarter search)</span></span>
+      <div class="set"><span class="lbl">Groq key <span id="groqtick" class="gtick"></span></span>
         <input id="groqkey" class="keyin" type="password" placeholder="gsk_…" autocomplete="off" spellcheck="false"></div>
       <div class="set"><span class="lbl">Normalize volume</span>
         <div class="toggle" id="normalize"><div class="dot"></div></div></div>
@@ -531,7 +539,7 @@ async function showResults(v){
   const box=$("results");box.innerHTML="";
   r.results.forEach(s=>{
     const el=document.createElement("div");el.className="rres";
-    const art=s.art?`<img class="qi" src="${s.art}">`:`<div class="qi"></div>`;
+    const art=s.art?`<img class="qi" src="${s.art}" onerror="this.removeAttribute('src')">`:`<div class="qi"></div>`;
     el.innerHTML=`${art}<div class="rt"><div class="rn">${esc(s.title)}</div><div class="ra">${esc(s.artist||"")}</div></div>`;
     el.onmousedown=(e)=>{e.preventDefault();playPick(s);};
     box.appendChild(el);
@@ -609,12 +617,18 @@ $("boot").onclick=()=>{const on=!$("boot").classList.contains("on");$("boot").cl
 $("lockips").onclick=()=>{const on=!$("lockips").classList.contains("on");$("lockips").classList.toggle("on",on);api("/api/lockips?enabled="+(on?1:0));};
 $("eq").onchange=()=>api("/api/audio?eq="+encodeURIComponent($("eq").value));
 $("source").onchange=()=>api("/api/source?value="+$("source").value);
+function setGroqTick(state){  // "ok" | "bad" | "test" | ""
+  const el=$("groqtick"); el.className="gtick"+(state?" "+state:"");
+  el.textContent = state==="ok"?"✓ working" : state==="bad"?"✗ not working" : state==="test"?"testing…" : "";
+}
 $("groqkey").addEventListener("change",async()=>{
   const v=$("groqkey").value.trim();
+  setGroqTick(v?"test":"");
   const r=await api("/api/groqkey?value="+encodeURIComponent(v));
-  const on=r&&r.groq;
-  toast(on?"Groq on — smarter search":"Groq key cleared");
+  const on=r&&r.groq, working=r&&r.working;
+  toast(!v?"Groq key cleared":working?"Groq verified — smarter search on":on?"Key saved but Groq didn't respond":"Couldn't save key");
   $("groqkey").value=""; $("groqkey").placeholder=on?"•••••••• set":"gsk_…";
+  setGroqTick(!on?"":working?"ok":"bad");
 });
 
 let settingsLoaded=false;
@@ -627,13 +641,14 @@ function loadSettings(s){
   $("boot").classList.toggle("on",!!s.start_on_boot);
   $("lockips").classList.toggle("on",!!s.lock_ips);
   $("groqkey").placeholder = s.groq_set ? "•••••••• set" : "gsk_…";
+  setGroqTick(!s.groq_set ? "" : s.groq_working ? "ok" : "bad");
   markChips("crossfade",s.crossfade||0);
 }
 
 /* ── render queue: current + up-next stay; already-played tucked behind a toggle ── */
 let lastQSig="", histOpen=false, lastQ=[];
 function qRow(t,idx){
-  const art=t.art?`<img class="qi" src="${t.art}">`:`<div class="qi"></div>`;
+  const art=t.art?`<img class="qi" src="${t.art}" onerror="this.removeAttribute('src')">`:`<div class="qi"></div>`;
   const eq=t.current?'<div class="eq"><i></i><i></i><i></i></div>':'';
   return `<div class="q clickable${t.current?" cur":""}" data-idx="${idx}">${art}`+
     `<div class="qt"><div class="qn">${esc(t.title)}</div><div class="qa">${esc(t.artist||"")}</div></div>${eq}`+
@@ -733,7 +748,7 @@ async function loadRecent(){
   }
   html+='<div class="seclbl">Recently played</div>';
   html+=(r.history&&r.history.length)
-    ? r.history.map(t=>{const art=t.art?`<img class="qi" src="${t.art}">`:`<div class="qi"></div>`;
+    ? r.history.map(t=>{const art=t.art?`<img class="qi" src="${t.art}" onerror="this.removeAttribute('src')">`:`<div class="qi"></div>`;
         return `<div class="rrow" data-v="${t.video_id}" data-t="${esc(t.title)}" data-ar="${esc(t.artist)}">${art}<div class="qt"><div class="qn">${esc(t.title)}</div><div class="qa">${esc(t.artist||"")}</div></div></div>`;}).join("")
     : '<div class="muted">Nothing played through yet.</div>';
   box.innerHTML=html;

@@ -16,6 +16,7 @@ _cfg = {
     "model": "llama-3.1-8b-instant",
     "enabled": False,
     "timeout": 6,
+    "working": False,   # last test() result
 }
 
 _SYSTEM = (
@@ -94,6 +95,30 @@ def _call_groq(text):
     with urllib.request.urlopen(req, timeout=_cfg["timeout"]) as r:
         payload = json.loads(r.read().decode())
     return payload["choices"][0]["message"]["content"]
+
+
+def test():
+    """Minimal Groq call (1 token) to confirm the key + model actually work.
+
+    Caches the result in _cfg["working"] so the UI can show a live tick.
+    """
+    if not available():
+        _cfg["working"] = False
+        return False
+    try:
+        body = json.dumps({"model": _cfg["model"], "max_tokens": 1,
+                           "messages": [{"role": "user", "content": "hi"}]}).encode()
+        req = urllib.request.Request(
+            _API_URL, data=body, method="POST",
+            headers={"Authorization": f"Bearer {_cfg['key']}",
+                     "Content-Type": "application/json",
+                     "User-Agent": "MusicRequestServer/1.0"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            ok = r.status == 200
+    except Exception:
+        ok = False
+    _cfg["working"] = ok
+    return ok
 
 
 def interpret(text):
