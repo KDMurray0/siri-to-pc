@@ -559,7 +559,26 @@ def api_settings():
         return jsonify({"status": "ok", "source": _runtime_source[0],
                         "start_on_boot": _get_boot(),
                         "lock_ips": bool(_config.get("lock_ips", False)),
+                        "groq_set": bool((_config.get("groq_api_key") or "").strip()),
                         **player_manager.get_settings()})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+
+@app.route("/api/groqkey", methods=["GET"])
+@require_auth
+def api_groqkey():
+    """Set/clear the Groq API key from the app — takes effect immediately."""
+    try:
+        from auth import save_config_value
+        key = (request.args.get("value") or "").strip()
+        save_config_value("groq_api_key", key)
+        save_config_value("use_groq", bool(key))
+        _config["groq_api_key"] = key
+        _config["use_groq"] = bool(key)
+        interpret.configure(api_key=key, model=_config.get("groq_model") or None,
+                            enabled=bool(key))
+        return jsonify({"status": "ok", "groq": interpret.available()})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 

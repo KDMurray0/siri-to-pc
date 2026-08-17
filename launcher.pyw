@@ -206,12 +206,19 @@ class Flyout:
             self.hide()
 
     def set_pinned(self, on):
-        # Pop-out: keep the window open on top and stop auto-hiding on blur.
+        # Pop-out: keep it visible, force it topmost, stop auto-hiding on blur.
         self._pinned = bool(on)
         try:
-            if self._pinned:
+            if self._pinned and self.window:
                 self.window.show()
                 self._visible = True
+            hwnd = self._find_hwnd()
+            if hwnd:
+                HWND_TOPMOST, HWND_NOTOPMOST = -1, -2
+                SWP = 0x0001 | 0x0002 | 0x0040   # NOSIZE | NOMOVE | SHOWWINDOW
+                ctypes.windll.user32.SetWindowPos(
+                    hwnd, HWND_TOPMOST if self._pinned else HWND_NOTOPMOST,
+                    0, 0, 0, 0, SWP)
         except Exception:
             pass
         return self._pinned
@@ -285,6 +292,19 @@ class Flyout:
                         self.hide()
             except Exception:
                 pass
+
+
+# ── JS bridge ────────────────────────────────────────────────────────
+# A tiny api object with NO reference to the window, so pywebview never walks
+# the WebView2 COM object (that caused the recursion-depth spam in the log).
+
+class _Bridge:
+    def on_blur(self):
+        if _flyout:
+            _flyout.on_blur()
+
+    def set_pinned(self, on):
+        return _flyout.set_pinned(on) if _flyout else False
 
 
 # ── tray ─────────────────────────────────────────────────────────────
@@ -381,7 +401,7 @@ if __name__ == "__main__":
     _flyout.window = webview.create_window(
         "Music Request",
         url=f"http://127.0.0.1:{port}/player?key={key}",
-        js_api=_flyout,
+        js_api=_Bridge(),
         frameless=True, easy_drag=False, on_top=True, resizable=False,
         width=Flyout.W, height=Flyout.H, x=x, y=y,
         background_color="#0e0f16", hidden=hidden,

@@ -804,7 +804,7 @@ class PlayerManager:
             pass  # metadata is a nicety; never fail playback over it
 
     def _download_with_fallbacks(self, track, fallbacks):
-        """Download *track* (dict), trying each fallback id if it fails."""
+        """Download *track*, trying each fallback id, then SoundCloud."""
         path = self._download_track(track["video_id"], track)
         if path:
             return path
@@ -812,7 +812,26 @@ class PlayerManager:
             path = self._download_track(fb, track)
             if path:
                 return path
-        return None
+        # YouTube gave up (blocked / no formats) — try the same song on SoundCloud.
+        return self._download_from_soundcloud(track)
+
+    def _download_from_soundcloud(self, track):
+        """Last resort: find the song on SoundCloud and download that."""
+        q = f"{(track.get('title') or '').strip()} {(track.get('artist') or '').strip()}".strip()
+        if not q:
+            return None
+        try:
+            import search as _search
+            hits = _search.resolve_external(q, source="soundcloud", limit=1)
+        except Exception:
+            return None
+        if not hits:
+            return None
+        sc = hits[0]
+        print(f"YouTube failed for '{q}' — falling back to SoundCloud.")
+        meta = dict(track)
+        meta["url"] = sc.get("url")            # _download_track downloads from meta['url']
+        return self._download_track(sc.get("video_id") or ("sc_" + q), meta)
 
     # ── True crossfade via the secondary mpv ──────────────────────────
 
