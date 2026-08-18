@@ -4,39 +4,72 @@ A local network music playback server that streams from YouTube Music through HT
 
 ## Quick Start
 
-```bash
-pip install -r requirements.txt
-copy config.example.json src\config.json
+### Option 1 — download the release (no Python needed)
+
+1. Grab the latest `MusicRequestServer-windows.zip` from the
+   [Releases page](https://github.com/KDMurray0/siri-to-pc/releases) and unzip it anywhere.
+2. Right-click `setup.ps1` → **Run with PowerShell** (or from a terminal):
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File setup.ps1
+   ```
+
+   It installs mpv, yt-dlp and Node.js via winget, then sets up your YouTube
+   cookies and verifies a real download works.
+3. Run `MusicRequestServer.exe`. It lives in the system tray.
+
+### Option 2 — run from source
+
+```powershell
+git clone https://github.com/KDMurray0/siri-to-pc
+cd siri-to-pc
+powershell -ExecutionPolicy Bypass -File setup.ps1
 ```
 
-Edit `src\config.json` (set `python_path` and `cookies_file`), then just **double-click `launcher.pyw`** — it starts the server and opens the player. Or run the server directly:
+`setup.ps1` also installs the Python packages and writes `src\config.json` for
+you. Then double-click **`launcher.pyw`** (server + tray player), or run the
+server on its own:
 
 ```bash
 python src/app.py
 ```
 
-If `api_key` is left blank (or missing), a random secret is generated on first run and saved back to `config.json`. Open `http://<pc-ip>:5000/` to see the endpoint URL (with the key) and the Siri Shortcut steps.
+If `api_key` is blank or missing, a random secret is generated on first run.
+Open `http://<pc-ip>:5000/` to see the endpoint URL (with the key) and the Siri
+Shortcut steps.
 
-### Or build a standalone .exe
+### What setup.ps1 does
 
-No Python needed on the target machine (mpv, yt-dlp and Node must still be on PATH):
+| Step | Detail |
+|------|--------|
+| Prerequisites | Installs `mpv`, `yt-dlp`, `Node.js` via winget; skips anything already present |
+| Python packages | `pip install -r requirements.txt` (source runs only — the .exe bundles them) |
+| Config | Creates `src\config.json` from the example, sets `python_path`, `js_runtime`, `player_client` |
+| Cookies | Tries `--cookies-from-browser` against each installed browser, falls back to a cookies file |
+| Verify | Runs a real YouTube fetch and reports exactly what failed if anything did |
+
+Useful flags: `-SkipCookies` (tools only), `-CookieBrowser firefox` (skip auto-detection).
+
+### Build the .exe yourself
 
 ```bash
 pip install pyinstaller
 pyinstaller --noconfirm MusicRequestServer.spec
 ```
 
-The build lands in `dist\MusicRequestServer\`. Put a `config.json` next to `MusicRequestServer.exe` (or let it generate one on first run) and run the exe — it starts the server in-process and shows the tray player.
-
-The player is a desktop flyout (from the tray). To control it from your phone, open `http://<pc-ip>:5000/` on the same network for step-by-step **Siri Shortcut** setup.
+The build lands in `dist\MusicRequestServer\`. mpv, yt-dlp and Node still need
+to be on PATH — run `setup.ps1` on the target machine to handle that.
 
 ## Prerequisites
 
-- **mpv** media player (audio-only mode): `winget install mpv`
-- **yt-dlp** (audio fetcher): `pip install -U yt-dlp`
-- **Node.js** — required so yt-dlp can solve YouTube's JavaScript signature challenge (otherwise no audio formats are returned): `winget install OpenJS.NodeJS`
-- Python 3.10+ with packages from `requirements.txt`
-- A **YouTube cookies file** (`youtube_cookies.txt`) from a logged-in session — YouTube now blocks unauthenticated requests with a "confirm you're not a bot" error. See [YouTube Authentication](#youtube-authentication) below.
+> `setup.ps1` installs all of these for you — this list is what it does, and what
+> to install by hand if you would rather.
+
+- **mpv** media player (audio-only mode): `winget install --id shinchiro.mpv -e`
+- **yt-dlp** (audio fetcher): `winget install --id yt-dlp.yt-dlp -e`
+- **Node.js** — required so yt-dlp can solve YouTube's JavaScript signature challenge (otherwise no audio formats are returned): `winget install --id OpenJS.NodeJS.LTS -e`
+- Python 3.10+ with packages from `requirements.txt` *(source runs only — the .exe bundles them)*
+- A **logged-in YouTube session**, either read live from your browser or exported to a cookies file — YouTube blocks unauthenticated requests with a "confirm you're not a bot" error. See [YouTube Authentication](#youtube-authentication) below.
 
 > **Important — use the same Python for everything.** All packages must be installed into the interpreter set in `config.json` → `python_path`. On this machine that is Python 3.12 (`C:\Users\<you>\AppData\Local\Programs\Python\Python312\python.exe`). The tray launcher itself may run under a different Python, so it launches `app.py` with `python_path` explicitly to avoid `ModuleNotFoundError`.
 
@@ -92,23 +125,56 @@ See `config.example.json` for the full list. `api_key` blank ⇒ auto-generated 
 
 ## YouTube Authentication
 
-As of 2026, YouTube blocks unauthenticated `yt-dlp` requests with **"Sign in to confirm you're not a bot."** Playback therefore requires cookies from a logged-in YouTube session, plus Node.js to solve the signature challenge.
+YouTube blocks unauthenticated `yt-dlp` requests with **"Sign in to confirm
+you're not a bot."** Playback needs cookies from a logged-in YouTube session,
+plus Node.js to solve the signature challenge.
 
-### Export a cookies file (using your existing Chrome login)
+**`setup.ps1` configures this for you** — it tries each installed browser and
+falls back to a cookies file. The detail below is for doing it by hand or
+debugging what the script reports.
 
-1. In your browser, install the extension **"Get cookies.txt LOCALLY"** (exports locally; nothing is uploaded).
-2. Open an **Incognito/Private window**, go to **youtube.com**, and confirm you're logged in. *(Incognito cookies aren't rotated by normal browsing, so they last much longer.)*
-3. Click the extension → **Export** (Netscape format) → save the file as:
-   ```
-   <project folder>\youtube_cookies.txt
-   ```
-4. Point `config.json` → `cookies_file` at that path (already set by default).
+### Option A — read cookies live from your browser (preferred)
 
-> **Chrome/Edge live extraction (`cookies_from_browser`) does not work on Windows** — Chrome v127+ encrypts cookies with App-Bound Encryption that yt-dlp cannot decrypt ("Failed to decrypt with DPAPI"). Use the exported `cookies_file`, or install **Firefox**, log into YouTube there, and set `cookies_from_browser: firefox`.
+```json
+"cookies_from_browser": "firefox"
+```
 
-> **Account note:** yt-dlp uses your real Google session; there is a small risk YouTube flags the account. Consider a throwaway Google account. Cookies also expire — if playback starts failing with the bot error again, re-export the file.
+yt-dlp reads the session at each download, so nothing expires on disk. Two
+things commonly stop it working:
 
-> **Rate limits:** many rapid requests from one IP can temporarily trigger the bot check even with valid cookies. Normal use (a handful of songs) is fine; it clears on its own after a while.
+- **The browser must be closed.** A running browser holds a lock on its cookie
+  database and yt-dlp fails with *"Could not copy ... cookie database"*.
+  `setup.ps1` detects this and offers to retry once you close it.
+- **Chromium browsers may be unreadable.** Chrome v127+ (and Edge, Brave and
+  friends built on it) encrypt cookies with App-Bound Encryption that yt-dlp
+  cannot decrypt — *"Failed to decrypt with DPAPI"*. **Firefox has no such
+  restriction and is the reliable choice:**
+
+  ```powershell
+  winget install --id Mozilla.Firefox -e
+  ```
+
+  Log into YouTube in Firefox once, then re-run `setup.ps1`.
+
+### Option B — export a cookies file
+
+Works with any browser, including Chrome, and needs no browser closed at
+download time.
+
+1. Install the **"Get cookies.txt LOCALLY"** extension (exports locally; nothing is uploaded).
+2. Open a **private/Incognito window**, go to **youtube.com**, confirm you're logged in.
+   *(Private-window cookies aren't rotated by normal browsing, so they last much longer.)*
+3. Extension → **Export** (Netscape format) → save as `youtube_cookies.txt` in the project folder.
+4. Point `config.json` → `cookies_file` at that path, or just re-run `setup.ps1`
+   and it will pick the file up.
+
+Exported cookies do expire — if the bot error returns, export again.
+
+> **Account note:** yt-dlp uses your real Google session; there is a small risk
+> YouTube flags the account. Consider a throwaway Google account.
+
+> **Rate limits:** many rapid requests from one IP can trigger the bot check even
+> with valid cookies. Normal use (a handful of songs) is fine; it clears on its own.
 
 ## How It Works
 
@@ -298,6 +364,7 @@ Say any of these to Siri (through a Shortcut):
 
 ```
 itunes_request_server/
+  setup.ps1              One-shot installer: prerequisites, cookies, config, verification
   launcher.pyw           Double-click entry: tray icon + webview player, starts the server
   MusicRequestServer.spec  PyInstaller build spec (-> standalone .exe)
   config.example.json    Copy to src/config.json and edit
@@ -321,10 +388,15 @@ itunes_request_server/
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| "mpv not found on PATH" | mpv is not installed or not on system PATH | Run `winget install mpv` and restart terminal |
-| "yt-dlp not found on PATH" | yt-dlp is not installed | Run `pip install yt-dlp` |
+| Any missing prerequisite | mpv / yt-dlp / Node not installed or not on PATH | Run `setup.ps1` — it installs all three and verifies them |
+| "mpv not found on PATH" | mpv is not installed or not on system PATH | `winget install --id shinchiro.mpv -e`, then restart the terminal |
+| "yt-dlp not found on PATH" | yt-dlp is not installed | `winget install --id yt-dlp.yt-dlp -e` |
 | `ModuleNotFoundError: No module named 'flask'` at launch | Launcher ran `app.py` under a Python that lacks the deps | Set `config.json` → `python_path` to the interpreter where you `pip install`ed everything |
-| "Sign in to confirm you're not a bot" / nothing plays | No/expired cookies, or IP rate-limited | Export a fresh `youtube_cookies.txt` (see [YouTube Authentication](#youtube-authentication)); if it was working, wait for the rate limit to clear |
+| "Sign in to confirm you're not a bot" / nothing plays | No/expired cookies, or IP rate-limited | Re-run `setup.ps1`, or export fresh cookies (see [YouTube Authentication](#youtube-authentication)); if it was working, wait for the rate limit to clear |
+| "Could not copy ... cookie database" | The browser is running and holds a lock on it | Close the browser fully, then re-run `setup.ps1` |
+| "Failed to decrypt with DPAPI" | Chrome v127+ App-Bound Encryption | Use Firefox for `cookies_from_browser`, or switch to an exported cookies file |
+| Player window shows a bare **"Not Found"** | Another server (often a stale copy) holds port 5000 — a `127.0.0.1` bind wins over ours | `Get-NetTCPConnection -LocalPort 5000 -State Listen`; close the extra instance. Current builds detect this and move to a free port |
+| Requests ignore Groq and use the basic parser | Bad key, or the model is blocked/rate-limited at your Groq org | Check `server.log` for `[groq] HTTP ...`; enable a model at console.groq.com/settings/limits |
 | Track starts then instantly stops / "only images available" | Node not installed or `js_runtime` not set | Install Node.js and set `config.json` → `js_runtime: "node"` |
 | "ytmusicapi validation failed" | YouTube changed its internal API; ytmusicapi is out of date | Run `pip install --upgrade ytmusicapi` and check the package's GitHub for notes |
 | No search results | Query too vague or artist name misspelled by dictation | Try a more specific phrase, e.g. "the song Yellow by Coldplay" |
