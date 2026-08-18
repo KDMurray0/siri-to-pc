@@ -109,6 +109,7 @@ def _kill_mpv():
 _server_process = None
 _server_app = None       # the imported app module (frozen path only)
 _running = False
+_port_override = None    # set when the configured port is taken by something else
 
 
 def _run_server():
@@ -121,7 +122,7 @@ def _run_server():
             server_app.startup()
             cfg = _load_config()
             server_app.app.run(host=cfg.get("host", "0.0.0.0"),
-                               port=cfg.get("port", 5000),
+                               port=_port_override or cfg.get("port", 5000),
                                threaded=True, debug=False, use_reloader=False)
         except SystemExit:
             pass                                # startup() aborts on missing mpv
@@ -166,15 +167,53 @@ def _stop_server():
     _running = False
 
 
+def _is_our_server(port, timeout=1.5):
+    """True only if OUR server answers on *port* (/api/ping is unauthenticated).
+
+    A stale instance or an unrelated app holding the port would otherwise get
+    the player window pointed at it — which just renders a bare 404.
+    """
+    try:
+        with urlrequest.urlopen(f"http://127.0.0.1:{port}/api/ping",
+                                timeout=timeout) as r:
+            return b'"status"' in r.read(120)
+    except Exception:
+        return False
+
+
+def _port_is_free(port):
+    try:
+        s = socket.socket()
+        s.bind(("127.0.0.1", port))
+        return True
+    except OSError:
+        return False
+    finally:
+        try: s.close()
+        except Exception: pass
+
+
+def _pick_port(preferred):
+    """Use the configured port unless a FOREIGN server holds it.
+
+    Windows lets a 127.0.0.1 bind win over our 0.0.0.0 bind, so a squatter
+    silently steals every request the flyout makes. Step aside to a free port.
+    """
+    if _port_is_free(preferred) or _is_our_server(preferred):
+        return preferred
+    for p in range(preferred + 1, preferred + 21):
+        if _port_is_free(p):
+            print(f"Port {preferred} is held by another server — using {p} instead.")
+            return p
+    return preferred
+
+
 def _wait_for_server(port, timeout=40):
-    url = f"http://127.0.0.1:{port}/api/ping"
     end = time.time() + timeout
     while time.time() < end:
-        try:
-            urlrequest.urlopen(url, timeout=1)
+        if _is_our_server(port, timeout=1):
             return True
-        except Exception:
-            time.sleep(0.6)
+        time.sleep(0.6)
     return False
 
 
@@ -623,7 +662,8 @@ if __name__ == "__main__":
         sys.exit(0)                      # another instance is already running
 
     config = _load_config()
-    port = config.get("port", 5000)
+    port = _pick_port(config.get("port", 5000))
+    _port_override = port if port != config.get("port", 5000) else None
     key = config.get("api_key", "")
 
     _start_server()
