@@ -11,11 +11,14 @@ import urllib.request
 
 _API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
+# Known-good default. Groq retires models (llama-3.1-8b-instant and
+# llama-3.3-70b-versatile both went away), and a config pinning a dead one makes
+# a perfectly good key look broken — so we fall back to this.
+DEFAULT_MODEL = "openai/gpt-oss-20b"
+
 _cfg = {
     "key": "",
-    # llama-3.1-8b-instant was retired by Groq. gpt-oss-20b is fast + does
-    # structured JSON well. Must be enabled at console.groq.com/settings/limits.
-    "model": "openai/gpt-oss-20b",
+    "model": DEFAULT_MODEL,
     "enabled": False,
     "timeout": 4,       # keep the request path snappy for Siri
     "working": False,   # last test() result

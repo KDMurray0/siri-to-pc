@@ -57,8 +57,15 @@ pip install pyinstaller
 pyinstaller --noconfirm MusicRequestServer.spec
 ```
 
-The build lands in `dist\MusicRequestServer\`. mpv, yt-dlp and Node still need
-to be on PATH — run `setup.ps1` on the target machine to handle that.
+**Run the `dist` folder, not `build`.** PyInstaller creates both:
+
+| Folder | What it is |
+|--------|------------|
+| `dist\MusicRequestServer\` | **The actual app.** Run `MusicRequestServer.exe` from here. This is what ships. |
+| `build\` | Scratch working files from the compile. Nothing to run; safe to delete anytime. |
+
+mpv, yt-dlp and Node still need to be on PATH — run `setup.ps1` on the target
+machine to handle that.
 
 ## Prerequisites
 
@@ -156,19 +163,39 @@ things commonly stop it working:
 
   Log into YouTube in Firefox once, then re-run `setup.ps1`.
 
-### Option B — export a cookies file
+### Option B — export a cookies file (the reliable one)
 
-Works with any browser, including Chrome, and needs no browser closed at
-download time.
+Works with any browser, needs nothing closed at download time, and is what
+`setup.ps1` falls back to. If Option A gives you trouble, just do this.
 
-1. Install the **"Get cookies.txt LOCALLY"** extension (exports locally; nothing is uploaded).
-2. Open a **private/Incognito window**, go to **youtube.com**, confirm you're logged in.
-   *(Private-window cookies aren't rotated by normal browsing, so they last much longer.)*
-3. Extension → **Export** (Netscape format) → save as `youtube_cookies.txt` in the project folder.
-4. Point `config.json` → `cookies_file` at that path, or just re-run `setup.ps1`
-   and it will pick the file up.
+1. Install the **"Get cookies.txt LOCALLY"** extension (Chrome, Edge or Firefox
+   web store). It exports locally — nothing is uploaded.
+2. Open a **private / incognito window**, go to **youtube.com**, and sign in.
+   *(Private-window cookies aren't rotated by normal browsing, so they last far longer.)*
+3. Click the extension icon → **Export** → **Netscape format**.
+4. Save it with **exactly this name, in exactly this place**:
 
-Exported cookies do expire — if the bot error returns, export again.
+   ```
+   youtube_cookies.txt
+   ```
+
+   | Running | Put the file here |
+   |---------|-------------------|
+   | The release `.exe` | Next to `MusicRequestServer.exe`, in the same folder as `setup.ps1` |
+   | From source | The repo root — next to `launcher.pyw` |
+
+   The name matters: lowercase, underscores, `.txt`. Windows may hide the
+   extension — if you end up with `youtube_cookies.txt.txt` it won't be found.
+5. Re-run `setup.ps1`. It finds the file, tests it against a real download, and
+   writes `cookies_file` into your config.
+
+If no cookies can be set up automatically, `setup.ps1` drops a clearly-labelled
+**placeholder** `youtube_cookies.txt` at that exact path and opens the folder, so
+there's no guessing where it goes — just overwrite the placeholder with your
+real export.
+
+Exported cookies do expire. When the bot error comes back, export again and
+re-run `setup.ps1`; it will tell you whether the new file works.
 
 > **Account note:** yt-dlp uses your real Google session; there is a small risk
 > YouTube flags the account. Consider a throwaway Google account.

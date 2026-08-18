@@ -170,8 +170,27 @@ def startup():
     )
     if interpret.available():
         print(f"Groq interpretation enabled ({interpret._cfg['model']}).")
+
+        def _groq_selftest():
+            if interpret.test():
+                print(f"[groq] {interpret._cfg['model']} responding.")
+                return
+            # A config pinning a retired model makes a good key look dead.
+            if interpret._cfg["model"] != interpret.DEFAULT_MODEL:
+                print(f"[groq] {interpret._cfg['model']} failed — trying "
+                      f"{interpret.DEFAULT_MODEL}")
+                interpret.configure(api_key=_groq_key,
+                                    model=interpret.DEFAULT_MODEL, enabled=True)
+                if interpret.test():
+                    from auth import save_config_value
+                    save_config_value("groq_model", interpret.DEFAULT_MODEL)
+                    _config["groq_model"] = interpret.DEFAULT_MODEL
+                    print(f"[groq] switched to {interpret.DEFAULT_MODEL}")
+                    return
+            print("[groq] self-test failed — requests use the local parser.")
+
         import threading as _t
-        _t.Thread(target=interpret.test, daemon=True).start()   # confirm it works
+        _t.Thread(target=_groq_selftest, daemon=True).start()
     else:
         print("Groq interpretation off — using local parser.")
 
@@ -616,10 +635,23 @@ def api_groqkey():
         save_config_value("use_groq", bool(key))
         _config["groq_api_key"] = key
         _config["use_groq"] = bool(key)
-        interpret.configure(api_key=key, model=_config.get("groq_model") or None,
-                            enabled=bool(key))
+        model = _config.get("groq_model") or None
+        interpret.configure(api_key=key, model=model, enabled=bool(key))
         working = interpret.test() if interpret.available() else False
-        return jsonify({"status": "ok", "groq": interpret.available(), "working": working})
+        # A config pinning a retired model makes a good key look dead. Retry on
+        # the current default and keep it if that works.
+        if not working and interpret.available() and model != interpret.DEFAULT_MODEL:
+            print(f"[groq] model '{model}' failed its self-test — trying "
+                  f"{interpret.DEFAULT_MODEL}")
+            interpret.configure(api_key=key, model=interpret.DEFAULT_MODEL,
+                                enabled=True)
+            working = interpret.test()
+            if working:
+                save_config_value("groq_model", interpret.DEFAULT_MODEL)
+                _config["groq_model"] = interpret.DEFAULT_MODEL
+                print(f"[groq] switched to {interpret.DEFAULT_MODEL}")
+        return jsonify({"status": "ok", "groq": interpret.available(),
+                        "working": working, "model": interpret._cfg["model"]})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 

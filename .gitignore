@@ -23,6 +23,7 @@ venv/
 build/
 dist/
 server.log
+setup-log.txt
 
 # ── Logs / misc ──
 *.log
