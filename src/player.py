@@ -232,6 +232,9 @@ class PlayerManager:
         self._last_refill_ts = 0.0
         self._autoqueue_lock = threading.Lock()
         self._played_ids = []             # ordered history of video_ids (dedup radio)
+        self._played_titles = []          # normalized "artist|title" (name-based dedup)
+        self._session_plays = 0           # songs started this run (queue grows with it)
+        self._aq_last_pos = -1            # last seen playlist-pos (detect advances)
         self._monitor_thread = None
         self._autoqueue_hold = False      # album/artist: no radio until exhausted
         self._seed_artists = []           # bias next radio batch to these bands
@@ -239,7 +242,7 @@ class PlayerManager:
         self._state_file = os.path.join(data_dir(), "player_state.json")
         self._settings = {
             "volume": 70, "eq": "flat", "normalize": False,
-            "crossfade": 0, "repeat": "off",
+            "crossfade": 0, "repeat": "off", "theme": "default",
         }
         self._like_provider = None        # callable(video_id, exclude) -> [tracks]
         self._sleep_timer = None          # threading.Timer
@@ -247,6 +250,7 @@ class PlayerManager:
         self._announce_enabled = True     # speak the song when you request one
         self._tts_voice = "en-US-AriaNeural"   # edge-tts neural voice
         self._ducking = False             # true while announce lowers the volume
+        self._crossfading = False         # true while a crossfade ramps the volume
         # Liked songs (drives taste-based recommendations)
         self._liked_file = os.path.join(data_dir(), "liked_songs.json")
         self._liked = []                  # [{video_id,title,artist,album,thumbnail,ts}]
@@ -268,7 +272,10 @@ class PlayerManager:
         self._weights = {
             "liked_boost": 2.0, "playthrough": 0.5, "skip_penalty": 0.8,
             "song_play": 0.4, "jitter": 1.0, "liked_seed_prob": 0.35,
-            "context_songs": 3, "same_artist_boost": 3.0,
+            # same_artist_boost is a dominant tier: keep the queue on the current
+            # band (or a recent-context band) until its songs run out, then drift.
+            "context_songs": 3, "same_artist_boost": 100.0,
+            "context_artist_boost": 40.0,   # a recently-played band (looser tier)
         }
         # currently-watched track (to detect skip vs play-through)
         self._watch_id = None
@@ -350,9 +357,12 @@ class PlayerManager:
 
         # Auto-queue config + monitor thread
         self._autoqueue_enabled = bool(config.get("auto_queue", True))
-        self._autoqueue_batch = int(config.get("auto_queue_batch", 4) or 4)
+        self._autoqueue_batch = int(config.get("auto_queue_batch", 5) or 5)
         self._autoqueue_threshold = int(config.get("auto_queue_threshold", 2) or 2)
-        self._autoqueue_target = int(config.get("auto_queue_target", 15) or 15)
+        # Base lookahead — never "a handful". Grows with the session (see loop).
+        self._autoqueue_target = int(config.get("auto_queue_target", 12) or 12)
+        self._autoqueue_hurry = int(config.get("auto_queue_hurry", 5) or 5)  # refill NOW below this
+        self._autoqueue_max = int(config.get("auto_queue_max", 26) or 26)    # cap total lookahead
         self._aq_min_interval = float(config.get("auto_queue_min_interval", 8) or 8)
         self._aq_max_interval = float(config.get("auto_queue_max_interval", 60) or 60)
         self._monitor_thread = threading.Thread(target=self._autoqueue_loop, daemon=True)
@@ -854,6 +864,28 @@ class PlayerManager:
             time.sleep(cf / steps)
         self._secondary("stop")
 
+    def _ramp_primary_in(self, target, cf):
+        """Fade the primary (incoming song) from 0 up to *target* over cf s.
+
+        Runs in a thread; _crossfading suppresses volume-persistence so this
+        ramp is never mistaken for the user turning the volume down.
+        """
+        def _ramp():
+            self._crossfading = True
+            try:
+                steps = max(4, int(cf * 8))
+                self._cmd("set_property", "volume", 0)
+                for i in range(steps):
+                    if self._reader_stop.is_set():
+                        break
+                    self._cmd("set_property", "volume",
+                              int(target * (i + 1) / steps))
+                    time.sleep(cf / steps)
+                self._cmd("set_property", "volume", target)
+            finally:
+                self._crossfading = False
+        threading.Thread(target=_ramp, daemon=True).start()
+
     def _start_tail(self, out_path, out_pos, cf):
         # Secondary mpv plays the outgoing tail, fading out. Seek must wait for
         # the file to load, else it lands on nothing (this broke crossfade).
@@ -885,7 +917,8 @@ class PlayerManager:
             self._cmd("loadfile", path, "replace")
             return
         self._start_tail(props.get("path"), props.get("time-pos") or 0, cf)
-        self._cmd("loadfile", path, "replace")   # new track fades in (afade)
+        self._cmd("loadfile", path, "replace")   # new track loads…
+        self._ramp_primary_in(int(self._settings.get("volume", 70)), cf)  # …and fades in
 
     def _skip_crossfade(self, cmd):
         # Manual next/prev: crossfade the skip too when crossfade is on.
@@ -895,14 +928,16 @@ class PlayerManager:
                 props = self._get_properties(["path", "time-pos", "pause"])
                 if props.get("path") and not props.get("pause"):
                     self._start_tail(props["path"], props.get("time-pos") or 0, cf)
+                    self._cmd(cmd)
+                    self._ramp_primary_in(int(self._settings.get("volume", 70)), cf)
+                    return
             except Exception:
                 pass
         self._cmd(cmd)
 
     def _maybe_crossfade(self):
         """Auto-advance crossfade: when the current track is within *cf* seconds
-        of the end and the next track is ready, start the tail on the secondary
-        and advance the primary early so the two overlap."""
+        of the end and the next one is downloaded, kick off the dual-mpv fade."""
         cf = self._settings.get("crossfade") or 0
         if cf <= 0 or not self._pipe2_handle or time.monotonic() < self._crossfade_until:
             return
@@ -913,19 +948,68 @@ class PlayerManager:
             return
         pos, dur = props.get("time-pos"), props.get("duration")
         ppos, pcount = props.get("playlist-pos"), props.get("playlist-count") or 0
-        if props.get("pause") or pos is None or not dur or ppos is None:
+        if props.get("pause") or pos is None or not dur or ppos is None or not props.get("path"):
             return
         if ppos + 1 >= pcount or pos < dur - cf:
             return
         try:
             pl = self._cmd("get_property", "playlist") or []
-            next_ready = ppos + 1 < len(pl) and pl[ppos + 1].get("filename")
+            if not (ppos + 1 < len(pl) and pl[ppos + 1].get("filename")):
+                return
         except Exception:
-            next_ready = False
-        if not next_ready or not props.get("path"):
             return
-        self._start_tail(props.get("path"), pos, cf)  # outgoing tail fades out
-        self._cmd("playlist-next")                    # new track fades in
+        # Guard against re-triggering while the fade runs, then do it off-thread
+        # so the monitor loop (watchdog etc.) keeps ticking.
+        self._crossfade_until = time.monotonic() + cf + 2
+        threading.Thread(target=self._crossfade_to_next, args=(cf,), daemon=True).start()
+
+    def _crossfade_to_next(self, cf):
+        """Your model: preload the INCOMING track on the secondary mpv, ramp the
+        primary (outgoing) down while ramping the secondary up, then hand the
+        incoming back to the primary so it keeps owning the playlist/SMTC/UI.
+        keep-open stops the primary auto-advancing mid-fade. Logs each step."""
+        vol = int(self._settings.get("volume", 70))
+        try:
+            pl = self._cmd("get_property", "playlist") or []
+            ppos = self._cmd("get_property", "playlist-pos")
+            if ppos is None or ppos + 1 >= len(pl) or not pl[ppos + 1].get("filename"):
+                return
+            nxt = pl[ppos + 1]["filename"]
+            print(f"[crossfade] begin N->N+1 (cf={cf}s) -> {os.path.basename(nxt)}")
+            self._cmd("set_property", "keep-open", "yes")   # don't auto-advance yet
+            self._secondary("set_property", "volume", 0)
+            self._secondary("loadfile", nxt, "replace")     # incoming from the top
+            time.sleep(0.18)
+            self._secondary("set_property", "pause", False)
+            self._crossfading = True
+            t0 = time.monotonic()
+            steps = max(6, int(cf * 12))
+            for i in range(steps):
+                if self._reader_stop.is_set():
+                    break
+                f = (i + 1) / steps
+                self._secondary("set_property", "volume", int(vol * f))       # new up
+                self._cmd("set_property", "volume", int(vol * (1 - f)))       # old down
+                time.sleep(cf / steps)
+            # Hand off: primary jumps to the incoming and seeks to where the
+            # secondary reached, then takes over at full volume.
+            pos = time.monotonic() - t0
+            self._cmd("set_property", "volume", 0)
+            self._cmd("playlist-next")
+            time.sleep(0.06)
+            self._cmd("seek", round(pos + 0.12, 2), "absolute")
+            self._cmd("set_property", "volume", vol)
+            self._secondary("stop")
+            print(f"[crossfade] handoff at {pos:.1f}s done")
+        except Exception as e:
+            print(f"[crossfade] error: {e}")
+        finally:
+            try:
+                self._cmd("set_property", "keep-open", "no")
+                self._cmd("set_property", "volume", vol)
+            except Exception:
+                pass
+            self._crossfading = False
 
     def _prefetch_append(self, tracks, seq):
         """Background: download each remaining track (dict) and append it.
@@ -935,6 +1019,8 @@ class PlayerManager:
         for tr in tracks:
             if self._reader_stop.is_set() or seq != self._append_seq:
                 return
+            if self._title_seen(tr):        # skip a duplicate name in the plan
+                continue
             path = self._download_with_fallbacks(tr, [])   # YouTube → SoundCloud
             if not path or seq != self._append_seq:
                 if seq != self._append_seq:
@@ -942,18 +1028,45 @@ class PlayerManager:
                 continue
             try:
                 self._cmd("loadfile", path, "append")
-                self._remember_played(tr["video_id"])
+                self._remember_played(tr["video_id"], tr.get("title"), tr.get("artist"))
             except Exception:
                 pass
 
-    def _remember_played(self, video_id):
-        """Track recently-queued ids so auto-queue radio doesn't repeat them."""
+    @staticmethod
+    def _norm_title(title, artist=""):
+        """Collapse a track to an "artist|title" key for name-based dedup:
+        lowercase, drop (feat..)/(remaster/live) brackets and punctuation."""
+        t = (title or "").lower()
+        t = re.sub(r"\(.*?\)|\[.*?\]", " ", t)
+        t = re.sub(r"\b(feat|ft|featuring)\b.*", " ", t)
+        t = re.sub(r"[^a-z0-9]+", " ", t).strip()
+        a = re.sub(r"[^a-z0-9]+", " ", (artist or "").split(",")[0].lower()).strip()
+        return f"{a}|{t}" if t else ""
+
+    def _title_seen(self, tr):
+        """True if a song with this name was already queued/played (dedup)."""
+        norm = self._norm_title(tr.get("title"), tr.get("artist")) \
+            if isinstance(tr, dict) else ""
+        if not norm:
+            return False
+        with self._autoqueue_lock:
+            return norm in self._played_titles
+
+    def _remember_played(self, video_id, title=None, artist=None):
+        """Track recently-queued ids + names so radio doesn't repeat them."""
         with self._autoqueue_lock:
             if video_id in self._played_ids:
                 self._played_ids.remove(video_id)
             self._played_ids.append(video_id)
             if len(self._played_ids) > 200:
                 self._played_ids = self._played_ids[-200:]
+            norm = self._norm_title(title, artist)
+            if norm:
+                if norm in self._played_titles:
+                    self._played_titles.remove(norm)
+                self._played_titles.append(norm)
+                if len(self._played_titles) > 250:
+                    self._played_titles = self._played_titles[-250:]
 
     def play(self, plan):
         """Play a search-plan dict.
@@ -1004,7 +1117,8 @@ class PlayerManager:
             self._cmd("playlist-clear")
             self._crossfade_replace(first)   # fade out current, swap, fade in
             self._cmd("set_property", "pause", False)  # a request always plays
-            self._remember_played(tracks[0]["video_id"])
+            self._remember_played(tracks[0]["video_id"],
+                                  tracks[0].get("title"), tracks[0].get("artist"))
             rest = tracks[1:]
         elif mode == "next":
             first = self._download_with_fallbacks(tracks[0], fallbacks)
@@ -1015,7 +1129,8 @@ class PlayerManager:
             total_before = self._playlist_count()
             self._cmd("loadfile", first, "append")
             self._cmd("playlist-move", total_before, current + 1)
-            self._remember_played(tracks[0]["video_id"])
+            self._remember_played(tracks[0]["video_id"],
+                                  tracks[0].get("title"), tracks[0].get("artist"))
             rest = tracks[1:]
         else:  # queue
             rest = tracks
@@ -1047,8 +1162,8 @@ class PlayerManager:
 
     def _persist_volume_if_changed(self):
         # Save the volume whenever it changes (slider, media keys, mixer) so it
-        # survives a restart. Skip while announce is ducking it.
-        if self._ducking:
+        # survives a restart. Skip while announce/crossfade drives it.
+        if self._ducking or self._crossfading:
             return
         try:
             v = self._get_properties(["volume"]).get("volume")
@@ -1114,6 +1229,10 @@ class PlayerManager:
                 if pos is None or pos < 0:
                     continue
                 remaining = count - pos - 1
+                # Count song advances so the buffer grows the longer you listen.
+                if pos > self._aq_last_pos >= 0:
+                    self._session_plays += pos - self._aq_last_pos
+                self._aq_last_pos = pos
                 # Hold: no radio until the pure album/artist queue is exhausted.
                 if self._autoqueue_hold:
                     if remaining > 0:
@@ -1121,20 +1240,22 @@ class PlayerManager:
                     self._autoqueue_hold = False
                 now = time.monotonic()
                 recent_skips = sum(1 for t in self._skip_times if now - t < 60)
-                # Queue grows dynamically — the more you're skipping, the deeper
-                # the buffer we keep ahead of you.
-                target = self._autoqueue_target + min(12, recent_skips * 3)
+                # Target grows over time (deeper buffer the longer you listen) and
+                # deeper still while you're skipping. Capped so disk stays sane.
+                grow = min(12, self._session_plays)
+                target = min(self._autoqueue_max,
+                             self._autoqueue_target + grow + min(12, recent_skips * 3))
                 if remaining >= target:
                     continue
-                # Refill delay scales with how much buffer is left: short near the
-                # end, long when well-stocked, shorter still while skipping. Never
-                # let it actually run dry.
+                # Pace refills by how much buffer is left: long when well-stocked,
+                # short near the end. Below the "hurry" line, refill immediately so
+                # the queue never looks empty.
                 frac = remaining / float(max(1, target))
                 interval = self._aq_min_interval + \
                     (self._aq_max_interval - self._aq_min_interval) * frac
                 if recent_skips >= 2:
                     interval /= recent_skips
-                if remaining > self._autoqueue_threshold and \
+                if remaining > self._autoqueue_hurry and \
                         (now - self._last_refill_ts) < interval:
                     continue
                 self._last_refill_ts = now
@@ -1152,10 +1273,12 @@ class PlayerManager:
                 for tr in new_tracks:
                     if self._reader_stop.is_set():
                         break
+                    if self._title_seen(tr):        # never the same song twice
+                        continue
                     path = self._download_track(tr["video_id"], tr)
                     if path:
                         self._cmd("loadfile", path, "append")
-                        self._remember_played(tr["video_id"])
+                        self._remember_played(tr["video_id"], tr.get("title"), tr.get("artist"))
                         appended += 1
                     if appended >= self._autoqueue_batch:
                         break
@@ -1326,15 +1449,19 @@ class PlayerManager:
             pass
 
     def _build_af_chain(self):
-        """Assemble the mpv audio-filter chain from EQ + normalize + fade."""
+        """Assemble the mpv audio-filter chain from EQ + normalize.
+
+        The crossfade fade-in is done by ramping the primary's volume (see
+        _ramp_primary_in) rather than an af 'afade', which starts from the
+        filter's own clock and mis-fires when the chain is re-applied mid-song.
+        """
         parts = []
-        cross = self._settings.get("crossfade") or 0
-        if cross:
-            parts.append(f"afade=t=in:st=0:d={cross}")
         for freq, gain in self.EQ_PRESETS.get(self._settings.get("eq", "flat"), []):
             parts.append(f"equalizer=f={freq}:width_type=o:width=1.5:g={gain}")
         if self._settings.get("normalize"):
-            parts.append("dynaudnorm=g=7:f=250:p=0.6")
+            # Even out loudness across songs: target a consistent RMS (r), allow
+            # big gain on quiet tracks (m), smooth window (g) to avoid pumping.
+            parts.append("dynaudnorm=f=150:g=15:p=0.9:m=15:r=0.9")
         return ",".join(parts)
 
     def _apply_audio(self):
@@ -1494,11 +1621,13 @@ class PlayerManager:
         total = self._playlist_count()
         added = 0
         for tr in related:
+            if self._title_seen(tr):
+                continue
             path = self._download_track(tr["video_id"], tr)
             if path:
                 self._cmd("loadfile", path, "append")
                 self._cmd("playlist-move", total + added, current + 1 + added)
-                self._remember_played(tr["video_id"])
+                self._remember_played(tr["video_id"], tr.get("title"), tr.get("artist"))
                 added += 1
         return {"ok": True, "added": added,
                 "message": f"Queued {added} more like this"}
@@ -1599,11 +1728,13 @@ class PlayerManager:
             current = self._current_playlist_pos()
             total = self._playlist_count()
             for tr in related:
+                if self._title_seen(tr):
+                    continue
                 path = self._download_track(tr["video_id"], tr)
                 if path:
                     self._cmd("loadfile", path, "append")
                     self._cmd("playlist-move", total + added, current + 1 + added)
-                    self._remember_played(tr["video_id"])
+                    self._remember_played(tr["video_id"], tr.get("title"), tr.get("artist"))
                     added += 1
         return {"ok": True, "liked": True, "added": added,
                 "message": f"Liked — queued {added} similar"}
@@ -1742,7 +1873,9 @@ class PlayerManager:
         except Exception:
             is_derivative = lambda t: False
         w = self._weights
-        seed_artists = set(self._seed_artists or [])
+        seed_list = self._seed_artists or []
+        primary_artist = seed_list[0] if seed_list else None   # the current band
+        context_artists = set(seed_list[1:])                   # other recent bands
         scored = []
         seen = set()
         for t in tracks:
@@ -1752,8 +1885,10 @@ class PlayerManager:
             seen.add(vid)
             artist = (t.get("artist") or "").split(",")[0].strip().lower()
             score = random.random() * w["jitter"]
-            if artist and artist in seed_artists:
-                score += w["same_artist_boost"]       # same band > same genre
+            if artist and artist == primary_artist:
+                score += w["same_artist_boost"]       # stay on the current band
+            elif artist and artist in context_artists:
+                score += w["context_artist_boost"]    # then a recent-context band
             if artist and artist in liked_artists:
                 score += w["liked_boost"]
             if is_derivative(t.get("title")):
@@ -1801,6 +1936,14 @@ class PlayerManager:
                 seed_artists.append(a)
         self._seed_artists = seed_artists
         candidates = []
+        # Steady supply of same-artist songs so the queue actually stays on the
+        # band (radio alone drifts off after a couple of tracks).
+        if cur_artist:
+            try:
+                import search as _search
+                candidates += _search.search_candidates(cur_artist, limit=10) or []
+            except Exception:
+                pass
         for s in uniq[:4]:
             candidates += self._autoqueue_provider(s, exclude) or []
         return self._rank_candidates(candidates)
@@ -1829,6 +1972,13 @@ class PlayerManager:
     def set_announce(self, enabled):
         self._announce_enabled = bool(enabled)
         return self._announce_enabled
+
+    def set_theme(self, theme):
+        """Persist the UI theme server-side (WebView2 localStorage doesn't
+        reliably survive a relaunch, so the chosen colour was resetting)."""
+        self._settings["theme"] = (theme or "default")
+        self._save_state()
+        return self._settings["theme"]
 
     def get_settings(self):
         s = dict(self._settings)

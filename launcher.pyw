@@ -199,6 +199,11 @@ class Flyout:
         self._hwnd = None
         self._pinned = False          # popped out: stays put, never auto-hides
         self._moving = False          # native drag loop active
+        self._fs_active = False       # a fullscreen app currently owns our monitor
+        self._click_through = False   # overlay mode: cursor passes through
+        self._force_interactive = False  # hotkey override during fullscreen
+        self._mini = False            # shrunk to the mini player
+        self._resize_gen = 0          # cancels an in-flight animated resize
 
     # JS bridge
     def on_blur(self):
@@ -210,6 +215,8 @@ class Flyout:
     def set_pinned(self, on):
         # Pop-out: keep it visible, force it topmost, stop auto-hiding on blur.
         self._pinned = bool(on)
+        if self._fs_active and self._pinned:
+            return self._pinned      # a game owns the screen — stay out of its way
         try:
             if self._pinned and self.window:
                 self.window.show()
@@ -251,13 +258,58 @@ class Flyout:
         finally:
             self._moving = False
 
-    def set_mini(self, on):
-        # Shrink to a compact art + title chip (or restore full size).
+    MINI_W = 344            # constant mini width (idle + hover share it)
+    MINI_IDLE_H = 80        # idle: art + name/artist
+    MINI_HOVER_H = 108      # hover: + transport row + vertical volume
+
+    def _win_size(self):
         try:
-            if self.window:
-                self.window.resize(300, 120) if on else self.window.resize(Flyout.W, Flyout.H)
+            hwnd = self._find_hwnd()
+            if hwnd:
+                r = wintypes.RECT()
+                ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(r))
+                return r.right - r.left, r.bottom - r.top
         except Exception:
             pass
+        return Flyout.W, Flyout.H
+
+    def _animate_resize(self, tw, th, dur=0.16, steps=11):
+        """Smoothly step the window from its current size to (tw, th). A newer
+        call cancels an in-flight one via the generation counter."""
+        self._resize_gen += 1
+        gen = self._resize_gen
+        cw, ch = self._win_size()
+
+        def run():
+            for i in range(1, steps + 1):
+                if gen != self._resize_gen or not self.window:
+                    return
+                f = i / steps
+                try:
+                    self.window.resize(int(cw + (tw - cw) * f),
+                                       int(ch + (th - ch) * f))
+                except Exception:
+                    return
+                time.sleep(dur / steps)
+        threading.Thread(target=run, daemon=True).start()
+
+    def set_mini(self, on):
+        # Enter/leave mini mode (animated). Enter at hover height (pointer is
+        # over it); set_mini_hover collapses to the idle card when you leave.
+        self._mini = bool(on)
+        if on:
+            self._animate_resize(Flyout.MINI_W, Flyout.MINI_HOVER_H)
+        else:
+            self._animate_resize(Flyout.W, Flyout.H, dur=0.20)
+        return bool(on)
+
+    def set_mini_hover(self, on):
+        # While mini: grow to the card on hover, shrink to the idle card off.
+        # Width never changes — only the height animates.
+        if not self._mini:
+            return False
+        self._animate_resize(Flyout.MINI_W,
+                             Flyout.MINI_HOVER_H if on else Flyout.MINI_IDLE_H)
         return bool(on)
 
     def _find_hwnd(self):
@@ -321,12 +373,149 @@ class Flyout:
         while True:
             time.sleep(0.25)
             try:
-                if self._pinned or os.environ.get("MRS_NO_AUTOHIDE"):
-                    continue
+                if self._pinned or self._fs_active or os.environ.get("MRS_NO_AUTOHIDE"):
+                    continue                       # overlay stays put during games
                 if self._visible and (time.monotonic() - self._shown_at) > 0.6:
                     hwnd = self._find_hwnd()
                     if hwnd and ctypes.windll.user32.GetForegroundWindow() != hwnd:
                         self.hide()
+            except Exception:
+                pass
+
+    def _foreground_is_fullscreen(self):
+        """True when a real app (a game) covers the whole monitor in the
+        foreground — so we should get out of its way even when pinned."""
+        u = ctypes.windll.user32
+        u.GetForegroundWindow.restype = ctypes.c_void_p
+        u.MonitorFromWindow.restype = ctypes.c_void_p
+        u.MonitorFromWindow.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        fg = u.GetForegroundWindow()
+        if not fg:
+            return False
+        hwnd = self._find_hwnd()
+        if hwnd and fg == ctypes.c_void_p(hwnd).value:
+            return False                      # that's us
+        buf = ctypes.create_unicode_buffer(256)
+        u.GetClassNameW(fg, buf, 256)
+        if buf.value in ("WorkerW", "Progman", "Shell_TrayWnd",
+                         "Windows.UI.Core.CoreWindow", "XamlExplorerHostIslandWindow"):
+            return False                      # desktop / shell / task view
+        r = wintypes.RECT()
+        u.GetWindowRect(fg, ctypes.byref(r))
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                        ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+        mon = u.MonitorFromWindow(fg, 2)      # MONITOR_DEFAULTTONEAREST
+        mi = MONITORINFO(); mi.cbSize = ctypes.sizeof(MONITORINFO)
+        u.GetMonitorInfoW(ctypes.c_void_p(mon), ctypes.byref(mi))
+        m = mi.rcMonitor
+        covers = (r.left <= m.left and r.top <= m.top
+                  and r.right >= m.right and r.bottom >= m.bottom)
+        if not covers:
+            return False
+        # Only get out of the way if the game is on the SAME monitor as us — a
+        # fullscreen app on the OTHER screen shouldn't touch the player.
+        if hwnd:
+            pmon = u.MonitorFromWindow(ctypes.c_void_p(hwnd), 2)
+            if pmon and mon and pmon != mon:
+                return False
+        return True
+
+    def _set_topmost(self, on):
+        try:
+            hwnd = self._find_hwnd()
+            if hwnd:
+                SWP = 0x0001 | 0x0002 | 0x0010    # NOSIZE | NOMOVE | NOACTIVATE
+                ctypes.windll.user32.SetWindowPos(
+                    hwnd, -1 if on else -2, 0, 0, 0, 0, SWP)
+        except Exception:
+            pass
+
+    def _set_click_through(self, on):
+        """Discord-overlay behaviour: the window stays visible + on top but the
+        cursor passes straight through it (WS_EX_TRANSPARENT), so it can't grab
+        the mouse over a game. LAYERED+opaque alpha keeps it fully drawn."""
+        if on == self._click_through:
+            return
+        try:
+            hwnd = self._find_hwnd()
+            if not hwnd:
+                return
+            u = ctypes.windll.user32
+            u.GetWindowLongW.restype = ctypes.c_long
+            u.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            u.SetWindowLongW.restype = ctypes.c_long
+            u.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
+            GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TRANSPARENT, LWA_ALPHA = -20, 0x80000, 0x20, 2
+            style = u.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            if on:
+                u.SetWindowLongW(hwnd, GWL_EXSTYLE,
+                                 style | WS_EX_LAYERED | WS_EX_TRANSPARENT)
+                u.SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)  # stay opaque
+                self._set_topmost(True)          # float over the game like an overlay
+            else:
+                u.SetWindowLongW(hwnd, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT)
+            self._click_through = on
+        except Exception:
+            pass
+
+    def fullscreen_watch(self):
+        """While a fullscreen app owns OUR monitor, turn the player into a
+        click-through overlay (visible, on top, but the mouse passes through) —
+        like the Discord overlay. Ctrl+Alt+M toggles interactivity back on."""
+        while True:
+            time.sleep(0.7)
+            try:
+                fs = self._foreground_is_fullscreen()
+                if fs and not self._fs_active:
+                    self._fs_active = True
+                    if not self._force_interactive:
+                        self._set_click_through(True)
+                elif fs and self._fs_active and self._click_through:
+                    # Keep re-asserting topmost — a borderless game re-raises
+                    # itself, and we have to keep floating above it (Discord does
+                    # the same). (True exclusive-fullscreen can't be overlaid by
+                    # any normal window; nothing to do there.)
+                    self._set_topmost(True)
+                elif not fs and self._fs_active:
+                    self._fs_active = False
+                    self._force_interactive = False
+                    self._set_click_through(False)
+                    if self._pinned:
+                        self.set_pinned(True)
+                    else:
+                        self._set_topmost(False)
+            except Exception:
+                pass
+
+    def toggle_interactive(self):
+        """Hotkey: while a game is fullscreen, flip the overlay between
+        click-through and interactive so you can actually use it, then back."""
+        if not self._fs_active:
+            return
+        self._force_interactive = not self._force_interactive
+        self._set_click_through(not self._force_interactive)
+        if self._force_interactive:
+            try:
+                ctypes.windll.user32.SetForegroundWindow(
+                    ctypes.c_void_p(self._find_hwnd()))
+            except Exception:
+                pass
+
+    def hotkey_watch(self):
+        """Poll Ctrl+Alt+M (no message loop needed) to toggle overlay interactivity."""
+        u = ctypes.windll.user32
+        prev = False
+        while True:
+            time.sleep(0.05)
+            try:
+                down = ((u.GetAsyncKeyState(0x11) & 0x8000) and   # Ctrl
+                        (u.GetAsyncKeyState(0x12) & 0x8000) and   # Alt
+                        (u.GetAsyncKeyState(0x4D) & 0x8000))      # M
+                if down and not prev:
+                    self.toggle_interactive()
+                prev = bool(down)
             except Exception:
                 pass
 
@@ -349,6 +538,9 @@ class _Bridge:
 
     def set_mini(self, on):
         return _flyout.set_mini(on) if _flyout else False
+
+    def set_mini_hover(self, on):
+        return _flyout.set_mini_hover(on) if _flyout else False
 
 
 # ── tray ─────────────────────────────────────────────────────────────
@@ -420,6 +612,8 @@ def _after_start():
     _flyout.round_corners()
     _flyout.hide_from_taskbar()
     threading.Thread(target=_flyout.focus_watch, daemon=True).start()
+    threading.Thread(target=_flyout.fullscreen_watch, daemon=True).start()
+    threading.Thread(target=_flyout.hotkey_watch, daemon=True).start()
     threading.Thread(target=_tray, daemon=True).start()
 
 

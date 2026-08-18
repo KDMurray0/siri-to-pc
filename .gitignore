@@ -10,6 +10,7 @@ src/liked_songs.json
 src/play_stats.json
 src/recent_requests.json
 src/ui_prefs.json
+src/playlists.json
 
 # ── Python ──
 __pycache__/

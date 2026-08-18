@@ -13,9 +13,11 @@ _API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 _cfg = {
     "key": "",
-    "model": "llama-3.1-8b-instant",
+    # llama-3.1-8b-instant was retired by Groq. gpt-oss-20b is fast + does
+    # structured JSON well. Must be enabled at console.groq.com/settings/limits.
+    "model": "openai/gpt-oss-20b",
     "enabled": False,
-    "timeout": 6,
+    "timeout": 4,       # keep the request path snappy for Siri
     "working": False,   # last test() result
 }
 

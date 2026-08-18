@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -223,9 +224,13 @@ def _strip_play(text):
 
 
 def _run_play(query, artist=None, type_hint="auto", shuffle_requested=None,
-              mode="play", source=None):
+              mode="play", source=None, defer=False):
     """Core request handler — returns a response dict. Shared by /api/play
-    (GET) and the iOS-shortcut endpoint at / (POST)."""
+    (GET) and the iOS-shortcut endpoint at / (POST).
+
+    *defer* returns as soon as the track is resolved and starts playback in the
+    background — the first-track download added seconds that made Siri time out.
+    """
     try:
         query = (query or "").strip()
 
@@ -378,6 +383,27 @@ def _run_play(query, artist=None, type_hint="auto", shuffle_requested=None,
             return {"status": "not_found", "resolved_type": None,
                     "message": f"I could not find anything for {query} on YouTube Music",
                     "candidates": []}
+
+        # Fast path (iOS shortcut): the song is resolved, so reply now and let
+        # the download + mpv load happen in the background. Siri gets its answer
+        # in ~1 s instead of waiting on yt-dlp.
+        if defer:
+            threading.Thread(target=player_manager.play, args=(resolved,),
+                             daemon=True).start()
+            response = {
+                "status": "played",
+                "resolved_type": resolved.get("kind"),
+                "message": resolved.get("spoken", f"Playing {query}"),
+                "tracks": len(resolved.get("tracks", [])),
+                "candidates": [
+                    {"id": t["video_id"], "name": t.get("title", ""),
+                     "artist": t.get("artist", ""), "album": t.get("album", "")}
+                    for t in resolved.get("tracks", [])[:5]
+                ],
+            }
+            log_request(query, response)
+            player_manager.announce(response.get("message"))
+            return response
 
         # Play through mpv
         try:
@@ -532,6 +558,17 @@ def api_announce():
         return jsonify({"status": "error", "message": str(e)})
 
 
+@app.route("/api/theme", methods=["GET"])
+@require_auth
+def api_theme():
+    """Persist the chosen UI theme so it survives a relaunch."""
+    try:
+        theme = (request.args.get("value") or "default").strip()
+        return jsonify({"status": "ok", "theme": player_manager.set_theme(theme)})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+
 @app.route("/api/sleep", methods=["GET"])
 @require_auth
 def api_sleep():
@@ -647,7 +684,8 @@ def api_search():
         q = (request.args.get("q") or "").strip()
         if not q:
             return jsonify({"status": "error", "message": "q required"})
-        return jsonify({"status": "ok", "results": search_module.search_candidates(q)})
+        return jsonify({"status": "ok",
+                        "results": search_module.search_candidates(q, limit=12)})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
@@ -861,7 +899,7 @@ def index():
         data = request.get_json(silent=True) or {}
         query = (data.get("input") or data.get("q")
                  or request.form.get("input") or request.values.get("input") or "")
-        return jsonify(_run_play(query=query))
+        return jsonify(_run_play(query=query, defer=True))
     return render_template("setup.html", host=_lan_address(),
                            port=_config.get("port", 5000),
                            api_key=_config.get("api_key", ""))
