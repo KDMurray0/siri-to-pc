@@ -123,6 +123,15 @@ def test():
     return ok
 
 
+def _as_bool(v):
+    """Models sometimes emit "true"/"false" as strings — coerce, else None."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str) and v.strip().lower() in ("true", "false"):
+        return v.strip().lower() == "true"
+    return None
+
+
 def interpret(text):
     """Parse *text* into a resolver-ready plan dict, or None to fall back.
 
@@ -141,7 +150,17 @@ def interpret(text):
     try:
         raw = _call_groq(text.strip())
         data = json.loads(raw)
-    except Exception:
+    except urllib.error.HTTPError as e:
+        # 429 = rate limited (8k tokens/min), 403 = model blocked, 401 = bad key.
+        body = ""
+        try:
+            body = e.read().decode()[:160]
+        except Exception:
+            pass
+        print(f"[groq] HTTP {e.code} — falling back to local parser. {body}")
+        return None
+    except Exception as e:
+        print(f"[groq] {type(e).__name__}: {e} — falling back to local parser.")
         return None
 
     kind = (data.get("kind") or "").strip().lower()
@@ -174,6 +193,6 @@ def interpret(text):
         "query": query,
         "artist": artist,
         "command": None,
-        "variant": bool(data.get("variant")),
-        "shuffle": data.get("shuffle") if isinstance(data.get("shuffle"), bool) else None,
+        "variant": _as_bool(data.get("variant")) is True,
+        "shuffle": _as_bool(data.get("shuffle")),
     }
