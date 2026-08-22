@@ -18,7 +18,6 @@ from ..events import Ev, bus
 from ..logging_setup import get
 from ..models import Activity, Candidate, Track, is_derivative, norm_title
 from .downloader import downloader
-from .spectrum import analyse_async
 from .taste import taste
 
 log = get("queue")
@@ -212,7 +211,6 @@ class QueueManager:
             return
 
         track.path = path
-        analyse_async(path, track.video_id)   # real bars for the visualiser
         with self._lock:
             self._meta[path] = track
             if track.key():

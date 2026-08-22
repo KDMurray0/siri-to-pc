@@ -15,6 +15,7 @@ from .core.context import ContextBuilder
 from .core.downloader import downloader
 from .core.extras import AlarmClock, caster, scrobbler
 from .core.library import library
+from .core.listen import listener
 from .core.playlists import playlists
 from .core.mpv import MpvClient, PIPE_ALT, PIPE_MAIN, kill_stray_mpv
 from .core.queue import QueueManager
@@ -55,15 +56,21 @@ class PlayerService:
         except Exception as exc:
             log.warning("crossfade engine unavailable: %s", exc)
         self.audio.apply_all()
+        dev = config.get("audio_device", "auto")
+        if dev and dev != "auto":
+            self.mpv.set("audio-device", dev)
         self.queue.start()
         catalog.set_preferences(taste.preferred_artists())
         threading.Thread(target=self._monitor, daemon=True, name="monitor").start()
+        if config.get("listen_loopback", True) and listener.available():
+            listener.start()
         threading.Thread(target=self._levels, daemon=True, name="levels").start()
         self._alarms = AlarmClock(self._on_alarm)
         log.info("player ready")
 
     def stop(self) -> None:
         self._stop.set()
+        listener.stop()
         self.queue.stop()
         taste.save()
         for m in (self.mpv, self.alt):
@@ -194,9 +201,11 @@ class PlayerService:
             config.set("volume", v)
 
     def _levels(self) -> None:
-        """Publish real audio levels for the visualiser."""
+        """Loudness fallback, only when we can't hear the output directly."""
         while not self._stop.is_set():
-            time.sleep(0.07)
+            time.sleep(0.1)
+            if listener.running:
+                continue
             try:
                 if self.mpv.get("pause", True):
                     continue
@@ -205,6 +214,38 @@ class PlayerService:
                     bus.publish(Ev.LEVEL, levels, sticky=False)
             except Exception:
                 pass
+
+    def audio_devices(self) -> dict:
+        rows = self.mpv.command("get_property", "audio-device-list") or []
+        current = config.get("audio_device", "auto")
+        out = [{"name": "auto", "label": "System default",
+                "active": current in ("", "auto")}]
+        for d in rows:
+            name = d.get("name", "")
+            if name in ("auto", ""):
+                continue
+            out.append({"name": name,
+                        "label": d.get("description") or name,
+                        "active": name == current})
+        return {"devices": out, "current": current}
+
+    def set_audio_device(self, name: str) -> dict:
+        name = (name or "auto").strip()
+        config.set("audio_device", name)
+        try:
+            self.mpv.set("audio-device", name)
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+        label = name
+        for d in (self.mpv.command("get_property", "audio-device-list") or []):
+            if d.get("name") == name:
+                label = d.get("description") or name
+        config.set("audio_device_label", "" if name == "auto" else label)
+        if listener.running:
+            listener.restart()      # the meter should follow the sound
+        log.info("audio output -> %s", label)
+        return {"ok": True, "device": name,
+                "message": f"Playing through {label if name != 'auto' else 'the system default'}"}
 
     # -- status --------------------------------------------------------
     def status(self) -> dict:
@@ -442,6 +483,7 @@ class PlayerService:
             "eq_presets": list(EQ_PRESETS.keys()),
             "sleep_remaining": self.sleep_remaining(),
             "library_count": library.count(),
+            "listener": listener.status(),
             "queue_stats": self.queue.stats(),
         }
 

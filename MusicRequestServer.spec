@@ -35,7 +35,7 @@ for _pkg in ('fastapi', 'starlette', 'uvicorn', 'jinja2'):
 
 # pythonnet (clr) powers pywebview's WebView2 backend; edge_tts/certifi give the
 # neural announce voice. Pull their data + native DLLs in explicitly.
-for _pkg in ('pythonnet', 'clr_loader', 'edge_tts', 'certifi'):
+for _pkg in ('pythonnet', 'clr_loader', 'edge_tts', 'certifi', 'pyaudiowpatch'):
     try:
         _d, _b, _h = collect_all(_pkg)
         datas += _d

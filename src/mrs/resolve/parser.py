@@ -28,6 +28,10 @@ def parse(text: str, *, mode: str = "play") -> Plan:
     if vol:
         return Plan(kind="command", command=vol[0], query=str(vol[1]),
                     via="grammar", spoken=text, mode=mode)
+    listname = grammar.playlist_add(text)
+    if listname:
+        return Plan(kind="command", command="add_to_playlist", query=listname,
+                    via="grammar", spoken=text, mode=mode)
 
     # 2. the LLM, when we have one
     if llm.available():

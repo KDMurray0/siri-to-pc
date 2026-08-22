@@ -1,7 +1,11 @@
-"""Spotify links, read with spotdl and resolved through YouTube Music.
+"""Spotify links.
 
-spotdl is shelled out to, not imported, because it pins older fastapi and
-ytmusicapi.
+We never download from Spotify, just read the track names and find each one
+through YouTube Music like any other request.
+
+Names come from Spotify's own embed page, which carries the whole track list as
+JSON. spotdl was the original plan but it bundles its own ytmusicapi and dies on
+the same parser bug our searches hit, so it's only a fallback now.
 """
 
 from __future__ import annotations
@@ -11,6 +15,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
+import urllib.request
 from pathlib import Path
 
 from ..logging_setup import get
@@ -20,8 +26,11 @@ log = get("spotify")
 
 CREATE_NO_WINDOW = 0x08000000
 SPOTIFY_URL = re.compile(
-    r"https?://open\.spotify\.com/(?:intl-[a-z]+/)?(playlist|album|track|artist)/([A-Za-z0-9]+)",
+    r"https?://open\.spotify\.com/(?:intl-[a-z-]+/)?(playlist|album|track|artist)/([A-Za-z0-9]+)",
     re.I)
+_NEXT_DATA = re.compile(
+    r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.S)
+UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
 
 def is_spotify_url(text: str) -> bool:
@@ -29,78 +38,141 @@ def is_spotify_url(text: str) -> bool:
 
 
 def available() -> bool:
-    return shutil.which("spotdl") is not None
+    return True          # reading the embed page needs nothing installed
 
 
-def _parse_save_file(path: Path) -> list[Track]:
+def parts(url: str):
+    m = SPOTIFY_URL.search(url or "")
+    return (m.group(1).lower(), m.group(2)) if m else None
+
+
+def _dig(obj, key, depth: int = 0):
+    """First value for `key` anywhere in nested json."""
+    if depth > 14:
+        return None
+    if isinstance(obj, dict):
+        if key in obj:
+            return obj[key]
+        for v in obj.values():
+            found = _dig(v, key, depth + 1)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for v in obj:
+            found = _dig(v, key, depth + 1)
+            if found is not None:
+                return found
+    return None
+
+
+def _embed_json(kind: str, spotify_id: str):
+    url = f"https://open.spotify.com/embed/{kind}/{spotify_id}"
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        html = urllib.request.urlopen(
+            urllib.request.Request(url, headers=UA), timeout=25
+        ).read().decode("utf-8", "replace")
     except Exception as exc:
-        log.warning("could not read spotdl output: %s", exc)
+        log.warning("couldn't load the Spotify page: %s", exc)
+        return None
+    m = _NEXT_DATA.search(html)
+    if not m:
+        log.warning("no track data on that page — is the link public?")
+        return None
+    try:
+        return json.loads(m.group(1))
+    except Exception:
+        return None
+
+
+def _from_embed(kind: str, spotify_id: str) -> list[Track]:
+    data = _embed_json(kind, spotify_id)
+    if not data:
         return []
+    rows = _dig(data, "trackList") or []
+    name = _dig(data, "name") or ""
     out: list[Track] = []
-    for row in data if isinstance(data, list) else []:
-        name = (row.get("name") or "").strip()
-        artists = row.get("artists") or []
-        artist = ", ".join(a for a in artists if a) if isinstance(artists, list) \
-            else str(row.get("artist") or "")
-        if not name:
+    for row in rows:
+        title = (row.get("title") or "").strip()
+        if not title:
             continue
-        out.append(Track(
-            title=name,
-            artist=artist or (row.get("artist") or ""),
-            album=(row.get("album_name") or row.get("album") or ""),
-            art=row.get("cover_url") or "",
-            duration=int(row.get("duration") or 0),
-            origin="playlist",
-        ))
+        out.append(Track(title=title,
+                         artist=(row.get("subtitle") or "").strip(),
+                         album=name if kind == "album" else "",
+                         duration=int((row.get("duration") or 0) / 1000),
+                         origin="playlist"))
+    if out:
+        log.info("read %d tracks from Spotify %s %r", len(out), kind, name)
     return out
 
 
-def track_names(url: str, timeout: int = 180) -> list[Track]:
-    """Read a Spotify link and return its tracks as names (no audio)."""
+def _from_spotdl(url: str, timeout: int = 180) -> list[Track]:
     exe = shutil.which("spotdl")
     if not exe:
-        log.warning("spotdl not installed")
         return []
     with tempfile.TemporaryDirectory() as tmp:
         out_file = Path(tmp) / "list.spotdl"
         try:
-            proc = subprocess.run(
-                [exe, "save", url, "--save-file", str(out_file)],
-                capture_output=True, text=True, timeout=timeout,
-                creationflags=CREATE_NO_WINDOW, cwd=tmp)
-        except Exception as exc:
-            log.warning("spotdl failed: %s", exc)
+            subprocess.run([exe, "save", url, "--save-file", str(out_file)],
+                           capture_output=True, text=True, timeout=timeout,
+                           creationflags=CREATE_NO_WINDOW, cwd=tmp)
+        except Exception:
             return []
         if not out_file.exists():
-            log.warning("spotdl produced nothing: %s",
-                        (proc.stderr or proc.stdout or "")[-200:])
             return []
-        tracks = _parse_save_file(out_file)
-    log.info("spotify import: %d tracks from %s", len(tracks), url)
+        try:
+            rows = json.loads(out_file.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+    out = []
+    for row in rows if isinstance(rows, list) else []:
+        title = (row.get("name") or "").strip()
+        if not title:
+            continue
+        artists = row.get("artists") or []
+        artist = ", ".join(a for a in artists if a) if isinstance(artists, list) \
+            else str(row.get("artist") or "")
+        out.append(Track(title=title, artist=artist,
+                         album=row.get("album_name") or "",
+                         art=row.get("cover_url") or "", origin="playlist"))
+    return out
+
+
+def link_name(url: str) -> str:
+    """What Spotify calls this playlist/album, for naming an import."""
+    got = parts(url)
+    if not got:
+        return ""
+    data = _embed_json(*got)
+    return (_dig(data, "name") or "") if data else ""
+
+
+def track_names(url: str) -> list[Track]:
+    """Every track behind a Spotify link, as names."""
+    got = parts(url)
+    if not got:
+        return []
+    kind, spotify_id = got
+    tracks = _from_embed(kind, spotify_id)
+    if not tracks:
+        log.info("embed gave nothing, falling back to spotdl")
+        tracks = _from_spotdl(url)
     return tracks
 
 
-def resolve_imported(tracks: list[Track], limit: int = 100,
+def resolve_imported(tracks: list[Track], limit: int = 200,
                      on_progress=None) -> list[Track]:
-    """Turn imported names into playable YouTube Music tracks.
-
-    Paced deliberately: a 60-track playlist is 60 searches, and hammering them
-    back to back is how you get rate-limited.
-    """
-    import time as _time
-
+    """Match imported names to playable tracks, paced so we don't get limited."""
     from . import catalog
     out: list[Track] = []
+    total = min(len(tracks), limit)
     for i, t in enumerate(tracks[:limit], 1):
         if on_progress:
             try:
-                on_progress(i, min(len(tracks), limit), t.title)
+                on_progress(i, total, t.title)
             except Exception:
                 pass
         if i > 1:
-            _time.sleep(0.35)
+            time.sleep(0.3)
         query = f"{t.title} {t.artist}".strip()
         hits = catalog.search_songs(query, limit=3)
         if not hits:

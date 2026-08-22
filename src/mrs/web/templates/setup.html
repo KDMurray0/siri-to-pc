@@ -29,6 +29,14 @@ a{color:var(--accent)}
   <h1>🎧 Music Request</h1>
   <p class="lede">Ask Siri for a song and it plays on this PC.</p>
 
+  <div class="card" style="border-color:var(--accent)">
+    <div class="muted">Control it from this phone</div>
+    <div class="row" style="margin-top:10px">
+      <button onclick="location.href='/remote?key={{ api_key }}'">Open the remote</button>
+      <span class="muted">Play, pause, skip, search, queue, playlists</span>
+    </div>
+  </div>
+
   <div class="card">
     <div class="muted">Your endpoint</div>
     <code id="url">http://{{ host }}:{{ port }}/?key={{ api_key }}</code>

@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0e0f16">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Music Request</title>
+<style>
+:root{
+  --bg:#0e0f16; --panel:#171826; --fg:#f5f6fb; --sub:#9aa0b8;
+  --line:#252739; --accent:#6d8bff; --accent-ink:#0b0c12;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{background:var(--bg);color:var(--fg);min-height:100vh;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  padding:max(14px,env(safe-area-inset-top)) 14px max(20px,env(safe-area-inset-bottom));
+  overflow-x:hidden}
+.wash{position:fixed;inset:-30% -30% auto -30%;height:46vh;z-index:0;
+  filter:blur(80px) saturate(1.3);opacity:.34;pointer-events:none}
+.wash img{width:100%;height:100%;object-fit:cover;border-radius:50%}
+.page{position:relative;z-index:1;max-width:520px;margin:0 auto}
+
+.now{display:flex;flex-direction:column;align-items:center;text-align:center;
+  padding:10px 0 4px}
+.art{width:min(58vw,240px);height:min(58vw,240px);border-radius:20px;object-fit:cover;
+  background:var(--panel);box-shadow:0 18px 50px rgba(0,0,0,.6)}
+.art.placeholder{background:linear-gradient(145deg,color-mix(in srgb,var(--accent) 14%,var(--panel)),var(--panel))}
+h1{font-size:20px;font-weight:800;letter-spacing:-.02em;margin-top:16px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.by{font-size:13.5px;color:var(--sub);margin-top:3px}
+.stage{font-size:11.5px;color:var(--accent);font-weight:600;margin-top:6px;min-height:15px}
+
+.bar{height:6px;border-radius:3px;background:var(--line);position:relative;
+  margin:16px 0 6px;cursor:pointer}
+.fill{position:absolute;inset:0 auto 0 0;width:0;background:var(--accent);border-radius:3px}
+.times{display:flex;justify-content:space-between;font-size:11px;color:var(--sub);
+  font-variant-numeric:tabular-nums}
+
+.controls{display:flex;align-items:center;justify-content:center;gap:16px;margin:14px 0 6px}
+button{background:none;border:0;color:var(--fg);font-family:inherit;cursor:pointer}
+.ib{width:52px;height:52px;border-radius:16px;display:grid;place-items:center;
+  background:var(--panel);border:1px solid var(--line)}
+.ib:active{transform:scale(.94)}
+.ib svg{width:24px;height:24px;fill:currentColor;display:block}
+.ib.on{color:var(--accent);border-color:var(--accent)}
+.play{width:68px;height:68px;border-radius:22px;background:var(--accent);
+  color:var(--accent-ink);border:0}
+.play svg{width:30px;height:30px}
+
+.row{display:flex;gap:8px;margin-top:10px}
+.row .ib{flex:1;height:46px;border-radius:13px}
+.row .ib svg{width:20px;height:20px}
+
+.vol{display:flex;align-items:center;gap:10px;margin-top:14px}
+.vol svg{width:20px;height:20px;fill:var(--sub);flex:0 0 auto}
+input[type=range]{flex:1;-webkit-appearance:none;height:6px;border-radius:3px;
+  background:var(--line);outline:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;
+  border-radius:50%;background:var(--fg)}
+
+.search{position:relative;margin-top:18px}
+.search input{width:100%;background:var(--panel);border:1px solid var(--line);
+  color:var(--fg);border-radius:14px;padding:14px 14px;font-size:16px;
+  font-family:inherit;outline:none}
+.search input:focus{border-color:var(--accent)}
+.results{margin-top:8px;background:var(--panel);border:1px solid var(--line);
+  border-radius:14px;overflow:hidden;display:none}
+.results.show{display:block}
+.grp{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--sub);
+  padding:9px 13px 4px;font-weight:700}
+.res{display:flex;gap:11px;align-items:center;padding:11px 13px;cursor:pointer}
+.res:active{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.res img,.res .ph{width:40px;height:40px;border-radius:8px;object-fit:cover;
+  background:var(--bg);flex:0 0 auto}
+.res .t{min-width:0;flex:1}
+.res .n{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.res .a{font-size:12px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.res .add{width:34px;height:34px;border-radius:10px;background:var(--bg);
+  border:1px solid var(--line);display:grid;place-items:center;flex:0 0 auto;font-size:17px}
+
+h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--sub);
+  margin:22px 0 8px;font-weight:700}
+.q{display:flex;gap:10px;align-items:center;padding:9px 6px;border-radius:10px}
+.q:active{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.q img,.q .ph{width:38px;height:38px;border-radius:8px;object-fit:cover;background:var(--panel)}
+.q .t{min-width:0;flex:1}
+.q .n{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q .a{font-size:11.5px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q.cur .n{color:var(--accent)}
+.muted{color:var(--sub);font-size:13px;padding:14px 6px}
+
+.sheet{position:fixed;inset:auto 0 0 0;z-index:40;background:var(--panel);
+  border-radius:18px 18px 0 0;border-top:1px solid var(--line);
+  transform:translateY(105%);transition:transform .25s cubic-bezier(.2,.8,.2,1);
+  padding:14px 14px max(18px,env(safe-area-inset-bottom));max-height:70vh;overflow-y:auto}
+.sheet.show{transform:translateY(0)}
+.sheet h3{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--sub);
+  margin-bottom:8px}
+.pl{display:flex;align-items:center;gap:8px;padding:13px 6px;font-size:15px;
+  border-bottom:1px solid var(--line)}
+.pl:last-child{border-bottom:0}
+.pl .cnt{margin-left:auto;color:var(--sub);font-size:12px}
+.newrow{display:flex;gap:8px;margin-top:10px}
+.newrow input{flex:1;background:var(--bg);border:1px solid var(--line);color:var(--fg);
+  border-radius:11px;padding:12px;font-size:16px;font-family:inherit;outline:none}
+.newrow button{background:var(--accent);color:var(--accent-ink);border-radius:11px;
+  padding:0 16px;font-weight:600;font-size:14px}
+
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));
+  transform:translate(-50%,24px);z-index:50;background:var(--accent);
+  color:var(--accent-ink);font-size:14px;font-weight:600;padding:12px 20px;
+  border-radius:24px;opacity:0;transition:.2s;pointer-events:none;max-width:88vw;
+  text-align:center}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+</style>
+</head>
+<body>
+<div class="wash" id="wash"></div>
+<div class="page">
+
+  <div class="now">
+    <img class="art placeholder" id="art" alt="">
+    <h1 id="title">Nothing playing</h1>
+    <div class="by" id="artist"></div>
+    <div class="stage" id="stage"></div>
+  </div>
+
+  <div class="bar" id="bar"><div class="fill" id="fill"></div></div>
+  <div class="times"><span id="cur">0:00</span><span id="dur">0:00</span></div>
+
+  <div class="controls">
+    <button class="ib" id="prev" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button>
+    <button class="play" id="play" aria-label="Play or pause"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+    <button class="ib" id="next" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg></button>
+  </div>
+
+  <div class="row">
+    <button class="ib" id="shuffle" aria-label="Shuffle"><svg viewBox="0 0 24 24"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg></button>
+    <button class="ib" id="repeat" aria-label="Repeat"><svg viewBox="0 0 24 24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2z"/></svg></button>
+    <button class="ib" id="like" aria-label="Like"><svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54z"/></svg></button>
+    <button class="ib" id="save" aria-label="Save to Music"><svg viewBox="0 0 24 24"><path d="M11 3h2v7h2.5l-3.5 4-3.5-4H11zM5 18h14v2H5z"/></svg></button>
+    <button class="ib" id="addlist" aria-label="Add to playlist"><svg viewBox="0 0 24 24"><path d="M3 6h12v2H3zm0 5h12v2H3zm0 5h8v2H3zm15-9h2v4h4v2h-4v4h-2v-4h-4v-2h4z"/></svg></button>
+  </div>
+
+  <div class="vol">
+    <svg viewBox="0 0 24 24"><path d="M3 9.2v5.6h3.8L11.5 19V5l-4.7 4.2z"/></svg>
+    <input type="range" id="vol" min="0" max="150" value="70">
+  </div>
+
+  <div class="search">
+    <input id="q" placeholder="Play a song, artist, vibe, or Spotify link"
+           autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go">
+    <div class="results" id="results"></div>
+  </div>
+
+  <h2>Up next</h2>
+  <div id="queue"><div class="muted">Nothing queued.</div></div>
+</div>
+
+<div class="sheet" id="sheet">
+  <h3>Add to playlist</h3>
+  <div id="pllist"></div>
+  <div class="newrow">
+    <input id="newpl" placeholder="New playlist" autocomplete="off">
+    <button id="newplgo">Create</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const KEY = "{{ api_key }}";
+const $ = id => document.getElementById(id);
+const api = p => fetch(p + (p.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(KEY))
+  .then(r => r.ok ? r.json() : null).catch(() => null);
+const esc = s => (s || "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmt = s => { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s/60) + ":" + String(s%60).padStart(2,"0"); };
+const ICON = {
+  play: '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>',
+};
+
+let st = { pos: 0, dur: 0, playing: false, vol: 70, key: "" };
+let scrubbing = false, volTouch = false;
+
+let toastT;
+function toast(m) {
+  if (!m) return;
+  const t = $("toast"); t.textContent = m; t.classList.add("show");
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 2400);
+}
+
+/* accent from the artwork, same idea as the desktop player */
+let lastArt = "";
+function setArt(url) {
+  if (url === lastArt) return;
+  lastArt = url;
+  const img = $("art");
+  if (!url) { img.removeAttribute("src"); img.classList.add("placeholder"); $("wash").innerHTML = ""; return; }
+  img.src = url; img.classList.remove("placeholder");
+  $("wash").innerHTML = `<img src="${url}" alt="">`;
+  const probe = new Image();
+  probe.crossOrigin = "anonymous";
+  probe.onload = () => {
+    try {
+      const c = document.createElement("canvas"); c.width = c.height = 20;
+      const x = c.getContext("2d"); x.drawImage(probe, 0, 0, 20, 20);
+      const d = x.getImageData(0, 0, 20, 20).data;
+      let best = null, bs = -1;
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i+1], b = d[i+2];
+        const mx = Math.max(r,g,b), mn = Math.min(r,g,b);
+        const sat = mx === 0 ? 0 : (mx-mn)/mx;
+        const sc = sat * 1.4 * (1 - Math.abs(mx/255 - .62));
+        if (sc > bs) { bs = sc; best = [r,g,b]; }
+      }
+      if (best && bs > .05) {
+        const mx = Math.max(...best), boost = mx < 170 ? 170/Math.max(mx,1) : 1;
+        document.documentElement.style.setProperty("--accent",
+          `rgb(${Math.min(255,best[0]*boost|0)},${Math.min(255,best[1]*boost|0)},${Math.min(255,best[2]*boost|0)})`);
+      }
+    } catch (e) {}
+  };
+  probe.src = url;
+}
+
+/* transport */
+$("play").onclick = () => api("/api/control/playpause");
+$("next").onclick = () => api("/api/control/next");
+$("prev").onclick = () => api("/api/control/previous");
+$("shuffle").onclick = async () => toast((await api("/api/control/shuffle") || {}).message);
+$("repeat").onclick = async () => toast((await api("/api/control/repeat") || {}).message);
+$("like").onclick = async () => toast((await api("/api/control/like") || {}).message);
+$("save").onclick = async () => {
+  const r = await api("/api/download");
+  toast(r && r.ok ? (r.message || "Saved") : "Nothing to save");
+};
+
+$("bar").onclick = e => {
+  if (!st.dur) return;
+  const r = $("bar").getBoundingClientRect();
+  api("/api/seek?pos=" + Math.round((e.clientX - r.left) / r.width * st.dur));
+};
+$("vol").addEventListener("input", () => { volTouch = true; });
+$("vol").addEventListener("change", () => {
+  api("/api/control/volume?value=" + $("vol").value);
+  setTimeout(() => { volTouch = false; }, 600);
+});
+
+/* search + add */
+let searchT, seq = 0;
+$("q").addEventListener("input", () => {
+  const v = $("q").value.trim();
+  clearTimeout(searchT);
+  if (v.length < 2) { $("results").classList.remove("show"); return; }
+  searchT = setTimeout(() => search(v), 350);
+});
+$("q").addEventListener("keydown", e => {
+  if (e.key !== "Enter") return;
+  const v = $("q").value.trim(); if (!v) return;
+  closeSearch();
+  api("/api/play?q=" + encodeURIComponent(v)).then(r => toast(r && r.message));
+});
+function closeSearch() {
+  clearTimeout(searchT); seq++;
+  $("results").classList.remove("show");
+  $("q").value = ""; $("q").blur();
+}
+
+async function search(v) {
+  const mine = ++seq;
+  const r = await api("/api/search?q=" + encodeURIComponent(v));
+  if (mine !== seq || !r) return;
+  const img = u => u ? `<img src="${u}" onerror="this.removeAttribute('src')">` : `<div class="ph"></div>`;
+  let h = "";
+  if (r.spotify) {
+    h += `<div class="grp">Spotify</div><div class="res" data-act="spotify"><div class="ph"></div>` +
+         `<div class="t"><div class="n">Import this link</div><div class="a">Saves it as a playlist</div></div></div>`;
+  }
+  if (r.playlists && r.playlists.length) {
+    h += `<div class="grp">Your playlists</div>` + r.playlists.map(p =>
+      `<div class="res" data-act="playlist" data-n="${esc(p.name)}"><div class="ph"></div>` +
+      `<div class="t"><div class="n">${esc(p.name)}</div><div class="a">${p.count} tracks</div></div></div>`).join("");
+  }
+  if (r.artists && r.artists.length) {
+    h += `<div class="grp">Artists</div>` + r.artists.map(a =>
+      `<div class="res" data-act="artist" data-n="${esc(a.name)}">${img(a.art)}` +
+      `<div class="t"><div class="n">${esc(a.name)}</div><div class="a">Play everything</div></div></div>`).join("");
+  }
+  if (r.albums && r.albums.length) {
+    h += `<div class="grp">Albums</div>` + r.albums.map(a =>
+      `<div class="res" data-act="album" data-n="${esc(a.name)}" data-ar="${esc(a.artist)}">${img(a.art)}` +
+      `<div class="t"><div class="n">${esc(a.name)}</div><div class="a">${esc(a.artist)}</div></div></div>`).join("");
+  }
+  const songs = [].concat(r.library || [], r.results || []);
+  if (songs.length) {
+    h += `<div class="grp">Songs</div>` + songs.map(t =>
+      `<div class="res" data-act="song" data-v="${esc(t.video_id)}" data-t="${esc(t.title)}" ` +
+      `data-ar="${esc(t.artist)}" data-img="${esc(t.art)}">${img(t.art)}` +
+      `<div class="t"><div class="n">${esc(t.title)}</div><div class="a">${esc(t.artist)}</div></div>` +
+      `<div class="add" data-queue="1">+</div></div>`).join("");
+  }
+  $("results").innerHTML = h || `<div class="muted">Nothing found.</div>`;
+  $("results").classList.add("show");
+}
+
+$("results").addEventListener("click", async e => {
+  const row = e.target.closest(".res"); if (!row) return;
+  const queueIt = !!e.target.closest("[data-queue]");
+  const q = $("q").value.trim();
+  const act = row.dataset.act;
+  let r;
+  if (act === "spotify")      r = await api("/api/play?q=" + encodeURIComponent(q));
+  else if (act === "playlist") r = await api("/api/playlist/play?name=" + encodeURIComponent(row.dataset.n));
+  else if (act === "artist")   r = await api("/api/play/artist?name=" + encodeURIComponent(row.dataset.n));
+  else if (act === "album")    r = await api("/api/play/album?name=" + encodeURIComponent(row.dataset.n) +
+                                             "&artist=" + encodeURIComponent(row.dataset.ar || ""));
+  else r = await api("/api/play/video/" + encodeURIComponent(row.dataset.v) +
+                     "?title=" + encodeURIComponent(row.dataset.t || "") +
+                     "&artist=" + encodeURIComponent(row.dataset.ar || "") +
+                     "&art=" + encodeURIComponent(row.dataset.img || "") +
+                     (queueIt ? "&mode=queue" : ""));
+  if (!queueIt) closeSearch();
+  toast((r && r.message) || "Playing");
+});
+
+/* add to playlist */
+const sheet = $("sheet");
+$("addlist").onclick = async () => {
+  const r = await api("/api/playlists");
+  const rows = (r && r.playlists) || [];
+  $("pllist").innerHTML = rows.length
+    ? rows.map(p => `<div class="pl" data-n="${esc(p.name)}">${esc(p.name)}<span class="cnt">${p.count}</span></div>`).join("")
+    : `<div class="muted">No playlists yet.</div>`;
+  sheet.classList.add("show");
+};
+$("pllist").addEventListener("click", async e => {
+  const row = e.target.closest(".pl[data-n]"); if (!row) return;
+  sheet.classList.remove("show");
+  toast(((await api("/api/playlist/add?name=" + encodeURIComponent(row.dataset.n))) || {}).message);
+});
+$("newplgo").onclick = async () => {
+  const n = $("newpl").value.trim();
+  if (!n) { toast("Give it a name"); return; }
+  sheet.classList.remove("show"); $("newpl").value = "";
+  toast(((await api("/api/playlist/add?name=" + encodeURIComponent(n))) || {}).message);
+};
+document.addEventListener("click", e => {
+  if (sheet.classList.contains("show") && !sheet.contains(e.target) &&
+      !e.target.closest("#addlist")) sheet.classList.remove("show");
+});
+
+/* queue */
+function renderQueue(rows) {
+  const box = $("queue");
+  if (!rows || !rows.length) { box.innerHTML = `<div class="muted">Nothing queued.</div>`; return; }
+  const cur = rows.findIndex(r => r.current);
+  const show = rows.slice(Math.max(0, cur), Math.max(0, cur) + 25);
+  box.innerHTML = show.map(t =>
+    `<div class="q${t.current ? " cur" : ""}" data-i="${t.index}">` +
+    (t.art ? `<img src="${t.art}" onerror="this.removeAttribute('src')">` : `<div class="ph"></div>`) +
+    `<div class="t"><div class="n">${esc(t.title)}</div><div class="a">${esc(t.artist)}</div></div></div>`).join("");
+}
+$("queue").addEventListener("click", e => {
+  const row = e.target.closest(".q[data-i]"); if (!row) return;
+  api("/api/queue/jump?index=" + row.dataset.i);
+});
+
+/* live state */
+function apply(d) {
+  if (!d) return;
+  const t = d.track || {};
+  $("title").textContent = t.name || "Nothing playing";
+  $("artist").textContent = t.artist || "";
+  setArt(t.art || "");
+  st.dur = t.duration || 0;
+  st.pos = d.position || 0;
+  st.playing = d.state === "playing";
+  $("play").innerHTML = st.playing ? ICON.pause : ICON.play;
+  if (!scrubbing) {
+    $("fill").style.width = (st.dur ? Math.min(100, st.pos / st.dur * 100) : 0) + "%";
+    $("cur").textContent = fmt(st.pos);
+  }
+  $("dur").textContent = fmt(st.dur);
+  if (!volTouch && d.volume != null) $("vol").value = Math.round(d.volume);
+  $("like").classList.toggle("on", !!t.liked);
+  $("shuffle").classList.toggle("on", !!d.shuffle);
+  $("repeat").classList.toggle("on", d.repeat && d.repeat !== "off");
+  const a = d.activity || {};
+  const busy = a.stage && !["idle", "playing"].includes(a.stage);
+  $("stage").textContent = busy
+    ? ({finding:"Finding", downloading:"Downloading", loading:"Loading"}[a.stage] || a.stage) +
+      (a.detail ? " · " + a.detail : "")
+    : "";
+}
+
+let es;
+function connect() {
+  if (es) es.close();
+  es = new EventSource("/api/events?key=" + encodeURIComponent(KEY));
+  es.onmessage = ev => {
+    let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+    if (m.type === "status") apply(m.data);
+    else if (m.type === "queue") renderQueue(m.data);
+    else if (m.type === "toast") toast(m.data);
+  };
+  es.onerror = () => { es.close(); setTimeout(connect, 3000); };
+}
+
+setInterval(() => {
+  if (st.playing && st.dur && !scrubbing) {
+    st.pos = Math.min(st.dur, st.pos + 0.5);
+    $("fill").style.width = (st.pos / st.dur * 100) + "%";
+    $("cur").textContent = fmt(st.pos);
+  }
+}, 500);
+
+connect();
+api("/api/status").then(d => { if (d) { apply(d); renderQueue(d.queue); } });
+</script>
+</body>
+</html>

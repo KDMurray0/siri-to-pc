@@ -28,7 +28,15 @@ _TRANSPORT = {
     "like": "like", "like this": "like", "love this": "like",
     "more like this": "more_like_this", "similar": "more_like_this",
     "mute": "mute", "unmute": "unmute",
+    "save": "save", "save this": "save", "save this song": "save",
+    "download": "save", "download this": "save", "download this song": "save",
+    "keep this": "save",
 }
+
+# "add this to my gym playlist" / "add to gym"
+_ADD_TO = re.compile(
+    r"add (?:this|it|the song|this song)?\s*to (?:my )?(?P<name>.+?)"
+    r"(?:\s+playlist|\s+list)?\s*$", re.I)
 
 _VOL_SET = re.compile(r"\b(?:set\s+)?volume\s+(?:to\s+)?(\d{1,3})\b", re.I)
 _VOL_PCT = re.compile(r"\b(\d{1,3})\s*(?:%|percent)\b", re.I)
@@ -73,6 +81,12 @@ def volume_intent(text: str) -> tuple[str, int] | None:
     if _VOL_DOWN.search(t):
         return ("volume_delta", -10)
     return None
+
+
+def playlist_add(text: str) -> str | None:
+    """Playlist name from "add this to my X"."""
+    m = _ADD_TO.search(clean(text))
+    return m.group("name").strip() if m else None
 
 
 def parse(text: str) -> Plan:

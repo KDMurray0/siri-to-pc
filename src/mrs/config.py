@@ -30,6 +30,9 @@ DEFAULTS: dict[str, Any] = {
     "announce": True,
     "tts_voice": "en-US-AriaNeural",
     "theme": "default",
+    "audio_device": "auto",
+    "audio_device_label": "",
+    "listen_loopback": True,   # meter reads the real output
 
     # fetching
     "js_runtime": "node",
@@ -81,6 +84,7 @@ DEFAULTS: dict[str, Any] = {
     "playlist_download": False,   # keep playlist audio on disk
     "artist_track_count": 60,
     "cast_peers": [],
+    "cast_all": False,     # mirror every request to the peers
     "alarms": [],
     "start_on_boot": False,
 }

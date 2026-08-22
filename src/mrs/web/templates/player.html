@@ -300,6 +300,7 @@ select,.keyin{background:var(--panel);border:1px solid var(--line);color:var(--f
 .hint code{background:var(--panel);padding:1px 5px;border-radius:4px;font-size:10.5px}
 
 /* add-to-playlist picker */
+#devpicker{bottom:auto;top:auto}
 .picker{position:absolute;left:14px;right:14px;bottom:66px;z-index:25;
   background:var(--panel);border:1px solid var(--line);border-radius:14px;
   box-shadow:0 18px 40px rgba(0,0,0,.55);display:none;overflow:hidden}
@@ -352,7 +353,7 @@ body.mini .controls{grid-area:ctl;display:flex;justify-content:flex-start;
   transition:max-height .18s ease,opacity .16s ease,margin-top .18s ease}
 body.mini .controls .ib{width:30px;height:30px;border-radius:9px}
 body.mini .controls .ib svg{width:18px;height:18px}
-body.mini .controls .play{width:36px;height:36px}
+body.mini .controls .play{width:36px;height:36px;border-radius:11px}
 body.mini .controls .play svg{width:18px;height:18px}
 body.mini.mini-hover .art{width:74px;height:74px}
 body.mini.mini-hover .meta{align-self:start}
@@ -423,7 +424,7 @@ body.mini .miniwave i{width:2.5px;height:10%;background:var(--accent);border-rad
       <button class="ib small" id="download" title="Save to Music"><svg viewBox="0 0 24 24"><path d="M11 3h2v7h2.5l-3.5 4-3.5-4H11zM5 18h14v2H5z"/></svg></button>
       <button class="ib small" id="addlist" title="Add to a playlist"><svg viewBox="0 0 24 24"><path d="M3 6h12v2H3zm0 5h12v2H3zm0 5h8v2H3zm15-9h2v4h4v2h-4v4h-2v-4h-4v-2h4z"/></svg></button>
       <div class="vol">
-        <span class="ib small" id="volicon" style="cursor:default"></span>
+        <button class="ib small" id="volicon" title="Choose output device"></button>
         <div class="slider" id="volslider">
           <div class="sfill" id="sfill"></div><div class="knob" id="knob"></div>
         </div>
@@ -456,6 +457,11 @@ body.mini .miniwave i{width:2.5px;height:10%;background:var(--accent);border-rad
     <div class="panel" id="panel-lists"></div>
   </div>
 
+  <div class="picker" id="devpicker">
+    <div class="picker-head">Play through</div>
+    <div class="picker-list" id="devlist"></div>
+  </div>
+
   <div class="picker" id="picker">
     <div class="picker-head">Add to playlist</div>
     <div class="picker-list" id="pickerlist"></div>
@@ -476,6 +482,7 @@ body.mini .miniwave i{width:2.5px;height:10%;background:var(--accent);border-rad
       <button class="stab on" data-s="sound">Sound</button>
       <button class="stab" data-s="queue">Queue</button>
       <button class="stab" data-s="access">Access</button>
+      <button class="stab" data-s="extras">Extras</button>
       <button class="stab" data-s="system">System</button>
     </div>
     <div class="sheet-body">
@@ -500,6 +507,8 @@ body.mini .miniwave i{width:2.5px;height:10%;background:var(--accent);border-rad
         <div class="srow"><span class="slabel">Keep playlists on disk<em>Downloads them into their folder</em></span>
           <div class="toggle" id="pldl"></div></div>
         <div class="srow"><span class="slabel">Queue right now</span><span class="sval" id="queuestats">—</span></div>
+        <div class="srow"><span class="slabel">Meter source<em>Reads the speakers directly when it can</em></span>
+          <span class="sval" id="meterinfo">—</span></div>
         <div class="srow"><span class="slabel">Your music folders</span>
           <span class="sval" id="libcount">none indexed</span></div>
         <div class="srow"><span class="slabel">Index local files<em>Owned songs play instantly, no download</em></span>
@@ -522,6 +531,47 @@ body.mini .miniwave i{width:2.5px;height:10%;background:var(--accent);border-rad
         <div class="srow"><span class="slabel"><span class="status-dot" id="groqdot"></span> Groq key<em>Optional — improves messy dictation</em></span>
           <input class="keyin" id="groqkey" type="password" placeholder="gsk_…"></div>
         <div class="hint" id="groqhint"></div>
+      </section>
+
+      <section class="spane" data-s="extras">
+        <div class="seclbl">Alarms</div>
+        <div id="alarmlist"></div>
+        <div class="srow"><span class="slabel">New alarm</span>
+          <span style="display:flex;gap:6px">
+            <input class="keyin" id="alarmtime" type="time" style="width:96px">
+            <input class="keyin" id="alarmq" placeholder="what to play" style="width:118px">
+            <button class="btn" id="alarmadd">Add</button>
+          </span></div>
+
+        <div class="seclbl">Scrobbling</div>
+        <div class="srow"><span class="slabel"><span class="status-dot" id="lfmdot"></span> Last.fm</span>
+          <span style="display:flex;gap:6px">
+            <input class="keyin" id="lfmkey" placeholder="API key" style="width:104px">
+            <input class="keyin" id="lfmsec" placeholder="secret" style="width:88px">
+          </span></div>
+        <div class="srow"><span class="slabel">Connect<em>Opens Last.fm to approve, then press Finish</em></span>
+          <span style="display:flex;gap:6px">
+            <button class="btn" id="lfmauth">Approve</button>
+            <button class="btn" id="lfmdone">Finish</button>
+          </span></div>
+
+        <div class="seclbl">Other machines</div>
+        <div id="peerlist"></div>
+        <div class="srow"><span class="slabel">Add a peer<em>host:port of another copy of this app</em></span>
+          <span style="display:flex;gap:6px">
+            <input class="keyin" id="peerhost" placeholder="192.168.1.20:7420" style="width:150px">
+            <button class="btn" id="peeradd">Add</button>
+          </span></div>
+        <div class="srow"><span class="slabel">Send requests to peers too</span>
+          <div class="toggle" id="castall"></div></div>
+
+        <div class="seclbl">Music folders</div>
+        <div id="libpaths"></div>
+        <div class="srow"><span class="slabel">Add a folder</span>
+          <span style="display:flex;gap:6px">
+            <input class="keyin" id="libpath" placeholder="D:\Music" style="width:150px">
+            <button class="btn" id="libadd">Add</button>
+          </span></div>
       </section>
 
       <section class="spane" data-s="system">
@@ -721,9 +771,22 @@ $("q").addEventListener("input", () => {
 $("q").addEventListener("keydown", e => {
   if (e.key === "Enter") {
     const v = $("q").value.trim(); if (!v) return;
-    hideResults(); $("q").value = ""; $("qactions").classList.remove("show"); $("q").blur();
+    closeSearch();
     api("/api/play?q=" + encodeURIComponent(v)).then(r => toast(r && r.message));
-  } else if (e.key === "Escape") { hideResults(); $("q").blur(); }
+  } else if (e.key === "Escape") { closeSearch(); }
+});
+function closeSearch() {
+  clearTimeout(searchT);
+  searchSeq++;                       // any reply still coming is now stale
+  $("spin").style.display = "none";
+  hideResults();
+  $("q").value = "";
+  $("qactions").classList.remove("show");
+  $("q").blur();
+}
+// clicking anywhere else should close it too
+document.addEventListener("mousedown", e => {
+  if (!e.target.closest(".search")) hideResults();
 });
 const SPOTIFY_RE = /open\.spotify\.com\/(playlist|album|track|artist)\//i;
 
@@ -800,7 +863,7 @@ $("results").addEventListener("mousedown", async e => {
   e.preventDefault();
   const act = row.dataset.act;
   const q = $("q").value.trim();
-  hideResults(); $("q").value = ""; $("qactions").classList.remove("show"); $("q").blur();
+  closeSearch();
   let r;
   if (act === "playlist") {
     r = await api("/api/playlist/play?name=" + encodeURIComponent(row.dataset.n));
@@ -1039,6 +1102,32 @@ $("normalize").onclick = () => {
 
 $("eq").onchange = () => api("/api/audio?eq=" + encodeURIComponent($("eq").value));
 $("source").onchange = () => api("/api/source?value=" + encodeURIComponent($("source").value));
+/* output device picker, hung off the speaker icon */
+const devpicker = $("devpicker");
+async function openDevices() {
+  const r = await api("/api/audio/devices");
+  const rows = (r && r.devices) || [];
+  $("devlist").innerHTML = rows.map(d =>
+    `<div class="picker-row" data-d="${esc(d.name)}">${esc(d.label)}` +
+    `<span class="cnt">${d.active ? "✓" : ""}</span></div>`).join("");
+  devpicker.classList.add("show");
+}
+$("volicon").onclick = e => {
+  e.stopPropagation();
+  devpicker.classList.contains("show") ? devpicker.classList.remove("show") : openDevices();
+};
+$("devlist").addEventListener("click", async e => {
+  const row = e.target.closest(".picker-row[data-d]");
+  if (!row) return;
+  devpicker.classList.remove("show");
+  const r = await api("/api/audio/device?name=" + encodeURIComponent(row.dataset.d));
+  toast((r && r.message) || "Output changed");
+});
+document.addEventListener("click", e => {
+  if (devpicker.classList.contains("show") && !devpicker.contains(e.target) &&
+      e.target.closest("#volicon") === null) devpicker.classList.remove("show");
+});
+
 const picker = $("picker");
 async function openPicker() {
   const r = await api("/api/playlists");
@@ -1167,6 +1256,86 @@ function applyCookies(c) {
   }
 }
 
+/* ── extras: alarms, last.fm, peers, music folders ── */
+async function loadAlarms() {
+  const r = await api("/api/alarms");
+  const rows = (r && r.alarms) || [];
+  $("alarmlist").innerHTML = rows.length ? rows.map((a, i) =>
+    `<div class="srow"><span class="slabel">${esc(a.time)} — ${esc(a.query)}</span>` +
+    `<button class="btn" data-alarm="${i}">Remove</button></div>`).join("")
+    : `<div class="hint">No alarms set.</div>`;
+}
+$("alarmlist").addEventListener("click", async e => {
+  const b = e.target.closest("[data-alarm]"); if (!b) return;
+  await api("/api/alarms?remove=" + b.dataset.alarm);
+  loadAlarms();
+});
+$("alarmadd").onclick = async () => {
+  const t = $("alarmtime").value, q = $("alarmq").value.trim();
+  if (!t || !q) { toast("Need a time and something to play"); return; }
+  await api("/api/alarms?add=" + encodeURIComponent(q) + "&time=" + encodeURIComponent(t));
+  $("alarmq").value = ""; loadAlarms(); toast("Alarm set for " + t);
+};
+
+$("lfmauth").onclick = async () => {
+  const k = $("lfmkey").value.trim(), sec = $("lfmsec").value.trim();
+  const r = await api("/api/lastfm" + (k ? "?api_key=" + encodeURIComponent(k) +
+            "&secret=" + encodeURIComponent(sec) : ""));
+  if (r && r.auth_url) { window.open(r.auth_url, "_blank"); toast("Approve it, then press Finish"); }
+  else toast("Enter your Last.fm API key first");
+};
+$("lfmdone").onclick = async () => {
+  const r = await api("/api/lastfm");
+  setDot("lfmdot", r && r.connected ? "ok" : "bad");
+  toast(r && r.connected ? "Last.fm connected" : "Not connected yet");
+};
+
+async function loadPeers() {
+  const r = await api("/api/cast");
+  const rows = (r && r.peers) || [];
+  $("peerlist").innerHTML = rows.length ? rows.map(h =>
+    `<div class="srow"><span class="slabel">${esc(h)}</span>` +
+    `<button class="btn" data-peer="${esc(h)}">Remove</button></div>`).join("")
+    : `<div class="hint">No other machines.</div>`;
+}
+$("peerlist").addEventListener("click", async e => {
+  const b = e.target.closest("[data-peer]"); if (!b) return;
+  await api("/api/cast?remove=" + encodeURIComponent(b.dataset.peer));
+  loadPeers();
+});
+$("peeradd").onclick = async () => {
+  const h = $("peerhost").value.trim();
+  if (!h) return;
+  await api("/api/cast?add=" + encodeURIComponent(h));
+  $("peerhost").value = ""; loadPeers(); toast("Added " + h);
+};
+$("castall").onclick = () => {
+  const on = !$("castall").classList.contains("on");
+  $("castall").classList.toggle("on", on);
+  api("/api/setting?key=cast_all&value=" + (on ? 1 : 0));
+};
+
+async function loadLibPaths() {
+  const r = await api("/api/library/paths");
+  const rows = (r && r.paths) || [];
+  $("libpaths").innerHTML = rows.length ? rows.map(p =>
+    `<div class="srow"><span class="slabel">${esc(p)}</span>` +
+    `<button class="btn" data-lib="${esc(p)}">Remove</button></div>`).join("")
+    : `<div class="hint">No folders added.</div>`;
+}
+$("libpaths").addEventListener("click", async e => {
+  const b = e.target.closest("[data-lib]"); if (!b) return;
+  await api("/api/library/paths?remove=" + encodeURIComponent(b.dataset.lib));
+  loadLibPaths();
+});
+$("libadd").onclick = async () => {
+  const p = $("libpath").value.trim();
+  if (!p) return;
+  await api("/api/library/paths?add=" + encodeURIComponent(p));
+  $("libpath").value = ""; loadLibPaths();
+  toast("Added — press Scan to index it");
+};
+
 async function loadSettings() {
   const s = await api("/api/settings");
   if (!s) return;
@@ -1191,9 +1360,16 @@ async function loadSettings() {
   applyCookies(Object.assign({ path: (s.cookies && s.cookies.path) || "" }, s.cookies));
   $("libcount").textContent = s.library_count
     ? s.library_count + " indexed" : "none indexed";
+  const li = s.listener || {};
+  $("meterinfo").textContent = li.running
+    ? "live from " + (li.device || "output")
+    : (li.available ? "loudness (capture idle)" : "loudness only");
   const qs = s.queue_stats || {};
   $("queuestats").textContent =
     `${qs.ready_ahead ?? 0} ready · target ${qs.target ?? 0} · ${qs.pool ?? 0} ideas`;
+  setDot("lfmdot", s.lastfm_set ? "ok" : "");
+  $("castall").classList.toggle("on", !!s.cast_all);
+  loadAlarms(); loadPeers(); loadLibPaths();
   if (s.theme && s.theme !== curTheme) setTheme(s.theme, false);
   $("diaghint").textContent = "";
 }
@@ -1224,14 +1400,12 @@ $("pin").onclick = () => {
 window.addEventListener("blur", () => { const b = bridge(); if (b && b.on_blur) b.on_blur(); });
 
 /* ── the meter ─────────────────────────────────────────────────────────
-   Each track gets analysed with ffmpeg after it downloads: seven frequency
-   bands, 25 times a second. We play that back against the current position, so
-   the bars are the actual music. If a track hasn't been analysed yet we fall
-   back to mpv's loudness, which at least moves with the volume. */
+   The server listens to the speakers over WASAPI loopback and sends real
+   per-band levels ~20 times a second, so this is the actual waveform. If
+   capture isn't available it falls back to mpv's loudness. */
 const BANDS = 7;
-const BARS = 14;                       // bands mirrored L..R
-let spec = null;                       // {fps, frames:[[7 bytes]]}
-let specFor = "";
+const BARS = 14;                       // bands mirrored out from the centre
+let live = null;                       // bands from the loopback listener
 let lv = { m: 0, s: 0, l: 0, r: 0 };   // loudness fallback
 const bar = [];
 
@@ -1244,20 +1418,8 @@ function buildMeters() {
   while (bar.length < BARS) bar.push({ v: 0, peak: 0 });
 }
 
-async function loadSpectrum(videoId) {
-  if (!videoId || videoId === specFor) return;
-  specFor = videoId; spec = null;
-  const r = await api("/api/spectrum/" + encodeURIComponent(videoId));
-  if (specFor === videoId && r && r.spectrum) spec = r.spectrum;
-}
-
 function bandsNow() {
-  // real data if we have it, otherwise shape the loudness into something
-  if (spec && spec.frames && spec.frames.length) {
-    const i = Math.floor(state.position * spec.fps);
-    const f = spec.frames[Math.max(0, Math.min(spec.frames.length - 1, i))];
-    if (f) return f.map(v => v / 255);
-  }
+  if (live) return live;                        // what the speakers are doing
   const out = [];
   for (let b = 0; b < BANDS; b++) {
     const tilt = 1 - b / BANDS * 0.55;          // highs sit lower, as they do
@@ -1268,7 +1430,7 @@ function bandsNow() {
 
 function paintMeter() {
   const boxes = document.querySelectorAll(".eq, .miniwave");
-  if (boxes.length && state.playing) {
+  if (boxes.length && (state.playing || live)) {
     const b = bandsNow();
     for (let i = 0; i < BARS; i++) {
       // mirror the bands out from the centre so it reads symmetrically
@@ -1322,7 +1484,6 @@ function applyStatus(d) {
   $("like").classList.toggle("liked", !!t.liked);
   if (key !== state.trackKey) {
     state.trackKey = key;
-    loadSpectrum(t.video_id);
     if (activePanel === "lyrics") loadLyrics(true);
   }
   syncLyrics(state.position);
@@ -1348,7 +1509,11 @@ function connect() {
       case "queue": renderQueue(msg.data); break;
       case "activity": applyActivity(msg.data || {}); break;
       case "toast": toast(msg.data); break;
-      case "level": if (msg.data) lv = msg.data; break;
+      case "level":
+        if (!msg.data) break;
+        if (msg.data.live && msg.data.bands) { live = msg.data.bands; lv.m = msg.data.m; }
+        else { live = null; lv = msg.data; }
+        break;
       case "cookies": applyCookies(msg.data); break;
       case "settings": break;
     }

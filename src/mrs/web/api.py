@@ -95,6 +95,14 @@ async def siri(request: Request, key: str = Query(default="")):
     return JSONResponse(result)
 
 
+@app.get("/remote", response_class=HTMLResponse)
+async def remote_page(request: Request, key: str = Query(default="")):
+    """Full remote for a phone: controls, search, queue, playlists."""
+    require_key(request, key)
+    return templates.TemplateResponse(request, "remote.html",
+                                      {"api_key": config.get("api_key", "")})
+
+
 @app.get("/player", response_class=HTMLResponse)
 async def player_page(request: Request):
     return templates.TemplateResponse(request, "player.html",
@@ -242,16 +250,6 @@ def api_play_album(name: str, artist: str = "", _: bool = Auth):
     return handle_request(f"play the {name} album" + (f" by {artist}" if artist else ""))
 
 
-@app.get("/api/spectrum/{video_id}")
-def api_spectrum(video_id: str, _: bool = Auth):
-    """Per-band levels for the current track, measured from the file itself."""
-    from ..core import spectrum
-    data = spectrum.load(video_id)
-    if not data:
-        return {"status": "ok", "spectrum": None}
-    return {"status": "ok", "spectrum": data}
-
-
 @app.get("/api/lyrics")
 def api_lyrics(_: bool = Auth):
     track = player.queue.current_track()
@@ -340,6 +338,7 @@ _SETTABLE = {
     "artist_run_limit": int, "min_duration": int, "dedupe_hours": int,
     "cookie_close_browser_optin": bool, "cookie_auto_refresh": bool,
     "playlist_download": bool, "queue_max": int, "artist_track_count": int,
+    "cast_all": bool, "queue_minutes": int,
     "cookie_check_interval": int, "completion_ratio": float,
     "announce": bool, "tts_voice": str, "download_workers": int,
 }
@@ -360,6 +359,17 @@ def api_setting(key: str, value: str = "", _: bool = Auth):
     config.set(key, parsed)
     bus.publish(Ev.SETTINGS, player.settings())
     return {"status": "ok", "key": key, "value": parsed}
+
+
+@app.get("/api/audio/devices")
+def api_audio_devices(_: bool = Auth):
+    """Output devices mpv can see, plus which one we're using."""
+    return {"status": "ok", **player.audio_devices()}
+
+
+@app.get("/api/audio/device")
+def api_audio_device(name: str = "auto", _: bool = Auth):
+    return {"status": "ok", **player.set_audio_device(name)}
 
 
 @app.get("/api/theme")

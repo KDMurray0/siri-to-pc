@@ -33,7 +33,7 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
         return {"status": "error", "message": "Nothing to play"}
 
     try:
-        if cast:
+        if cast or config.get("cast_all"):
             threading.Thread(target=caster.broadcast, args=(text,), daemon=True).start()
 
         # A Spotify link is a playlist import, not a search.
@@ -124,6 +124,12 @@ def _run_command(plan) -> dict:
     cmd = (plan.command or "").lower()
     if cmd == "more_like_this":
         return {"status": "ok", **player.queue_similar()}
+    if cmd == "save":
+        return {"status": "ok", **player.export_current()}
+    if cmd == "add_to_playlist":
+        name = plan.query or "Favourites"
+        match = playlists.find(name)
+        return {"status": "ok", **player.playlist_add_current(match[0] if match else name)}
     action = _COMMANDS.get(cmd)
     if not action:
         return {"status": "error", "message": f"I don't know how to {cmd}"}
@@ -139,33 +145,45 @@ def _run_command(plan) -> dict:
 
 
 def _import_spotify(url: str, *, announce: bool = True) -> dict:
-    if not spotify.available():
-        return {"status": "error",
-                "message": "spotdl isn't installed, so Spotify links can't be read"}
+    """Read a Spotify link, save it as a playlist, and start playing it."""
+    from .core.playlists import playlists
 
-    player.queue._set_activity("finding", "Reading Spotify playlist")
+    player.queue._set_activity("finding", "Reading Spotify link")
     bus.publish(Ev.TOAST, "Reading that Spotify link…")
 
     def work() -> None:
         names = spotify.track_names(url)
         if not names:
-            bus.publish(Ev.TOAST, "Couldn't read that Spotify link")
+            bus.publish(Ev.TOAST, "Couldn't read that link — is the playlist public?")
             player.queue._set_activity("idle")
             return
-        bus.publish(Ev.TOAST, f"Found {len(names)} tracks — matching them up")
-        tracks = spotify.resolve_imported(names)
+
+        label = spotify.link_name(url) or "Spotify import"
+        bus.publish(Ev.TOAST, f"{label}: {len(names)} tracks, matching them up…")
+
+        def progress(i, total, title):
+            player.queue._set_activity("finding", f"{i}/{total} {title}", i / total)
+
+        tracks = spotify.resolve_imported(names, on_progress=progress)
+        player.queue._set_activity("idle")
         if not tracks:
             bus.publish(Ev.TOAST, "None of those tracks could be found")
-            player.queue._set_activity("idle")
             return
+
+        # keep it, so the import isn't a one-off
+        playlists.create(label)
+        for t in tracks:
+            playlists.add(label, t)
+
         player.queue.play_now(tracks, hold_radio=True)
-        msg = f"Playing {len(tracks)} tracks from Spotify"
-        bus.publish(Ev.TOAST, msg)
+        msg = f"Playing {label} — {len(tracks)} tracks"
+        bus.publish(Ev.TOAST, msg + " (saved as a playlist)")
         if announce:
             player.announce(msg)
 
     threading.Thread(target=work, daemon=True).start()
-    return {"status": "ok", "message": "Importing that Spotify playlist…"}
+    return {"status": "ok", "message": "Importing that Spotify link…",
+            "via": "spotify"}
 
 
 def play_video(video_id: str, *, title: str = "", artist: str = "", art: str = "",
