@@ -1,0 +1,1069 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Music Request</title>
+<style>
+/* ── palette ───────────────────────────────────────────────────────────
+   The artwork is the light source: its dominant colour becomes --accent and
+   bleeds through the ambient wash behind the card. Themes below are the
+   fallback identity when there's no art (or when you pick one deliberately). */
+:root{
+  --bg:#0e0f16; --panel:#171826; --fg:#f5f6fb; --sub:#9aa0b8;
+  --line:#252739; --accent:#6d8bff; --accent-ink:#0b0c12; --radius:22px;
+  --ok:#3fd48a; --warn:#ffb454; --bad:#ff6b6b;
+}
+[data-theme="mono"]   {--bg:#0c0c0d;--panel:#161617;--fg:#f4f4f5;--sub:#8a8a8f;--line:#242426;--accent:#e6e6ea;}
+[data-theme="ember"]  {--bg:#140d0b;--panel:#221512;--fg:#fceee7;--sub:#b58c7d;--line:#33201a;--accent:#ff7a4d;}
+[data-theme="forest"] {--bg:#0a1310;--panel:#12211b;--fg:#eaf6ef;--sub:#7fa595;--line:#1d3329;--accent:#3fd48a;}
+[data-theme="grape"]  {--bg:#110c1a;--panel:#1d1430;--fg:#f2ecff;--sub:#9a8bc0;--line:#2c2145;--accent:#b98cff;}
+[data-theme="rose"]   {--bg:#150b10;--panel:#25141d;--fg:#fdecf3;--sub:#c088a0;--line:#3a1f2c;--accent:#ff5d8f;}
+[data-theme="ocean"]  {--bg:#0a121c;--panel:#12202f;--fg:#e9f2fb;--sub:#7f9bb5;--line:#1d3247;--accent:#4aa8ff;}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:var(--bg);
+  font-family:-apple-system,"Segoe UI Variable Display","Segoe UI",Roboto,sans-serif;
+  color:var(--fg);-webkit-font-smoothing:antialiased;user-select:none}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:var(--sub)}
+
+.frame{position:relative;height:100%;display:flex;flex-direction:column;
+  overflow:hidden;background:var(--bg)}
+
+/* the blurred album wash — the thing that makes it feel alive */
+.ambient{position:absolute;inset:-25% -25% auto -25%;height:52%;z-index:0;
+  filter:blur(72px) saturate(1.35);opacity:.32;transform:scale(1.15);
+  transition:opacity .8s ease;pointer-events:none}
+.ambient img{width:100%;height:100%;object-fit:cover;border-radius:50%}
+/* keeps the lower UI readable under a bright cover */
+.frame::after{content:"";position:absolute;inset:0;z-index:1;pointer-events:none;
+  background:linear-gradient(to bottom,transparent 0,transparent 22%,var(--bg) 62%)}
+
+.topdrag{position:absolute;top:0;left:0;right:0;height:26px;z-index:4;cursor:move}
+.winbtn{position:absolute;top:9px;z-index:5;background:none;border:0;color:var(--sub);
+  cursor:pointer;width:28px;height:28px;display:grid;place-items:center;
+  border-radius:8px;opacity:.55;transition:opacity .15s,color .15s,background .15s}
+.winbtn:hover{opacity:1;color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
+.winbtn.on{opacity:1;color:var(--accent);background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.winbtn svg{width:15px;height:15px;fill:currentColor;display:block}
+#pin{right:11px} #shrink{right:44px}
+
+.stage{position:relative;z-index:2;padding:22px 22px 12px;flex:1;display:flex;
+  flex-direction:column;min-height:0}
+
+/* now playing */
+.art-wrap{display:flex;justify-content:center;margin-top:4px;position:relative;
+  transition:max-height .3s ease,opacity .22s ease}
+.art{width:152px;height:152px;border-radius:18px;object-fit:cover;background:var(--panel);
+  box-shadow:0 16px 44px rgba(0,0,0,.55);
+  transition:transform .5s cubic-bezier(.2,.8,.2,1),opacity .4s,width .2s,height .2s}
+.art.placeholder{box-shadow:none;
+  background:linear-gradient(145deg,color-mix(in srgb,var(--accent) 12%,var(--panel)),var(--panel))}
+
+.meta{text-align:center;margin-top:16px;min-height:52px}
+.title{font-size:22px;font-weight:800;letter-spacing:-.022em;line-height:1.15;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.artist{font-size:13px;color:var(--sub);margin-top:3px;font-weight:500;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* what the server is doing, when it isn't simply playing */
+.activity{display:none;align-items:center;justify-content:center;gap:8px;
+  margin-top:8px;font-size:11.5px;color:var(--accent);font-weight:600;
+  letter-spacing:.02em}
+body.busy .activity{display:flex}
+.activity .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);
+  animation:pulse 1s ease-in-out infinite}
+.actbar{height:2px;border-radius:2px;background:var(--line);width:76px;overflow:hidden}
+.actbar i{display:block;height:100%;width:0;background:var(--accent);
+  transition:width .25s ease}
+@keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+
+/* progress */
+.prog{margin-top:14px}
+.bar{height:5px;border-radius:3px;background:var(--line);position:relative;
+  cursor:pointer;overflow:hidden}
+.fill{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--accent);
+  border-radius:3px;transition:width .25s linear}
+.times{display:flex;justify-content:space-between;font-size:10.5px;color:var(--sub);
+  margin-top:6px;font-variant-numeric:tabular-nums;letter-spacing:.02em}
+
+/* transport */
+.controls{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:14px}
+.ib{background:none;border:0;color:var(--fg);cursor:pointer;display:grid;
+  place-items:center;width:40px;height:40px;border-radius:12px;
+  transition:background .15s,color .15s,transform .1s}
+.ib:hover{color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.ib:active{transform:scale(.92)}
+.ib.small{width:34px;height:34px}
+.ib.on{color:var(--accent)}
+.ib svg{width:22px;height:22px;fill:currentColor;display:block}
+.play{width:58px;height:58px;border-radius:50%;background:var(--accent);
+  color:var(--accent-ink)}
+.play:hover{background:var(--accent);color:var(--accent-ink);filter:brightness(1.08);
+  transform:scale(1.04)}
+.play svg{width:26px;height:26px}
+
+.row2{display:flex;align-items:center;gap:10px;margin-top:12px}
+.vol{flex:1;display:flex;align-items:center;gap:8px}
+.slider{flex:1;height:5px;border-radius:3px;background:var(--line);position:relative;
+  cursor:pointer}
+.slider .sfill{position:absolute;left:0;top:0;bottom:0;background:var(--accent);
+  border-radius:3px}
+.knob{position:absolute;top:50%;width:12px;height:12px;border-radius:50%;
+  background:var(--fg);transform:translate(-50%,-50%);pointer-events:none}
+.heart.liked{color:var(--accent)}
+.heart.liked svg{fill:var(--accent)}
+
+/* search */
+.search{margin-top:16px;position:relative}
+.search input{width:100%;background:var(--panel);border:1px solid var(--line);
+  color:var(--fg);border-radius:12px;padding:11px 13px;font-size:13px;
+  font-family:inherit;outline:none;transition:border-color .15s}
+.search input:focus{border-color:var(--accent)}
+.search input::placeholder{color:var(--sub)}
+.spin{position:absolute;right:12px;top:12px;width:14px;height:14px;border-radius:50%;
+  border:2px solid var(--line);border-top-color:var(--accent);
+  animation:spin .7s linear infinite;display:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+.qactions{display:flex;gap:6px;margin-top:7px;max-height:0;overflow:hidden;opacity:0;
+  transition:max-height .2s ease,opacity .2s ease}
+.qactions.show{max-height:40px;opacity:1}
+.qbtn{background:var(--panel);border:1px solid var(--line);color:var(--sub);
+  border-radius:9px;padding:6px 10px;font-size:11.5px;cursor:pointer;font-family:inherit}
+.qbtn:hover{color:var(--accent);border-color:var(--accent)}
+
+/* results open upward: the input sits low, a downward list runs off the window */
+.results{position:absolute;left:0;right:0;bottom:calc(100% + 6px);z-index:8;
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  box-shadow:0 12px 34px rgba(0,0,0,.5);max-height:min(360px,56vh);
+  overflow-y:auto;overflow-x:hidden;display:none}
+.results.show{display:block}
+.rres{display:flex;gap:9px;align-items:center;padding:8px 10px;cursor:pointer}
+.rres:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.rres .qi{width:30px;height:30px;border-radius:6px;object-fit:cover;background:var(--bg);flex:0 0 auto}
+.rres .rt{min-width:0}
+.rres .rn{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rres .ra{font-size:11px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rres .tag{margin-left:auto;font-size:9.5px;color:var(--accent);border:1px solid var(--accent);
+  border-radius:5px;padding:1px 5px;flex:0 0 auto}
+
+/* panels */
+.nav{display:flex;gap:2px;margin-top:14px;border-bottom:1px solid var(--line);
+  padding-bottom:8px;position:relative}
+.navtab{flex:1;background:none;border:0;color:var(--sub);cursor:pointer;
+  font-family:inherit;font-size:11px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;padding:4px 0;position:relative}
+.navtab:hover{color:var(--fg)}
+.navtab.on{color:var(--accent)}
+.navtab.on::after{content:"";position:absolute;left:22%;right:22%;bottom:-9px;
+  height:2px;background:var(--accent);border-radius:2px}
+.navgear{flex:0 0 34px}
+.panel{display:none;margin-top:8px;overflow-y:auto;overflow-x:hidden;flex:1;position:relative}
+.panel.open{display:block}
+.muted{color:var(--sub);font-size:12px;text-align:center;padding:18px 8px}
+
+.q{display:flex;gap:9px;align-items:center;padding:7px 6px;border-radius:9px;cursor:pointer}
+.q:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}
+.q .qi{width:34px;height:34px;border-radius:7px;object-fit:cover;background:var(--panel);flex:0 0 auto}
+.q .qt{min-width:0;flex:1}
+.q .qn{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q .qa{font-size:11px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q.cur .qn{color:var(--accent)}
+.qctl{display:flex;gap:2px;opacity:0;transition:opacity .15s}
+.q:hover .qctl{opacity:1}
+.qc{background:none;border:0;color:var(--sub);cursor:pointer;width:22px;height:22px;
+  border-radius:6px;font-size:12px;font-family:inherit}
+.qc:hover{color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
+.qhistory{width:100%;background:none;border:0;color:var(--sub);font-size:11px;
+  cursor:pointer;padding:6px;font-family:inherit;text-align:left}
+.qhistory:hover{color:var(--accent)}
+
+/* the level meter — driven by real audio, not a fixed animation */
+.eq{flex:0 0 auto;display:flex;gap:2px;align-items:flex-end;height:15px}
+.eq i{width:3px;height:3px;background:var(--accent);border-radius:2px;
+  transition:height .12s ease-out}
+
+.seclbl{font-size:10px;color:var(--sub);text-transform:uppercase;letter-spacing:.08em;
+  margin:10px 4px 6px;font-weight:700}
+.artistchips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px}
+.achip{font-size:11px;border:1px solid var(--line);border-radius:20px;padding:4px 10px;
+  color:var(--sub);cursor:pointer}
+.achip:hover{border-color:var(--accent);color:var(--accent)}
+.rrow{display:flex;gap:9px;align-items:center;padding:7px 6px;border-radius:9px;cursor:pointer}
+.rrow:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}
+.plrow{display:flex;align-items:center;gap:8px;padding:8px 6px;border-radius:9px}
+.plrow:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}
+.plrow .pn{font-size:13px;font-weight:600;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* lyrics */
+.lyrics{padding:4px 2px;text-align:center}
+.lyrics .lrow{font-size:14px;line-height:1.5;color:var(--sub);padding:5px 4px;
+  opacity:.55;overflow-wrap:anywhere;transition:color .2s,opacity .2s}
+.lyrics .lrow.active{color:var(--fg);font-weight:700;opacity:1}
+.lyrics:not(.plain) .lrow{cursor:pointer;border-radius:8px}
+.lyrics:not(.plain) .lrow:hover{color:var(--fg);opacity:.9;
+  background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.lyrics.plain .lrow{text-align:left;opacity:.85}
+
+/* collapse the art when a panel wants the room */
+body.expand .art-wrap,body.expand .row2{max-height:0;opacity:0;margin-top:0;
+  overflow:hidden;pointer-events:none}
+body.expand .meta{margin-top:2px;min-height:0}
+body.expand .prog{margin-top:10px}
+
+/* settings sheet */
+.sheet{position:absolute;inset:0;z-index:20;background:var(--bg);
+  display:flex;flex-direction:column;transform:translate3d(0,100%,0);
+  visibility:hidden;transition:transform .28s cubic-bezier(.2,.8,.2,1),visibility .28s;
+  will-change:transform}
+.sheet.open{transform:translate3d(0,0,0);visibility:visible}
+.sheet-head{display:flex;align-items:center;justify-content:space-between;
+  padding:18px 18px 10px}
+.sheet-head h2{font-size:17px;font-weight:800;letter-spacing:-.01em}
+.sheet-body{flex:1;overflow-y:auto;padding:6px 18px 24px}
+.srow{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:11px 0;border-bottom:1px solid var(--line)}
+.srow:last-child{border-bottom:0}
+.slabel{font-size:12.5px;color:var(--sub)}
+.sval{font-size:12px}
+select,.keyin{background:var(--panel);border:1px solid var(--line);color:var(--fg);
+  border-radius:9px;padding:7px 10px;font-size:12px;font-family:inherit;outline:none}
+.keyin{width:150px}
+.keyin:focus,select:focus{border-color:var(--accent)}
+.swatches{display:flex;gap:7px}
+.sw{width:20px;height:20px;border-radius:50%;cursor:pointer;border:2px solid transparent}
+.sw.sel{border-color:var(--fg)}
+.chips{display:flex;gap:5px}
+.chip{background:var(--panel);border:1px solid var(--line);color:var(--sub);
+  border-radius:8px;padding:5px 9px;font-size:11.5px;cursor:pointer}
+.chip.sel{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.toggle{width:40px;height:22px;border-radius:11px;background:var(--line);
+  position:relative;cursor:pointer;transition:background .18s;flex:0 0 auto}
+.toggle::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;
+  border-radius:50%;background:#fff;transition:transform .18s}
+.toggle.on{background:var(--accent)}
+.toggle.on::after{transform:translateX(18px)}
+.btn{background:var(--panel);border:1px solid var(--line);color:var(--fg);
+  border-radius:9px;padding:7px 12px;font-size:12px;cursor:pointer;font-family:inherit}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--line);flex:0 0 auto}
+.status-dot.ok{background:var(--ok)} .status-dot.bad{background:var(--bad)}
+.status-dot.warn{background:var(--warn)}
+.hint{font-size:11px;color:var(--sub);line-height:1.5;padding:2px 0 8px}
+.hint code{background:var(--panel);padding:1px 5px;border-radius:4px;font-size:10.5px}
+
+/* toast */
+.toast{position:absolute;left:50%;bottom:18px;transform:translate(-50%,20px);z-index:30;
+  background:var(--accent);color:var(--accent-ink);font-size:12.5px;font-weight:600;
+  padding:9px 16px;border-radius:22px;opacity:0;pointer-events:none;
+  transition:opacity .2s,transform .2s;max-width:88%;text-align:center}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+
+/* ── mini mode ─────────────────────────────────────────────────────────
+   Constant width. Idle shows art + name; hovering lifts the text to the top
+   of the cover and drops the transport into the space that makes. */
+body.mini .ambient,body.mini .prog,body.mini .row2,body.mini .search,
+body.mini .nav,body.mini .panel,body.mini .toast,body.mini .frame::after,
+body.mini #shuffle,body.mini #repeat,body.mini .activity{display:none}
+body.mini .stage{display:grid;grid-template-columns:auto 1fr;
+  grid-template-areas:"art meta" "art ctl";align-items:center;align-content:center;
+  column-gap:12px;row-gap:0;padding:11px 46px 11px 12px}
+body.mini .art-wrap{grid-area:art;margin:0;justify-content:flex-start;align-self:center}
+body.mini .art{width:58px;height:58px;border-radius:12px;box-shadow:0 6px 16px rgba(0,0,0,.5)}
+body.mini .meta{grid-area:meta;margin:0;text-align:left;min-height:0;min-width:0;
+  align-self:center}
+body.mini .title{font-size:13.5px;line-height:1.2}
+body.mini .artist{font-size:11px;margin-top:1px}
+body.mini .controls{grid-area:ctl;display:flex;justify-content:flex-start;
+  align-items:center;gap:15px;margin:0;max-height:0;opacity:0;overflow:hidden;
+  transition:max-height .18s ease,opacity .16s ease,margin-top .18s ease}
+body.mini .controls .ib{width:30px;height:30px;border-radius:9px}
+body.mini .controls .ib svg{width:18px;height:18px}
+body.mini .controls .play{width:36px;height:36px}
+body.mini .controls .play svg{width:18px;height:18px}
+body.mini.mini-hover .art{width:74px;height:74px}
+body.mini.mini-hover .meta{align-self:start}
+body.mini.mini-hover .controls{max-height:44px;opacity:1;margin-top:9px}
+body.mini .minivol{display:none}
+body.mini.mini-hover .minivol{display:block;position:absolute;top:40px;right:21px;
+  width:6px;height:52px;background:var(--line);border-radius:3px;cursor:pointer;z-index:6}
+body.mini.mini-hover .minivol i{position:absolute;left:0;right:0;bottom:0;
+  background:var(--accent);border-radius:3px;display:block}
+/* the level meter sits on the artwork in mini mode */
+.miniwave{display:none}
+body.mini .miniwave{display:flex;position:absolute;left:0;right:0;bottom:0;height:19px;
+  align-items:flex-end;justify-content:center;gap:2.5px;padding:0 6px 4px;
+  border-radius:0 0 12px 12px;pointer-events:none;
+  background:linear-gradient(to top,rgba(0,0,0,.5),transparent)}
+body.mini .miniwave i{width:3px;height:12%;background:var(--accent);border-radius:2px;
+  transition:height .12s ease-out}
+</style>
+</head>
+<body>
+<div class="frame" id="frame">
+  <div class="topdrag"></div>
+  <button class="winbtn" id="shrink" title="Shrink to mini" aria-label="Shrink">
+    <svg viewBox="0 0 24 24"><path d="M5 15h4v4H7v-2H5v-2zm10 0h2v2h2v2h-4v-4zM5 5h4v2H7v2H5V5zm12 0v4h-2V7h-2V5h4z"/></svg>
+  </button>
+  <button class="winbtn" id="pin" title="Keep on top" aria-label="Keep on top">
+    <svg viewBox="0 0 24 24"><path d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z"/></svg>
+  </button>
+  <div class="ambient" id="ambient"></div>
+  <div class="minivol" id="minivol"><i id="minivfill"></i></div>
+
+  <div class="stage">
+    <div class="art-wrap drag">
+      <img class="art placeholder" id="art" alt="" draggable="false">
+      <div class="miniwave" id="miniwave" aria-hidden="true"></div>
+    </div>
+    <div class="meta drag">
+      <div class="title" id="title">Nothing playing</div>
+      <div class="artist" id="artist"></div>
+      <div class="activity" id="activity">
+        <span class="dot"></span><span id="actlabel">Finding</span>
+        <span class="actbar"><i id="actbar"></i></span>
+      </div>
+    </div>
+
+    <div class="prog">
+      <div class="bar"><div class="fill" id="fill"></div></div>
+      <div class="times"><span id="cur">0:00</span><span id="dur">0:00</span></div>
+    </div>
+
+    <div class="controls">
+      <button class="ib small" id="shuffle" title="Shuffle"><svg viewBox="0 0 24 24"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg></button>
+      <button class="ib" id="prev" title="Previous"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button>
+      <button class="ib play" id="play" title="Play/Pause"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+      <button class="ib" id="next" title="Next"><svg viewBox="0 0 24 24"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg></button>
+      <button class="ib small" id="repeat" title="Repeat"><svg viewBox="0 0 24 24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2z"/></svg></button>
+    </div>
+
+    <div class="row2">
+      <button class="ib small heart" id="like" title="Like"><svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54z"/></svg></button>
+      <button class="ib small" id="download" title="Save to Music"><svg viewBox="0 0 24 24"><path d="M11 3h2v7h2.5l-3.5 4-3.5-4H11zM5 18h14v2H5z"/></svg></button>
+      <div class="vol">
+        <span class="ib small" id="volicon" style="cursor:default"></span>
+        <div class="slider" id="volslider">
+          <div class="sfill" id="sfill"></div><div class="knob" id="knob"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="search">
+      <input id="q" placeholder="Play anything — a song, artist, vibe, or Spotify link" autocomplete="off" spellcheck="false">
+      <div class="spin" id="spin"></div>
+      <div class="results" id="results"></div>
+      <div class="qactions" id="qactions">
+        <button class="qbtn" id="addnext">Play next</button>
+        <button class="qbtn" id="addqueue">Add to queue</button>
+        <button class="qbtn" id="radio">Radio</button>
+      </div>
+    </div>
+
+    <div class="nav">
+      <button class="navtab on" data-panel="queue" title="Tap again to expand">Queue</button>
+      <button class="navtab" data-panel="lyrics">Lyrics</button>
+      <button class="navtab" data-panel="recent">Recent</button>
+      <button class="navtab" data-panel="lists">Lists</button>
+      <button class="navtab navgear" id="openSettings" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><path d="M19.14 12.94a7.5 7.5 0 000-1.88l2.03-1.58-2-3.46-2.39.96a7.4 7.4 0 00-1.62-.94L14.8 2.5h-4l-.39 2.54c-.58.23-1.13.55-1.62.94l-2.39-.96-2 3.46 2.03 1.58a7.5 7.5 0 000 1.88l-2.03 1.58 2 3.46 2.39-.96c.49.39 1.04.71 1.62.94l.39 2.54h4l.39-2.54c.58-.23 1.13-.55 1.62-.94l2.39.96 2-3.46-2.03-1.58zM12 15.5A3.5 3.5 0 1112 8.5a3.5 3.5 0 010 7z"/></svg>
+      </button>
+    </div>
+    <div class="panel open" id="panel-queue"></div>
+    <div class="panel" id="panel-lyrics"></div>
+    <div class="panel" id="panel-recent"></div>
+    <div class="panel" id="panel-lists"></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <div class="sheet" id="sheet">
+    <div class="sheet-head">
+      <h2>Settings</h2>
+      <button class="ib small" id="closeSettings" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M19 6.4L17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg></button>
+    </div>
+    <div class="sheet-body">
+      <div class="srow"><span class="slabel">Theme</span><div class="swatches" id="swatches"></div></div>
+      <div class="srow"><span class="slabel">Equaliser</span><select id="eq"></select></div>
+      <div class="srow"><span class="slabel">Source</span>
+        <select id="source"><option value="youtube">YouTube</option><option value="soundcloud">SoundCloud</option><option value="bandcamp">Bandcamp</option></select></div>
+      <div class="srow"><span class="slabel">Normalise volume</span><div class="toggle" id="normalize"></div></div>
+      <div class="srow"><span class="slabel">Crossfade</span><div class="chips" id="crossfade"></div></div>
+      <div class="srow"><span class="slabel">Announce songs</span><div class="toggle" id="announce"></div></div>
+      <div class="srow"><span class="slabel">Sleep timer</span><div class="chips" id="sleep"></div></div>
+
+      <div class="seclbl">Queue</div>
+      <div class="srow"><span class="slabel">Stay on the artist</span><div class="chips" id="cohesion"></div></div>
+      <div class="srow"><span class="slabel" id="queuestats">—</span></div>
+
+      <div class="seclbl">YouTube access</div>
+      <div class="srow">
+        <span class="slabel"><span class="status-dot" id="ckdot"></span> Cookies</span>
+        <button class="btn" id="findck">Find cookies</button>
+      </div>
+      <div class="hint" id="ckhint"></div>
+      <div class="srow"><span class="slabel">Let me close your browser to read them</span>
+        <div class="toggle" id="ckclose"></div></div>
+
+      <div class="seclbl">Understanding requests</div>
+      <div class="srow"><span class="slabel"><span class="status-dot" id="groqdot"></span> Groq key</span>
+        <input class="keyin" id="groqkey" type="password" placeholder="gsk_…"></div>
+      <div class="hint" id="groqhint">Optional. Without it, requests use the built-in parser.</div>
+
+      <div class="seclbl">Library</div>
+      <div class="srow"><span class="slabel" id="libcount">No local files indexed</span>
+        <button class="btn" id="libscan">Scan</button></div>
+      <div class="hint">Add folders in config (<code>library_paths</code>) — owned files play instantly with no download.</div>
+
+      <div class="seclbl">System</div>
+      <div class="srow"><span class="slabel">Start with Windows</span><div class="toggle" id="boot"></div></div>
+      <div class="srow"><span class="slabel">Only my devices (IP lock)</span><div class="toggle" id="lockips"></div></div>
+      <div class="srow"><span class="slabel">Restart the player</span><button class="btn" id="restart">Restart</button></div>
+      <div class="hint" id="diaghint"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const KEY = "{{ api_key }}";
+const $ = id => document.getElementById(id);
+const api = (path) => fetch(path + (path.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(KEY))
+  .then(r => r.ok ? r.json() : null).catch(() => null);
+const esc = s => (s || "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmt = s => { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s/60) + ":" + String(s%60).padStart(2,"0"); };
+
+const ICON = {
+  play: '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>',
+};
+
+let state = { volume: 70, position: 0, duration: 0, trackKey: "", playing: false };
+
+/* ── window bridge (pywebview) ─────────────────────────────────────── */
+const bridge = () => (window.pywebview && window.pywebview.api) || null;
+document.querySelectorAll(".topdrag,.drag").forEach(el => {
+  el.addEventListener("mousedown", e => {
+    if (e.button === 0) { const b = bridge(); if (b && b.begin_move) b.begin_move(); }
+  });
+});
+
+/* ── theme + accent from artwork ───────────────────────────────────── */
+const THEMES = ["default","ocean","forest","grape","rose","ember","mono"];
+const THEME_ACCENT = {default:"#6d8bff",ocean:"#4aa8ff",forest:"#3fd48a",grape:"#b98cff",rose:"#ff5d8f",ember:"#ff7a4d",mono:"#e6e6ea"};
+let curTheme = "default", artAccent = null;
+
+function setTheme(t, persist) {
+  curTheme = t || "default";
+  document.documentElement.setAttribute("data-theme", t === "default" ? "" : t);
+  localStorage.setItem("theme", t);
+  if (persist !== false) api("/api/theme?value=" + encodeURIComponent(t));
+  document.querySelectorAll(".sw").forEach(s => s.classList.toggle("sel", s.dataset.t === t));
+  applyAccent();
+}
+function buildSwatches() {
+  const box = $("swatches");
+  THEMES.forEach(t => {
+    const s = document.createElement("div");
+    s.className = "sw"; s.dataset.t = t; s.style.background = THEME_ACCENT[t]; s.title = t;
+    s.onclick = () => setTheme(t);
+    box.appendChild(s);
+  });
+}
+function applyAccent() {
+  // The artwork colours the UI, but only while you're on the default theme —
+  // pick a theme deliberately and it keeps its own accent.
+  if (artAccent && curTheme === "default")
+    document.documentElement.style.setProperty("--accent", artAccent);
+  else
+    document.documentElement.style.removeProperty("--accent");
+}
+function extractAccent(img) {
+  try {
+    const c = document.createElement("canvas"); c.width = c.height = 24;
+    const x = c.getContext("2d"); x.drawImage(img, 0, 0, 24, 24);
+    const d = x.getImageData(0, 0, 24, 24).data;
+    let best = null, bs = -1;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i], g = d[i+1], b = d[i+2];
+      const mx = Math.max(r,g,b), mn = Math.min(r,g,b);
+      const sat = mx === 0 ? 0 : (mx-mn)/mx, lig = mx/255;
+      const score = sat * 1.4 * (1 - Math.abs(lig - 0.62));
+      if (score > bs) { bs = score; best = [r,g,b]; }
+    }
+    if (best && bs > 0.05) {
+      let [r,g,b] = best; const mx = Math.max(r,g,b);
+      const boost = mx < 170 ? 170 / Math.max(mx,1) : 1;
+      return `rgb(${Math.min(255,r*boost|0)},${Math.min(255,g*boost|0)},${Math.min(255,b*boost|0)})`;
+    }
+  } catch (e) {}
+  return null;
+}
+let lastArt = "";
+function setArt(url) {
+  if (url === lastArt) return;
+  lastArt = url;
+  const img = $("art"), amb = $("ambient");
+  if (!url) {
+    img.removeAttribute("src"); img.classList.add("placeholder");
+    amb.innerHTML = ""; artAccent = null; applyAccent(); return;
+  }
+  img.src = url; img.classList.remove("placeholder");
+  amb.innerHTML = `<img src="${url}" alt="">`;
+  const probe = new Image(); probe.crossOrigin = "anonymous";
+  probe.onload = () => { artAccent = extractAccent(probe); applyAccent(); };
+  probe.src = url;
+}
+$("art").addEventListener("error", () => {
+  $("art").removeAttribute("src"); $("art").classList.add("placeholder");
+});
+
+/* ── volume ────────────────────────────────────────────────────────── */
+const VOL_MAX = 150;
+let volDrag = false, vvolDrag = false, volSendT = 0;
+function volIcon(v) {
+  const body = '<path d="M3 9.2v5.6h3.8L11.5 19V5l-4.7 4.2z"/>';
+  const arc = d => `<path d="${d}" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>`;
+  if (v <= 0) return '<svg viewBox="0 0 24 24">' + body + '<path d="M15 9.5l5 5M20 9.5l-5 5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" fill="none"/></svg>';
+  let w = arc('M14 9.4a3.6 3.6 0 010 5.2');
+  if (v >= 34) w += arc('M16.4 7a7 7 0 010 10');
+  if (v >= 67) w += arc('M18.8 4.7a10.4 10.4 0 010 14.6');
+  return '<svg viewBox="0 0 24 24">' + body + w + '</svg>';
+}
+function setVol(v) {
+  state.volume = v;
+  const pct = v / VOL_MAX * 100;
+  $("sfill").style.width = pct + "%"; $("knob").style.left = pct + "%";
+  $("minivfill").style.height = pct + "%";
+  $("volicon").innerHTML = volIcon(v);
+}
+function sendVol() {
+  const now = Date.now();
+  if (now - volSendT >= 110) { volSendT = now; api("/api/control/volume?value=" + state.volume); }
+}
+const volFromX = e => { const r = $("volslider").getBoundingClientRect();
+  return Math.max(0, Math.min(VOL_MAX, Math.round((e.clientX - r.left) / r.width * VOL_MAX))); };
+const volFromY = e => { const r = $("minivol").getBoundingClientRect();
+  return Math.max(0, Math.min(VOL_MAX, Math.round((1 - (e.clientY - r.top) / r.height) * VOL_MAX))); };
+$("volslider").addEventListener("mousedown", e => { volDrag = true; setVol(volFromX(e)); sendVol(); });
+$("minivol").addEventListener("mousedown", e => { e.stopPropagation(); e.preventDefault(); vvolDrag = true; setVol(volFromY(e)); sendVol(); });
+window.addEventListener("mousemove", e => {
+  if (volDrag) { setVol(volFromX(e)); sendVol(); }
+  if (vvolDrag) { setVol(volFromY(e)); sendVol(); }
+});
+window.addEventListener("mouseup", () => {
+  if (volDrag || vvolDrag) api("/api/control/volume?value=" + state.volume);
+  volDrag = vvolDrag = false;
+});
+let wheelT;
+function wheelVol(e) {
+  e.preventDefault();
+  setVol(Math.max(0, Math.min(VOL_MAX, state.volume + (e.deltaY < 0 ? 4 : -4))));
+  clearTimeout(wheelT);
+  wheelT = setTimeout(() => api("/api/control/volume?value=" + state.volume), 120);
+}
+["volslider","volicon","minivol"].forEach(id => $(id).addEventListener("wheel", wheelVol, {passive:false}));
+
+/* ── transport ─────────────────────────────────────────────────────── */
+$("play").onclick = () => api("/api/control/playpause");
+$("next").onclick = () => api("/api/control/next");
+$("prev").onclick = () => api("/api/control/previous");
+$("shuffle").onclick = () => api("/api/control/shuffle");
+$("repeat").onclick = () => api("/api/control/repeat");
+$("like").onclick = () => api("/api/control/like");
+$("download").onclick = async () => {
+  const r = await api("/api/download");
+  toast(r && r.ok ? (r.message || "Saved") : "Nothing to save");
+};
+
+let seekDrag = false;
+const bar = document.querySelector(".bar");
+const seekFrac = e => { const r = bar.getBoundingClientRect();
+  return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)); };
+bar.addEventListener("mousedown", e => { seekDrag = true;
+  const p = seekFrac(e); $("fill").style.width = (p*100) + "%"; $("cur").textContent = fmt(p * state.duration); });
+window.addEventListener("mousemove", e => { if (seekDrag) {
+  const p = seekFrac(e); $("fill").style.width = (p*100) + "%"; $("cur").textContent = fmt(p * state.duration); } });
+window.addEventListener("mouseup", e => { if (seekDrag) { seekDrag = false;
+  if (state.duration) api("/api/seek?pos=" + Math.round(seekFrac(e) * state.duration)); } });
+
+/* ── toast ─────────────────────────────────────────────────────────── */
+let toastT;
+function toast(msg) {
+  if (!msg) return;
+  const el = $("toast"); el.textContent = msg; el.classList.add("show");
+  clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove("show"), 2600);
+}
+
+/* ── search ────────────────────────────────────────────────────────── */
+let searchT, searchSeq = 0;
+$("q").addEventListener("input", () => {
+  const v = $("q").value.trim();
+  $("qactions").classList.toggle("show", v.length > 0);
+  clearTimeout(searchT);
+  if (v.length < 2) { hideResults(); return; }
+  searchT = setTimeout(() => showResults(v), 320);
+});
+$("q").addEventListener("keydown", e => {
+  if (e.key === "Enter") {
+    const v = $("q").value.trim(); if (!v) return;
+    hideResults(); $("q").value = ""; $("qactions").classList.remove("show"); $("q").blur();
+    api("/api/play?q=" + encodeURIComponent(v)).then(r => toast(r && r.message));
+  } else if (e.key === "Escape") { hideResults(); $("q").blur(); }
+});
+async function showResults(v) {
+  // A newer search wins; stale replies are dropped rather than racing.
+  const seq = ++searchSeq;
+  $("spin").style.display = "block";
+  const r = await api("/api/search?q=" + encodeURIComponent(v));
+  if (seq !== searchSeq) return;
+  $("spin").style.display = "none";
+  const rows = [].concat((r && r.library) || [], (r && r.results) || []);
+  if (!rows.length) { hideResults(); return; }
+  const box = $("results"); box.innerHTML = "";
+  rows.forEach(s => {
+    const el = document.createElement("div"); el.className = "rres";
+    const art = s.art ? `<img class="qi" src="${s.art}" onerror="this.removeAttribute('src')">` : `<div class="qi"></div>`;
+    const tag = s.source === "local" ? `<span class="tag">on disk</span>` : "";
+    el.innerHTML = `${art}<div class="rt"><div class="rn">${esc(s.title)}</div><div class="ra">${esc(s.artist||"")}</div></div>${tag}`;
+    el.onmousedown = ev => { ev.preventDefault(); playPick(s); };
+    box.appendChild(el);
+  });
+  box.classList.add("show");
+}
+const hideResults = () => $("results").classList.remove("show");
+async function playPick(s) {
+  hideResults(); $("q").value = ""; $("qactions").classList.remove("show"); $("q").blur();
+  await api("/api/play/video/" + encodeURIComponent(s.video_id) +
+    "?title=" + encodeURIComponent(s.title||"") +
+    "&artist=" + encodeURIComponent(s.artist||"") +
+    "&art=" + encodeURIComponent(s.art||""));
+  toast("Playing " + (s.title || "song"));
+}
+const withQuery = (mode) => {
+  const v = $("q").value.trim(); if (!v) return;
+  $("q").value = ""; $("qactions").classList.remove("show"); hideResults();
+  api("/api/play?q=" + encodeURIComponent(v) + "&mode=" + mode).then(r => toast(r && r.message));
+};
+$("addnext").onclick = () => withQuery("next");
+$("addqueue").onclick = () => withQuery("queue");
+$("radio").onclick = () => api("/api/radio").then(r => toast(r && r.message));
+
+/* ── panels ────────────────────────────────────────────────────────── */
+let activePanel = "queue";
+document.querySelectorAll(".navtab[data-panel]").forEach(tab => tab.onclick = () => {
+  const wasActive = activePanel === tab.dataset.panel;
+  activePanel = tab.dataset.panel;
+  document.querySelectorAll(".navtab[data-panel]").forEach(x => x.classList.toggle("on", x === tab));
+  document.querySelectorAll(".panel").forEach(p => p.classList.remove("open"));
+  $("panel-" + activePanel).classList.add("open");
+  // Tapping the active tab again expands the panel — dblclick never fired
+  // reliably inside WebView2.
+  document.body.classList.toggle("expand", wasActive ? !document.body.classList.contains("expand") : activePanel === "lyrics");
+  if (activePanel === "lyrics") loadLyrics(true);
+  if (activePanel === "recent") loadRecent();
+  if (activePanel === "lists") loadLists();
+});
+
+/* ── queue ─────────────────────────────────────────────────────────── */
+let histOpen = false, lastQ = [];
+function qRow(t) {
+  const art = t.art ? `<img class="qi" src="${t.art}" onerror="this.removeAttribute('src')">` : `<div class="qi"></div>`;
+  const eq = t.current ? `<div class="eq" id="qeq"><i></i><i></i><i></i><i></i></div>` : "";
+  return `<div class="q${t.current?" cur":""}" data-idx="${t.index}">${art}` +
+    `<div class="qt"><div class="qn">${esc(t.title)}</div><div class="qa">${esc(t.artist||"")}</div></div>${eq}` +
+    `<div class="qctl">` +
+      `<button class="qc" data-act="up" data-i="${t.index}" title="Move up">↑</button>` +
+      `<button class="qc" data-act="down" data-i="${t.index}" title="Move down">↓</button>` +
+      `<button class="qc" data-act="del" data-i="${t.index}" title="Remove">✕</button>` +
+    `</div></div>`;
+}
+function renderQueue(rows) {
+  lastQ = rows || [];
+  const box = $("panel-queue");
+  if (!lastQ.length) {
+    box.innerHTML = '<div class="muted">Nothing queued. Ask for a song, an artist, or a vibe.</div>';
+    return;
+  }
+  const cur = lastQ.findIndex(x => x.current);
+  const cut = cur < 0 ? 0 : cur;
+  const played = lastQ.slice(0, cut), upcoming = lastQ.slice(cut);
+  let html = "";
+  if (played.length) {
+    html += `<button class="qhistory" id="qHist">${histOpen?"▾":"▸"} ${played.length} already played</button>`;
+    if (histOpen) html += played.map(qRow).join("");
+  }
+  html += upcoming.map(qRow).join("");
+  box.innerHTML = html;
+  const h = $("qHist");
+  if (h) h.onclick = e => { e.stopPropagation(); histOpen = !histOpen; renderQueue(lastQ); };
+}
+$("panel-queue").addEventListener("click", e => {
+  const btn = e.target.closest(".qc");
+  if (btn) {
+    e.stopPropagation();
+    const i = +btn.dataset.i, act = btn.dataset.act;
+    if (act === "up" && i > 0) api("/api/queue/move?from=" + i + "&to=" + (i-1));
+    else if (act === "down") api("/api/queue/move?from=" + i + "&to=" + (i+2));
+    else if (act === "del") api("/api/queue/remove?index=" + i).then(() => toast("Removed — press Z to undo"));
+    return;
+  }
+  const row = e.target.closest(".q");
+  if (row) api("/api/queue/jump?index=" + row.dataset.idx);
+});
+
+/* ── lyrics ────────────────────────────────────────────────────────── */
+let lyricData = null, lyricKey = "", lastLine = -1;
+async function loadLyrics(force) {
+  if (!force && state.trackKey === lyricKey) return;
+  lyricKey = state.trackKey; lyricData = null; lastLine = -1;
+  const box = $("panel-lyrics");
+  box.classList.remove("plain");
+  box.innerHTML = '<div class="muted">Looking for lyrics…</div>';
+  const r = await api("/api/lyrics");
+  const L = r && r.lyrics;
+  if (!L) { box.innerHTML = '<div class="muted">No lyrics for this one.</div>'; return; }
+  lyricData = L; box.classList.add("lyrics");
+  if (L.synced && L.synced.length) {
+    box.classList.remove("plain");
+    box.innerHTML = L.synced.map(ln => `<div class="lrow" data-t="${ln.t}">${esc(ln.text)||"♪"}</div>`).join("");
+  } else {
+    box.classList.add("plain");
+    box.innerHTML = (L.plain||"").split("\n").map(l => `<div class="lrow">${esc(l)||"&nbsp;"}</div>`).join("");
+  }
+  box.scrollTop = 0;   // always open at the top
+}
+function syncLyrics(pos) {
+  if (activePanel !== "lyrics" || !lyricData || !lyricData.synced || !lyricData.synced.length) return;
+  const s = lyricData.synced;
+  let idx = 0;
+  for (let i = 0; i < s.length; i++) { if (s[i].t <= pos + 0.25) idx = i; else break; }
+  if (idx === lastLine) return;
+  lastLine = idx;
+  const box = $("panel-lyrics"), rows = box.querySelectorAll(".lrow");
+  rows.forEach((r, i) => r.classList.toggle("active", i === idx));
+  // scroll the panel itself, never the window
+  if (rows[idx]) {
+    const top = box.scrollTop + rows[idx].getBoundingClientRect().top -
+      box.getBoundingClientRect().top - box.clientHeight/2 + rows[idx].offsetHeight/2;
+    box.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+  }
+}
+$("panel-lyrics").addEventListener("click", e => {
+  const row = e.target.closest(".lrow[data-t]"); if (!row) return;
+  const t = parseFloat(row.dataset.t);
+  if (!isNaN(t)) { api("/api/seek?pos=" + Math.max(0, t - 0.3)); lastLine = -1; }
+});
+
+/* ── recent + lists ────────────────────────────────────────────────── */
+async function loadRecent() {
+  const box = $("panel-recent");
+  box.innerHTML = '<div class="muted">Loading…</div>';
+  const r = await api("/api/history");
+  if (!r) { box.innerHTML = '<div class="muted">Nothing yet.</div>'; return; }
+  let html = "";
+  if (r.top_artists && r.top_artists.length) {
+    html += '<div class="seclbl">Your top artists</div><div class="artistchips">' +
+      r.top_artists.map(a => `<span class="achip" data-a="${esc(a.artist)}">${esc(a.artist)}</span>`).join("") + "</div>";
+  }
+  html += '<div class="seclbl">Recently played</div>';
+  html += (r.history && r.history.length)
+    ? r.history.map(t => {
+        const art = t.art ? `<img class="qi" src="${t.art}" onerror="this.removeAttribute('src')">` : `<div class="qi"></div>`;
+        return `<div class="rrow" data-v="${t.video_id}" data-t="${esc(t.title)}" data-ar="${esc(t.artist||"")}">${art}<div class="qt"><div class="qn">${esc(t.title)}</div><div class="qa">${esc(t.artist||"")}</div></div></div>`;
+      }).join("")
+    : '<div class="muted">Nothing played through yet.</div>';
+  box.innerHTML = html;
+}
+$("panel-recent").addEventListener("click", e => {
+  const chip = e.target.closest(".achip");
+  if (chip) { api("/api/play?q=" + encodeURIComponent(chip.dataset.a)).then(r => toast(r && r.message)); return; }
+  const row = e.target.closest(".rrow");
+  if (row) {
+    api("/api/play/video/" + encodeURIComponent(row.dataset.v) +
+      "?title=" + encodeURIComponent(row.dataset.t) + "&artist=" + encodeURIComponent(row.dataset.ar));
+    toast("Playing " + row.dataset.t);
+  }
+});
+
+async function loadLists() {
+  const box = $("panel-lists");
+  box.innerHTML = '<div class="muted">Loading…</div>';
+  const r = await api("/api/playlists");
+  const names = Object.keys((r && r.playlists) || {});
+  let html = `<div class="srow" style="border:0"><button class="btn primary" id="plnew">Save current song to a list</button></div>`;
+  html += names.length
+    ? names.map(n => `<div class="plrow"><span class="pn">${esc(n)}</span>` +
+        `<button class="qc" data-play="${esc(n)}" title="Play">▶</button>` +
+        `<button class="qc" data-del="${esc(n)}" title="Delete">✕</button></div>`).join("")
+    : '<div class="muted">No lists yet.</div>';
+  box.innerHTML = html;
+  $("plnew").onclick = async () => {
+    const name = prompt("List name:");
+    if (name) { const res = await api("/api/playlist/add?name=" + encodeURIComponent(name)); toast(res && res.message); loadLists(); }
+  };
+}
+$("panel-lists").addEventListener("click", async e => {
+  const play = e.target.closest("[data-play]"), del = e.target.closest("[data-del]");
+  if (play) { const r = await api("/api/playlist/play?name=" + encodeURIComponent(play.dataset.play)); toast(r && r.message); }
+  if (del) { const r = await api("/api/playlist/delete?name=" + encodeURIComponent(del.dataset.del)); toast(r && r.message); loadLists(); }
+});
+
+/* ── settings ──────────────────────────────────────────────────────── */
+$("openSettings").onclick = () => { $("sheet").classList.add("open"); loadSettings(); };
+$("closeSettings").onclick = () => $("sheet").classList.remove("open");
+
+function buildChips(id, options, onPick) {
+  const box = $(id); box.innerHTML = "";
+  options.forEach(o => {
+    const c = document.createElement("div");
+    c.className = "chip"; c.textContent = o.label; c.dataset.v = o.val;
+    c.onclick = () => onPick(o.val);
+    box.appendChild(c);
+  });
+}
+const markChips = (id, v) => document.querySelectorAll("#" + id + " .chip")
+  .forEach(c => c.classList.toggle("sel", String(c.dataset.v) === String(v)));
+
+buildChips("crossfade", [{label:"Off",val:0},{label:"3s",val:3},{label:"6s",val:6},{label:"10s",val:10}],
+  v => { api("/api/audio?crossfade=" + v); markChips("crossfade", v); });
+buildChips("sleep", [{label:"Off",val:0},{label:"15m",val:15},{label:"30m",val:30},{label:"60m",val:60}],
+  v => api("/api/sleep?minutes=" + v).then(r => { toast(r && r.message); markChips("sleep", v); }));
+buildChips("cohesion", [{label:"Explore",val:0},{label:"Balanced",val:1},{label:"Stay put",val:2}],
+  v => { api("/api/setting?key=artist_cohesion&value=" + v); markChips("cohesion", v); });
+
+// generic on/off row -> endpoint with ?enabled=
+const toggleRow = (id, path) => {
+  $(id).onclick = () => {
+    const on = !$(id).classList.contains("on");
+    $(id).classList.toggle("on", on);
+    api(path + (path.includes("?") ? "&" : "?") + "enabled=" + (on ? 1 : 0));
+  };
+};
+toggleRow("announce", "/api/announce");
+toggleRow("boot", "/api/boot");
+toggleRow("lockips", "/api/lockips");
+$("normalize").onclick = () => {
+  const on = !$("normalize").classList.contains("on");
+  $("normalize").classList.toggle("on", on);
+  api("/api/audio?normalize=" + (on ? 1 : 0));
+};
+$("ckclose").onclick = () => {
+  const on = !$("ckclose").classList.contains("on");
+  $("ckclose").classList.toggle("on", on);
+  api("/api/setting?key=cookie_close_browser_optin&value=" + (on ? 1 : 0));
+  if (on) toast("I'll grab cookies next time your browser closes");
+};
+
+$("eq").onchange = () => api("/api/audio?eq=" + encodeURIComponent($("eq").value));
+$("source").onchange = () => api("/api/source?value=" + encodeURIComponent($("source").value));
+$("restart").onclick = async () => { toast("Restarting the player…"); await api("/api/restart"); };
+$("libscan").onclick = async () => { toast("Scanning your library…"); await api("/api/library/scan"); };
+$("findck").onclick = async () => {
+  $("findck").textContent = "Looking…";
+  const r = await api("/api/cookies/find");
+  $("findck").textContent = "Find cookies";
+  if (r) { toast(r.ok ? "Cookies working" : (r.hint || "Couldn't find usable cookies")); applyCookies(r); }
+};
+let groqT;
+$("groqkey").addEventListener("input", () => {
+  clearTimeout(groqT);
+  groqT = setTimeout(async () => {
+    const v = $("groqkey").value.trim();
+    if (!v) return;
+    setDot("groqdot", "warn");
+    const r = await api("/api/groqkey?value=" + encodeURIComponent(v));
+    setDot("groqdot", r && r.working ? "ok" : "bad");
+    $("groqhint").textContent = r && r.working
+      ? "Connected — " + (r.model || "")
+      : "That key didn't work: " + ((r && r.detail && r.detail.last_error) || "unknown");
+    toast(r && r.working ? "Groq connected" : "Groq key didn't work");
+  }, 700);
+});
+
+const setDot = (id, cls) => { const d = $(id); d.className = "status-dot" + (cls ? " " + cls : ""); };
+
+function applyCookies(c) {
+  if (!c) return;
+  setDot("ckdot", c.ok === true ? "ok" : (c.ok === false ? "bad" : "warn"));
+  const path = c.path ? `<code>${esc(c.path)}</code>` : "";
+  if (c.ok) $("ckhint").innerHTML = "YouTube access is working.";
+  else $("ckhint").innerHTML =
+    (c.hint ? esc(c.hint) + "<br>" : "") +
+    "Export cookies with the “Get cookies.txt LOCALLY” extension from a private " +
+    "window on youtube.com, and save it as " + (path || "<code>youtube_cookies.txt</code>") + ".";
+}
+
+async function loadSettings() {
+  const s = await api("/api/settings");
+  if (!s) return;
+  if (s.eq_presets && !$("eq").options.length)
+    s.eq_presets.forEach(p => { const o = document.createElement("option"); o.value = o.textContent = p; $("eq").appendChild(o); });
+  if (s.eq) $("eq").value = s.eq;
+  if (s.source) $("source").value = s.source;
+  $("normalize").classList.toggle("on", !!s.normalize);
+  $("announce").classList.toggle("on", s.announce !== false);
+  $("boot").classList.toggle("on", !!s.start_on_boot);
+  $("lockips").classList.toggle("on", !!s.lock_ips);
+  $("ckclose").classList.toggle("on", !!s.cookie_close_browser_optin);
+  markChips("crossfade", s.crossfade || 0);
+  markChips("cohesion", Math.round(s.artist_cohesion ?? 1));
+  $("groqkey").placeholder = s.groq_set ? "•••••••• saved" : "gsk_…";
+  const g = s.groq || {};
+  setDot("groqdot", !s.groq_set ? "" : (g.working ? "ok" : "bad"));
+  $("groqhint").textContent = !s.groq_set
+    ? "Optional. Without it, requests use the built-in parser."
+    : (g.working ? "Connected — " + (s.groq_model || "") : "Not working: " + (g.last_error || ""));
+  applyCookies(Object.assign({ path: (s.cookies && s.cookies.path) || "" }, s.cookies));
+  $("libcount").textContent = s.library_count
+    ? s.library_count + " local files indexed" : "No local files indexed";
+  const qs = s.queue_stats || {};
+  $("queuestats").textContent =
+    `${qs.ready_ahead ?? 0} ready · target ${qs.target ?? 0} · ${qs.pool ?? 0} ideas`;
+  if (s.theme && s.theme !== curTheme) setTheme(s.theme, false);
+  $("diaghint").textContent = "";
+}
+
+/* ── mini mode ─────────────────────────────────────────────────────── */
+let mini = false;
+$("shrink").onclick = () => {
+  mini = !mini;
+  document.body.classList.toggle("mini", mini);
+  document.body.classList.toggle("mini-hover", mini);
+  $("shrink").title = mini ? "Back to full size" : "Shrink to mini";
+  const b = bridge(); if (b && b.set_mini) b.set_mini(mini);
+};
+function miniHover(on) {
+  if (!mini || document.body.classList.contains("mini-hover") === on) return;
+  document.body.classList.toggle("mini-hover", on);
+  const b = bridge(); if (b && b.set_mini_hover) b.set_mini_hover(on);
+}
+document.documentElement.addEventListener("mouseenter", () => miniHover(true));
+document.documentElement.addEventListener("mouseleave", () => miniHover(false));
+
+let pinned = false;
+$("pin").onclick = () => {
+  pinned = !pinned;
+  $("pin").classList.toggle("on", pinned);
+  const b = bridge(); if (b && b.set_pinned) b.set_pinned(pinned);
+};
+window.addEventListener("blur", () => { const b = bridge(); if (b && b.on_blur) b.on_blur(); });
+
+/* ── the level meter, fed by real audio ────────────────────────────── */
+const BARS = 5;
+(() => {
+  const mw = $("miniwave");
+  for (let i = 0; i < BARS; i++) mw.appendChild(document.createElement("i"));
+})();
+let level = 0, levelTarget = 0;
+function paintLevel() {
+  // ease toward the reported loudness so bars glide instead of snapping
+  level += (levelTarget - level) * 0.35;
+  const bars = document.querySelectorAll("#miniwave i, #qeq i");
+  const n = bars.length;
+  bars.forEach((b, i) => {
+    const spread = 0.55 + 0.45 * Math.sin((i / Math.max(1, n - 1)) * Math.PI);
+    const h = Math.max(0.12, Math.min(1, level * spread * 1.25));
+    b.style.height = (h * 100) + "%";
+  });
+  requestAnimationFrame(paintLevel);
+}
+requestAnimationFrame(paintLevel);
+
+/* ── live updates over SSE (no more polling) ───────────────────────── */
+function applyStatus(d) {
+  if (!d) return;
+  const t = d.track || {};
+  const key = (t.name || "") + "|" + (t.artist || "");
+  $("title").textContent = t.name || "Nothing playing";
+  $("artist").textContent = t.artist || "";
+  setArt(t.art || "");
+  state.duration = t.duration || 0;
+  state.position = d.position || 0;
+  state.playing = d.state === "playing";
+  if (!seekDrag) {
+    const pct = state.duration ? Math.min(100, state.position / state.duration * 100) : 0;
+    $("fill").style.width = pct + "%";
+    $("cur").textContent = fmt(state.position);
+  }
+  $("dur").textContent = fmt(state.duration);
+  $("play").innerHTML = state.playing ? ICON.pause : ICON.play;
+  document.body.classList.toggle("paused", !state.playing);
+  if (!state.playing) levelTarget = 0;
+  if (!volDrag && !vvolDrag && d.volume != null) setVol(Math.round(d.volume));
+  $("repeat").classList.toggle("on", d.repeat && d.repeat !== "off");
+  $("like").classList.toggle("liked", !!t.liked);
+  if (key !== state.trackKey) {
+    state.trackKey = key;
+    if (activePanel === "lyrics") loadLyrics(true);
+  }
+  syncLyrics(state.position);
+  if (d.activity) applyActivity(d.activity);
+}
+function applyActivity(a) {
+  const busy = a.stage && !["idle", "playing"].includes(a.stage);
+  document.body.classList.toggle("busy", !!busy);
+  if (!busy) return;
+  const label = { finding: "Finding", downloading: "Downloading", loading: "Loading" }[a.stage] || a.stage;
+  $("actlabel").textContent = a.detail ? `${label} · ${a.detail}` : label;
+  $("actbar").style.width = Math.round((a.progress || 0) * 100) + "%";
+}
+
+let es = null;
+function connect() {
+  if (es) es.close();
+  es = new EventSource("/api/events?key=" + encodeURIComponent(KEY));
+  es.onmessage = ev => {
+    let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    switch (msg.type) {
+      case "status": applyStatus(msg.data); break;
+      case "queue": renderQueue(msg.data); break;
+      case "activity": applyActivity(msg.data || {}); break;
+      case "toast": toast(msg.data); break;
+      case "level": levelTarget = msg.data || 0; break;
+      case "cookies": applyCookies(msg.data); break;
+      case "settings": break;
+    }
+  };
+  es.onerror = () => { es.close(); setTimeout(connect, 2500); };
+}
+
+/* local clock so the progress bar moves smoothly between events */
+setInterval(() => {
+  if (state.playing && !seekDrag && state.duration) {
+    state.position = Math.min(state.duration, state.position + 0.25);
+    $("fill").style.width = (state.position / state.duration * 100) + "%";
+    $("cur").textContent = fmt(state.position);
+    syncLyrics(state.position);
+  }
+}, 250);
+
+/* ── keyboard ──────────────────────────────────────────────────────── */
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT") return;
+  const k = e.key.toLowerCase();
+  if (k === " ") { e.preventDefault(); api("/api/control/playpause"); }
+  else if (k === "arrowright") api("/api/seek?pos=" + Math.round(state.position + 10));
+  else if (k === "arrowleft") api("/api/seek?pos=" + Math.max(0, Math.round(state.position - 10)));
+  else if (k === "arrowup") { setVol(Math.min(VOL_MAX, state.volume + 5)); sendVol(); }
+  else if (k === "arrowdown") { setVol(Math.max(0, state.volume - 5)); sendVol(); }
+  else if (k === "n") api("/api/control/next");
+  else if (k === "p") api("/api/control/previous");
+  else if (k === "l") api("/api/control/like");
+  else if (k === "z") api("/api/queue/undo").then(r => toast(r && r.message));
+  else if (k === "/") { e.preventDefault(); $("q").focus(); }
+});
+
+/* ── init ──────────────────────────────────────────────────────────── */
+setTheme(localStorage.getItem("theme") || "default", false);
+buildSwatches();
+setVol(70);
+connect();
+api("/api/settings").then(s => { if (s && s.theme) setTheme(s.theme, false); });
+api("/api/status").then(d => { if (d) { applyStatus(d); renderQueue(d.queue); } });
+</script>
+</body>
+</html>

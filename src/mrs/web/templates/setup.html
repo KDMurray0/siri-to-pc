@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up the Shortcut</title>
+<style>
+:root{--bg:#0e0f16;--panel:#171826;--fg:#f5f6fb;--sub:#9aa0b8;--line:#252739;--accent:#6d8bff}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font-family:-apple-system,"Segoe UI",Roboto,sans-serif;
+  line-height:1.6;padding:28px 20px 60px}
+.wrap{max-width:640px;margin:0 auto}
+h1{font-size:26px;font-weight:800;letter-spacing:-.02em;margin-bottom:6px}
+.lede{color:var(--sub);margin-bottom:26px}
+h2{font-size:15px;font-weight:700;margin:26px 0 10px}
+ol{margin-left:20px} li{margin-bottom:10px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin:14px 0}
+code{background:#0b0c12;border:1px solid var(--line);border-radius:6px;padding:2px 7px;
+  font-size:12.5px;word-break:break-all;display:inline-block}
+.row{display:flex;gap:8px;align-items:center;margin-top:8px}
+button{background:var(--accent);color:#0b0c12;border:0;border-radius:9px;padding:8px 14px;
+  font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+.muted{color:var(--sub);font-size:13px}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎧 Music Request</h1>
+  <p class="lede">Ask Siri for a song and it plays on this PC.</p>
+
+  <div class="card">
+    <div class="muted">Your endpoint</div>
+    <code id="url">http://{{ host }}:{{ port }}/?key={{ api_key }}</code>
+    <div class="row">
+      <button id="copy">Copy</button>
+      <span class="muted" id="copied"></span>
+    </div>
+  </div>
+
+  <h2>Build the Shortcut on your iPhone</h2>
+  <ol>
+    <li>Open <strong>Shortcuts</strong> → <strong>+</strong> → <strong>Add Action</strong>.</li>
+    <li>Add <strong>Dictate Text</strong>.</li>
+    <li>Add <strong>Get Contents of URL</strong> and paste the endpoint above.</li>
+    <li>Set <strong>Method</strong> to <strong>POST</strong>, <strong>Request Body</strong> to <strong>JSON</strong>.</li>
+    <li>Add one field: key <code>input</code>, type Text, value = <strong>Dictated Text</strong>.</li>
+    <li>Name it something you'd say out loud, like “Play music”.</li>
+  </ol>
+  <p class="muted">Then: “Hey Siri, Play music” → “play something by Fleetwood Mac”.</p>
+
+  <h2>Skip the dictation</h2>
+  <p class="muted">For a one-phrase shortcut, drop the Dictate step and put the words
+  straight into <code>input</code> — “Hey Siri, evening jazz”.</p>
+
+  <h2>If nothing plays</h2>
+  <p class="muted">YouTube needs a logged-in session. Open the player, go to
+  Settings → <strong>Find cookies</strong>, and follow what it tells you.</p>
+</div>
+<script>
+document.getElementById("copy").onclick = () => {
+  const text = document.getElementById("url").textContent;
+  const done = () => { document.getElementById("copied").textContent = "Copied"; };
+  if (navigator.clipboard && location.protocol === "https:") {
+    navigator.clipboard.writeText(text).then(done);
+  } else {
+    // plain http on a LAN: clipboard API is unavailable, so fall back
+    const ta = document.createElement("textarea");
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); done(); } catch (e) {}
+    document.body.removeChild(ta);
+  }
+};
+</script>
+</body>
+</html>

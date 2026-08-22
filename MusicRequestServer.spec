@@ -1,26 +1,37 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller build spec for Music Request Server.
 
-Builds a single windowed MusicRequestServer.exe that runs the Flask server
-in-process and shows the pywebview tray flyout. External tools mpv, yt-dlp and
-node are NOT bundled — they must be on PATH at runtime. config.json and the
-JSON state files live next to the .exe (see src/paths.py).
+Builds a windowed MusicRequestServer.exe that runs the FastAPI server
+in-process and shows the pywebview tray flyout. mpv, yt-dlp and node are NOT
+bundled — they must be on PATH at runtime. Config and state live in
+%LOCALAPPDATA%\MusicRequestServer (see mrs/paths.py).
 
 Build:  pyinstaller --noconfirm MusicRequestServer.spec
 """
 
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
-datas = [('src/templates', 'templates')]
+# Templates are loaded via mrs.paths.resource_dir() -> _MEIPASS/web/templates
+datas = [('src/mrs/web/templates', 'web/templates')]
 binaries = []
 hiddenimports = [
-    'app', 'player', 'search', 'matching', 'auth', 'paths',
     'clr', 'pystray._win32',
+    # uvicorn resolves these by string at runtime, so PyInstaller can't see them
+    'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto', 'uvicorn.loops.asyncio',
+    'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto',
+    'uvicorn.protocols.http.h11_impl', 'uvicorn.protocols.websockets',
+    'uvicorn.protocols.websockets.auto', 'uvicorn.lifespan', 'uvicorn.lifespan.on',
 ]
+hiddenimports += collect_submodules('mrs')
 
 # ytmusicapi ships locale/oauth JSON it loads at runtime.
 datas += collect_data_files('ytmusicapi')
 hiddenimports += collect_submodules('webview')
+for _pkg in ('fastapi', 'starlette', 'uvicorn', 'jinja2'):
+    try:
+        hiddenimports += collect_submodules(_pkg)
+    except Exception:
+        pass
 
 # pythonnet (clr) powers pywebview's WebView2 backend; edge_tts/certifi give the
 # neural announce voice. Pull their data + native DLLs in explicitly.
