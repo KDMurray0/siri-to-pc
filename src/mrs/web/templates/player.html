@@ -1407,7 +1407,7 @@ const BANDS = 7;
 const BARS = 14;                       // bands mirrored out from the centre
 let live = null;                       // bands from the loopback listener
 let lv = { m: 0, s: 0, l: 0, r: 0 };   // loudness fallback
-const bar = [];
+const meterBars = [];
 
 function buildMeters() {
   document.querySelectorAll(".eq, .miniwave").forEach(box => {
@@ -1415,7 +1415,7 @@ function buildMeters() {
     box.innerHTML = "";
     for (let i = 0; i < BARS; i++) box.appendChild(document.createElement("i"));
   });
-  while (bar.length < BARS) bar.push({ v: 0, peak: 0 });
+  while (meterBars.length < BARS) meterBars.push({ v: 0, peak: 0 });
 }
 
 function bandsNow() {
@@ -1437,18 +1437,18 @@ function paintMeter() {
       const half = BARS / 2;
       const idx = i < half ? (half - 1 - i) : (i - half);
       const target = b[Math.min(BANDS - 1, idx)] || 0;
-      const s = bar[i];
+      const s = meterBars[i];
       s.v += (target - s.v) * (target > s.v ? 0.6 : 0.14);
       s.peak = Math.max(s.peak - 0.015, s.v);
     }
   } else {
-    for (const s of bar) { s.v *= 0.88; s.peak *= 0.9; }
+    for (const s of meterBars) { s.v *= 0.88; s.peak *= 0.9; }
   }
   document.querySelectorAll(".eq, .miniwave").forEach(box => {
     const bars = box.children;
     for (let i = 0; i < bars.length && i < BARS; i++) {
-      bars[i].style.height = (Math.max(0.05, bar[i].v) * 100) + "%";
-      bars[i].style.opacity = 0.5 + 0.5 * bar[i].peak;
+      bars[i].style.height = (Math.max(0.05, meterBars[i].v) * 100) + "%";
+      bars[i].style.opacity = 0.5 + 0.5 * meterBars[i].peak;
     }
   });
   requestAnimationFrame(paintMeter);
