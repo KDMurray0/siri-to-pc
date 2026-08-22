@@ -1,15 +1,7 @@
-"""EQ, normalisation, crossfade and level metering.
+"""EQ, normalise, crossfade, level metering.
 
-Crossfade uses two mpv processes. The previous attempt faded by swapping an
-`afade` filter in mid-song, which starts from the filter's own clock and
-mis-fires, and its handoff had no error handling — the logs showed fades that
-began and never finished. This version:
-
-  * preloads the incoming track on the second mpv and ramps volumes explicitly,
-    so timing never depends on filter internals;
-  * holds a lock, so a skip during a fade can't start a second one;
-  * restores volume and `keep-open` in `finally`, so a failure mid-fade leaves
-    playback in a sane state rather than silent.
+Crossfade runs on a second mpv: preload, ramp both, hand back. Volume is
+restored in finally so a failure can't leave you on silence.
 """
 
 from __future__ import annotations
@@ -50,8 +42,7 @@ class AudioEngine:
         for freq, gain in EQ_PRESETS.get(config.get("eq", "flat"), []):
             parts.append(f"equalizer=f={freq}:width_type=o:width=1.5:g={gain}")
         if config.get("normalize"):
-            # Even out loudness across songs: target a consistent RMS rather
-            # than just clipping peaks.
+            # target a consistent RMS, not just peak clipping
             parts.append("dynaudnorm=f=150:g=15:p=0.9:m=15:r=0.9")
         parts.append(_METER)
         return ",".join(parts)

@@ -1,10 +1,4 @@
-"""Where everything lives.
-
-One data directory, whether we're frozen or running from source. The old build
-kept a second config next to the sources, the two drifted, and a key saved in
-one was invisible to the other — so there is exactly one location now and
-anything found in the old spots gets migrated into it.
-"""
+"""Where things live. One data directory, wherever we're running from."""
 
 from __future__ import annotations
 

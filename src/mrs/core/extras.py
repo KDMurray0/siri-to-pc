@@ -1,7 +1,4 @@
-"""Scrobbling, alarms and casting to other machines.
-
-Small features that would each be lost in their own file.
-"""
+"""Last.fm, alarms and casting to other machines."""
 
 from __future__ import annotations
 

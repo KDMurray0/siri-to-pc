@@ -1,8 +1,4 @@
-"""Logging with rotation.
-
-The old build appended to server.log forever; it reached 3.8 MB of mostly
-per-second status requests. Rotate, and drop the access-log noise.
-"""
+"""Logging, with rotation so the log can't grow forever."""
 
 from __future__ import annotations
 

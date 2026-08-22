@@ -1,14 +1,8 @@
 """Groq request parsing.
 
-Notes that cost real time to learn:
-  * api.groq.com sits behind Cloudflare, which 403s the default urllib
-    User-Agent — always send our own.
-  * Groq retires models. A config pinning a dead one makes a perfectly good key
-    look broken, so a failed self-test falls back to DEFAULT_MODEL and sticks.
-  * Free tier is ~8k tokens/minute, not just a daily cap; bursts get 429s.
-  * gpt-oss returns "false" as a *string* for booleans.
-  * Never swallow errors silently — a 429 and a bad key used to look identical
-    from the outside, which is exactly what made this hard to diagnose.
+Gotchas: Cloudflare 403s the default urllib UA; Groq retires models so a
+pinned one can look like a bad key; free tier is ~8k tokens/min; gpt-oss
+returns "false" as a string.
 """
 
 from __future__ import annotations

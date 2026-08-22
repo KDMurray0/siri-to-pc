@@ -1,8 +1,7 @@
-"""What you actually like, learned from what you sit through.
+"""What you actually like, from what you sit through.
 
-A song counts as "played" once you've heard `completion_ratio` of it (30% by
-default); anything less is a skip. Play-throughs pull an artist up, skips push
-them down, and liked songs count for more than either.
+30% listened counts as played. Play-throughs pull an artist up, skips push
+them down, likes count for more.
 """
 
 from __future__ import annotations

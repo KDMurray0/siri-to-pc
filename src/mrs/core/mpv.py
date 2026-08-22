@@ -1,17 +1,10 @@
-"""mpv over a Windows named pipe.
+"""Talking to mpv over a Windows named pipe.
 
-Hard-won details, do not "simplify" these:
-
-* The pipe MUST be opened with FILE_FLAG_OVERLAPPED and driven with overlapped
-  read/write. A synchronous handle deadlocks: the reader's blocking ReadFile
-  serialises ahead of every WriteFile on the same handle, so no command ever
-  reaches mpv.
-* One handle for both directions. mpv replies on the connection the command
-  arrived on, so a second handle never sees the answer.
-* Booleans go over as JSON true/false. This mpv rejects 1/0 for flags like
-  `pause` with "error accessing property".
-* A dead pipe raises WinError 232/109/233/6/2 — treat those as "mpv went away"
-  and let the watchdog respawn it rather than crashing the request.
+Don't "clean up" these bits, they're all load-bearing:
+  - open the pipe with FILE_FLAG_OVERLAPPED, sync handles deadlock
+  - one handle for read+write, mpv replies on the same connection
+  - send real JSON true/false, mpv rejects 1/0 for flags like pause
+  - winerror 232/109/233/6/2 just means mpv went away
 """
 
 from __future__ import annotations
@@ -126,9 +119,7 @@ class MpvClient:
         self._handle = None
         self._read_event = None
         self._reader: threading.Thread | None = None
-        # Allocated once and kept alive: the kernel writes into these while an
-        # overlapped read is pending. Letting them be collected mid-flight
-        # corrupts the heap and takes the whole process down.
+        # kept alive: the kernel writes into these during a pending read
         self._ov = _OVERLAPPED()
         self._chunk = ctypes.create_string_buffer(65536)
         self._gen = 0

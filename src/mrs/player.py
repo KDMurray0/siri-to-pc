@@ -1,4 +1,4 @@
-"""The player service: mpv, queue, audio and taste, wired together."""
+"""Ties mpv, the queue, audio and taste together."""
 
 from __future__ import annotations
 
@@ -218,6 +218,7 @@ class PlayerService:
             state = "paused" if props.get("pause") else "playing"
         return {
             "state": state,
+            "shuffle": bool(config.get("shuffle")),
             "position": props.get("time-pos") or 0,
             "volume": int(props.get("volume") or config.get("volume", 70)),
             "repeat": config.get("repeat", "off"),
@@ -269,23 +270,34 @@ class PlayerService:
             self.mpv.set("mute", False)
             return {"message": "Unmuted"}
         if a == "shuffle":
-            self.mpv.command("playlist-shuffle", wait=False)
-            self.queue.publish_queue()
-            return {"message": "Shuffled"}
+            # A mode, not a one-shot: the radio used to bury a one-off shuffle
+            # under new tracks a second later.
+            on = not bool(config.get("shuffle"))
+            config.set("shuffle", on)
+            if on:
+                self.queue.shuffle_upcoming()
+            return {"message": "Shuffle on" if on else "Shuffle off",
+                    "shuffle": on}
         if a == "repeat":
             order = ["off", "all", "one"]
             cur = config.get("repeat", "off")
             nxt = order[(order.index(cur) + 1) % 3] if cur in order else "all"
             config.set("repeat", nxt)
-            self.mpv.set("loop-file", "inf" if nxt == "one" else "no")
-            self.mpv.set("loop-playlist", "inf" if nxt == "all" else "no")
-            return {"message": f"Repeat {nxt}", "repeat": nxt}
+            self.apply_repeat()
+            label = {"off": "Repeat off", "all": "Repeating the queue",
+                     "one": "Repeating this song"}[nxt]
+            return {"message": label, "repeat": nxt}
         if a == "like":
             return self.like_current()
         if a == "restart":
             self.restart()
             return {"message": "Player restarted"}
         return {"message": f"Unknown action {action}"}
+
+    def apply_repeat(self) -> None:
+        mode = config.get("repeat", "off")
+        self.mpv.set("loop-file", "inf" if mode == "one" else "no")
+        self.mpv.set("loop-playlist", "inf" if mode == "all" else "no")
 
     def seek(self, position: float) -> dict:
         self.mpv.command("seek", float(position), "absolute", wait=False)

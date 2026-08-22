@@ -1,8 +1,7 @@
-"""YouTube Music (and friends) lookups.
+"""YouTube Music lookups.
 
-Everything that turns a phrase into concrete tracks lives here. Two rules run
-through all of it: prefer the original release over remixes/sped-up re-uploads,
-and never return the 30-second preview clips that were sneaking into the queue.
+Two rules everywhere: prefer the original over remixes, and never return the
+30-second preview clips.
 """
 
 from __future__ import annotations

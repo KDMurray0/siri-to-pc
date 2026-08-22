@@ -56,7 +56,10 @@ html,body{height:100%;overflow:hidden;background:var(--bg);
 
 /* now playing */
 .art-wrap{display:flex;justify-content:center;margin-top:4px;position:relative;
-  transition:max-height .3s ease,opacity .22s ease}
+  transition:max-height .34s cubic-bezier(.4,0,.2,1),
+             opacity .26s cubic-bezier(.4,0,.2,1),
+             transform .34s cubic-bezier(.4,0,.2,1),
+             margin .34s cubic-bezier(.4,0,.2,1)}
 .art{width:152px;height:152px;border-radius:18px;object-fit:cover;background:var(--panel);
   box-shadow:0 16px 44px rgba(0,0,0,.55);
   transition:transform .5s cubic-bezier(.2,.8,.2,1),opacity .4s,width .2s,height .2s}
@@ -223,8 +226,15 @@ body.busy .activity{display:flex}
 .lyrics.plain .lrow{text-align:left;opacity:.85}
 
 /* collapse the art when a panel wants the room */
-body.expand .art-wrap,body.expand .row2{max-height:0;opacity:0;margin-top:0;
-  overflow:hidden;pointer-events:none}
+.art-wrap{max-height:260px;overflow:hidden}
+.row2{transition:max-height .34s cubic-bezier(.4,0,.2,1),
+      opacity .24s cubic-bezier(.4,0,.2,1),
+      margin .34s cubic-bezier(.4,0,.2,1);max-height:60px;overflow:hidden}
+body.expand .art-wrap{max-height:0;opacity:0;margin-top:0;transform:scale(.92);
+  pointer-events:none}
+body.expand .row2{max-height:0;opacity:0;margin-top:0;pointer-events:none}
+.meta,.prog{transition:margin .34s cubic-bezier(.4,0,.2,1),
+            min-height .34s cubic-bezier(.4,0,.2,1)}
 body.expand .meta{margin-top:2px;min-height:0}
 body.expand .prog{margin-top:10px}
 
@@ -317,12 +327,20 @@ select,.keyin{background:var(--panel);border:1px solid var(--line);color:var(--f
 /* ── mini mode ─────────────────────────────────────────────────────────
    Constant width. Idle shows art + name; hovering lifts the text to the top
    of the cover and drops the transport into the space that makes. */
-body.mini .ambient,body.mini .prog,body.mini .row2,body.mini .search,
+body.mini .ambient,body.mini .prog,body.mini .search,
 body.mini .nav,body.mini .panel,body.mini .toast,body.mini .frame::after,
-body.mini #shuffle,body.mini #repeat,body.mini .activity{display:none}
+body.mini #shuffle,body.mini #repeat,body.mini .activity,
+body.mini .vol,body.mini .picker{display:none}
+body.mini .row2{display:none}
+body.mini.mini-hover .row2{display:flex;grid-area:extra;margin:0;gap:2px;
+  justify-content:flex-start}
+body.mini.mini-hover .row2 .ib{width:26px;height:26px;border-radius:7px}
+body.mini.mini-hover .row2 .ib svg{width:15px;height:15px}
 body.mini .stage{display:grid;grid-template-columns:auto 1fr;
   grid-template-areas:"art meta" "art ctl";align-items:center;align-content:center;
   column-gap:12px;row-gap:0;padding:11px 46px 11px 12px}
+body.mini.mini-hover .stage{grid-template-areas:"art meta" "art ctl" "art extra";
+  row-gap:1px}
 body.mini .art-wrap{grid-area:art;margin:0;justify-content:flex-start;align-self:center}
 body.mini .art{width:58px;height:58px;border-radius:12px;box-shadow:0 6px 16px rgba(0,0,0,.5)}
 body.mini .meta{grid-area:meta;margin:0;text-align:left;min-height:0;min-width:0;
@@ -344,6 +362,11 @@ body.mini.mini-hover .minivol{display:block;position:absolute;top:40px;right:21p
   width:6px;height:52px;background:var(--line);border-radius:3px;cursor:pointer;z-index:6}
 body.mini.mini-hover .minivol i{position:absolute;left:0;right:0;bottom:0;
   background:var(--accent);border-radius:3px;display:block}
+.minihint{display:none}
+body.mini.mini-hover .minihint{display:block;position:absolute;left:14px;bottom:3px;
+  font-size:8.5px;color:var(--sub);opacity:.42;letter-spacing:.02em;
+  pointer-events:none;white-space:nowrap}
+
 /* the level meter sits on the artwork in mini mode */
 .miniwave{display:none}
 body.mini .miniwave{display:flex;position:absolute;left:0;right:0;bottom:0;height:22px;
@@ -371,6 +394,7 @@ body.mini .miniwave i{width:2.5px;height:10%;background:var(--accent);border-rad
       <img class="art placeholder" id="art" alt="" draggable="false">
       <div class="miniwave" id="miniwave" aria-hidden="true"></div>
     </div>
+    <div class="minihint">ctrl+alt+m over a fullscreen game</div>
     <div class="meta drag">
       <div class="title" id="title">Nothing playing</div>
       <div class="artist" id="artist"></div>
@@ -484,14 +508,15 @@ body.mini .miniwave i{width:2.5px;height:10%;background:var(--accent);border-rad
 
       <section class="spane" data-s="access">
         <div class="srow"><span class="slabel"><span class="status-dot" id="ckdot"></span> YouTube cookies</span>
-          <button class="btn" id="findck">Find cookies<small>may close your browser</small></button></div>
+          <button class="btn" id="findck">Test cookies</button></div>
         <div class="hint" id="ckhint"></div>
-        <div class="srow"><span class="slabel">Use the browser extension<em>For Chrome, which can't be read directly</em></span>
+        <div class="srow"><span class="slabel">Get them from Chrome<em>Restarts Chrome and reads them directly — tabs come back</em></span>
+          <button class="btn" id="ckchrome">Grab</button></div>
+        <div class="srow"><span class="slabel">Or use the export extension<em>No restart; you click Export and I pick it up</em></span>
           <button class="btn" id="ckext">Set up</button></div>
         <div class="srow"><span class="slabel">Re-check cookies hourly</span>
           <div class="toggle" id="ckauto"></div></div>
-        <div class="srow"><span class="slabel">May close a browser to read them</span>
-          <div class="toggle" id="ckclose"></div></div>
+
 
         <div class="seclbl">Understanding requests</div>
         <div class="srow"><span class="slabel"><span class="status-dot" id="groqdot"></span> Groq key<em>Optional — improves messy dictation</em></span>
@@ -1010,12 +1035,7 @@ $("normalize").onclick = () => {
   $("normalize").classList.toggle("on", on);
   api("/api/audio?normalize=" + (on ? 1 : 0));
 };
-$("ckclose").onclick = () => {
-  const on = !$("ckclose").classList.contains("on");
-  $("ckclose").classList.toggle("on", on);
-  api("/api/setting?key=cookie_close_browser_optin&value=" + (on ? 1 : 0));
-  if (on) toast("I'll grab cookies next time your browser closes");
-};
+
 
 $("eq").onchange = () => api("/api/audio?eq=" + encodeURIComponent($("eq").value));
 $("source").onchange = () => api("/api/source?value=" + encodeURIComponent($("source").value));
@@ -1066,6 +1086,22 @@ $("openfolder").onclick = async () => {
   const r = await api("/api/openfolder");
   toast((r && r.message) || "Opened");
 };
+let chromeArmed = false;
+$("ckchrome").onclick = async () => {
+  $("ckchrome").disabled = true;
+  $("ckchrome").textContent = chromeArmed ? "Restarting…" : "Checking…";
+  const r = await api("/api/cookies/chrome?restart=" + (chromeArmed ? 1 : 0));
+  $("ckchrome").disabled = false;
+  if (r && r.needs_restart) {
+    chromeArmed = true;
+    $("ckchrome").textContent = "Restart Chrome";
+    toast("Press again to restart Chrome and grab them");
+    return;
+  }
+  chromeArmed = false;
+  $("ckchrome").textContent = "Grab";
+  if (r) { toast(r.message || ""); applyCookies(r); }
+};
 $("ckext").onclick = async () => {
   const r = await api("/api/cookies/extension");
   if (!r) return;
@@ -1084,11 +1120,11 @@ $("ckauto").onclick = () => {
   $("ckauto").classList.toggle("on", on);
   api("/api/setting?key=cookie_auto_refresh&value=" + (on ? 1 : 0));
 };
-const FINDCK_LABEL = $("findck").innerHTML;
+const FINDCK_LABEL = "Test cookies";
 $("findck").onclick = async () => {
   $("findck").disabled = true;
   $("findck").textContent = "Working…";
-  const r = await api("/api/cookies/find?close=1");
+  const r = await api("/api/cookies/find?close=0");
   $("findck").disabled = false;
   $("findck").innerHTML = FINDCK_LABEL;
   if (!r) { toast("Couldn't reach the server"); return; }
@@ -1142,7 +1178,6 @@ async function loadSettings() {
   $("announce").classList.toggle("on", s.announce !== false);
   $("boot").classList.toggle("on", !!s.start_on_boot);
   $("lockips").classList.toggle("on", !!s.lock_ips);
-  $("ckclose").classList.toggle("on", !!s.cookie_close_browser_optin);
   $("ckauto").classList.toggle("on", s.cookie_auto_refresh !== false);
   $("pldl").classList.toggle("on", !!s.playlist_download);
   markChips("crossfade", s.crossfade || 0);
@@ -1188,14 +1223,17 @@ $("pin").onclick = () => {
 };
 window.addEventListener("blur", () => { const b = bridge(); if (b && b.on_blur) b.on_blur(); });
 
-/* ── the level meter ───────────────────────────────────────────────────
-   Fed by mpv's ebur128 output: momentary loudness, short-term loudness and
-   per-channel peaks. Bars are laid out left..right as L -> centre -> R, so a
-   stereo mix actually moves asymmetrically, and each band has its own attack
-   and decay so transients pop and the tail falls away like a real meter. */
-const BARS = 14;
-let lv = { m: 0, s: 0, l: 0, r: 0 };            // latest from the server
-const band = [];                                 // per-bar smoothed state
+/* ── the meter ─────────────────────────────────────────────────────────
+   Each track gets analysed with ffmpeg after it downloads: seven frequency
+   bands, 25 times a second. We play that back against the current position, so
+   the bars are the actual music. If a track hasn't been analysed yet we fall
+   back to mpv's loudness, which at least moves with the volume. */
+const BANDS = 7;
+const BARS = 14;                       // bands mirrored L..R
+let spec = null;                       // {fps, frames:[[7 bytes]]}
+let specFor = "";
+let lv = { m: 0, s: 0, l: 0, r: 0 };   // loudness fallback
+const bar = [];
 
 function buildMeters() {
   document.querySelectorAll(".eq, .miniwave").forEach(box => {
@@ -1203,44 +1241,58 @@ function buildMeters() {
     box.innerHTML = "";
     for (let i = 0; i < BARS; i++) box.appendChild(document.createElement("i"));
   });
-  while (band.length < BARS) band.push({ v: 0, peak: 0, seed: Math.random() * 6.283 });
+  while (bar.length < BARS) bar.push({ v: 0, peak: 0 });
 }
 
-function paintMeter(now) {
-  const boxes = document.querySelectorAll(".eq, .miniwave");
-  if (boxes.length) {
-    const t = now / 1000;
-    for (let i = 0; i < BARS; i++) {
-      const b = band[i];
-      // position across the meter: 0 = far left channel, 1 = far right
-      const x = BARS === 1 ? 0.5 : i / (BARS - 1);
-      const side = x < 0.5 ? lv.l : lv.r;                 // which channel leads
-      const centre = 1 - Math.abs(x - 0.5) * 2;           // 1 in the middle
-      // low bands follow short-term loudness (body), highs follow peaks
-      const tone = centre * lv.s + (1 - centre) * side;
-      const shimmer = 0.82 + 0.18 * Math.sin(t * (2.1 + b.seed) + b.seed * 3);
-      const target = Math.max(0.04, Math.min(1, tone * shimmer * (0.55 + 0.75 * lv.m)));
-      // fast attack, slow release — the thing that makes a meter feel alive
-      b.v += (target - b.v) * (target > b.v ? 0.55 : 0.12);
-      b.peak = Math.max(b.peak - 0.012, b.v);
-    }
-    boxes.forEach(box => {
-      const bars = box.children;
-      for (let i = 0; i < bars.length && i < BARS; i++) {
-        bars[i].style.height = (Math.max(0.06, band[i].v) * 100) + "%";
-        bars[i].style.opacity = 0.55 + 0.45 * band[i].peak;
-      }
-    });
+async function loadSpectrum(videoId) {
+  if (!videoId || videoId === specFor) return;
+  specFor = videoId; spec = null;
+  const r = await api("/api/spectrum/" + encodeURIComponent(videoId));
+  if (specFor === videoId && r && r.spectrum) spec = r.spectrum;
+}
+
+function bandsNow() {
+  // real data if we have it, otherwise shape the loudness into something
+  if (spec && spec.frames && spec.frames.length) {
+    const i = Math.floor(state.position * spec.fps);
+    const f = spec.frames[Math.max(0, Math.min(spec.frames.length - 1, i))];
+    if (f) return f.map(v => v / 255);
   }
+  const out = [];
+  for (let b = 0; b < BANDS; b++) {
+    const tilt = 1 - b / BANDS * 0.55;          // highs sit lower, as they do
+    out.push(Math.max(0, Math.min(1, (b < 3 ? lv.s : lv.m) * tilt)));
+  }
+  return out;
+}
+
+function paintMeter() {
+  const boxes = document.querySelectorAll(".eq, .miniwave");
+  if (boxes.length && state.playing) {
+    const b = bandsNow();
+    for (let i = 0; i < BARS; i++) {
+      // mirror the bands out from the centre so it reads symmetrically
+      const half = BARS / 2;
+      const idx = i < half ? (half - 1 - i) : (i - half);
+      const target = b[Math.min(BANDS - 1, idx)] || 0;
+      const s = bar[i];
+      s.v += (target - s.v) * (target > s.v ? 0.6 : 0.14);
+      s.peak = Math.max(s.peak - 0.015, s.v);
+    }
+  } else {
+    for (const s of bar) { s.v *= 0.88; s.peak *= 0.9; }
+  }
+  document.querySelectorAll(".eq, .miniwave").forEach(box => {
+    const bars = box.children;
+    for (let i = 0; i < bars.length && i < BARS; i++) {
+      bars[i].style.height = (Math.max(0.05, bar[i].v) * 100) + "%";
+      bars[i].style.opacity = 0.5 + 0.5 * bar[i].peak;
+    }
+  });
   requestAnimationFrame(paintMeter);
 }
 buildMeters();
 requestAnimationFrame(paintMeter);
-
-function decayMeter() {
-  // nothing playing: sink to the floor rather than freeze mid-bounce
-  lv = { m: lv.m * 0.85, s: lv.s * 0.85, l: lv.l * 0.85, r: lv.r * 0.85 };
-}
 
 /* ── live updates over SSE (no more polling) ───────────────────────── */
 function applyStatus(d) {
@@ -1261,12 +1313,16 @@ function applyStatus(d) {
   $("dur").textContent = fmt(state.duration);
   $("play").innerHTML = state.playing ? ICON.pause : ICON.play;
   document.body.classList.toggle("paused", !state.playing);
-  if (!state.playing) decayMeter();
+
   if (!volDrag && !vvolDrag && d.volume != null) setVol(Math.round(d.volume));
   $("repeat").classList.toggle("on", d.repeat && d.repeat !== "off");
+  $("repeat").title = { off: "Repeat off", all: "Repeating the queue",
+                        one: "Repeating this song" }[d.repeat] || "Repeat";
+  $("shuffle").classList.toggle("on", !!d.shuffle);
   $("like").classList.toggle("liked", !!t.liked);
   if (key !== state.trackKey) {
     state.trackKey = key;
+    loadSpectrum(t.video_id);
     if (activePanel === "lyrics") loadLyrics(true);
   }
   syncLyrics(state.position);

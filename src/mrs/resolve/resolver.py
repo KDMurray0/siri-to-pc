@@ -24,6 +24,18 @@ class Resolution:
         return bool(self.tracks)
 
 
+def _first_minutes(tracks: list[Track], minutes: float) -> list[Track]:
+    """Take roughly `minutes` worth off the front of a track list."""
+    budget = minutes * 60
+    out: list[Track] = []
+    for t in tracks:
+        out.append(t)
+        budget -= (t.duration or 210)
+        if budget <= 0:
+            break
+    return out or tracks[:8]
+
+
 def _artist_exact(query: str) -> str | None:
     """Is this phrase simply the name of a band?"""
     try:
@@ -84,6 +96,9 @@ def resolve(plan: Plan) -> Resolution:
         tracks = catalog.artist_all_tracks(who)
         if not tracks:
             return Resolution([], f"I couldn't find {who}", error="no results")
+        # Queue about half an hour of them rather than the whole discography;
+        # the queue tops itself up from the same catalogue as you listen.
+        tracks = _first_minutes(tracks, float(config.get("queue_minutes", 30)))
         return Resolution(tracks, f"Playing {who}", hold_radio=True)
 
     if kind == "genre":

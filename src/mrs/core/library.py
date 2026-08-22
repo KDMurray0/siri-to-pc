@@ -1,9 +1,4 @@
-"""Local music library.
-
-Files you already own play instantly — no search, no download, no cookies. The
-index is a flat JSON list rebuilt in the background; tags come from mutagen
-when it's available and from the filename when it isn't.
-"""
+"""Local music files, so owned songs play with no download."""
 
 from __future__ import annotations
 

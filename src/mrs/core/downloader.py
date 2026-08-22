@@ -1,15 +1,7 @@
-"""Fetching audio with yt-dlp.
+"""yt-dlp wrapper.
 
-Streaming straight from YouTube 403s (needs a GVS PO token / SABR), so every
-track is downloaded to a local cache first and mpv is handed the file.
-
-Three things the old version got wrong and this one doesn't:
-  * a failed download used to quietly end a queue refill — now every failure is
-    reported, retried with backoff, and the next candidate is tried;
-  * short "preview" uploads slipped through and played for 30 seconds — yt-dlp
-    is now told to reject anything under `min_duration`;
-  * progress was invisible, so the UI could only say "loading" — we parse
-    yt-dlp's output and publish real percentages.
+Streaming from YouTube 403s, so everything gets downloaded first and mpv is
+handed the file.
 """
 
 from __future__ import annotations
@@ -202,12 +194,7 @@ class Downloader:
             ev.set()
 
     def _client_chain(self) -> list[str]:
-        """The player clients to try, in order.
-
-        YouTube breaks these periodically — "tv" used to be the only one that
-        worked and now fails outright — so a failure moves down the list rather
-        than killing the track.
-        """
+        """Clients to try in order. YouTube breaks these periodically."""
         chain = [str(config.get("player_client") or "")]
         for alt in (config.get("player_client_fallbacks") or []):
             alt = str(alt)
@@ -227,8 +214,7 @@ class Downloader:
         for client in clients:
             args = [self.exe, "-f", "bestaudio/best", "--no-playlist", "--no-part",
                     "--newline", "--no-warnings", "-o", out_tmpl]
-            # Reject preview/snippet uploads outright — this is the "it played
-            # a 30 second version" bug. min_duration: 0 disables the filter.
+            # no 30-second preview uploads
             if min_dur > 0 and track.source == "youtube":
                 args += ["--match-filter", f"duration >= {min_dur}"]
             args += self.auth_args(client=client)

@@ -1,21 +1,13 @@
-"""Keeping a working YouTube session around.
+"""YouTube cookies.
 
-Tested facts, not guesses:
-  * with no cookies, yt-dlp fails with "The page needs to be reloaded";
-  * with a valid cookies.txt, a real download succeeds;
-  * a *running* Chromium browser locks its cookie database, so extraction says
-    "Could not copy ... cookie database";
-  * **Chrome v127+ cannot be decrypted even when closed** — "Failed to decrypt
-    with DPAPI" (yt-dlp #10927). Closing it costs the user their session and
-    still fails, so once we've seen that we record the browser as unreadable
-    and never offer to close it again.
-  * Firefox has neither problem: readable while open.
+What I found out the hard way:
+  - no cookies -> "The page needs to be reloaded"
+  - a running Chromium browser locks its cookie db
+  - Chrome v127+ can't be decrypted even closed (DPAPI, yt-dlp #10927)
+  - Firefox is fine either way
 
-Refreshing is therefore opportunistic, and an exported cookies.txt remains the
-reliable route on a Chrome-only machine.
-
-Only YouTube/Google cookies are kept — an export contains every site you've
-visited, and none of that belongs in this app's data folder.
+So an exported cookies.txt is the reliable route. Only YouTube/Google cookies
+are kept, the rest of the export isn't our business.
 """
 
 from __future__ import annotations
@@ -27,6 +19,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+from urllib import request as urllib_request
 
 from ..config import config
 from ..events import Ev, bus
@@ -262,7 +255,7 @@ def ensure(*, allow_refresh: bool = True) -> bool:
             _publish()
 
 
-def find_now(close_browsers: bool = True) -> dict:
+def find_now(close_browsers: bool = False) -> dict:
     """The 'Find cookies' button.
 
     A running Chromium browser locks its cookie database, so with
@@ -479,3 +472,124 @@ def start_watch() -> None:
             time.sleep(max(300, int(config.get("cookie_check_interval", 3600))))
 
     threading.Thread(target=loop, daemon=True, name="cookies").start()
+
+
+# ── the automatic route: ask Chrome itself ────────────────────────────
+# You can't trigger the export extension from outside, and the cookie file is
+# encrypted. But Chrome will hand its own cookies over the devtools protocol,
+# because Chrome does the decrypting. It has to be restarted with the debug
+# port on, so this is a button, not something we do behind your back.
+
+DEBUG_PORT = 9222
+
+
+def chrome_exe() -> str | None:
+    for base in (os.environ.get("ProgramFiles", ""),
+                 os.environ.get("ProgramFiles(x86)", "")):
+        p = os.path.join(base, r"Google\Chrome\Application\chrome.exe")
+        if base and os.path.isfile(p):
+            return p
+    return None
+
+
+def _netscape(rows: list[dict]) -> str:
+    out = ["# Netscape HTTP Cookie File", "# Pulled from Chrome by Music Request Server."]
+    for c in rows:
+        domain = c.get("domain", "")
+        if not any(domain.lstrip(".").endswith(d) for d in KEEP_DOMAINS):
+            continue
+        out.append("\t".join([
+            domain,
+            "TRUE" if domain.startswith(".") else "FALSE",
+            c.get("path", "/"),
+            "TRUE" if c.get("secure") else "FALSE",
+            str(int(c.get("expires") or 0)) if (c.get("expires") or 0) > 0 else "0",
+            c.get("name", ""),
+            c.get("value", ""),
+        ]))
+    return "\n".join(out) + "\n"
+
+
+async def _fetch_cookies(ws_url: str) -> list[dict]:
+    import websockets
+    async with websockets.connect(ws_url, max_size=40_000_000) as ws:
+        await ws.send(json.dumps({"id": 1, "method": "Storage.getCookies"}))
+        while True:
+            msg = json.loads(await ws.recv())
+            if msg.get("id") == 1:
+                return (msg.get("result") or {}).get("cookies") or []
+
+
+def grab_via_devtools(restart: bool = True) -> dict:
+    """Restart Chrome with the debug port and read its cookies directly."""
+    import asyncio
+
+    exe = chrome_exe()
+    if not exe:
+        return {"ok": False, "message": "Chrome isn't installed here."}
+
+    already = False
+    try:
+        with urllib_request.urlopen(f"http://127.0.0.1:{DEBUG_PORT}/json/version",
+                                    timeout=1.5) as r:
+            already = True
+            info = json.loads(r.read().decode())
+            ws_url = info.get("webSocketDebuggerUrl")
+    except Exception:
+        ws_url = None
+
+    if not already:
+        if not restart:
+            return {"ok": False, "needs_restart": True,
+                    "message": "Chrome has to restart for this. Press again to allow it."}
+        if browser_running("chrome.exe"):
+            log.info("restarting Chrome with the debug port on")
+            _run(["taskkill", "/IM", "chrome.exe", "/T"], timeout=30)
+            for _ in range(20):
+                if not browser_running("chrome.exe"):
+                    break
+                time.sleep(0.5)
+            time.sleep(1.5)
+        try:
+            subprocess.Popen([exe, f"--remote-debugging-port={DEBUG_PORT}",
+                              "--restore-last-session"],
+                             creationflags=CREATE_NO_WINDOW)
+        except Exception as exc:
+            return {"ok": False, "message": f"Couldn't start Chrome: {exc}"}
+        for _ in range(30):
+            time.sleep(0.7)
+            try:
+                with urllib_request.urlopen(
+                        f"http://127.0.0.1:{DEBUG_PORT}/json/version", timeout=1) as r:
+                    ws_url = json.loads(r.read().decode()).get("webSocketDebuggerUrl")
+                break
+            except Exception:
+                continue
+
+    if not ws_url:
+        return {"ok": False,
+                "message": "Chrome didn't open its debug port. Use the export "
+                           "extension instead."}
+    try:
+        rows = asyncio.run(_fetch_cookies(ws_url))
+    except Exception as exc:
+        return {"ok": False, "message": f"Chrome wouldn't hand them over: {exc}"}
+
+    text = _netscape(rows)
+    kept = text.count("\n") - 2
+    if kept <= 0:
+        return {"ok": False,
+                "message": "Chrome had no YouTube cookies — sign into YouTube first."}
+    dest = cookie_path()
+    dest.write_text(text, encoding="utf-8")
+    config.update({"cookies_file": str(dest), "cookies_from_browser": ""})
+    ok, msg = check(str(dest))
+    state.update(ok=ok, source="chrome-devtools", checked_at=time.time(),
+                 message="ok" if ok else msg)
+    _publish()
+    if ok:
+        bus.publish(Ev.TOAST, f"Got {kept} cookies straight from Chrome")
+        return {"ok": True, "kept": kept,
+                "message": f"Pulled {kept} YouTube cookies from Chrome. Working."}
+    return {"ok": False, "kept": kept,
+            "message": f"Read {kept} cookies but YouTube still refused: {msg}"}

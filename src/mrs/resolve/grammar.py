@@ -1,8 +1,4 @@
-"""Local phrase parsing — no network, instant.
-
-Handles the things that must never wait on an API call (transport, volume) and
-acts as the fallback whenever the LLM is off or unreachable.
-"""
+"""Local phrase parsing. No network, instant."""
 
 from __future__ import annotations
 

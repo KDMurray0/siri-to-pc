@@ -1,4 +1,4 @@
-"""Boot sequence and the uvicorn server."""
+"""Boot and serve."""
 
 from __future__ import annotations
 

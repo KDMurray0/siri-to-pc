@@ -1,8 +1,4 @@
-"""Turning "play something" into music.
-
-One path for every entry point — Siri, the search box, the API, an alarm — so
-they can't drift apart.
-"""
+"""Turning "play something" into music. One path for every entry point."""
 
 from __future__ import annotations
 

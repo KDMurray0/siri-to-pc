@@ -1,9 +1,7 @@
 """HTTP API.
 
-FastAPI, and a server-sent-event stream so the UI stops polling /api/status
-once a second. Blocking work (yt-dlp, mpv IPC) stays on threads — routes that
-touch it are plain `def`, which FastAPI runs in its threadpool, so the loop
-keeps serving events while a download runs.
+FastAPI plus an SSE stream, so the UI doesn't poll. Blocking work (yt-dlp, mpv)
+stays on threads via plain def routes.
 """
 
 from __future__ import annotations
@@ -244,6 +242,16 @@ def api_play_album(name: str, artist: str = "", _: bool = Auth):
     return handle_request(f"play the {name} album" + (f" by {artist}" if artist else ""))
 
 
+@app.get("/api/spectrum/{video_id}")
+def api_spectrum(video_id: str, _: bool = Auth):
+    """Per-band levels for the current track, measured from the file itself."""
+    from ..core import spectrum
+    data = spectrum.load(video_id)
+    if not data:
+        return {"status": "ok", "spectrum": None}
+    return {"status": "ok", "spectrum": data}
+
+
 @app.get("/api/lyrics")
 def api_lyrics(_: bool = Auth):
     track = player.queue.current_track()
@@ -445,9 +453,8 @@ def api_cookies(_: bool = Auth):
 
 
 @app.get("/api/cookies/find")
-def api_cookies_find(close: int = 1, _: bool = Auth):
-    """The 'Find cookies' button — closes a blocking browser by default, which
-    is what the button label warns it will do."""
+def api_cookies_find(close: int = 0, _: bool = Auth):
+    """Test the cookies; only closes a browser if explicitly asked (close=1)."""
     return {"status": "ok", **cookie_mod.find_now(close_browsers=bool(close)),
             "path": str(cookie_mod.cookie_path())}
 
@@ -457,6 +464,13 @@ def api_cookies_extension(_: bool = Auth):
     """Chrome can't be decrypted, so use the export extension instead: this
     tells the user what to install and watches Downloads for the result."""
     return {"status": "ok", **cookie_mod.extension_flow()}
+
+
+@app.get("/api/cookies/chrome")
+def api_cookies_chrome(restart: int = 0, _: bool = Auth):
+    """Read cookies straight out of Chrome over the devtools protocol.
+    Needs Chrome restarted, so it asks first."""
+    return {"status": "ok", **cookie_mod.grab_via_devtools(restart=bool(restart))}
 
 
 @app.get("/api/cookies/import")

@@ -1,10 +1,7 @@
-"""Import a Spotify playlist/album/track by URL.
+"""Spotify links, read with spotdl and resolved through YouTube Music.
 
-We never download from Spotify — `spotdl` is used purely to read the track
-names, then each one is resolved through our normal YouTube Music path.
-
-spotdl is shelled out to rather than imported: it pins older FastAPI and
-ytmusicapi versions and would fight our dependencies inside one process.
+spotdl is shelled out to, not imported, because it pins older fastapi and
+ytmusicapi.
 """
 
 from __future__ import annotations

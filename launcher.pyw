@@ -168,8 +168,10 @@ class Flyout:
             ox, oy = pt.x - r.left, pt.y - r.top
             while U32.GetAsyncKeyState(0x01) & 0x8000:
                 U32.GetCursorPos(ctypes.byref(pt))
-                U32.SetWindowPos(h, 0, pt.x - ox, pt.y - oy, 0, 0,
-                                 SWP_NOSIZE | SWP_NOZORDER)
+                U32.GetWindowRect(h, ctypes.byref(r))
+                x, y = self._clamp(pt.x - ox, pt.y - oy,
+                                   r.right - r.left, r.bottom - r.top)
+                U32.SetWindowPos(h, 0, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER)
                 time.sleep(0.008)
         except Exception:
             pass
@@ -184,9 +186,29 @@ class Flyout:
             U32.GetWindowRect(h, ctypes.byref(r))
         return r
 
+    def _work_area(self):
+        """Usable desktop for our monitor (excludes the taskbar)."""
+        h = self.hwnd()
+        mon = U32.MonitorFromWindow(ctypes.c_void_p(h) if h else None, 2)
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        if mon and U32.GetMonitorInfoW(ctypes.c_void_p(mon), ctypes.byref(mi)):
+            return mi.rcWork
+        r = wintypes.RECT()
+        r.left, r.top = 0, 0
+        r.right = U32.GetSystemMetrics(0)
+        r.bottom = U32.GetSystemMetrics(1)
+        return r
+
+    def _clamp(self, x: int, y: int, w: int, h: int):
+        """Never let the window sit off-screen; push it back from the edge."""
+        wa = self._work_area()
+        x = min(max(x, wa.left), max(wa.left, wa.right - w))
+        y = min(max(y, wa.top), max(wa.top, wa.bottom - h))
+        return x, y
+
     def _resize_centered(self, tw: int, th: int, dur: float = 0.16, steps: int = 10) -> None:
-        """Grow/shrink around the window's centre so it doesn't crawl across
-        the screen every time the mini player expands."""
+        """Grow/shrink around the window's centre, clamped to the screen."""
         self._resize_gen += 1
         gen = self._resize_gen
         h = self.hwnd()
@@ -203,8 +225,7 @@ class Flyout:
                 f = i / steps
                 w = int(cw + (tw - cw) * f)
                 ht = int(ch + (th - ch) * f)
-                x = int(cx - w / 2)
-                y = int(cy - ht / 2)
+                x, y = self._clamp(int(cx - w / 2), int(cy - ht / 2), w, ht)
                 try:
                     U32.SetWindowPos(h, 0, x, y, w, ht, SWP_NOZORDER | SWP_NOACTIVATE)
                 except Exception:
@@ -549,7 +570,7 @@ def main() -> None:
 
     sw = U32.GetSystemMetrics(0)
     sh = U32.GetSystemMetrics(1)
-    x, y = sw - Flyout.W - 18, sh - Flyout.H - 60
+    x, y = max(0, sw - Flyout.W - 18), max(0, sh - Flyout.H - 60)
 
     hidden = "--hidden" in sys.argv
     flyout = Flyout()

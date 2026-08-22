@@ -1,9 +1,4 @@
-"""Named playlists, with real folders on disk.
-
-Each playlist is a folder under <data>/playlists/<name>/ holding a tracks.json
-index. Turn on `playlist_download` and the audio is copied in beside it, so a
-playlist survives cache cleanup and works with no network.
-"""
+"""Playlists, each one a folder under <data>/playlists/<name>/."""
 
 from __future__ import annotations
 

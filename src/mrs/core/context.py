@@ -1,15 +1,6 @@
-"""Deciding what could play next.
+"""Picking what could play next.
 
-Builds a scored pool of candidates from several sources so the queue has real
-options instead of whatever one radio call returned. Score is deliberately
-readable — every term is one idea:
-
-    score = source weight
-          + taste (liked / played-through / skipped)
-          + cohesion   (same artist as what's playing, scaled by a setting)
-          - staleness  (heard recently)
-          - derivative (remixes, sped-up, lyric videos)
-          + jitter     (so it isn't identical every time)
+score = source + taste + cohesion - staleness + a bit of randomness
 """
 
 from __future__ import annotations
@@ -64,8 +55,7 @@ class ContextBuilder:
 
         out = self._rank(raw, current, exclude, limit, exclude_keys)
 
-        # A thin pool is how the queue used to die: everything got excluded and
-        # there was nothing left to download. Widen out before giving up.
+        # a thin pool is how the queue used to die — widen out first
         if len(out) < 8:
             out += self._widen(current, exclude, exclude_keys,
                                have={c.track.video_id for c in out})

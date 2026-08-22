@@ -1,20 +1,9 @@
 """The queue.
 
-The old design asked "is the playlist short? then download some songs" on one
-thread, so a couple of failed downloads ended a refill with nothing added and
-the queue quietly ran dry. This one separates *ideas* from *files*:
+    context -> candidate pool -> download workers -> mpv playlist
 
-    context  ->  candidate pool  ->  download workers  ->  mpv playlist
-                 (scored, cheap)     (retry, backoff)      (only real files)
-
-Consequences that matter:
-  * a failed download costs a candidate, never the refill — the worker just
-    takes the next one;
-  * we can guarantee "N downloaded tracks are ready ahead of you" rather than
-    hoping;
-  * user requests always jump the radio, because they enter a priority lane;
-  * an artist run-length cap stops the queue turning into one album, while the
-    cohesion weight still keeps it on the band you asked for.
+Ideas and files are separate. Only downloaded tracks reach mpv, so a failed
+download costs a candidate instead of killing the whole refill.
 """
 
 from __future__ import annotations
@@ -29,6 +18,7 @@ from ..events import Ev, bus
 from ..logging_setup import get
 from ..models import Activity, Candidate, Track, is_derivative, norm_title
 from .downloader import downloader
+from .spectrum import analyse_async
 from .taste import taste
 
 log = get("queue")
@@ -53,9 +43,7 @@ class QueueManager:
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._session_plays = 0
-        # Names already queued or being downloaded. Claimed the moment a
-        # candidate is taken, not when its download finishes — otherwise a
-        # refill in that window happily adds the same song again.
+        # claimed when a candidate is taken, not when it finishes downloading
         self._claimed: set[str] = set()
         self._hold_radio = False                 # album/artist runs pure first
         self._undo: deque[tuple] = deque(maxlen=20)
@@ -94,7 +82,7 @@ class QueueManager:
         tracks = [t for t in tracks if t.video_id or t.url]
         if not tracks:
             return
-        if shuffle:
+        if shuffle or config.get("shuffle"):
             random.shuffle(tracks)
         with self._lock:
             self._work.clear()
@@ -128,6 +116,11 @@ class QueueManager:
         return {"ok": True, "cancelled": killed, "dropped": dropped,
                 "message": "Stopped" if (killed or dropped) else "Nothing to stop"}
 
+    def shuffle_upcoming(self) -> None:
+        """Reorder what's still to come, leaving the current track alone."""
+        self.mpv.command("playlist-shuffle", wait=False)
+        self.publish_queue()
+
     def release_hold(self) -> None:
         self._hold_radio = False
         self._wake.set()
@@ -152,6 +145,11 @@ class QueueManager:
                 return self._work.popleft()
         if self._hold_radio:
             return None
+        if config.get("repeat", "off") != "off":
+            return None          # repeating a set list: don't keep growing it
+        # Enough music queued, by time and by count.
+        if self.minutes_ahead() >= self.target_minutes():
+            return None
         if self.ready_ahead() >= self.target_depth():
             return None
         cand = self._take_candidate()
@@ -169,6 +167,10 @@ class QueueManager:
             # Highest score wins, but skip anything that would extend an
             # artist run past the cap — unless that's all we have.
             usable.sort(key=lambda c: c.score, reverse=True)
+            if config.get("shuffle"):
+                # shuffle mode: pick from the good ones rather than the best one
+                import random as _r
+                _r.shuffle(usable[:12])
             usable = [c for c in usable if c.track.key() not in self._claimed]
             if not usable:
                 return None
@@ -210,6 +212,7 @@ class QueueManager:
             return
 
         track.path = path
+        analyse_async(path, track.video_id)   # real bars for the visualiser
         with self._lock:
             self._meta[path] = track
             if track.key():
@@ -234,7 +237,27 @@ class QueueManager:
         self.publish_queue()
 
     # -- depth / maintenance -------------------------------------------
+    def target_minutes(self) -> float:
+        base = float(config.get("queue_minutes", 30))
+        cap = float(config.get("queue_minutes_max", 60))
+        # grows a little the longer you listen
+        return min(cap, base + min(20.0, self._session_plays * 1.5))
+
+    def minutes_ahead(self) -> float:
+        """How much music is actually queued up, in minutes."""
+        try:
+            pl = self.mpv.command("get_property", "playlist") or []
+            pos = self.mpv.get("playlist-pos", 0) or 0
+        except Exception:
+            return 0.0
+        total = 0.0
+        for entry in pl[pos + 1:]:
+            tr = self._meta.get(entry.get("filename", ""))
+            total += (tr.duration if tr and tr.duration else 210)   # ~3.5 min guess
+        return total / 60.0
+
     def target_depth(self) -> int:
+        """Song-count equivalent, still used as a hard ceiling."""
         base = int(config.get("queue_target", 12))
         cap = int(config.get("queue_max", 30))
         return max(1, min(cap, base + min(12, self._session_plays)))
@@ -269,7 +292,8 @@ class QueueManager:
                     if self.ready_ahead() <= 0:
                         self._hold_radio = False
                     continue
-                need_ready = self.ready_ahead() < self.target_depth()
+                need_ready = (self.minutes_ahead() < self.target_minutes()
+                              and self.ready_ahead() < self.target_depth())
                 pool_low = len(self._pool) < int(config.get("queue_pool_min", 20))
                 if pool_low and self.mpv.get("playlist-count", 0):
                     self._refill_pool()
@@ -399,6 +423,8 @@ class QueueManager:
                 "pool": len(self._pool),
                 "work": len(self._work),
                 "ready_ahead": self.ready_ahead(),
+                "minutes_ahead": round(self.minutes_ahead(), 1),
+                "target_minutes": round(self.target_minutes(), 1),
                 "target": self.target_depth(),
                 "session_plays": self._session_plays,
                 "hold_radio": self._hold_radio,

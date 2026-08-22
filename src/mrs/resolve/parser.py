@@ -1,16 +1,8 @@
-"""One request, one parser, one owner.
+"""One parser, one decision.
 
-The old flow ran the local grammar *and* Groq over the same phrase in sequence,
-so it was never obvious which one had decided anything. The rule now:
-
-  1. An exact transport/volume phrase ("pause", "skip", "volume 40") is decided
-     locally and instantly — no reason to spend 400ms and a token budget on it.
-  2. Everything else goes to the LLM when it's available.
-  3. The grammar is the fallback, used when the LLM is off, rate-limited or
-     confused.
-
-Whatever decides sets `plan.via`, which is logged and shown in diagnostics, so
-"is it using Groq?" is answerable at a glance.
+Exact controls (pause, skip, volume) are handled locally so they're instant.
+Everything else goes to the LLM, with the grammar as fallback. Whoever decided
+sets plan.via.
 """
 
 from __future__ import annotations

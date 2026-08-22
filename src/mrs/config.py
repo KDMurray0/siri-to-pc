@@ -1,7 +1,4 @@
-"""Config: one file, typed defaults, safe writes.
-
-Reads tolerate a BOM (PowerShell loves writing them); writes never emit one.
-"""
+"""Config: one file, typed defaults, no BOM on write."""
 
 from __future__ import annotations
 
@@ -18,9 +15,7 @@ _lock = threading.RLock()
 DEFAULTS: dict[str, Any] = {
     # server
     "host": "0.0.0.0",
-    # Not 5000 — that's crowded (Flask/AirPlay/etc. all grab it). pick_port()
-    # still steps aside if something takes this one.
-    "port": 7420,
+    "port": 7420,          # 5000 is crowded
     "api_key": "",
     "lock_ips": False,
     "allowed_ips": [],
@@ -30,18 +25,16 @@ DEFAULTS: dict[str, Any] = {
     "eq": "flat",
     "normalize": False,
     "crossfade": 0,
-    "repeat": "off",
+    "repeat": "off",          # off | all | one
+    "shuffle": False,
     "announce": True,
     "tts_voice": "en-US-AriaNeural",
     "theme": "default",
 
     # fetching
     "js_runtime": "node",
-    # web_embedded returns audio-only opus (~128k) and actually downloads.
-    # The old "tv" default now fails outright, and even when it worked it gave
-    # itag 18 — 96k AAC muxed with 360p video, 3x the bytes for worse audio.
+    # web_embedded gives audio-only opus and actually downloads; "tv" is dead
     "player_client": "web_embedded",
-    # Tried in order when a download fails; YouTube breaks clients regularly.
     "player_client_fallbacks": ["web", "mweb", ""],
     "cookies_file": "",
     "cookies_from_browser": "",
@@ -57,7 +50,10 @@ DEFAULTS: dict[str, Any] = {
     "min_duration": 60,       # reject sub-minute results (the "30 second version" bug)
 
     # queue
-    "queue_target": 12,       # base lookahead, grows with the session
+    # depth in minutes, not songs
+    "queue_minutes": 30,
+    "queue_minutes_max": 60,
+    "queue_target": 12,       # fallback when durations are unknown
     "queue_max": 30,
     "queue_min_ready": 3,     # downloaded tracks that must sit ahead
     "queue_pool_min": 20,     # candidate ideas kept in reserve

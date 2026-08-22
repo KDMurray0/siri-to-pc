@@ -1,9 +1,4 @@
-"""Event bus: worker threads publish, SSE clients subscribe.
-
-Replaces the old 1-second /api/status poll. Background work (downloads, queue
-refills, mpv state) happens on threads; subscribers live on the asyncio loop, so
-publishing hops threads via call_soon_threadsafe.
-"""
+"""Event bus. Worker threads publish, SSE clients subscribe."""
 
 from __future__ import annotations
 
