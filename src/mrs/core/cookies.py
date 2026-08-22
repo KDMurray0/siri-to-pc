@@ -42,8 +42,10 @@ BROWSERS = [
     ("opera", "opera.exe", True),
 ]
 
-KEEP_DOMAINS = ("youtube.com", "youtu.be", "google.com", "ytimg.com",
-                "googlevideo.com", "google.co.uk", "accounts.google.com")
+# the auth cookies (SID, SAPISID, LOGIN_INFO...) live on google.com, so losing
+# those domains is exactly what breaks playback
+KEEP_DOMAINS = ("youtube.com", "youtu.be", "youtube-nocookie.com", "google.com",
+                "ytimg.com", "googlevideo.com", "googleapis.com")
 
 state = {
     "ok": None,          # True / False / None = not checked yet
@@ -74,10 +76,61 @@ def _mark_unreadable(name: str) -> None:
 
 
 def cookie_path() -> Path:
+    """Your export. yt-dlp must never be pointed at this."""
     configured = (config.get("cookies_file") or "").strip()
     if configured:
         return Path(configured)
     return data_dir() / "youtube_cookies.txt"
+
+
+def session_path() -> Path:
+    """The copy yt-dlp is allowed to chew on."""
+    return data_dir() / "cookies_session.txt"
+
+
+def backup_path() -> Path:
+    return data_dir() / "cookies_master.bak"
+
+
+def ensure_session() -> str:
+    """Give yt-dlp a working copy, never the master.
+
+    yt-dlp rewrites whatever file you pass to --cookies. Pointed at the real
+    export it slowly strips it — the google.com auth cookies go first and then
+    nothing plays. So it gets a copy, and the copy is refreshed whenever the
+    master changes.
+    """
+    master = cookie_path()
+    session = session_path()
+    if not master.is_file():
+        return str(session) if session.is_file() else ""
+    try:
+        stale = (not session.is_file()
+                 or session.stat().st_mtime < master.stat().st_mtime
+                 or session.stat().st_size < 200)
+        if stale:
+            shutil.copyfile(master, session)
+            log.info("refreshed the working cookie copy from %s", master.name)
+    except Exception as exc:
+        log.warning("couldn't copy cookies: %s", exc)
+        return str(master)
+    return str(session)
+
+
+def save_master(text: str) -> None:
+    """Write a new export, back up the old one, and reset the working copy."""
+    master = cookie_path()
+    try:
+        if master.is_file() and master.stat().st_size > 200:
+            shutil.copyfile(master, backup_path())
+    except Exception:
+        pass
+    master.write_text(text, encoding="utf-8")
+    try:
+        session_path().unlink(missing_ok=True)
+    except Exception:
+        pass
+    ensure_session()
 
 
 def _publish() -> None:
@@ -154,6 +207,26 @@ def _auth_args(cookies_file: str | None = None) -> list[str]:
     return downloader.auth_args()
 
 
+# without these you are not logged in, whatever else the file contains
+AUTH_COOKIES = ("SID", "SAPISID", "__Secure-1PSID", "__Secure-3PSID", "LOGIN_INFO")
+
+
+def inspect(path: Path | None = None) -> dict:
+    """What's actually in the cookie file."""
+    p = path or cookie_path()
+    if not p.is_file():
+        return {"exists": False, "lines": 0, "auth": [], "healthy": False}
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return {"exists": True, "lines": 0, "auth": [], "healthy": False}
+    lines = [l for l in text.splitlines() if l.strip() and not l.startswith("#")]
+    found = sorted({name for name in AUTH_COOKIES
+                    for l in lines if f"	{name}	" in l})
+    return {"exists": True, "lines": len(lines), "auth": found,
+            "healthy": bool(found), "size": p.stat().st_size}
+
+
 def check(cookies_file: str | None = None) -> tuple[bool, str]:
     """Does YouTube actually let us fetch a video right now?"""
     exe = shutil.which("yt-dlp")
@@ -164,6 +237,10 @@ def check(cookies_file: str | None = None) -> tuple[bool, str]:
     code, out = _run(args)
     if code == 0 and TEST_ID in out:
         return True, "ok"
+    info = inspect()
+    if info["exists"] and not info["healthy"]:
+        return False, ("Your cookies file has lost its Google sign-in cookies "
+                       f"({info['lines']} left) — export a fresh one.")
     err = next((l.strip() for l in reversed(out.splitlines()) if "ERROR" in l), "")
     return False, (err[:180] or "check failed")
 
@@ -185,7 +262,11 @@ def extract_from(browser: str, dest: Path) -> bool:
     code, out = _run(args)
     if code == 0 and TEST_ID in out and tmp.exists() and tmp.stat().st_size > 200:
         kept = filter_to_youtube(tmp)
-        os.replace(tmp, dest)
+        save_master(tmp.read_text(encoding="utf-8", errors="replace"))
+        try:
+            tmp.unlink()
+        except Exception:
+            pass
         log.info("cookies refreshed from %s (%d YouTube cookies)", browser, kept)
         return True
     if "Could not copy" in out or "another process" in out:
@@ -397,15 +478,16 @@ def scan_downloads(max_age: int = 900) -> Path | None:
 
 
 def import_file(src: Path) -> dict:
-    """Take an exported cookies.txt, keep only YouTube, and test it."""
+    """Take an exported cookies.txt, keep only YouTube/Google, and test it."""
     dest = cookie_path()
     try:
-        shutil.copyfile(src, dest)
+        save_master(src.read_text(encoding="utf-8", errors="replace"))
     except Exception as exc:
-        return {"ok": False, "message": f"Couldn't copy that file: {exc}"}
+        return {"ok": False, "message": f"Couldn't read that file: {exc}"}
     kept = filter_to_youtube(dest)
     config.update({"cookies_file": str(dest), "cookies_from_browser": ""})
-    ok, msg = check(str(dest))
+    ensure_session()
+    ok, msg = check()
     state.update(ok=ok, source="file", checked_at=time.time(),
                  message="ok" if ok else msg)
     _publish()
@@ -580,10 +662,9 @@ def grab_via_devtools(restart: bool = True) -> dict:
     if kept <= 0:
         return {"ok": False,
                 "message": "Chrome had no YouTube cookies — sign into YouTube first."}
-    dest = cookie_path()
-    dest.write_text(text, encoding="utf-8")
-    config.update({"cookies_file": str(dest), "cookies_from_browser": ""})
-    ok, msg = check(str(dest))
+    save_master(text)
+    config.update({"cookies_file": str(cookie_path()), "cookies_from_browser": ""})
+    ok, msg = check()
     state.update(ok=ok, source="chrome-devtools", checked_at=time.time(),
                  message="ok" if ok else msg)
     _publish()

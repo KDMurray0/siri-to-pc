@@ -459,6 +459,7 @@ def _set_run_at_boot(enable: bool) -> bool:
 def api_cookies(_: bool = Auth):
     return {"status": "ok", **cookie_mod.state,
             "path": str(cookie_mod.cookie_path()),
+            "file": cookie_mod.inspect(),
             "browsers": cookie_mod.installed_browsers()}
 
 

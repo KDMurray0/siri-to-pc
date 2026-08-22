@@ -43,7 +43,9 @@ class Downloader:
     def auth_args(self, client: str | None = None) -> list[str]:
         """Cookie + runtime flags, read fresh so a cookie refresh takes effect."""
         args: list[str] = []
-        cf = (config.get("cookies_file") or "").strip()
+        # a copy, never the master — yt-dlp rewrites whatever it's given
+        from .cookies import ensure_session
+        cf = ensure_session()
         cb = (config.get("cookies_from_browser") or "").strip()
         if cf and os.path.isfile(cf):
             args += ["--cookies", cf]

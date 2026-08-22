@@ -102,6 +102,7 @@ class Flyout:
         self._moving = False
         self._mini = False
         self._resize_gen = 0
+        self._ever_focused = False   # don't auto-hide before you've used it
         self._fs_active = False
         self._click_through = False
         self._force_interactive = False
@@ -254,6 +255,7 @@ class Flyout:
         try:
             self.window.show()
             self._visible = True
+            self._ever_focused = False
             self._shown_at = time.monotonic()
             h = self.hwnd()
             if h:
@@ -304,15 +306,30 @@ class Flyout:
 
     # -- watchers --
     def focus_watch(self) -> None:
+        """Hide when you click away — but only once you've actually been on it.
+
+        A freshly launched flyout often never wins focus, and since it has no
+        taskbar button, hiding at that point makes the app look like it didn't
+        start at all.
+        """
         while True:
             time.sleep(0.25)
             try:
                 if self._pinned or self._fs_active or os.environ.get("MRS_NO_AUTOHIDE"):
                     continue
-                if self._visible and (time.monotonic() - self._shown_at) > 0.6:
-                    h = self.hwnd()
-                    if h and U32.GetForegroundWindow() != h:
-                        self.hide()
+                if not self._visible:
+                    continue
+                h = self.hwnd()
+                if not h:
+                    continue
+                focused = U32.GetForegroundWindow() == h
+                if focused:
+                    self._ever_focused = True
+                    continue
+                if not self._ever_focused:
+                    continue                     # never been used; leave it up
+                if (time.monotonic() - self._shown_at) > 0.6:
+                    self.hide()
             except Exception:
                 pass
 
@@ -547,6 +564,16 @@ def _after_start() -> None:
     time.sleep(0.4)
     flyout.round_corners()
     flyout.hide_from_taskbar()
+    if flyout._visible:
+        # a freshly launched window that never gets focus looks like a dead app
+        try:
+            h = flyout.hwnd()
+            if h:
+                U32.ShowWindow(h, 5)
+                U32.SetForegroundWindow(h)
+                flyout._shown_at = time.monotonic()
+        except Exception:
+            pass
     for fn in (flyout.focus_watch, flyout.fullscreen_watch, flyout.hotkey_watch, _tray):
         threading.Thread(target=fn, daemon=True).start()
 
