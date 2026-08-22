@@ -392,24 +392,40 @@ Say any of these to Siri (through a Shortcut):
 ```
 itunes_request_server/
   setup.ps1              One-shot installer: prerequisites, cookies, config, verification
-  launcher.pyw           Double-click entry: tray icon + webview player, starts the server
+  launcher.pyw           Tray icon + the flyout player window
   MusicRequestServer.spec  PyInstaller build spec (-> standalone .exe)
-  config.example.json    Copy to src/config.json and edit
-  requirements.txt       Python dependencies
-  README.md / CHANGELOG.md
-  src/
-    app.py               Flask routes + startup (run: python src/app.py)
-    auth.py              API key (auto-gen) + IP allowlist checks
-    paths.py             Source-vs-frozen file locations
-    matching.py          Query parsing, grammar, natural-language commands
-    interpret.py         Optional Groq LLM request parsing
-    search.py            YouTube Music search + smart interpretation (ytmusicapi)
-    player.py            Dual-mpv playback: download-then-play, crossfade, smart-shuffle
-    config.json          Your settings (gitignored)
-    templates/
-      player.html        The desktop player UI
-      setup.html         Siri-Shortcut setup instructions (served at /)
+  src/mrs/
+    config.py            One config file, typed defaults, atomic writes
+    paths.py             Single data directory (+ migration from older layouts)
+    events.py            Pub/sub bus behind the SSE stream
+    models.py            Track / Candidate / Plan, and the dedupe key
+    player.py            Orchestrator: mpv + queue + audio + taste
+    requests.py          One entry point for every request (Siri, UI, API, alarm)
+    server.py            Boot sequence, port selection, uvicorn
+    core/
+      mpv.py             Named-pipe IPC (overlapped I/O, watchdog)
+      queue.py           Candidate pool -> download workers -> playlist
+      context.py         What could play next, and how it's scored
+      downloader.py      yt-dlp: retries, client fallback, cache, pinning
+      taste.py           Play-throughs vs skips, likes, ranking
+      audio.py           EQ, normalise, crossfade, level metering
+      cookies.py         Cookie testing and opportunistic refresh
+      library.py         Local file index
+      extras.py          Last.fm, alarms, casting
+    resolve/
+      parser.py          One parsing decision (grammar for controls, LLM otherwise)
+      grammar.py         Local phrase parsing
+      llm.py             Groq
+      catalog.py         YouTube Music, SoundCloud, Bandcamp
+      spotify.py         Spotify links via spotdl
+      lyrics.py          LRCLIB
+    web/
+      api.py             FastAPI routes + SSE
+      templates/         player.html, setup.html
 ```
+
+Config and state live in `%LOCALAPPDATA%\MusicRequestServer\` — one location,
+whether you run the .exe or from source.
 
 ## Troubleshooting
 
@@ -425,6 +441,8 @@ itunes_request_server/
 | Player window shows a bare **"Not Found"** | Another server (often a stale copy) holds port 5000 — a `127.0.0.1` bind wins over ours | `Get-NetTCPConnection -LocalPort 5000 -State Listen`; close the extra instance. Current builds detect this and move to a free port |
 | Requests ignore Groq and use the basic parser | Bad key, or the model is blocked/rate-limited at your Groq org | Check `server.log` for `[groq] HTTP ...`; enable a model at console.groq.com/settings/limits |
 | Track starts then instantly stops / "only images available" | Node not installed or `js_runtime` not set | Install Node.js and set `config.json` → `js_runtime: "node"` |
+| Every download fails with "the page needs to be reloaded" | The YouTube player client in your config stopped working | Set `player_client` to `web_embedded`. The app also falls through to the clients in `player_client_fallbacks` automatically |
+| A 30-second version plays instead of the song | A preview/snippet upload was picked | `min_duration` (default 60s) rejects these; lower it only if you play genuinely short tracks |
 | "ytmusicapi validation failed" | YouTube changed its internal API; ytmusicapi is out of date | Run `pip install --upgrade ytmusicapi` and check the package's GitHub for notes |
 | No search results | Query too vague or artist name misspelled by dictation | Try a more specific phrase, e.g. "the song Yellow by Coldplay" |
 | Region-locked or premium-only track | The chosen video is unavailable in your region | Check the spoken error message; the server tries alternate results automatically for song requests |

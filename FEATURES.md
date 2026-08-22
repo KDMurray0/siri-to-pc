@@ -1,6 +1,8 @@
 # Music Request Server — feature inventory & refactor scope
 
-**Status: for review. Nothing is being rebuilt until you sign this off.**
+**Status: BUILT.** You approved the refactor and everything below is now
+implemented, except per-person profiles (you said no). What actually shipped,
+and what testing turned up, is in the "Outcome" section at the end.
 
 This is what the app does today, how every interaction currently behaves, what's
 actually broken, and what I'd propose changing. Mark it up however you like —
@@ -237,3 +239,57 @@ Attached alongside this document:
 3. Yes/no on each §4.2 item
 4. Anything from §4.3 worth keeping
 5. Whether you want the **full §5 refactor** or targeted fixes only
+
+
+---
+
+## 8. Outcome
+
+The refactor is done and committed. Structure is now
+`core/` · `resolve/` · `web/` as sketched in §5, on FastAPI with an event
+stream instead of polling.
+
+### The queue, rebuilt
+
+Ideas and files are separate now:
+
+```
+context -> scored candidate pool -> download workers -> mpv playlist
+```
+
+Nothing reaches the playlist until it's downloaded, so a failed fetch costs one
+candidate instead of ending a refill. Requests use a priority lane, an artist
+run-limit stops one album taking over, and a name is claimed the moment a
+candidate is picked rather than when its download finishes.
+
+Verified on a live run: a request for one Smashing Pumpkins song produced
+**12 queued tracks, 12 unique, all the same artist.**
+
+### Bugs found by testing (not guessed)
+
+| Found | Fix |
+|---|---|
+| **`player_client: tv` is dead** — every download failed with "the page needs to be reloaded" | `web_embedded`, which returns audio-only opus. Downloads work *and* the audio is better than the old 96k muxed video. Broken clients now fall through automatically. |
+| **The process was crashing mid-crossfade** — the pipe handle was closed with an overlapped read still pending, corrupting the heap | Buffers live as long as the client; `close()` waits for the reader thread |
+| Crossfade never completed | Now logs `handoff done`; verified end to end |
+| "The Smashing Pumpkins" ≠ "Smashing Pumpkins" for dedupe | Articles stripped |
+| Dedupe truncated any title containing "with" ("Bullet With Butterfly Wings" → "bullet") | `with` removed from the feature-artist pattern |
+| Two configs had silently diverged (B1) | One config, one location |
+| Port guard lost in the rewrite (a regression I introduced) | Restored, and it verifies the server is *ours* |
+| ytmusicapi crashes on some unfiltered searches | Filtered validation, non-fatal |
+
+### Verified working
+
+`finding → downloading → loading → playing` over SSE · real level metering from
+mpv's ebur128 · Groq parsing (`via: llm`) · cookies passing · crossfade handoff ·
+Siri POST · queue dedupe and cohesion · the frozen .exe serving both pages.
+
+### Honest limits
+
+- **Casting** plays the same request on each peer; it isn't sample-synced audio.
+- **The visualiser** is amplitude-reactive (real loudness from mpv), not a full
+  FFT spectrum — that would need audio capture and numpy back in the build.
+- **Cookie refresh** can only run when a Chromium browser is closed; Firefox
+  works while open. That's a Windows file-lock limit, not a policy choice.
+- **Last.fm, alarms, casting and the local library** are implemented and wired
+  to endpoints, but I have not exercised them against real accounts/hardware.
