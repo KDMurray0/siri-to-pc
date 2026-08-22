@@ -118,6 +118,16 @@ class QueueManager:
                 self._work.append(WorkItem(t, mode="append"))
         self._wake.set()
 
+    def cancel(self) -> dict:
+        """Abandon whatever we're fetching and stop chasing it."""
+        with self._lock:
+            dropped = len(self._work)
+            self._work.clear()
+        killed = downloader.cancel_all()
+        self._set_activity("idle")
+        return {"ok": True, "cancelled": killed, "dropped": dropped,
+                "message": "Stopped" if (killed or dropped) else "Nothing to stop"}
+
     def release_hold(self) -> None:
         self._hold_radio = False
         self._wake.set()

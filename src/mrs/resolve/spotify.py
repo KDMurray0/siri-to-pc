@@ -85,11 +85,25 @@ def track_names(url: str, timeout: int = 180) -> list[Track]:
     return tracks
 
 
-def resolve_imported(tracks: list[Track], limit: int = 100) -> list[Track]:
-    """Turn imported names into playable YouTube Music tracks."""
+def resolve_imported(tracks: list[Track], limit: int = 100,
+                     on_progress=None) -> list[Track]:
+    """Turn imported names into playable YouTube Music tracks.
+
+    Paced deliberately: a 60-track playlist is 60 searches, and hammering them
+    back to back is how you get rate-limited.
+    """
+    import time as _time
+
     from . import catalog
     out: list[Track] = []
-    for t in tracks[:limit]:
+    for i, t in enumerate(tracks[:limit], 1):
+        if on_progress:
+            try:
+                on_progress(i, min(len(tracks), limit), t.title)
+            except Exception:
+                pass
+        if i > 1:
+            _time.sleep(0.35)
         query = f"{t.title} {t.artist}".strip()
         hits = catalog.search_songs(query, limit=3)
         if not hits:

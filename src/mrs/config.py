@@ -52,7 +52,8 @@ DEFAULTS: dict[str, Any] = {
     "unreadable_browsers": [],             # learned: cookies we can never decrypt
     "source": "youtube",
     "download_retries": 2,
-    "download_workers": 2,
+    "download_workers": 3,      # parallel fetches; YouTube tolerates a few
+    "download_timeout": 240,    # seconds before a single fetch is abandoned
     "min_duration": 60,       # reject sub-minute results (the "30 second version" bug)
 
     # queue
@@ -81,6 +82,8 @@ DEFAULTS: dict[str, Any] = {
     "lastfm_secret": "",
     "lastfm_session": "",
     "library_paths": [],
+    "playlist_download": False,   # keep playlist audio on disk
+    "artist_track_count": 60,
     "cast_peers": [],
     "alarms": [],
     "start_on_boot": False,

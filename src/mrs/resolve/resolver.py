@@ -79,7 +79,9 @@ def resolve(plan: Plan) -> Resolution:
 
     if kind == "artist":
         who = plan.artist or query
-        tracks = catalog.artist_tracks(who, limit=int(config.get("artist_track_count", 20)))
+        # Asking for a band plays the band: the whole catalogue, and only when
+        # it runs out does the radio take over (hold_radio).
+        tracks = catalog.artist_all_tracks(who)
         if not tracks:
             return Resolution([], f"I couldn't find {who}", error="no results")
         return Resolution(tracks, f"Playing {who}", hold_radio=True)

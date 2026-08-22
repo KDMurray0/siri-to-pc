@@ -15,6 +15,7 @@ from .core.context import ContextBuilder
 from .core.downloader import downloader
 from .core.extras import AlarmClock, caster, scrobbler
 from .core.library import library
+from .core.playlists import playlists
 from .core.mpv import MpvClient, PIPE_ALT, PIPE_MAIN, kill_stray_mpv
 from .core.queue import QueueManager
 from .core.taste import taste
@@ -37,12 +38,10 @@ class PlayerService:
         self._stop = threading.Event()
         self._restarting = threading.Lock()
         self._watch: dict = {}
-        self._playlists: dict[str, list[dict]] = {}
         self._sleep_timer: threading.Timer | None = None
         self._sleep_at: float | None = None
         self._ducking = False
         self._alarms: AlarmClock | None = None
-        self._load_playlists()
 
     # -- lifecycle -----------------------------------------------------
     def start(self) -> None:
@@ -197,13 +196,13 @@ class PlayerService:
     def _levels(self) -> None:
         """Publish real audio levels for the visualiser."""
         while not self._stop.is_set():
-            time.sleep(0.12)
+            time.sleep(0.07)
             try:
                 if self.mpv.get("pause", True):
                     continue
-                level = self.audio.read_level()
-                if level is not None:
-                    bus.publish(Ev.LEVEL, round(level, 3), sticky=False)
+                levels = self.audio.read_levels()
+                if levels:
+                    bus.publish(Ev.LEVEL, levels, sticky=False)
             except Exception:
                 pass
 
@@ -362,43 +361,25 @@ class PlayerService:
                 "message": "Kept offline" if path else "Couldn't pin that"}
 
     # -- playlists -----------------------------------------------------
-    def _load_playlists(self) -> None:
-        try:
-            self._playlists = json.loads(
-                state_file("playlists.json").read_text("utf-8-sig"))
-        except Exception:
-            self._playlists = {}
-
-    def _save_playlists(self) -> None:
-        try:
-            state_file("playlists.json").write_text(json.dumps(self._playlists),
-                                                    encoding="utf-8")
-        except Exception:
-            pass
-
-    def playlists(self) -> dict:
-        return {name: len(rows) for name, rows in self._playlists.items()}
+    def playlists(self) -> list[dict]:
+        return playlists.summary()
 
     def playlist_add_current(self, name: str) -> dict:
         track = self.queue.current_track()
         if not track:
             return {"ok": False, "message": "Nothing playing"}
-        rows = self._playlists.setdefault(name, [])
-        if not any(r.get("video_id") == track.video_id for r in rows):
-            rows.append(track.to_dict())
-            self._save_playlists()
-        return {"ok": True, "message": f"Added to {name}"}
+        return playlists.add(name, track)
+
+    def playlist_add_track(self, name: str, track: Track) -> dict:
+        return playlists.add(name, track)
 
     def playlist_delete(self, name: str) -> dict:
-        self._playlists.pop(name, None)
-        self._save_playlists()
-        return {"ok": True, "message": f"Deleted {name}"}
+        return playlists.delete(name)
 
     def playlist_play(self, name: str, shuffle: bool = False) -> dict:
-        rows = self._playlists.get(name) or []
-        if not rows:
+        tracks = playlists.tracks(name)
+        if not tracks:
             return {"ok": False, "message": f"{name} is empty"}
-        tracks = [Track.from_dict(r) for r in rows]
         self.queue.play_now(tracks, shuffle=shuffle, hold_radio=True)
         return {"ok": True, "message": f"Playing {name}"}
 

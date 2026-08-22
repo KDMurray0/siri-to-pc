@@ -159,19 +159,53 @@ class AudioEngine:
         self.mpv.command(command, wait=False)
 
     # -- level metering (real audio, not a CSS loop) --------------------
-    def read_level(self) -> float | None:
-        """Momentary loudness 0..1 from the ebur128 filter, if available."""
+    @staticmethod
+    def _lufs_to_unit(value, floor: float = -40.0, ceiling: float = -5.0) -> float:
+        try:
+            lufs = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(0.0, min(1.0, (lufs - floor) / (ceiling - floor)))
+
+    def read_levels(self) -> dict | None:
+        """Real numbers from the ebur128 filter.
+
+        Momentary and short-term loudness plus per-channel peaks — enough for a
+        meter that reacts to transients and shows left/right separately,
+        instead of one number driving every bar in lockstep.
+        """
         try:
             data = self.mpv.get("af-metadata/lvl", None)
-            if not data:
+            if not isinstance(data, dict) or not data:
                 return None
-            raw = None
-            if isinstance(data, dict):
-                raw = (data.get("lavfi.r128.M") or data.get("lavfi.r128.S"))
-            if raw is None:
-                return None
-            lufs = float(raw)
         except Exception:
             return None
-        # -40 LUFS (silence) .. -5 LUFS (loud) -> 0..1
-        return max(0.0, min(1.0, (lufs + 40.0) / 35.0))
+
+        momentary = data.get("lavfi.r128.M")
+        short = data.get("lavfi.r128.S")
+        if momentary is None and short is None:
+            return None
+        peak_l = data.get("lavfi.r128.sample_peak.L") or data.get("lavfi.r128.true_peak.L")
+        peak_r = data.get("lavfi.r128.sample_peak.R") or data.get("lavfi.r128.true_peak.R")
+
+        def peak_unit(v):
+            # peaks are dBFS-ish: -30 quiet .. 0 full scale
+            try:
+                return max(0.0, min(1.0, (float(v) + 30.0) / 30.0))
+            except (TypeError, ValueError):
+                return None
+
+        m = self._lufs_to_unit(momentary if momentary is not None else short)
+        s = self._lufs_to_unit(short if short is not None else momentary)
+        pl = peak_unit(peak_l)
+        pr = peak_unit(peak_r)
+        return {
+            "m": round(m, 3),
+            "s": round(s, 3),
+            "l": round(pl if pl is not None else m, 3),
+            "r": round(pr if pr is not None else m, 3),
+        }
+
+    def read_level(self) -> float | None:
+        levels = self.read_levels()
+        return levels["m"] if levels else None

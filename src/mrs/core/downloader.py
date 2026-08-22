@@ -44,6 +44,8 @@ class Downloader:
         self.exe = shutil.which("yt-dlp")
         self._lock = threading.Lock()
         self._inflight: dict[str, threading.Event] = {}
+        self._procs: set = set()          # running yt-dlp processes, for cancel
+        self._cancelled = False
 
     # -- options -------------------------------------------------------
     def auth_args(self, client: str | None = None) -> list[str]:
@@ -124,11 +126,14 @@ class Downloader:
         return removed
 
     # -- fetching ------------------------------------------------------
-    def _run(self, args: list[str], on_progress=None, timeout: int = 300) -> tuple[int, str]:
+    def _run(self, args: list[str], on_progress=None, timeout: int | None = None) -> tuple[int, str]:
+        timeout = timeout or int(config.get("download_timeout", 240))
         proc = subprocess.Popen(args, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True,
                                 encoding="utf-8", errors="replace",
                                 creationflags=CREATE_NO_WINDOW, bufsize=1)
+        with self._lock:
+            self._procs.add(proc)
         out_lines: list[str] = []
         deadline = time.time() + timeout
         try:
@@ -152,6 +157,19 @@ class Downloader:
                 pass
             return 1, "".join(out_lines) + f"\n{exc}"
         return proc.returncode, "".join(out_lines[-40:])
+
+    def cancel_all(self) -> int:
+        """Stop every running fetch (the X next to the progress bar)."""
+        with self._lock:
+            procs = list(self._procs)
+        for proc in procs:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        if procs:
+            log.info("cancelled %d download(s)", len(procs))
+        return len(procs)
 
     def fetch(self, track: Track, *, on_progress=None) -> str | None:
         """Download one track. Returns a path, or None if it can't be had."""

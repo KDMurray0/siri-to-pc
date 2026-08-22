@@ -24,6 +24,7 @@ from ..core import cookies as cookie_mod
 from ..core.downloader import downloader
 from ..core.extras import caster, scrobbler
 from ..core.library import library
+from ..core.playlists import playlists
 from ..core.taste import taste
 from ..events import Ev, bus
 from ..logging_setup import get, log_path
@@ -193,6 +194,12 @@ def api_queue(op: str, index: int = 0, to: int = 0,
     raise HTTPException(404, "unknown queue operation")
 
 
+@app.get("/api/cancel")
+def api_cancel(_: bool = Auth):
+    """The X beside the progress bar."""
+    return {"status": "ok", **player.queue.cancel()}
+
+
 @app.get("/api/radio")
 def api_radio(count: int = 8, _: bool = Auth):
     player.queue.release_hold()
@@ -203,12 +210,38 @@ def api_radio(count: int = 8, _: bool = Auth):
 
 @app.get("/api/search")
 def api_search(q: str, limit: int = 12, _: bool = Auth):
+    """Songs, artists, albums, your playlists and your own files.
+
+    Your playlists come first — they're the things you made, so they should
+    outrank anything YouTube suggests.
+    """
     q = (q or "").strip()
     if not q:
         return {"status": "error", "message": "q required"}
-    results = [t.to_dict() for t in catalog.search_candidates(q, limit=limit)]
-    local = [t.to_dict() for t in library.search(q, limit=4)]
-    return {"status": "ok", "results": results, "library": local}
+    if spotify.is_spotify_url(q):
+        return {"status": "ok", "spotify": True, "results": [], "playlists": [],
+                "artists": [], "albums": [], "library": [],
+                "message": "Spotify link — press Enter to import it"}
+    return {
+        "status": "ok",
+        "playlists": [{"kind": "playlist", **p}
+                      for p in playlists.summary()
+                      if q.lower() in p["name"].lower()],
+        "library": [t.to_dict() for t in library.search(q, limit=4)],
+        "artists": catalog.search_artists(q, limit=2),
+        "albums": catalog.search_albums(q, limit=2),
+        "results": [t.to_dict() for t in catalog.search_candidates(q, limit=limit)],
+    }
+
+
+@app.get("/api/play/artist")
+def api_play_artist(name: str, _: bool = Auth):
+    return handle_request(f"songs by {name}")
+
+
+@app.get("/api/play/album")
+def api_play_album(name: str, artist: str = "", _: bool = Auth):
+    return handle_request(f"play the {name} album" + (f" by {artist}" if artist else ""))
 
 
 @app.get("/api/lyrics")
@@ -235,17 +268,36 @@ def api_liked(_: bool = Auth):
 
 @app.get("/api/playlists")
 def api_playlists(_: bool = Auth):
-    return {"status": "ok", "playlists": player.playlists()}
+    return {"status": "ok", "playlists": playlists.summary(),
+            "folder": str(playlists.root()),
+            "download": bool(config.get("playlist_download"))}
 
 
 @app.get("/api/playlist/{op}")
-def api_playlist(op: str, name: str = "", shuffle: bool = False, _: bool = Auth):
+def api_playlist(op: str, name: str = "", shuffle: bool = False,
+                 video_id: str = "", title: str = "", artist: str = "",
+                 art: str = "", _: bool = Auth):
+    if op == "create":
+        playlists.create(name)
+        return {"status": "ok", "message": f"Created {name}"}
     if op == "add":
+        if video_id:
+            from ..models import Track as _T
+            return {"status": "ok", **playlists.add(
+                name, _T(video_id=video_id, title=title, artist=artist, art=art))}
         return {"status": "ok", **player.playlist_add_current(name)}
+    if op == "remove":
+        return {"status": "ok", **playlists.remove(name, video_id)}
     if op == "delete":
-        return {"status": "ok", **player.playlist_delete(name)}
+        return {"status": "ok", **playlists.delete(name)}
     if op == "play":
         return {"status": "ok", **player.playlist_play(name, shuffle)}
+    if op == "download":
+        playlists.download_async(name)
+        return {"status": "ok", "message": f"Saving {name} offline"}
+    if op == "tracks":
+        return {"status": "ok",
+                "tracks": [t.to_dict() for t in playlists.tracks(name)]}
     raise HTTPException(404, "unknown playlist operation")
 
 
@@ -279,6 +331,7 @@ _SETTABLE = {
     "artist_cohesion": float, "queue_target": int, "queue_min_ready": int,
     "artist_run_limit": int, "min_duration": int, "dedupe_hours": int,
     "cookie_close_browser_optin": bool, "cookie_auto_refresh": bool,
+    "playlist_download": bool, "queue_max": int, "artist_track_count": int,
     "cookie_check_interval": int, "completion_ratio": float,
     "announce": bool, "tts_voice": str, "download_workers": int,
 }
@@ -399,6 +452,24 @@ def api_cookies_find(close: int = 1, _: bool = Auth):
             "path": str(cookie_mod.cookie_path())}
 
 
+@app.get("/api/cookies/extension")
+def api_cookies_extension(_: bool = Auth):
+    """Chrome can't be decrypted, so use the export extension instead: this
+    tells the user what to install and watches Downloads for the result."""
+    return {"status": "ok", **cookie_mod.extension_flow()}
+
+
+@app.get("/api/cookies/import")
+def api_cookies_import(path: str = "", _: bool = Auth):
+    """Import a cookies.txt the user points at (or the newest in Downloads)."""
+    from pathlib import Path as _P
+    src = _P(path) if path else cookie_mod.scan_downloads(max_age=86400)
+    if not src or not _P(src).is_file():
+        return {"status": "error", "ok": False,
+                "message": "No cookies file found to import"}
+    return {"status": "ok", **cookie_mod.import_file(_P(src))}
+
+
 @app.get("/api/cookies/grab")
 def api_cookies_grab(browser: str, close: int = 0, _: bool = Auth):
     """Opt-in: wait for a browser to close (or close it) and take its cookies."""
@@ -415,6 +486,18 @@ def api_cookies_grab(browser: str, close: int = 0, _: bool = Auth):
 
 
 # ── library ───────────────────────────────────────────────────────────
+
+@app.get("/api/openfolder")
+def api_open_folder(_: bool = Auth):
+    """Open the data folder in Explorer."""
+    import subprocess
+    from ..paths import data_dir
+    try:
+        subprocess.Popen(["explorer", str(data_dir())])
+        return {"status": "ok", "message": f"Opened {data_dir()}"}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+
 
 @app.get("/api/library/scan")
 def api_library_scan(_: bool = Auth):

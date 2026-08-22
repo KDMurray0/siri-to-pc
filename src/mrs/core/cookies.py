@@ -365,6 +365,99 @@ def grab_after_close(name: str, timeout: int = 600) -> bool:
     return False
 
 
+# ── the extension route ───────────────────────────────────────────────
+# Chrome v127+ won't give up its cookies to yt-dlp at all, so the practical
+# path is the "Get cookies.txt LOCALLY" extension: the user clicks Export, and
+# we pick the file up out of Downloads and import it for them.
+
+EXTENSION_URL = ("https://chromewebstore.google.com/detail/get-cookiestxt-locally/"
+                 "cclelndahbckbenkjhflpdbgdldlbecc")
+_COOKIE_FILE_HINT = re.compile(r"cookies?.*\.txt$", re.I)
+
+
+def downloads_dir() -> Path:
+    return Path(os.path.expanduser("~")) / "Downloads"
+
+
+def scan_downloads(max_age: int = 900) -> Path | None:
+    """A recently-downloaded cookies.txt that actually mentions YouTube."""
+    folder = downloads_dir()
+    if not folder.is_dir():
+        return None
+    best, best_time = None, 0.0
+    now = time.time()
+    for f in folder.glob("*.txt"):
+        try:
+            if not _COOKIE_FILE_HINT.search(f.name):
+                continue
+            age = now - f.stat().st_mtime
+            if age > max_age:
+                continue
+            head = f.read_text(encoding="utf-8", errors="replace")[:4000]
+            if "youtube.com" not in head.lower():
+                continue
+            if f.stat().st_mtime > best_time:
+                best, best_time = f, f.stat().st_mtime
+        except Exception:
+            continue
+    return best
+
+
+def import_file(src: Path) -> dict:
+    """Take an exported cookies.txt, keep only YouTube, and test it."""
+    dest = cookie_path()
+    try:
+        shutil.copyfile(src, dest)
+    except Exception as exc:
+        return {"ok": False, "message": f"Couldn't copy that file: {exc}"}
+    kept = filter_to_youtube(dest)
+    config.update({"cookies_file": str(dest), "cookies_from_browser": ""})
+    ok, msg = check(str(dest))
+    state.update(ok=ok, source="file", checked_at=time.time(),
+                 message="ok" if ok else msg)
+    _publish()
+    if ok:
+        bus.publish(Ev.TOAST, "Cookies imported — YouTube access is working")
+        return {"ok": True, "kept": kept,
+                "message": f"Imported {kept} YouTube cookies from {src.name}. "
+                           "YouTube access is working."}
+    return {"ok": False, "kept": kept,
+            "message": f"Imported {src.name} but YouTube still refused: {msg}"}
+
+
+def watch_downloads(timeout: int = 300) -> dict:
+    """Wait for the user to export cookies, then import them automatically."""
+    log.info("watching %s for a cookies export", downloads_dir())
+    seen_before = {f: f.stat().st_mtime for f in downloads_dir().glob("*.txt")
+                   if f.is_file()} if downloads_dir().is_dir() else {}
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        found = scan_downloads(max_age=timeout)
+        if found and (found not in seen_before
+                      or found.stat().st_mtime > seen_before.get(found, 0)):
+            time.sleep(1.0)                    # let the download finish
+            return import_file(found)
+        time.sleep(2.0)
+    return {"ok": False, "message": "No cookies file appeared in Downloads."}
+
+
+def extension_flow() -> dict:
+    """What to tell the user, and start watching for their export."""
+    existing = scan_downloads()
+    if existing:
+        return import_file(existing)
+    threading.Thread(target=watch_downloads, daemon=True).start()
+    return {
+        "ok": False,
+        "watching": True,
+        "extension_url": EXTENSION_URL,
+        "downloads": str(downloads_dir()),
+        "message": ("Install “Get cookies.txt LOCALLY”, open youtube.com signed "
+                    "in, and click Export. I'm watching your Downloads folder "
+                    "and will import it automatically."),
+    }
+
+
 def start_watch() -> None:
     """Boot check, then re-check on a timer."""
     def loop() -> None:

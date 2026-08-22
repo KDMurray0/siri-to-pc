@@ -79,6 +79,9 @@ body.busy .activity{display:flex}
 .actbar{height:2px;border-radius:2px;background:var(--line);width:76px;overflow:hidden}
 .actbar i{display:block;height:100%;width:0;background:var(--accent);
   transition:width .25s ease}
+.actx{background:none;border:0;color:var(--sub);cursor:pointer;font-size:12px;
+  line-height:1;padding:2px 4px;border-radius:5px;font-family:inherit}
+.actx:hover{color:var(--bad);background:color-mix(in srgb,var(--bad) 15%,transparent)}
 @keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
 
 /* progress */
@@ -147,6 +150,13 @@ body.busy .activity{display:flex}
 .rres .rt{min-width:0}
 .rres .rn{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rres .ra{font-size:11px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rgroup{font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--sub);
+  padding:8px 11px 3px;font-weight:700;position:sticky;top:0;background:var(--panel)}
+.rres .qi.pl{background:color-mix(in srgb,var(--accent) 22%,var(--bg));
+  position:relative}
+.rres .qi.pl::after{content:"";position:absolute;inset:8px 7px;
+  border-top:2px solid var(--accent);border-bottom:2px solid var(--accent);
+  border-radius:1px}
 .rres .tag{margin-left:auto;font-size:9.5px;color:var(--accent);border:1px solid var(--accent);
   border-radius:5px;padding:1px 5px;flex:0 0 auto}
 
@@ -181,10 +191,10 @@ body.busy .activity{display:flex}
   cursor:pointer;padding:6px;font-family:inherit;text-align:left}
 .qhistory:hover{color:var(--accent)}
 
-/* the level meter — driven by real audio, not a fixed animation */
-.eq{flex:0 0 auto;display:flex;gap:2px;align-items:flex-end;height:15px}
-.eq i{width:3px;height:3px;background:var(--accent);border-radius:2px;
-  transition:height .12s ease-out}
+/* the level meter — fed by mpv's real loudness + per-channel peaks */
+.eq{flex:0 0 auto;display:flex;gap:1.5px;align-items:flex-end;height:16px}
+.eq i{width:2.5px;height:8%;border-radius:1.5px;background:var(--accent);
+  transform-origin:bottom;will-change:height}
 
 .seclbl{font-size:10px;color:var(--sub);text-transform:uppercase;letter-spacing:.08em;
   margin:10px 4px 6px;font-weight:700}
@@ -192,8 +202,12 @@ body.busy .activity{display:flex}
 .achip{font-size:11px;border:1px solid var(--line);border-radius:20px;padding:4px 10px;
   color:var(--sub);cursor:pointer}
 .achip:hover{border-color:var(--accent);color:var(--accent)}
-.rrow{display:flex;gap:9px;align-items:center;padding:7px 6px;border-radius:9px;cursor:pointer}
+.rrow{display:flex;gap:8px;align-items:center;padding:4px 6px;border-radius:7px;cursor:pointer}
 .rrow:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}
+.rrow .qi{width:24px;height:24px;border-radius:5px}
+.rrow .qn{font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rrow .qa{font-size:10px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.achip{font-size:10.5px;padding:3px 9px}
 .plrow{display:flex;align-items:center;gap:8px;padding:8px 6px;border-radius:9px}
 .plrow:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}
 .plrow .pn{font-size:13px;font-weight:600;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -223,9 +237,21 @@ body.expand .prog{margin-top:10px}
 .sheet-head{display:flex;align-items:center;justify-content:space-between;
   padding:18px 18px 10px}
 .sheet-head h2{font-size:17px;font-weight:800;letter-spacing:-.01em}
-.sheet-body{flex:1;overflow-y:auto;padding:6px 18px 24px}
-.srow{display:flex;align-items:center;justify-content:space-between;gap:10px;
-  padding:11px 0;border-bottom:1px solid var(--line)}
+.sheet-tabs{display:flex;gap:4px;padding:0 16px 8px;border-bottom:1px solid var(--line)}
+.stab{flex:1;background:none;border:0;color:var(--sub);font-family:inherit;
+  font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+  padding:7px 0;cursor:pointer;border-radius:8px}
+.stab:hover{color:var(--fg)}
+.stab.on{color:var(--accent-ink);background:var(--accent)}
+.sheet-body{flex:1;overflow-y:auto;padding:8px 18px 24px}
+.spane{display:none}
+.spane.open{display:block}
+.slabel em{display:block;font-style:normal;font-size:10.5px;color:var(--sub);
+  opacity:.75;margin-top:2px;line-height:1.35}
+.btn small{display:block;font-size:9.5px;opacity:.7;font-weight:400}
+.srow{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:11px 0;border-bottom:1px solid var(--line);min-height:46px}
+.srow > .slabel{flex:1;min-width:0}
 .srow:last-child{border-bottom:0}
 .slabel{font-size:12.5px;color:var(--sub)}
 .sval{font-size:12px}
@@ -240,12 +266,19 @@ select,.keyin{background:var(--panel);border:1px solid var(--line);color:var(--f
 .chip{background:var(--panel);border:1px solid var(--line);color:var(--sub);
   border-radius:8px;padding:5px 9px;font-size:11.5px;cursor:pointer}
 .chip.sel{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
-.toggle{width:40px;height:22px;border-radius:11px;background:var(--line);
-  position:relative;cursor:pointer;transition:background .18s;flex:0 0 auto}
+/* The knob is --accent-ink, not white: on a pale accent (mono, or a bright
+   album) a white knob on a white track was invisible. */
+.toggle{width:42px;height:24px;border-radius:12px;background:var(--line);
+  position:relative;cursor:pointer;flex:0 0 auto;
+  border:1px solid color-mix(in srgb,var(--fg) 14%,transparent);
+  transition:background .18s,border-color .18s}
 .toggle::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;
-  border-radius:50%;background:#fff;transition:transform .18s}
-.toggle.on{background:var(--accent)}
-.toggle.on::after{transform:translateX(18px)}
+  border-radius:50%;background:var(--sub);transition:transform .18s,background .18s;
+  box-shadow:0 1px 3px rgba(0,0,0,.45)}
+.toggle:hover{border-color:color-mix(in srgb,var(--accent) 50%,transparent)}
+.toggle.on{background:var(--accent);border-color:var(--accent)}
+.toggle.on::after{transform:translateX(18px);background:var(--accent-ink);
+  box-shadow:0 1px 3px rgba(0,0,0,.35)}
 .btn{background:var(--panel);border:1px solid var(--line);color:var(--fg);
   border-radius:9px;padding:7px 12px;font-size:12px;cursor:pointer;font-family:inherit}
 .btn:hover{border-color:var(--accent);color:var(--accent)}
@@ -255,6 +288,24 @@ select,.keyin{background:var(--panel);border:1px solid var(--line);color:var(--f
 .status-dot.warn{background:var(--warn)}
 .hint{font-size:11px;color:var(--sub);line-height:1.5;padding:2px 0 8px}
 .hint code{background:var(--panel);padding:1px 5px;border-radius:4px;font-size:10.5px}
+
+/* add-to-playlist picker */
+.picker{position:absolute;left:14px;right:14px;bottom:66px;z-index:25;
+  background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  box-shadow:0 18px 40px rgba(0,0,0,.55);display:none;overflow:hidden}
+.picker.show{display:block}
+.picker-head{font-size:11px;text-transform:uppercase;letter-spacing:.07em;
+  color:var(--sub);padding:10px 13px 6px;font-weight:700}
+.picker-list{max-height:190px;overflow-y:auto}
+.picker-row{display:flex;align-items:center;gap:8px;padding:9px 13px;cursor:pointer;
+  font-size:13px}
+.picker-row:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.picker-row .cnt{margin-left:auto;font-size:11px;color:var(--sub)}
+.picker-new{display:flex;gap:6px;padding:9px 11px;border-top:1px solid var(--line)}
+.picker-new input{flex:1;background:var(--bg);border:1px solid var(--line);
+  color:var(--fg);border-radius:9px;padding:7px 10px;font-size:12.5px;
+  font-family:inherit;outline:none}
+.picker-new input:focus{border-color:var(--accent)}
 
 /* toast */
 .toast{position:absolute;left:50%;bottom:18px;transform:translate(-50%,20px);z-index:30;
@@ -295,12 +346,12 @@ body.mini.mini-hover .minivol i{position:absolute;left:0;right:0;bottom:0;
   background:var(--accent);border-radius:3px;display:block}
 /* the level meter sits on the artwork in mini mode */
 .miniwave{display:none}
-body.mini .miniwave{display:flex;position:absolute;left:0;right:0;bottom:0;height:19px;
-  align-items:flex-end;justify-content:center;gap:2.5px;padding:0 6px 4px;
+body.mini .miniwave{display:flex;position:absolute;left:0;right:0;bottom:0;height:22px;
+  align-items:flex-end;justify-content:center;gap:1.5px;padding:0 5px 4px;
   border-radius:0 0 12px 12px;pointer-events:none;
-  background:linear-gradient(to top,rgba(0,0,0,.5),transparent)}
-body.mini .miniwave i{width:3px;height:12%;background:var(--accent);border-radius:2px;
-  transition:height .12s ease-out}
+  background:linear-gradient(to top,rgba(0,0,0,.55),transparent)}
+body.mini .miniwave i{width:2.5px;height:10%;background:var(--accent);border-radius:1.5px;
+  box-shadow:0 0 4px color-mix(in srgb,var(--accent) 55%,transparent)}
 </style>
 </head>
 <body>
@@ -326,6 +377,7 @@ body.mini .miniwave i{width:3px;height:12%;background:var(--accent);border-radiu
       <div class="activity" id="activity">
         <span class="dot"></span><span id="actlabel">Finding</span>
         <span class="actbar"><i id="actbar"></i></span>
+        <button class="actx" id="cancelbtn" title="Stop" aria-label="Stop">✕</button>
       </div>
     </div>
 
@@ -345,6 +397,7 @@ body.mini .miniwave i{width:3px;height:12%;background:var(--accent);border-radiu
     <div class="row2">
       <button class="ib small heart" id="like" title="Like"><svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54z"/></svg></button>
       <button class="ib small" id="download" title="Save to Music"><svg viewBox="0 0 24 24"><path d="M11 3h2v7h2.5l-3.5 4-3.5-4H11zM5 18h14v2H5z"/></svg></button>
+      <button class="ib small" id="addlist" title="Add to a playlist"><svg viewBox="0 0 24 24"><path d="M3 6h12v2H3zm0 5h12v2H3zm0 5h8v2H3zm15-9h2v4h4v2h-4v4h-2v-4h-4v-2h4z"/></svg></button>
       <div class="vol">
         <span class="ib small" id="volicon" style="cursor:default"></span>
         <div class="slider" id="volslider">
@@ -379,6 +432,15 @@ body.mini .miniwave i{width:3px;height:12%;background:var(--accent);border-radiu
     <div class="panel" id="panel-lists"></div>
   </div>
 
+  <div class="picker" id="picker">
+    <div class="picker-head">Add to playlist</div>
+    <div class="picker-list" id="pickerlist"></div>
+    <div class="picker-new">
+      <input id="newlist" placeholder="New playlist name" autocomplete="off">
+      <button class="btn" id="newlistgo">Create</button>
+    </div>
+  </div>
+
   <div class="toast" id="toast"></div>
 
   <div class="sheet" id="sheet">
@@ -386,44 +448,68 @@ body.mini .miniwave i{width:3px;height:12%;background:var(--accent);border-radiu
       <h2>Settings</h2>
       <button class="ib small" id="closeSettings" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M19 6.4L17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg></button>
     </div>
+    <div class="sheet-tabs" id="sheettabs">
+      <button class="stab on" data-s="sound">Sound</button>
+      <button class="stab" data-s="queue">Queue</button>
+      <button class="stab" data-s="access">Access</button>
+      <button class="stab" data-s="system">System</button>
+    </div>
     <div class="sheet-body">
-      <div class="srow"><span class="slabel">Theme</span><div class="swatches" id="swatches"></div></div>
-      <div class="srow"><span class="slabel">Equaliser</span><select id="eq"></select></div>
-      <div class="srow"><span class="slabel">Source</span>
-        <select id="source"><option value="youtube">YouTube</option><option value="soundcloud">SoundCloud</option><option value="bandcamp">Bandcamp</option></select></div>
-      <div class="srow"><span class="slabel">Normalise volume</span><div class="toggle" id="normalize"></div></div>
-      <div class="srow"><span class="slabel">Crossfade</span><div class="chips" id="crossfade"></div></div>
-      <div class="srow"><span class="slabel">Announce songs</span><div class="toggle" id="announce"></div></div>
-      <div class="srow"><span class="slabel">Sleep timer</span><div class="chips" id="sleep"></div></div>
 
-      <div class="seclbl">Queue</div>
-      <div class="srow"><span class="slabel">Stay on the artist</span><div class="chips" id="cohesion"></div></div>
-      <div class="srow"><span class="slabel" id="queuestats">—</span></div>
+      <section class="spane open" data-s="sound">
+        <div class="srow"><span class="slabel">Theme</span><div class="swatches" id="swatches"></div></div>
+        <div class="srow"><span class="slabel">Equaliser</span><select id="eq"></select></div>
+        <div class="srow"><span class="slabel">Even out volume<em>Keeps quiet and loud songs level</em></span>
+          <div class="toggle" id="normalize"></div></div>
+        <div class="srow"><span class="slabel">Crossfade<em>Overlap between tracks</em></span>
+          <div class="chips" id="crossfade"></div></div>
+        <div class="srow"><span class="slabel">Announce songs<em>Says the track name out loud</em></span>
+          <div class="toggle" id="announce"></div></div>
+        <div class="srow"><span class="slabel">Sleep timer</span><div class="chips" id="sleep"></div></div>
+      </section>
 
-      <div class="seclbl">YouTube access</div>
-      <div class="srow">
-        <span class="slabel"><span class="status-dot" id="ckdot"></span> Cookies</span>
-        <button class="btn" id="findck" title="Tests your cookies, and will close a browser if that would let it read them">Find cookies<small style="display:block;font-size:9.5px;opacity:.7;font-weight:400">may close your browser</small></button>
-      </div>
-      <div class="hint" id="ckhint"></div>
-      <div class="srow"><span class="slabel">Let me close your browser to read them</span>
-        <div class="toggle" id="ckclose"></div></div>
+      <section class="spane" data-s="queue">
+        <div class="srow"><span class="slabel">Stay on the artist<em>How hard the radio sticks to the band you asked for</em></span>
+          <div class="chips" id="cohesion"></div></div>
+        <div class="srow"><span class="slabel">Where songs come from</span>
+          <select id="source"><option value="youtube">YouTube</option><option value="soundcloud">SoundCloud</option><option value="bandcamp">Bandcamp</option></select></div>
+        <div class="srow"><span class="slabel">Keep playlists on disk<em>Downloads them into their folder</em></span>
+          <div class="toggle" id="pldl"></div></div>
+        <div class="srow"><span class="slabel">Queue right now</span><span class="sval" id="queuestats">—</span></div>
+        <div class="srow"><span class="slabel">Your music folders</span>
+          <span class="sval" id="libcount">none indexed</span></div>
+        <div class="srow"><span class="slabel">Index local files<em>Owned songs play instantly, no download</em></span>
+          <button class="btn" id="libscan">Scan now</button></div>
+      </section>
 
-      <div class="seclbl">Understanding requests</div>
-      <div class="srow"><span class="slabel"><span class="status-dot" id="groqdot"></span> Groq key</span>
-        <input class="keyin" id="groqkey" type="password" placeholder="gsk_…"></div>
-      <div class="hint" id="groqhint">Optional. Without it, requests use the built-in parser.</div>
+      <section class="spane" data-s="access">
+        <div class="srow"><span class="slabel"><span class="status-dot" id="ckdot"></span> YouTube cookies</span>
+          <button class="btn" id="findck">Find cookies<small>may close your browser</small></button></div>
+        <div class="hint" id="ckhint"></div>
+        <div class="srow"><span class="slabel">Use the browser extension<em>For Chrome, which can't be read directly</em></span>
+          <button class="btn" id="ckext">Set up</button></div>
+        <div class="srow"><span class="slabel">Re-check cookies hourly</span>
+          <div class="toggle" id="ckauto"></div></div>
+        <div class="srow"><span class="slabel">May close a browser to read them</span>
+          <div class="toggle" id="ckclose"></div></div>
 
-      <div class="seclbl">Library</div>
-      <div class="srow"><span class="slabel" id="libcount">No local files indexed</span>
-        <button class="btn" id="libscan">Scan</button></div>
-      <div class="hint">Add folders in config (<code>library_paths</code>) — owned files play instantly with no download.</div>
+        <div class="seclbl">Understanding requests</div>
+        <div class="srow"><span class="slabel"><span class="status-dot" id="groqdot"></span> Groq key<em>Optional — improves messy dictation</em></span>
+          <input class="keyin" id="groqkey" type="password" placeholder="gsk_…"></div>
+        <div class="hint" id="groqhint"></div>
+      </section>
 
-      <div class="seclbl">System</div>
-      <div class="srow"><span class="slabel">Start with Windows</span><div class="toggle" id="boot"></div></div>
-      <div class="srow"><span class="slabel">Only my devices (IP lock)</span><div class="toggle" id="lockips"></div></div>
-      <div class="srow"><span class="slabel">Restart the player</span><button class="btn" id="restart">Restart</button></div>
-      <div class="hint" id="diaghint"></div>
+      <section class="spane" data-s="system">
+        <div class="srow"><span class="slabel">Start with Windows</span><div class="toggle" id="boot"></div></div>
+        <div class="srow"><span class="slabel">Only my devices<em>Rejects other machines on the network</em></span>
+          <div class="toggle" id="lockips"></div></div>
+        <div class="srow"><span class="slabel">Restart the player<em>Reloads mpv without quitting</em></span>
+          <button class="btn" id="restart">Restart</button></div>
+        <div class="srow"><span class="slabel">Where your data lives</span>
+          <button class="btn" id="openfolder">Open folder</button></div>
+        <div class="hint" id="diaghint"></div>
+      </section>
+
     </div>
   </div>
 </div>
@@ -614,35 +700,101 @@ $("q").addEventListener("keydown", e => {
     api("/api/play?q=" + encodeURIComponent(v)).then(r => toast(r && r.message));
   } else if (e.key === "Escape") { hideResults(); $("q").blur(); }
 });
+const SPOTIFY_RE = /open\.spotify\.com\/(playlist|album|track|artist)\//i;
+
 async function showResults(v) {
   // A newer search wins; stale replies are dropped rather than racing.
   const seq = ++searchSeq;
+  if (SPOTIFY_RE.test(v)) {
+    $("results").innerHTML =
+      `<div class="rgroup">Spotify</div>` +
+      `<div class="rres" data-act="spotify"><div class="qi"></div>` +
+      `<div class="rt"><div class="rn">Import this Spotify link</div>` +
+      `<div class="ra">Matches each track up — press Enter or click</div></div></div>`;
+    $("results").classList.add("show");
+    return;
+  }
   $("spin").style.display = "block";
   const r = await api("/api/search?q=" + encodeURIComponent(v));
   if (seq !== searchSeq) return;
   $("spin").style.display = "none";
-  const rows = [].concat((r && r.library) || [], (r && r.results) || []);
-  if (!rows.length) { hideResults(); return; }
-  const box = $("results"); box.innerHTML = "";
-  rows.forEach(s => {
-    const el = document.createElement("div"); el.className = "rres";
-    const art = s.art ? `<img class="qi" src="${s.art}" onerror="this.removeAttribute('src')">` : `<div class="qi"></div>`;
-    const tag = s.source === "local" ? `<span class="tag">on disk</span>` : "";
-    el.innerHTML = `${art}<div class="rt"><div class="rn">${esc(s.title)}</div><div class="ra">${esc(s.artist||"")}</div></div>${tag}`;
-    el.onmousedown = ev => { ev.preventDefault(); playPick(s); };
-    box.appendChild(el);
-  });
-  box.classList.add("show");
+  if (!r) { hideResults(); return; }
+
+  const esc2 = s => esc(s || "");
+  const art = u => u ? `<img class="qi" src="${u}" onerror="this.removeAttribute('src')">`
+                     : `<div class="qi"></div>`;
+  let html = "";
+
+  // your own things first
+  if (r.playlists && r.playlists.length) {
+    html += `<div class="rgroup">Your playlists</div>`;
+    html += r.playlists.map(p =>
+      `<div class="rres" data-act="playlist" data-n="${esc2(p.name)}"><div class="qi pl"></div>` +
+      `<div class="rt"><div class="rn">${esc2(p.name)}</div>` +
+      `<div class="ra">${p.count} track${p.count === 1 ? "" : "s"}` +
+      `${p.downloaded ? " · " + p.downloaded + " offline" : ""}</div></div></div>`).join("");
+  }
+  if (r.library && r.library.length) {
+    html += `<div class="rgroup">On this PC</div>`;
+    html += r.library.map(t =>
+      `<div class="rres" data-act="song" data-v="${esc2(t.video_id)}" data-t="${esc2(t.title)}" ` +
+      `data-ar="${esc2(t.artist)}" data-img="${esc2(t.art)}">${art(t.art)}` +
+      `<div class="rt"><div class="rn">${esc2(t.title)}</div><div class="ra">${esc2(t.artist)}</div></div>` +
+      `<span class="tag">on disk</span></div>`).join("");
+  }
+  if (r.artists && r.artists.length) {
+    html += `<div class="rgroup">Artists</div>`;
+    html += r.artists.map(a =>
+      `<div class="rres" data-act="artist" data-n="${esc2(a.name)}">${art(a.art)}` +
+      `<div class="rt"><div class="rn">${esc2(a.name)}</div>` +
+      `<div class="ra">Play everything by them</div></div></div>`).join("");
+  }
+  if (r.albums && r.albums.length) {
+    html += `<div class="rgroup">Albums</div>`;
+    html += r.albums.map(a =>
+      `<div class="rres" data-act="album" data-n="${esc2(a.name)}" data-ar="${esc2(a.artist)}">` +
+      `${art(a.art)}<div class="rt"><div class="rn">${esc2(a.name)}</div>` +
+      `<div class="ra">${esc2(a.artist) || "Album"}</div></div></div>`).join("");
+  }
+  if (r.results && r.results.length) {
+    html += `<div class="rgroup">Songs</div>`;
+    html += r.results.map(t =>
+      `<div class="rres" data-act="song" data-v="${esc2(t.video_id)}" data-t="${esc2(t.title)}" ` +
+      `data-ar="${esc2(t.artist)}" data-img="${esc2(t.art)}">${art(t.art)}` +
+      `<div class="rt"><div class="rn">${esc2(t.title)}</div><div class="ra">${esc2(t.artist)}</div></div></div>`).join("");
+  }
+  if (!html) { hideResults(); return; }
+  $("results").innerHTML = html;
+  $("results").classList.add("show");
 }
 const hideResults = () => $("results").classList.remove("show");
-async function playPick(s) {
+
+$("results").addEventListener("mousedown", async e => {
+  const row = e.target.closest(".rres");
+  if (!row) return;
+  e.preventDefault();
+  const act = row.dataset.act;
+  const q = $("q").value.trim();
   hideResults(); $("q").value = ""; $("qactions").classList.remove("show"); $("q").blur();
-  await api("/api/play/video/" + encodeURIComponent(s.video_id) +
-    "?title=" + encodeURIComponent(s.title||"") +
-    "&artist=" + encodeURIComponent(s.artist||"") +
-    "&art=" + encodeURIComponent(s.art||""));
-  toast("Playing " + (s.title || "song"));
-}
+  let r;
+  if (act === "playlist") {
+    r = await api("/api/playlist/play?name=" + encodeURIComponent(row.dataset.n));
+  } else if (act === "artist") {
+    r = await api("/api/play/artist?name=" + encodeURIComponent(row.dataset.n));
+  } else if (act === "album") {
+    r = await api("/api/play/album?name=" + encodeURIComponent(row.dataset.n) +
+                  "&artist=" + encodeURIComponent(row.dataset.ar || ""));
+  } else if (act === "spotify") {
+    r = await api("/api/play?q=" + encodeURIComponent(q));
+  } else {
+    r = await api("/api/play/video/" + encodeURIComponent(row.dataset.v) +
+      "?title=" + encodeURIComponent(row.dataset.t || "") +
+      "&artist=" + encodeURIComponent(row.dataset.ar || "") +
+      "&art=" + encodeURIComponent(row.dataset.img || ""));
+  }
+  toast((r && r.message) || "Playing");
+});
+
 const withQuery = (mode) => {
   const v = $("q").value.trim(); if (!v) return;
   $("q").value = ""; $("qactions").classList.remove("show"); hideResults();
@@ -672,7 +824,7 @@ document.querySelectorAll(".navtab[data-panel]").forEach(tab => tab.onclick = ()
 let histOpen = false, lastQ = [];
 function qRow(t) {
   const art = t.art ? `<img class="qi" src="${t.art}" onerror="this.removeAttribute('src')">` : `<div class="qi"></div>`;
-  const eq = t.current ? `<div class="eq" id="qeq"><i></i><i></i><i></i><i></i></div>` : "";
+  const eq = t.current ? `<div class="eq"></div>` : "";
   return `<div class="q${t.current?" cur":""}" data-idx="${t.index}">${art}` +
     `<div class="qt"><div class="qn">${esc(t.title)}</div><div class="qa">${esc(t.artist||"")}</div></div>${eq}` +
     `<div class="qctl">` +
@@ -698,6 +850,7 @@ function renderQueue(rows) {
   }
   html += upcoming.map(qRow).join("");
   box.innerHTML = html;
+  buildMeters();
   const h = $("qHist");
   if (h) h.onclick = e => { e.stopPropagation(); histOpen = !histOpen; renderQueue(lastQ); };
 }
@@ -814,6 +967,12 @@ $("panel-lists").addEventListener("click", async e => {
 
 /* ── settings ──────────────────────────────────────────────────────── */
 $("openSettings").onclick = () => { $("sheet").classList.add("open"); loadSettings(); };
+document.querySelectorAll(".stab").forEach(tab => tab.onclick = () => {
+  document.querySelectorAll(".stab").forEach(t => t.classList.toggle("on", t === tab));
+  document.querySelectorAll(".spane").forEach(p =>
+    p.classList.toggle("open", p.dataset.s === tab.dataset.s));
+  $("sheet").querySelector(".sheet-body").scrollTop = 0;
+});
 $("closeSettings").onclick = () => $("sheet").classList.remove("open");
 
 function buildChips(id, options, onPick) {
@@ -860,8 +1019,71 @@ $("ckclose").onclick = () => {
 
 $("eq").onchange = () => api("/api/audio?eq=" + encodeURIComponent($("eq").value));
 $("source").onchange = () => api("/api/source?value=" + encodeURIComponent($("source").value));
+const picker = $("picker");
+async function openPicker() {
+  const r = await api("/api/playlists");
+  const rows = (r && r.playlists) || [];
+  $("pickerlist").innerHTML = rows.length
+    ? rows.map(p => `<div class="picker-row" data-n="${esc(p.name)}">${esc(p.name)}` +
+        `<span class="cnt">${p.count}</span></div>`).join("")
+    : '<div class="picker-row" style="color:var(--sub);cursor:default">No playlists yet</div>';
+  picker.classList.add("show");
+  $("newlist").value = "";
+}
+$("addlist").onclick = e => {
+  e.stopPropagation();
+  picker.classList.contains("show") ? picker.classList.remove("show") : openPicker();
+};
+$("pickerlist").addEventListener("click", async e => {
+  const row = e.target.closest(".picker-row[data-n]");
+  if (!row) return;
+  picker.classList.remove("show");
+  const r = await api("/api/playlist/add?name=" + encodeURIComponent(row.dataset.n));
+  toast((r && r.message) || "Added");
+});
+async function createList() {
+  const name = $("newlist").value.trim();
+  if (!name) { toast("Give it a name first"); return; }
+  picker.classList.remove("show");
+  const r = await api("/api/playlist/add?name=" + encodeURIComponent(name));
+  toast((r && r.message) || `Created ${name}`);
+}
+$("newlistgo").onclick = createList;
+$("newlist").addEventListener("keydown", e => { if (e.key === "Enter") createList(); });
+document.addEventListener("click", e => {
+  if (picker.classList.contains("show") && !picker.contains(e.target) &&
+      e.target.closest("#addlist") === null) picker.classList.remove("show");
+});
+
+$("cancelbtn").onclick = async (e) => {
+  e.stopPropagation();
+  const r = await api("/api/cancel");
+  toast((r && r.message) || "Stopped");
+};
 $("restart").onclick = async () => { toast("Restarting the player…"); await api("/api/restart"); };
 $("libscan").onclick = async () => { toast("Scanning your library…"); await api("/api/library/scan"); };
+$("openfolder").onclick = async () => {
+  const r = await api("/api/openfolder");
+  toast((r && r.message) || "Opened");
+};
+$("ckext").onclick = async () => {
+  const r = await api("/api/cookies/extension");
+  if (!r) return;
+  toast(r.message || "");
+  applyCookies(r);
+  if (r.extension_url) window.open(r.extension_url, "_blank");
+};
+$("pldl").onclick = () => {
+  const on = !$("pldl").classList.contains("on");
+  $("pldl").classList.toggle("on", on);
+  api("/api/setting?key=playlist_download&value=" + (on ? 1 : 0));
+  if (on) toast("Playlists will be saved to disk");
+};
+$("ckauto").onclick = () => {
+  const on = !$("ckauto").classList.contains("on");
+  $("ckauto").classList.toggle("on", on);
+  api("/api/setting?key=cookie_auto_refresh&value=" + (on ? 1 : 0));
+};
 const FINDCK_LABEL = $("findck").innerHTML;
 $("findck").onclick = async () => {
   $("findck").disabled = true;
@@ -921,6 +1143,8 @@ async function loadSettings() {
   $("boot").classList.toggle("on", !!s.start_on_boot);
   $("lockips").classList.toggle("on", !!s.lock_ips);
   $("ckclose").classList.toggle("on", !!s.cookie_close_browser_optin);
+  $("ckauto").classList.toggle("on", s.cookie_auto_refresh !== false);
+  $("pldl").classList.toggle("on", !!s.playlist_download);
   markChips("crossfade", s.crossfade || 0);
   markChips("cohesion", Math.round(s.artist_cohesion ?? 1));
   $("groqkey").placeholder = s.groq_set ? "•••••••• saved" : "gsk_…";
@@ -931,7 +1155,7 @@ async function loadSettings() {
     : (g.working ? "Connected — " + (s.groq_model || "") : "Not working: " + (g.last_error || ""));
   applyCookies(Object.assign({ path: (s.cookies && s.cookies.path) || "" }, s.cookies));
   $("libcount").textContent = s.library_count
-    ? s.library_count + " local files indexed" : "No local files indexed";
+    ? s.library_count + " indexed" : "none indexed";
   const qs = s.queue_stats || {};
   $("queuestats").textContent =
     `${qs.ready_ahead ?? 0} ready · target ${qs.target ?? 0} · ${qs.pool ?? 0} ideas`;
@@ -964,26 +1188,59 @@ $("pin").onclick = () => {
 };
 window.addEventListener("blur", () => { const b = bridge(); if (b && b.on_blur) b.on_blur(); });
 
-/* ── the level meter, fed by real audio ────────────────────────────── */
-const BARS = 5;
-(() => {
-  const mw = $("miniwave");
-  for (let i = 0; i < BARS; i++) mw.appendChild(document.createElement("i"));
-})();
-let level = 0, levelTarget = 0;
-function paintLevel() {
-  // ease toward the reported loudness so bars glide instead of snapping
-  level += (levelTarget - level) * 0.35;
-  const bars = document.querySelectorAll("#miniwave i, #qeq i");
-  const n = bars.length;
-  bars.forEach((b, i) => {
-    const spread = 0.55 + 0.45 * Math.sin((i / Math.max(1, n - 1)) * Math.PI);
-    const h = Math.max(0.12, Math.min(1, level * spread * 1.25));
-    b.style.height = (h * 100) + "%";
+/* ── the level meter ───────────────────────────────────────────────────
+   Fed by mpv's ebur128 output: momentary loudness, short-term loudness and
+   per-channel peaks. Bars are laid out left..right as L -> centre -> R, so a
+   stereo mix actually moves asymmetrically, and each band has its own attack
+   and decay so transients pop and the tail falls away like a real meter. */
+const BARS = 14;
+let lv = { m: 0, s: 0, l: 0, r: 0 };            // latest from the server
+const band = [];                                 // per-bar smoothed state
+
+function buildMeters() {
+  document.querySelectorAll(".eq, .miniwave").forEach(box => {
+    if (box.childElementCount === BARS) return;
+    box.innerHTML = "";
+    for (let i = 0; i < BARS; i++) box.appendChild(document.createElement("i"));
   });
-  requestAnimationFrame(paintLevel);
+  while (band.length < BARS) band.push({ v: 0, peak: 0, seed: Math.random() * 6.283 });
 }
-requestAnimationFrame(paintLevel);
+
+function paintMeter(now) {
+  const boxes = document.querySelectorAll(".eq, .miniwave");
+  if (boxes.length) {
+    const t = now / 1000;
+    for (let i = 0; i < BARS; i++) {
+      const b = band[i];
+      // position across the meter: 0 = far left channel, 1 = far right
+      const x = BARS === 1 ? 0.5 : i / (BARS - 1);
+      const side = x < 0.5 ? lv.l : lv.r;                 // which channel leads
+      const centre = 1 - Math.abs(x - 0.5) * 2;           // 1 in the middle
+      // low bands follow short-term loudness (body), highs follow peaks
+      const tone = centre * lv.s + (1 - centre) * side;
+      const shimmer = 0.82 + 0.18 * Math.sin(t * (2.1 + b.seed) + b.seed * 3);
+      const target = Math.max(0.04, Math.min(1, tone * shimmer * (0.55 + 0.75 * lv.m)));
+      // fast attack, slow release — the thing that makes a meter feel alive
+      b.v += (target - b.v) * (target > b.v ? 0.55 : 0.12);
+      b.peak = Math.max(b.peak - 0.012, b.v);
+    }
+    boxes.forEach(box => {
+      const bars = box.children;
+      for (let i = 0; i < bars.length && i < BARS; i++) {
+        bars[i].style.height = (Math.max(0.06, band[i].v) * 100) + "%";
+        bars[i].style.opacity = 0.55 + 0.45 * band[i].peak;
+      }
+    });
+  }
+  requestAnimationFrame(paintMeter);
+}
+buildMeters();
+requestAnimationFrame(paintMeter);
+
+function decayMeter() {
+  // nothing playing: sink to the floor rather than freeze mid-bounce
+  lv = { m: lv.m * 0.85, s: lv.s * 0.85, l: lv.l * 0.85, r: lv.r * 0.85 };
+}
 
 /* ── live updates over SSE (no more polling) ───────────────────────── */
 function applyStatus(d) {
@@ -1004,7 +1261,7 @@ function applyStatus(d) {
   $("dur").textContent = fmt(state.duration);
   $("play").innerHTML = state.playing ? ICON.pause : ICON.play;
   document.body.classList.toggle("paused", !state.playing);
-  if (!state.playing) levelTarget = 0;
+  if (!state.playing) decayMeter();
   if (!volDrag && !vvolDrag && d.volume != null) setVol(Math.round(d.volume));
   $("repeat").classList.toggle("on", d.repeat && d.repeat !== "off");
   $("like").classList.toggle("liked", !!t.liked);
@@ -1035,7 +1292,7 @@ function connect() {
       case "queue": renderQueue(msg.data); break;
       case "activity": applyActivity(msg.data || {}); break;
       case "toast": toast(msg.data); break;
-      case "level": levelTarget = msg.data || 0; break;
+      case "level": if (msg.data) lv = msg.data; break;
       case "cookies": applyCookies(msg.data); break;
       case "settings": break;
     }

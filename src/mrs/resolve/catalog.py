@@ -179,6 +179,114 @@ def artist_tracks(artist: str, limit: int = 20) -> list[Track]:
     return _store(key, out[:limit])
 
 
+def search_artists(query: str, limit: int = 3) -> list[dict]:
+    """Artist hits for the search dropdown."""
+    try:
+        rows = client().search(query, filter="artists", limit=limit)
+    except Exception:
+        return []
+    out = []
+    for r in rows[:limit]:
+        name = r.get("artist") or r.get("title")
+        if name:
+            out.append({"kind": "artist", "name": name, "art": _thumb(r),
+                        "subtitle": r.get("subscribers") or "Artist"})
+    return out
+
+
+def search_albums(query: str, limit: int = 3) -> list[dict]:
+    """Album hits for the search dropdown."""
+    try:
+        rows = client().search(query, filter="albums", limit=limit)
+    except Exception:
+        return []
+    out = []
+    for r in rows[:limit]:
+        title = r.get("title")
+        if not title:
+            continue
+        artists = ", ".join(a.get("name", "") for a in (r.get("artists") or [])
+                            if a.get("name"))
+        out.append({"kind": "album", "name": title, "artist": artists,
+                    "art": _thumb(r),
+                    "subtitle": f"Album{' · ' + artists if artists else ''}"})
+    return out
+
+
+def artist_all_tracks(artist: str, cap: int = 200) -> list[Track]:
+    """Everything we can find by one artist — singles plus every album track.
+
+    Asking for a band should play the band, not five songs and then drift, so
+    this walks their albums instead of taking the handful `get_artist` returns.
+    """
+    key = f"artist_all:{artist}"
+    hit = _cached(key)
+    if hit is not None:
+        return hit
+
+    out: list[Track] = []
+    seen: set[str] = set()
+    seen_names: set[str] = set()
+
+    def add(tracks: list[Track]) -> None:
+        for t in tracks:
+            if not t.video_id or t.video_id in seen or not _acceptable(t):
+                continue
+            # A discography walk hits the same song on the album, the deluxe
+            # edition and the greatest hits — keep one.
+            name = t.key()
+            if name and name in seen_names:
+                continue
+            seen.add(t.video_id)
+            if name:
+                seen_names.add(name)
+            out.append(t)
+
+    browse_id = None
+    try:
+        found = client().search(artist, filter="artists", limit=1)
+        if found:
+            browse_id = found[0].get("browseId")
+    except Exception as exc:
+        log.debug("artist search failed for %r: %s", artist, exc)
+
+    if browse_id:
+        try:
+            info = client().get_artist(browse_id)
+            add([to_track(r, "request")
+                 for r in (info.get("songs") or {}).get("results") or []])
+            # Walk the discography for the rest.
+            albums = (info.get("albums") or {}).get("results") or []
+            singles = (info.get("singles") or {}).get("results") or []
+            for entry in (albums + singles)[:25]:
+                if len(out) >= cap:
+                    break
+                bid = entry.get("browseId")
+                if not bid:
+                    continue
+                try:
+                    al = client().get_album(bid)
+                    art = _thumb(al)
+                    rows = []
+                    for r in al.get("tracks") or []:
+                        t = to_track(r, "request")
+                        t.artist = t.artist or artist
+                        t.album = al.get("title", "")
+                        t.art = t.art or art
+                        rows.append(t)
+                    add(rows)
+                except Exception:
+                    continue
+        except Exception as exc:
+            log.debug("artist walk failed for %r: %s", artist, exc)
+
+    if len(out) < 20:
+        add(search_songs(artist, limit=25))
+
+    log.info("artist catalogue for %r: %d tracks", artist, len(out))
+    return _store(key, out[:cap])
+
+
 def album_tracks(album: str, artist: str = "", limit: int = 0) -> list[Track]:
     query = f"{album} {artist}".strip()
     try:

@@ -15,7 +15,7 @@ from .core.downloader import downloader
 from .core.library import library
 from .events import bus
 from .logging_setup import get, setup
-from .paths import data_dir, migrate_legacy_data
+from .paths import data_dir, ensure_structure, migrate_legacy_data
 from .player import player
 from .resolve import catalog, llm
 
@@ -80,6 +80,10 @@ def preflight() -> list[str]:
 
 def startup() -> None:
     setup(config.get("api_key", ""))
+    made = ensure_structure()
+    if made["created"]:
+        log.info("first run — created %d paths under %s",
+                 len(made["created"]), made["root"])
     moved = migrate_legacy_data()
     for m in moved:
         log.info("migrated %s", m)

@@ -6,11 +6,13 @@ they can't drift apart.
 
 from __future__ import annotations
 
+import re
 import threading
 
 from .config import config
 from .core.extras import caster
 from .core.library import library
+from .core.playlists import playlists
 from .core.taste import taste
 from .events import Ev, bus
 from .logging_setup import get
@@ -41,6 +43,15 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
         # A Spotify link is a playlist import, not a search.
         if spotify.is_spotify_url(text):
             return _import_spotify(text, announce=announce)
+
+        # Your own playlists win over anything YouTube might suggest.
+        hit = _match_playlist(text)
+        if hit:
+            res = player.playlist_play(hit, shuffle="shuffle" in text.lower())
+            if announce and res.get("ok"):
+                player.announce(res["message"])
+            return {"status": "played" if res.get("ok") else "error",
+                    "message": res.get("message", ""), "via": "playlist"}
 
         plan = parser.parse(text, mode=mode)
         if source:
@@ -88,6 +99,29 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
     except Exception as exc:
         log.exception("request failed: %s", exc)
         return {"status": "error", "message": f"Something went wrong: {exc}"}
+
+
+_PLAYLIST_PHRASE = re.compile(
+    r"^\s*(?:play\s+)?(?:my\s+)?(.+?)\s*(?:playlist|list)\s*$", re.I)
+
+
+def _match_playlist(text: str) -> str | None:
+    """"play my gym playlist" / "gym playlist" / an exact playlist name."""
+    names = playlists.names()
+    if not names:
+        return None
+    stripped = re.sub(r"^\s*play\s+", "", text, flags=re.I).strip()
+    m = _PLAYLIST_PHRASE.match(text)
+    for candidate in filter(None, [m.group(1).strip() if m else None, stripped]):
+        for name in names:
+            if name.lower() == candidate.lower():
+                return name
+    # only fall back to a loose match when they actually said "playlist"
+    if m:
+        found = playlists.find(m.group(1).strip())
+        if found:
+            return found[0]
+    return None
 
 
 def _run_command(plan) -> dict:

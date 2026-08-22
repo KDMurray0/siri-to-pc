@@ -61,6 +61,37 @@ def pinned_dir() -> Path:
     return p
 
 
+def ensure_structure() -> dict:
+    """Create every folder the app expects, on first run of a fresh install.
+
+    The release zip is just an .exe — nothing else exists until we make it.
+    """
+    made = []
+    for path in (data_dir(), data_dir() / "playlists", pinned_dir(), cache_dir(),
+                 data_dir() / "logs"):
+        if not path.exists():
+            path.mkdir(parents=True, exist_ok=True)
+            made.append(str(path))
+    readme = data_dir() / "README.txt"
+    if not readme.exists():
+        readme.write_text("\n".join([
+            "Music Request Server — your data lives here.",
+            "",
+            "  config.json          settings (edit while the app is closed)",
+            "  youtube_cookies.txt  your YouTube session, if you exported one",
+            "  playlists/           one folder per playlist",
+            "  pinned/              tracks kept offline",
+            "  play_stats.json      what you play and skip",
+            "  liked_songs.json     your likes",
+            "  server.log           rotating log",
+            "",
+            "Deleting this folder resets the app; it is recreated on next run.",
+            "",
+        ]), encoding="utf-8")
+        made.append(str(readme))
+    return {"created": made, "root": str(data_dir())}
+
+
 # Files that used to live in src/ or next to the .exe.
 _LEGACY_NAMES = [
     "config.json", "player_state.json", "liked_songs.json", "play_stats.json",
