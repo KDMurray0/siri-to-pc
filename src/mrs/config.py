@@ -18,7 +18,9 @@ _lock = threading.RLock()
 DEFAULTS: dict[str, Any] = {
     # server
     "host": "0.0.0.0",
-    "port": 5000,
+    # Not 5000 — that's crowded (Flask/AirPlay/etc. all grab it). pick_port()
+    # still steps aside if something takes this one.
+    "port": 7420,
     "api_key": "",
     "lock_ips": False,
     "allowed_ips": [],
@@ -47,6 +49,7 @@ DEFAULTS: dict[str, Any] = {
     "cookie_check_interval": 3600,
     "cookie_close_browser_optin": False,   # ask before closing a browser
     "cookie_browsers": "",                 # "" = auto-detect
+    "unreadable_browsers": [],             # learned: cookies we can never decrypt
     "source": "youtube",
     "download_retries": 2,
     "download_workers": 2,

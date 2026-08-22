@@ -392,9 +392,10 @@ def api_cookies(_: bool = Auth):
 
 
 @app.get("/api/cookies/find")
-def api_cookies_find(_: bool = Auth):
-    """The 'Find cookies' button."""
-    return {"status": "ok", **cookie_mod.find_now(),
+def api_cookies_find(close: int = 1, _: bool = Auth):
+    """The 'Find cookies' button — closes a blocking browser by default, which
+    is what the button label warns it will do."""
+    return {"status": "ok", **cookie_mod.find_now(close_browsers=bool(close)),
             "path": str(cookie_mod.cookie_path())}
 
 

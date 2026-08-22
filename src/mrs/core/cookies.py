@@ -3,14 +3,16 @@
 Tested facts, not guesses:
   * with no cookies, yt-dlp fails with "The page needs to be reloaded";
   * with a valid cookies.txt, a real download succeeds;
-  * a *running* Chromium browser holds an exclusive lock on its cookie
-    database, so extraction fails with "Could not copy ... cookie database".
-    Firefox has no such lock.
+  * a *running* Chromium browser locks its cookie database, so extraction says
+    "Could not copy ... cookie database";
+  * **Chrome v127+ cannot be decrypted even when closed** — "Failed to decrypt
+    with DPAPI" (yt-dlp #10927). Closing it costs the user their session and
+    still fails, so once we've seen that we record the browser as unreadable
+    and never offer to close it again.
+  * Firefox has neither problem: readable while open.
 
-So refreshing is opportunistic: we retry on a timer and take our chance the
-moment a browser is closed. With `cookie_close_browser_optin` the user can let
-us watch for the browser exiting (and, if they ask, close it for them) instead
-of waiting for luck.
+Refreshing is therefore opportunistic, and an exported cookies.txt remains the
+reliable route on a Chrome-only machine.
 
 Only YouTube/Google cookies are kept — an export contains every site you've
 visited, and none of that belongs in this app's data folder.
@@ -59,6 +61,23 @@ state = {
 }
 
 _lock = threading.Lock()
+
+
+def unreadable() -> list[str]:
+    """Browsers we've already proven we can't decrypt (Chrome v127+ and friends).
+
+    Closing one of these would cost the user their session and still fail, so
+    once we've learned it we never close that browser again.
+    """
+    return list(config.get("unreadable_browsers") or [])
+
+
+def _mark_unreadable(name: str) -> None:
+    known = unreadable()
+    if name not in known:
+        known.append(name)
+        config.set("unreadable_browsers", known)
+        log.info("%s can't be decrypted — won't ask to close it again", name)
 
 
 def cookie_path() -> Path:
@@ -179,7 +198,8 @@ def extract_from(browser: str, dest: Path) -> bool:
     if "Could not copy" in out or "another process" in out:
         log.info("%s is open, so its cookie database is locked", browser)
     elif "DPAPI" in out or "decrypt" in out:
-        log.info("%s encrypts its cookies (Chrome v127+) — can't be read", browser)
+        log.info("%s encrypts its cookies (v127+) — can't be read at all", browser)
+        _mark_unreadable(browser)
     try:
         if tmp.exists():
             tmp.unlink()
@@ -242,17 +262,73 @@ def ensure(*, allow_refresh: bool = True) -> bool:
             _publish()
 
 
-def find_now() -> dict:
-    """The 'Find cookies' button: check, refresh, report plainly."""
-    ok = ensure(allow_refresh=True)
-    running = [n for n, img, locks in BROWSERS
-               if locks and n in installed_browsers() and browser_running(img)]
+def find_now(close_browsers: bool = True) -> dict:
+    """The 'Find cookies' button.
+
+    A running Chromium browser locks its cookie database, so with
+    close_browsers the button closes it (the button says so), takes the
+    cookies, and reports what happened. The browser is asked to close
+    politely — no /F — so it can save your tabs and restore them next launch.
+    """
+    if check()[0]:
+        state.update(ok=True, message="ok", checked_at=time.time())
+        _publish()
+        return {"ok": True, "message": "Cookies already working.", "closed": []}
+
+    closed: list[str] = []
+    got = refresh()                       # try anything readable first
+
+    if not got and close_browsers:
+        blocked = unreadable()
+        for name, image, locks in BROWSERS:
+            if not locks or name not in installed_browsers():
+                continue
+            if not browser_running(image):
+                continue
+            if name in blocked:
+                log.info("not closing %s — its cookies can't be decrypted anyway",
+                         name)
+                continue
+            log.info("closing %s to read its cookies (user pressed Find cookies)", name)
+            if close_browser(name):
+                closed.append(name)
+                time.sleep(1.5)           # let it release the file
+                if extract_from(name, cookie_path()):
+                    got = name
+                    break
+
+    if got:
+        config.update({"cookies_file": str(cookie_path()), "cookies_from_browser": ""})
+        ok, msg = check()
+        state.update(ok=ok, source=f"browser:{got}", checked_at=time.time(),
+                     message="ok" if ok else msg)
+        _publish()
+        if ok:
+            note = f"Got your cookies from {got}"
+            if closed:
+                note += f" (closed {', '.join(closed)})"
+            return {"ok": True, "message": note + ". YouTube access is working.",
+                    "closed": closed, "browser": got}
+        return {"ok": False, "closed": closed,
+                "message": f"Read {got}'s cookies but YouTube still refused: {msg}"}
+
+    still_running = [n for n, img, locks in BROWSERS
+                     if locks and n in installed_browsers() and browser_running(img)]
+    state.update(ok=False, checked_at=time.time())
+    _publish()
+    dead = [b for b in unreadable() if b in installed_browsers()]
+    if dead:
+        why = (", ".join(dead) + " encrypt their cookies (Chrome v127+), so they "
+               "can't be read even when closed. Install Firefox and sign into "
+               "YouTube there, or export a cookies file.")
+    else:
+        why = "Couldn't read cookies from any browser."
     return {
-        "ok": ok,
-        "message": state.get("message", ""),
-        "blocked_by": running,
-        "hint": ("Close " + ", ".join(running) + " and try again."
-                 if running and not ok else ""),
+        "ok": False,
+        "closed": closed,
+        "blocked_by": still_running,
+        "unreadable": dead,
+        "message": f"{why} Save an export as {cookie_path()}",
     }
 
 

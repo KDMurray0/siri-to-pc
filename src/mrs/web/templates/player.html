@@ -403,7 +403,7 @@ body.mini .miniwave i{width:3px;height:12%;background:var(--accent);border-radiu
       <div class="seclbl">YouTube access</div>
       <div class="srow">
         <span class="slabel"><span class="status-dot" id="ckdot"></span> Cookies</span>
-        <button class="btn" id="findck">Find cookies</button>
+        <button class="btn" id="findck" title="Tests your cookies, and will close a browser if that would let it read them">Find cookies<small style="display:block;font-size:9.5px;opacity:.7;font-weight:400">may close your browser</small></button>
       </div>
       <div class="hint" id="ckhint"></div>
       <div class="srow"><span class="slabel">Let me close your browser to read them</span>
@@ -862,11 +862,16 @@ $("eq").onchange = () => api("/api/audio?eq=" + encodeURIComponent($("eq").value
 $("source").onchange = () => api("/api/source?value=" + encodeURIComponent($("source").value));
 $("restart").onclick = async () => { toast("Restarting the player…"); await api("/api/restart"); };
 $("libscan").onclick = async () => { toast("Scanning your library…"); await api("/api/library/scan"); };
+const FINDCK_LABEL = $("findck").innerHTML;
 $("findck").onclick = async () => {
-  $("findck").textContent = "Looking…";
-  const r = await api("/api/cookies/find");
-  $("findck").textContent = "Find cookies";
-  if (r) { toast(r.ok ? "Cookies working" : (r.hint || "Couldn't find usable cookies")); applyCookies(r); }
+  $("findck").disabled = true;
+  $("findck").textContent = "Working…";
+  const r = await api("/api/cookies/find?close=1");
+  $("findck").disabled = false;
+  $("findck").innerHTML = FINDCK_LABEL;
+  if (!r) { toast("Couldn't reach the server"); return; }
+  toast(r.message || (r.ok ? "Cookies working" : "Couldn't find usable cookies"));
+  applyCookies(r);
 };
 let groqT;
 $("groqkey").addEventListener("input", () => {
@@ -890,11 +895,18 @@ function applyCookies(c) {
   if (!c) return;
   setDot("ckdot", c.ok === true ? "ok" : (c.ok === false ? "bad" : "warn"));
   const path = c.path ? `<code>${esc(c.path)}</code>` : "";
-  if (c.ok) $("ckhint").innerHTML = "YouTube access is working.";
-  else $("ckhint").innerHTML =
-    (c.hint ? esc(c.hint) + "<br>" : "") +
-    "Export cookies with the “Get cookies.txt LOCALLY” extension from a private " +
-    "window on youtube.com, and save it as " + (path || "<code>youtube_cookies.txt</code>") + ".";
+  if (c.ok) {
+    $("ckhint").innerHTML = esc(c.message && c.message !== "ok"
+      ? c.message : "YouTube access is working.");
+  } else {
+    $("ckhint").innerHTML =
+      (c.message ? esc(c.message) + "<br>" : "") +
+      (c.blocked_by && c.blocked_by.length
+        ? "Still open: " + esc(c.blocked_by.join(", ")) + ".<br>" : "") +
+      "Or export cookies with the “Get cookies.txt LOCALLY” extension from a " +
+      "private window on youtube.com and save as " +
+      (path || "<code>youtube_cookies.txt</code>") + ".";
+  }
 }
 
 async function loadSettings() {
