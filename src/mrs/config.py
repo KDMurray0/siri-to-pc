@@ -63,6 +63,7 @@ DEFAULTS: dict[str, Any] = {
     "artist_run_limit": 3,    # max consecutive tracks by one artist
     "artist_cohesion": 1.0,   # 0 = pure discovery, 2 = stay on the band
     "anchor_pull": 0.35,      # how much the song you asked for still counts
+    "taste_from_requests": True,   # radio plays don't count as liking it
     "use_tags": True,         # Last.fm genre tags steer the radio
     "history_size": 200,
     "dedupe_hours": 12,

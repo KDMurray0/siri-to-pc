@@ -74,10 +74,18 @@ class TasteEngine:
         completed = ratio >= float(config.get("completion_ratio", 0.30))
         vid = track.video_id
         artist = track.primary_artist()
+        # Only what you asked for shapes what you like. Left alone for six
+        # hours the radio drifts, and if autoplay counted as taste that drift
+        # would bake itself in — an artist you never chose ends up a favourite
+        # and gets pushed at you tomorrow. Skips still count either way: those
+        # are you telling it no, and it should hear that wherever it came from.
+        asked_for = track.origin in ("request", "playlist", "library")
+        learns = asked_for or not config.get("taste_from_requests", True)
+        counts = learns or not completed        # a skip is a no wherever it came from
         with self._lock:
-            if vid:
+            if vid and counts:
                 self._song[vid][0 if completed else 1] += 1
-            if artist:
+            if artist and counts:
                 self._artist[artist][0 if completed else 1] += 1
             if completed and vid:
                 if vid in self._history:
