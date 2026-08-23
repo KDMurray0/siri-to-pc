@@ -51,6 +51,7 @@ class PlayerService:
         self._watch: dict = {}
         self._sleep_timer: threading.Timer | None = None
         self._sleep_at: float | None = None
+        self._start_at: float | None = None      # a "play in ten minutes" job
         self._ducking = False
         self._alarms: AlarmClock | None = None
 
@@ -278,6 +279,7 @@ class PlayerService:
             "playlist_pos": props.get("playlist-pos"),
             "playlist_count": props.get("playlist-count") or 0,
             "activity": self.queue.activity.to_dict(),
+            "timer": self.timer_state(),
             # A station shows the song it's playing with its own name
             # underneath. When it doesn't say — speech radio never does — the
             # station name is the answer.
@@ -444,6 +446,16 @@ class PlayerService:
         if not self._sleep_at:
             return 0
         return max(0, int(self._sleep_at - time.time()))
+
+    def timer_state(self) -> dict:
+        """Whatever clock is running, for the countdown in the corner."""
+        waiting = max(0, int(self._start_at - time.time())) if self._start_at else 0
+        if waiting:
+            return {"kind": "start", "seconds": waiting}
+        left = self.sleep_remaining()
+        if left:
+            return {"kind": "stop", "seconds": left}
+        return {"kind": "", "seconds": 0}
 
     # -- export / pin --------------------------------------------------
     def export_current(self) -> dict:

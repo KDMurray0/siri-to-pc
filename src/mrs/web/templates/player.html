@@ -50,6 +50,15 @@ html,body{height:100%;overflow:hidden;background:var(--bg);
 .winbtn.on{opacity:1;color:var(--accent);background:color-mix(in srgb,var(--accent) 16%,transparent)}
 .winbtn svg{width:15px;height:15px;fill:currentColor;display:block}
 #pin{right:11px} #shrink{right:44px}
+/* Sits opposite the window buttons and matches them, so it reads as chrome
+   rather than as part of the song. Never in mini — there's no room. */
+.timeleft{position:absolute;top:9px;left:12px;z-index:5;height:28px;
+  display:none;align-items:center;gap:5px;font-size:11px;font-weight:600;
+  font-variant-numeric:tabular-nums;color:var(--sub);opacity:.55;
+  letter-spacing:.02em;pointer-events:none}
+body.timing .timeleft{display:flex}
+body.mini .timeleft{display:none}
+.timeleft svg{width:12px;height:12px;fill:currentColor;display:block}
 
 .stage{position:relative;z-index:2;padding:22px 22px 12px;flex:1;display:flex;
   flex-direction:column;min-height:0}
@@ -452,6 +461,10 @@ body.mini .miniwave i{width:2px;height:10%;background:var(--accent);border-radiu
 <body>
 <div class="frame" id="frame">
   <div class="topdrag"></div>
+  <div class="timeleft" id="timeleft">
+    <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 10.6V6h-2v7.4l5.3 3.2 1-1.7z"/></svg>
+    <span id="timeleftv"></span>
+  </div>
   <button class="winbtn" id="shrink" title="Shrink to mini" aria-label="Shrink">
     <svg viewBox="0 0 24 24"><path d="M5 15h4v4H7v-2H5v-2zm10 0h2v2h2v2h-4v-4zM5 5h4v2H7v2H5V5zm12 0v4h-2V7h-2V5h4z"/></svg>
   </button>
@@ -1740,6 +1753,23 @@ buildMeters();
 requestAnimationFrame(paintMeter);
 
 /* ── live updates over SSE (no more polling) ───────────────────────── */
+
+/* "for twenty minutes" and "in ten minutes" both leave a clock running; show
+   whichever one it is, counting down. */
+function showTimer(t) {
+  const on = !!(t && t.seconds > 0);
+  document.body.classList.toggle("timing", on);
+  if (!on) return;
+  const s = t.seconds;
+  const clock = s >= 3600
+    ? Math.floor(s / 3600) + ":" + String(Math.floor(s / 60) % 60).padStart(2, "0") +
+      ":" + String(s % 60).padStart(2, "0")
+    : Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  $("timeleftv").textContent = clock;
+  $("timeleft").title = t.kind === "start"
+    ? "Starts in " + clock : "Stops in " + clock;
+}
+
 function applyStatus(d) {
   if (!d) return;
   const t = d.track || {};
@@ -1769,6 +1799,7 @@ function applyStatus(d) {
   // status that says we're on air, and the queue only re-sends when it
   // actually changes, so the stale list would sit there forever.
   const wasLive = document.body.classList.contains("live");
+  showTimer(d.timer);
   document.body.classList.toggle("live", !!t.live);
   document.body.classList.toggle("onsong", !!t.song_known);
   if (wasLive !== !!t.live) renderQueue(lastQ);

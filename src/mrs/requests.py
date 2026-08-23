@@ -290,7 +290,9 @@ def play_later(what: str, minutes: float, *, announce: bool = True) -> dict:
             now = player.mpv.get("path", "") or ""
             if holding["path"] and now and now != holding["path"]:
                 log.info("skipping the timed start; something else is on")
+                player._start_at = None
                 return
+            player._start_at = None
             player.control("resume")
             bus.publish(Ev.TOAST, f"Playing {want}")
             if announce:
@@ -298,6 +300,7 @@ def play_later(what: str, minutes: float, *, announce: bool = True) -> dict:
         except Exception as exc:
             log.warning("timed start failed: %s", exc)
 
+    player._start_at = time.time() + minutes * 60
     threading.Thread(target=prepare, daemon=True).start()
     timer = threading.Timer(minutes * 60, begin)
     timer.daemon = True
