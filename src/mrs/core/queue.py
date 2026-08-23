@@ -17,7 +17,7 @@ from ..config import config
 from ..events import Ev, bus
 from ..logging_setup import get
 from ..models import Activity, Candidate, Track, is_derivative, norm_title
-from . import spectrum
+from . import radio, spectrum
 from .downloader import downloader
 from .taste import taste
 
@@ -49,6 +49,7 @@ class QueueManager:
         self._request_kind = "song"              # what you last asked for
         self._anchor: Track | None = None        # the song that started it off
         self._theme = ""                         # genre/vibe asked for, if any
+        self._end_after_run = False              # artist/album: stop, don't drift
         self._queue_stamp = None                 # so we only push real changes
         self._activity_mark = None               # last progress we bothered sending
         self._undo: deque[tuple] = deque(maxlen=20)
@@ -108,6 +109,12 @@ class QueueManager:
             # ask for grunge and the whole hour should be grunge, not just the
             # first 25 tracks before the radio wanders off somewhere else
             self._theme = (theme or "").strip()
+            # Ask for an artist or an album and that's what you asked for.
+            # When it runs out the queue ends rather than sliding into a radio
+            # you didn't request.
+            self._end_after_run = kind in ("artist", "album")
+            if not radio.is_station(tracks[0]):
+                radio.now_playing.stop()
             for t in tracks:
                 t.reason = t.reason or "asked"
             self._work.append(WorkItem(tracks[0], mode="now", alternates=alternates))
@@ -179,6 +186,22 @@ class QueueManager:
         cand.track.reason = cand.reason      # so the queue can say why
         return WorkItem(cand.track, mode="append")
 
+    def _play_station(self, track: Track) -> None:
+        """Put a live station on. No queue, no radio afterwards — it's on
+        until you ask for something else."""
+        with self._lock:
+            self._work.clear()
+            self._pool.clear()
+            self._hold_radio = True
+            self._end_after_run = True
+            self._meta[track.url] = track
+        self.mpv.command("loadfile", track.url, "replace", wait=False)
+        self.mpv.set("pause", False)
+        radio.now_playing.start(self.mpv, track.title)
+        self._set_activity("idle")
+        log.info("tuned to %s", track.title)
+        self.publish_queue(force=True)
+
     def _take_candidate(self) -> Candidate | None:
         now = time.monotonic()
         recent_artists = self._tail_artists(int(config.get("artist_run_limit", 3)))
@@ -216,6 +239,11 @@ class QueueManager:
 
         def progress(frac: float) -> None:
             self._set_activity("downloading", track.title, frac)
+
+        if radio.is_station(track):
+            # a live stream has nothing to fetch; hand mpv the url
+            self._play_station(track)
+            return
 
         path = downloader.fetch_with_fallbacks(track, item.alternates,
                                                on_progress=progress)
@@ -311,9 +339,9 @@ class QueueManager:
             try:
                 self._track_progress()
                 if self._hold_radio:
-                    if self.ready_ahead() <= 0:
-                        # the album/artist run is done; the radio after it is
-                        # not an artist request and shouldn't behave like one
+                    if self.ready_ahead() <= 0 and not self._end_after_run:
+                        # the run is done; whatever follows is not an artist
+                        # request and shouldn't behave like one
                         self._hold_radio = False
                         if self._request_kind != "genre":
                             self._request_kind = "song"

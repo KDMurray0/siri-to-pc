@@ -45,8 +45,31 @@ def _theme_words(theme: str) -> set[str]:
     return words
 
 
+# Tags that say something about the listener rather than the song. Ignored,
+# but harmless.
+_USELESS_TAGS = ("seen live", "favourite", "favorite", "albums i own",
+                 "check out", "spotify")
+# Tags left behind by automated tagging. A track carrying these has had its
+# tags written by a script, so none of them can be trusted — Taylor Swift's
+# Anti-Hero has "grunge" at full weight next to "test-tag" and "automated".
+_POISON_TAGS = ("test-tag", "batch-test", "automated", "testtag")
+
+
 def _matches(want: set[str], tags: dict) -> bool:
-    for tag in tags:
+    """Does this track really carry the genre, not just mention it?
+
+    A tag has to be one of the track's stronger ones. Half of Last.fm has
+    "rock" on it somewhere, and a tag with three votes against a top tag with
+    two hundred says nothing.
+    """
+    if not tags:
+        return False
+    top = max(tags.values()) or 1
+    if any(p in tag for tag in tags for p in _POISON_TAGS):
+        return False              # scripted tags; the whole set is worthless
+    for tag, count in tags.items():
+        if count < top * 0.4 or any(u in tag for u in _USELESS_TAGS):
+            continue
         for w in want:
             if w in tag or tag in w:
                 return True
@@ -268,10 +291,18 @@ class ContextBuilder:
             # You asked for a genre, so the genre is the brief. Tracks whose
             # own tags say they belong get a real push; ones we can't confirm
             # only drift in if nothing better is going.
+            # Ask for a genre and you get that genre, full stop. Anything
+            # drawn from the genre itself qualifies by construction; anything
+            # else has to prove it. Scoring it down wasn't enough — a low
+            # score still plays once the good ones run out.
+            # Everything gets checked, including tracks the genre lookup
+            # itself supplied — that list is part Apple search now, and it
+            # offered Blur's Tender for grunge.
             if want:
-                tags = tagstore.get(track) or {}
-                if tags:
-                    score += 3.5 if _matches(want, tags) else -2.0
+                tags = tagstore.get(track)
+                if not tags or not _matches(want, tags):
+                    continue
+                score += 3.5
             score -= stack_penalty * per_artist.get(track.primary_artist(), 0)
             score += random.random() * 0.8
 

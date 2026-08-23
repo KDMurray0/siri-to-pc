@@ -19,6 +19,7 @@ from .core.listen import listener
 from .core.playlists import playlists
 from .core.mpv import MpvClient, PIPE_ALT, PIPE_MAIN, kill_stray_mpv
 from .core.queue import QueueManager
+from .core import radio
 from .core.taste import taste
 from .events import Ev, bus
 from .logging_setup import get
@@ -26,6 +27,14 @@ from .models import Track
 from .resolve import catalog
 
 log = get("player")
+
+
+def _song_on_air(track) -> str:
+    """The song a station says it's playing, if it's a station and it says."""
+    if not radio.is_station(track):
+        return ""
+    return radio.now_playing.title or ""
+
 
 CREATE_NO_WINDOW = 0x08000000
 
@@ -269,9 +278,13 @@ class PlayerService:
             "playlist_pos": props.get("playlist-pos"),
             "playlist_count": props.get("playlist-count") or 0,
             "activity": self.queue.activity.to_dict(),
+            # A station shows the song it's playing with its own name
+            # underneath. When it doesn't say — speech radio never does — the
+            # station name is the answer.
             "track": {
-                "name": track.title if track else "",
-                "artist": track.artist if track else "",
+                "name": (_song_on_air(track) or track.title) if track else "",
+                "artist": (track.title if _song_on_air(track)
+                           else track.artist) if track else "",
                 "album": track.album if track else "",
                 "art": track.art if track else "",
                 "video_id": track.video_id if track else "",

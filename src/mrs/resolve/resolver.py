@@ -158,4 +158,12 @@ def _on_theme(genre: str, tracks: list[Track]) -> list[Track]:
                  "; ".join(bad[:4]))
     if not good:
         return tracks          # tags told us nothing useful; leave it alone
+    # Zero drift when we can manage it: once there are enough confirmed
+    # tracks, the ones we couldn't check are dropped rather than trusted.
+    # Anti-Hero got into a grunge queue by being unverified, not by being
+    # wrong-but-close.
+    if len(good) >= 8:
+        if unknown:
+            log.info("%s: also dropped %d unverified", genre, len(unknown))
+        return good
     return good + unknown

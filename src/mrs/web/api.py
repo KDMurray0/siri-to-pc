@@ -19,6 +19,7 @@ from fastapi.templating import Jinja2Templates
 
 from ..config import config
 from ..core import cookies as cookie_mod
+from ..core import radio as radio_mod
 from ..core.downloader import downloader
 from ..core.extras import caster, scrobbler
 from ..core.library import library
@@ -28,7 +29,8 @@ from ..events import Ev, bus
 from ..logging_setup import get, log_path
 from ..paths import resource_dir
 from ..player import player
-from ..requests import add_spotify, handle_request, play_for_you, play_video
+from ..requests import (add_spotify, handle_request, play_for_you,
+                        play_station, play_video)
 from ..resolve import catalog, llm, lyrics as lyrics_mod, spotify
 
 log = get("api")
@@ -236,6 +238,7 @@ def api_search(q: str, limit: int = 12, _: bool = Auth):
         "library": [t.to_dict() for t in library.search(q, limit=4)],
         "artists": catalog.search_artists(q, limit=2),
         "albums": catalog.search_albums(q, limit=2),
+        "stations": [t.to_dict() for t in radio_mod.search(q, limit=3)],
         "results": [t.to_dict() for t in catalog.search_candidates(q, limit=limit)],
     }
 
@@ -277,6 +280,12 @@ def api_playlists(_: bool = Auth):
     return {"status": "ok", "playlists": playlists.summary(),
             "folder": str(playlists.root()),
             "download": bool(config.get("playlist_download"))}
+
+
+@app.get("/api/station")
+def api_station(url: str = "", name: str = "", art: str = "", _: bool = Auth):
+    """Tune a live radio station."""
+    return play_station(url, name, art)
 
 
 @app.get("/api/foryou")

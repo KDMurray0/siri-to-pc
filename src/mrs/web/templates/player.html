@@ -936,6 +936,13 @@ async function showResults(v) {
       `<div class="ra">${esc2(a.artist) || "Album"}</div></div>` + label("album") + `</div>`);
   });
 
+  (r.stations || []).forEach((t, i) => push(0.86 - i * 0.001,
+    `<div class="rres" data-act="station" data-u="${esc2(t.url)}" ` +
+    `data-t="${esc2(t.title)}" data-img="${esc2(t.art)}">${art(t.art)}` +
+    `<div class="rt"><div class="rn">${esc2(t.title)}</div>` +
+    `<div class="ra">Live${t.artist ? " · " + esc2(t.artist) : ""}</div></div>` +
+    label("radio") + `</div>`));
+
   (r.results || []).forEach((t, i) => push(0.8 - i * 0.001,
     `<div class="rres" data-act="song" data-v="${esc2(t.video_id)}" data-t="${esc2(t.title)}" ` +
     `data-ar="${esc2(t.artist)}" data-img="${esc2(t.art)}">${art(t.art)}` +
@@ -959,7 +966,11 @@ $("results").addEventListener("mousedown", async e => {
   const q = $("q").value.trim();
   closeSearch();
   let r;
-  if (act === "playlist") {
+  if (act === "station") {
+    r = await api("/api/station?url=" + encodeURIComponent(row.dataset.u) +
+                  "&name=" + encodeURIComponent(row.dataset.t) +
+                  "&art=" + encodeURIComponent(row.dataset.img || ""));
+  } else if (act === "playlist") {
     r = await api("/api/playlist/play?name=" + encodeURIComponent(row.dataset.n));
   } else if (act === "artist") {
     r = await api("/api/play/artist?name=" + encodeURIComponent(row.dataset.n));

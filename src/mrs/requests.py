@@ -237,6 +237,19 @@ def add_spotify(url: str) -> dict:
     return _import_spotify(url, announce=False, play=False)
 
 
+def play_station(url: str, name: str = "", art: str = "") -> dict:
+    """Tune a live station picked from the search results."""
+    if not url:
+        return {"status": "error", "message": "No station"}
+    track = Track(title=name or "Radio", artist="Radio", art=art, url=url,
+                  source="radio", origin="request", reason="asked")
+    player.queue.play_now([track], kind="radio")
+    msg = f"Tuned to {track.title}"
+    bus.publish(Ev.TOAST, msg)
+    log.info("%s", msg)
+    return {"status": "played", "message": msg, "via": "radio"}
+
+
 def play_video(video_id: str, *, title: str = "", artist: str = "", art: str = "",
                mode: str = "play") -> dict:
     """Play one exact track chosen from the search dropdown."""
