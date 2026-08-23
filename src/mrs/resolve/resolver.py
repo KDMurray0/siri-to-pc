@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from ..config import config
 from ..logging_setup import get
 from ..models import Plan, Track
@@ -102,10 +104,58 @@ def resolve(plan: Plan) -> Resolution:
         return Resolution(tracks, f"Playing {who}", hold_radio=True)
 
     if kind == "genre":
-        tracks = catalog.genre_tracks(query, limit=25)
+        tracks = _on_theme(query, catalog.genre_tracks(query, limit=25))
         if not tracks:
             return Resolution([], f"I couldn't find anything for {query}",
                               error="no results")
         return Resolution(tracks, f"Playing some {query}")
 
     return Resolution([], f"I couldn't work out what {query} means", error="unknown")
+
+
+def _on_theme(genre: str, tracks: list[Track]) -> list[Track]:
+    """Put the confirmed-on-genre tracks first and drop the clear misses.
+
+    Asking for grunge returned twenty-five tracks with Thong Song among them —
+    YouTube's genre lookup is a search, and a search for a word returns what it
+    returns. Worse, that became track one, so it also became the anchor, and
+    the radio spent the next hour faithfully anchored to Sisqo.
+
+    The refill already scores candidates against the genre's tags. This is the
+    same check on the batch that goes straight to the queue, which nothing was
+    looking at. Ordering matters as much as dropping: whatever ends up first
+    becomes the anchor, so it has to be something we actually verified.
+
+    Only tracks we can positively rule out are dropped. Anything we have no
+    tags for is kept, just later in the list — with no Last.fm key the order
+    and the contents are unchanged.
+    """
+    from ..core.context import _matches, _theme_words
+    from ..core.tags import tagstore
+
+    want = _theme_words(genre)
+    if not want or not tracks or not tagstore.enabled():
+        return tracks
+
+    tagstore.warm(tracks)
+    deadline = time.monotonic() + 6.0
+    while time.monotonic() < deadline:
+        if all(tagstore.get(t) is not None for t in tracks):
+            break
+        time.sleep(0.25)
+
+    good, unknown, bad = [], [], []
+    for t in tracks:
+        tags = tagstore.get(t)
+        if not tags:
+            unknown.append(t)
+        elif _matches(want, tags):
+            good.append(t)
+        else:
+            bad.append(f"{t.title} — {t.artist}")
+    if bad:
+        log.info("%s: dropped %d off-genre (%s)", genre, len(bad),
+                 "; ".join(bad[:4]))
+    if not good:
+        return tracks          # tags told us nothing useful; leave it alone
+    return good + unknown

@@ -50,6 +50,7 @@ class QueueManager:
         self._anchor: Track | None = None        # the song that started it off
         self._theme = ""                         # genre/vibe asked for, if any
         self._queue_stamp = None                 # so we only push real changes
+        self._activity_mark = None               # last progress we bothered sending
         self._undo: deque[tuple] = deque(maxlen=20)
         self._workers: list[threading.Thread] = []
         self._activity = Activity()
@@ -72,6 +73,14 @@ class QueueManager:
     # -- activity ------------------------------------------------------
     def _set_activity(self, stage: str, detail: str = "", progress: float = 0.0) -> None:
         self._activity = Activity(stage=stage, detail=detail, progress=progress)
+        # yt-dlp reports progress far more often than a 76px bar can show it.
+        # Send it when the stage or the song changes, otherwise only when the
+        # bar would actually move.
+        step = int(progress * 50)          # 2% of the bar
+        mark = (stage, detail, step)
+        if mark == self._activity_mark:
+            return
+        self._activity_mark = mark
         bus.publish(Ev.ACTIVITY, self._activity.to_dict())
 
     @property
