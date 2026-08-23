@@ -126,8 +126,11 @@ body.busy .activity{display:flex}
 
 /* search */
 .search{margin-top:16px;position:relative}
+/* the input and its trailing button, so 50% means the middle of the
+   field and not the middle of the search block plus its dropdown */
+.field{position:relative;display:flex;align-items:center}
 .search input{width:100%;background:var(--panel);border:1px solid var(--line);
-  color:var(--fg);border-radius:12px;padding:11px 13px;font-size:13px;
+  color:var(--fg);border-radius:12px;padding:11px 44px 11px 13px;font-size:13px;
   font-family:inherit;outline:none;transition:border-color .15s}
 .search input:focus{border-color:var(--accent)}
 .search input::placeholder{color:var(--sub)}
@@ -135,6 +138,16 @@ body.busy .activity{display:flex}
   border:2px solid var(--line);border-top-color:var(--accent);
   animation:spin .7s linear infinite;display:none}
 @keyframes spin{to{transform:rotate(360deg)}}
+/* sits inside the field: it's another way to ask for something to play */
+.magic{position:absolute;right:7px;top:50%;transform:translateY(-50%);
+  width:30px;height:30px;display:grid;place-items:center;background:none;border:0;
+  color:var(--sub);cursor:pointer;border-radius:9px;
+  transition:color .15s,background .15s,opacity .15s}
+.magic:hover{color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
+.magic svg{width:17px;height:17px;fill:currentColor;display:block}
+.magic:disabled{opacity:.45;pointer-events:none}
+.magic.hide{display:none}
+body.mini .magic{display:none}
 .qactions{display:flex;gap:6px;margin-top:7px;max-height:0;overflow:hidden;opacity:0;
   transition:max-height .2s ease,opacity .2s ease}
 .qactions.show{max-height:40px;opacity:1}
@@ -462,8 +475,11 @@ body.mini .miniwave i{width:2px;height:10%;background:var(--accent);border-radiu
     </div>
 
     <div class="search">
+      <div class="field">
       <input id="q" placeholder="Play anything — a song, artist, vibe, or Spotify link" autocomplete="off" spellcheck="false">
+      <button class="magic" id="foryou" title="Play something I'd like" aria-label="Play something I'd like"><svg viewBox="0 0 24 24"><path d="M10.5 2.5l1.7 4.3 4.3 1.7-4.3 1.7-1.7 4.3-1.7-4.3L4.5 8.5l4.3-1.7z"/><path d="M17.5 13l1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1z"/></svg></button>
       <div class="spin" id="spin"></div>
+      </div>
       <div class="results" id="results"></div>
       <div class="qactions" id="qactions">
         <button class="qbtn" id="addnext">Play next</button>
@@ -822,6 +838,7 @@ function closeSearch() {
   clearTimeout(searchT);
   searchSeq++;                       // any reply still coming is now stale
   $("spin").style.display = "none";
+  $("foryou").classList.remove("hide");
   hideResults();
   $("q").value = "";
   $("qactions").classList.remove("show");
@@ -846,9 +863,11 @@ async function showResults(v) {
     return;
   }
   $("spin").style.display = "block";
+  $("foryou").classList.add("hide");
   const r = await api("/api/search?q=" + encodeURIComponent(v));
   if (seq !== searchSeq) return;
   $("spin").style.display = "none";
+  $("foryou").classList.remove("hide");
   if (!r) { hideResults(); return; }
 
   const esc2 = s => esc(s || "");
@@ -1325,6 +1344,15 @@ $("cksignin").onclick = () => {
   const b = bridge();
   if (b && b.sign_in) { b.sign_in(); toast("Sign in, then it saves your cookies"); }
   else toast("Open the desktop player to sign in");
+};
+
+$("foryou").onclick = async () => {
+  const b = $("foryou");
+  b.disabled = true;
+  toast("Picking something you'd like…");
+  const r = await api("/api/foryou");
+  toast((r && r.message) || "Couldn't build that");
+  b.disabled = false;
 };
 
 $("lfmauth").onclick = async () => {

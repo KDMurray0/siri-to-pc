@@ -210,14 +210,22 @@ class ContextBuilder:
                 ts *= 0.5 + 0.5 * fit      # you replay it, but is it this mood
             score += ts
 
+            # What people play alongside this, which is the only signal that
+            # can tell Song 2 from The Universal — tags call those 0.86 alike
+            # because tags describe Blur, not the song.
+            near = tagstore.affinity(anchor or current, track)
+            if near:
+                score += 3.0 * near
+
             if cur_artist and track.primary_artist() == cur_artist:
-                # Same band only counts for as much as it sounds like the song
-                # you asked for — Song 2 shouldn't drag in the rest of Blur.
-                score += 3.0 * cohesion * fit
+                # A pull, not a rule. Same band is worth something, but only as
+                # much as it actually sounds alike: put on Song 2 and the rest
+                # of Blur is not what you asked for.
+                score += 1.2 * cohesion * fit
                 if current and current.album and track.album == current.album:
-                    score += 1.5 * cohesion      # same record, same era
+                    score += 1.0 * cohesion      # same record, same era
             if sim is not None:
-                score += 1.5 * (sim - 0.65)      # nudge toward the genre
+                score += 3.0 * (sim - 0.55)      # genre and mood lead
             score -= stack_penalty * per_artist.get(track.primary_artist(), 0)
             score += random.random() * 0.8
 

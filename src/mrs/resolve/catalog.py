@@ -86,7 +86,11 @@ def _duration(row: dict) -> int:
 
 
 def _thumb(row: dict) -> str:
-    thumbs = row.get("thumbnails") or []
+    # search rows say "thumbnails", watch/radio rows say "thumbnail" — miss the
+    # second and every song the radio picks turns up with a blank cover
+    thumbs = row.get("thumbnails") or row.get("thumbnail") or []
+    if isinstance(thumbs, dict):
+        thumbs = thumbs.get("thumbnails") or []
     if not thumbs:
         return ""
     try:

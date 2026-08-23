@@ -49,6 +49,10 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
             return {"status": "played" if res.get("ok") else "error",
                     "message": res.get("message", ""), "via": "playlist"}
 
+        # "play something I'd like" — build off your taste, not one seed song
+        if _FOR_YOU.search(text):
+            return play_for_you(announce=announce)
+
         plan = parser.parse(text, mode=mode)
         if source:
             plan.source = source
@@ -142,6 +146,36 @@ def _run_command(plan) -> dict:
     result = player.control(action, value)
     return {"status": "ok", "message": result.get("message", "OK"),
             "via": plan.via}
+
+
+_FOR_YOU = re.compile(
+    r"\b(?:something|anything|music|songs?|stuff)\s+i(?:'?d)?\s+"
+    r"(?:would\s+)?(?:like|enjoy|love)\b"
+    r"|\bmy\s+(?:kind\s+of\s+music|taste|favourites?|favorites?)\b"
+    r"|\b(?:surprise|shuffle)\s+me\b", re.I)
+
+
+def play_for_you(*, announce: bool = True) -> dict:
+    """A queue drawn from what you actually ask for."""
+    from .core import foryou
+    from .resolve import catalog
+
+    player.queue._set_activity("finding", "Picking something you'd like")
+    tracks = foryou.build(catalog)
+    player.queue._set_activity("idle")
+    if not tracks:
+        msg = "Play a few things first and I'll learn what you like"
+        bus.publish(Ev.TOAST, msg)
+        return {"status": "not_found", "message": msg, "via": "foryou"}
+
+    player.queue.play_now(tracks, hold_radio=True, kind="foryou")
+    msg = f"Playing {len(tracks)} songs you'd like"
+    if announce:
+        player.announce("Here's something you'd like")
+    bus.publish(Ev.TOAST, msg)
+    log.info("for-you: %d tracks", len(tracks))
+    return {"status": "played", "message": msg, "via": "foryou",
+            "kind": "foryou", "tracks": len(tracks)}
 
 
 def _import_spotify(url: str, *, announce: bool = True, play: bool = True) -> dict:

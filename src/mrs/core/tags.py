@@ -25,7 +25,7 @@ import urllib.request
 
 from ..config import config
 from ..logging_setup import get
-from ..models import Track
+from ..models import Track, _strip_article
 from ..paths import data_dir
 
 log = get("tags")
@@ -46,6 +46,7 @@ class TagStore:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._cache: dict[str, dict[str, int]] = {}
+        self._near: dict[str, dict[str, float]] = {}   # track -> its neighbours
         self._missing: set[str] = set()      # looked up, genuinely has none
         self._queued: set[str] = set()
         self._q: queue.Queue[tuple[str, str]] = queue.Queue()
@@ -66,7 +67,10 @@ class TagStore:
                 self._cache = {k: v for k, v in (raw.get("tags") or {}).items()
                                if isinstance(v, dict)}
                 self._missing = set(raw.get("missing") or [])
-            log.info("%d tagged tracks cached", len(self._cache))
+                self._near = {k: v for k, v in (raw.get("near") or {}).items()
+                              if isinstance(v, dict)}
+            log.info("%d tagged tracks cached, %d with neighbours",
+                     len(self._cache), len(self._near))
         except FileNotFoundError:
             pass
         except Exception as exc:
@@ -76,7 +80,9 @@ class TagStore:
         try:
             with self._lock:
                 items = list(self._cache.items())[-MAX_ENTRIES:]
-                data = {"tags": dict(items), "missing": list(self._missing)[-MAX_ENTRIES:]}
+                near = list(self._near.items())[-MAX_ENTRIES:]
+                data = {"tags": dict(items), "near": dict(near),
+                        "missing": list(self._missing)[-MAX_ENTRIES:]}
             tmp = self._file().with_suffix(".tmp")
             tmp.write_text(json.dumps(data), encoding="utf-8")
             tmp.replace(self._file())
@@ -84,6 +90,43 @@ class TagStore:
             log.debug("couldn't save tags: %s", exc)
 
     # -- keys ----------------------------------------------------------
+    @staticmethod
+    def near_key(track: Track | None) -> str:
+        if not track:
+            return ""
+        t = (track.title or "").strip().lower()
+        return f"{track.primary_artist()}|{t}" if t else ""
+
+    def affinity(self, seed: Track | None, other: Track | None) -> float | None:
+        """Do people play these two together? None if we haven't looked yet."""
+        if not self.enabled() or not seed or not other:
+            return None
+        self.load()
+        sk, ok = self.near_key(seed), self.near_key(other)
+        if not sk or not ok:
+            return None
+        with self._lock:
+            near = self._near.get(sk)
+        if near is None:
+            self._enqueue("n:" + sk, seed)
+            return None
+        return near.get(ok, 0.0)
+
+    def neighbours(self, seed: Track | None) -> dict[str, float]:
+        """Names of what sits alongside this, once we've looked."""
+        if not self.enabled() or not seed:
+            return {}
+        self.load()
+        sk = self.near_key(seed)
+        if not sk:
+            return {}
+        with self._lock:
+            near = self._near.get(sk)
+        if near is None:
+            self._enqueue("n:" + sk, seed)
+            return {}
+        return dict(near)
+
     @staticmethod
     def _track_key(track: Track) -> str:
         return f"t:{_clean(track.primary_artist())}|{_clean(track.title)}"
@@ -189,6 +232,31 @@ class TagStore:
                            "artist": artist, "track": title})
         rows = (data.get("toptags") or {}).get("tag") or []
         return self._parse(rows if isinstance(rows, list) else [], _clean(artist))
+
+    def _fetch_near(self, artist: str, title: str) -> dict[str, float]:
+        """Tracks people actually play alongside this one.
+
+        Tags describe a band, so every Blur song looks like every other Blur
+        song — Song 2 and The Universal score 0.86 on tags alone. What people
+        listen to together knows the difference: Song 2 sits with Beetlebum and
+        Parklife, not the orchestral one.
+        """
+        if not artist or not title:
+            return {}
+        data = self._call({"method": "track.getSimilar", "artist": artist,
+                           "track": title, "limit": 30})
+        rows = (data.get("similartracks") or {}).get("track") or []
+        out: dict[str, float] = {}
+        for row in rows if isinstance(rows, list) else []:
+            name = _clean(row.get("name"))
+            who = _clean(((row.get("artist") or {}) or {}).get("name"))
+            try:
+                match = float(row.get("match") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if name and who and match > 0:
+                out[f"{_strip_article(who)}|{name}"] = round(match, 3)
+        return out
 
     def _fetch_artist(self, artist: str) -> dict[str, int]:
         if not artist:

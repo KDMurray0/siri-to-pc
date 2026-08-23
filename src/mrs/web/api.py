@@ -28,7 +28,7 @@ from ..events import Ev, bus
 from ..logging_setup import get, log_path
 from ..paths import resource_dir
 from ..player import player
-from ..requests import add_spotify, handle_request, play_video
+from ..requests import add_spotify, handle_request, play_for_you, play_video
 from ..resolve import catalog, llm, lyrics as lyrics_mod, spotify
 
 log = get("api")
@@ -277,6 +277,12 @@ def api_playlists(_: bool = Auth):
     return {"status": "ok", "playlists": playlists.summary(),
             "folder": str(playlists.root()),
             "download": bool(config.get("playlist_download"))}
+
+
+@app.get("/api/foryou")
+def api_foryou(_: bool = Auth):
+    """A queue built from what you actually ask for."""
+    return play_for_you(announce=False)
 
 
 @app.get("/api/spectrum")
