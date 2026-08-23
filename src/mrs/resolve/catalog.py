@@ -335,8 +335,7 @@ def album_tracks(album: str, artist: str = "", limit: int = 0) -> list[Track]:
         return []
 
 
-MB_API = "https://musicbrainz.org/ws/2"
-MB_UA = {"User-Agent": "MusicRequestServer/2.0 (personal LAN music player)"}
+NET_UA = {"User-Agent": "MusicRequestServer/2.0 (personal LAN music player)"}
 
 
 # Channels that upload hours of wallpaper music. YouTube's Jazz and Ambient
@@ -384,7 +383,7 @@ def _from_itunes_genre(genre: str, limit: int) -> list[Track]:
         {"term": genre, "entity": "song", "attribute": "genreTerm",
          "limit": min(80, limit * 4)})
     try:
-        req = urllib.request.Request(url, headers=MB_UA)
+        req = urllib.request.Request(url, headers=NET_UA)
         with urllib.request.urlopen(req, timeout=8) as r:
             rows = json.loads(r.read().decode("utf-8", "replace")).get("results", [])
     except Exception as exc:
@@ -434,85 +433,6 @@ def _from_itunes_genre(genre: str, limit: int) -> list[Track]:
         log.info("%s: %d tracks from apple's genre index, %d artists",
                  genre, len(out), len({t.primary_artist() for t in out}))
     return _store(key, out)
-
-
-def _shelf_params(cats: dict, genre: str) -> str:
-    """Find YouTube's own shelf for a genre.
-
-    Their titles are compound — "Rap & hip-hop", "Reggae & caribbean",
-    "Country & Americana", "R&B & soul" — so matching the whole title exactly
-    found jazz, classical and metal and missed everything else. Match a word
-    of the title instead, which keeps "pop" off the J-Pop shelf.
-    """
-    target = _squash(genre)
-    if not target:
-        return ""
-    best = ""
-    for group in cats.values():
-        for cat in group or []:
-            title = cat.get("title", "")
-            if _squash(title) == target:
-                return cat.get("params", "")
-            words = {_squash(w) for w in re.split(r"[&/,]|\s+", title) if w}
-            if target in words and not best:
-                best = cat.get("params", "")
-    return best
-
-
-def _mb_genre_artists(genre: str, want: int = 8) -> list[str]:
-    """Bands filed under this genre, from MusicBrainz. No key, no account.
-
-    Asking MusicBrainz for *recordings* with the tag and then counting who made
-    them beats asking it for artists directly — the artist search is a text
-    match and returns Metallica and KISS for grunge, while the recordings are
-    tagged by hand and give Mudhoney, Green River and Alice in Chains.
-    """
-    key = f"mbgenre:{genre}:{want}"
-    hit = _cached(key)
-    if hit is not None:
-        return hit
-    url = MB_API + "/recording?" + urllib.parse.urlencode(
-        {"query": f'tag:"{genre}"', "fmt": "json", "limit": 100})
-    try:
-        req = urllib.request.Request(url, headers=MB_UA)
-        with urllib.request.urlopen(req, timeout=6) as r:
-            data = json.loads(r.read().decode("utf-8", "replace"))
-    except Exception as exc:
-        log.debug("musicbrainz genre lookup failed for %r: %s", genre, exc)
-        return []
-    counts: dict[str, int] = {}
-    for rec in data.get("recordings", []):
-        credit = (rec.get("artist-credit") or [{}])[0]
-        name = credit.get("name") or (credit.get("artist") or {}).get("name", "")
-        if name:
-            counts[name] = counts.get(name, 0) + 1
-    ranked = [a for a, _ in sorted(counts.items(), key=lambda kv: -kv[1])][:want]
-    if ranked:
-        log.info("%s: %d artists from musicbrainz", genre, len(ranked))
-    return _store(key, ranked)
-
-
-def _from_genre_artists(genre: str, limit: int) -> list[Track]:
-    """Popular songs by the bands MusicBrainz files under this genre.
-
-    The tagged recordings themselves are mostly album tracks and B-sides —
-    "Bushpusher Man" is real grunge but nobody asked for it. The artists are
-    the useful part; YouTube already knows their well-known songs.
-    """
-    from concurrent.futures import ThreadPoolExecutor
-
-    artists = _mb_genre_artists(genre)
-    if not artists:
-        return []
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        batches = list(pool.map(lambda a: artist_tracks(a, 3)[:2], artists))
-    out, seen = [], set()
-    for batch in batches:
-        for t in batch:
-            if t.video_id and t.video_id not in seen and _acceptable(t):
-                seen.add(t.video_id)
-                out.append(t)
-    return out[:limit]
 
 
 def _from_genre_tag(genre: str, limit: int, budget: float = 6.0) -> list[Track]:
@@ -569,53 +489,26 @@ def _from_genre_tag(genre: str, limit: int, budget: float = 6.0) -> list[Track]:
     return out
 
 
-def _shelf_tracks(genre: str, limit: int) -> list[Track]:
-    """YouTube's own genre shelf, if it has one for this word."""
-    out: list[Track] = []
-    try:
-        params = _shelf_params(client().get_mood_categories(), genre)
-        if not params:
-            return []
-        for pl in (client().get_mood_playlists(params) or [])[:2]:
-            try:
-                items = client().get_playlist(pl["playlistId"], limit=limit)
-                out += [to_track(r) for r in items.get("tracks", [])]
-            except Exception:
-                continue
-    except Exception as exc:
-        log.debug("mood lookup failed for %r: %s", genre, exc)
-    return out[:limit]
-
-
 def _word_search(genre: str, limit: int) -> list[Track]:
-    """Searching the words. Knows nothing about genre — "grunge music" has
-    returned Sk8er Boi and Anti-Hero — so filter it against the artists
-    MusicBrainz says belong, when we know any."""
-    loose = search_songs(f"{genre} music", limit=limit)
-    known = {Track(title="", artist=a).primary_artist()
-             for a in _mb_genre_artists(genre, 25)}
-    if known:
-        kept = [t for t in loose if t.primary_artist() in known]
-        log.info("%s: word search gave %d, %d were on-genre",
-                 genre, len(loose), len(kept))
-        return kept
-    return loose
+    """Searching the words, for a genre nothing else could answer.
+
+    Knows nothing about genre — "grunge music" has returned Sk8er Boi — but
+    Apple has an answer for essentially anything, so this almost never runs.
+    """
+    return search_songs(f"{genre} music", limit=limit)
 
 
 def genre_tracks(genre: str, limit: int = 25) -> list[Track]:
-    """Tracks for a genre, from whichever source can answer first.
+    """Tracks for a genre, asked in order until there's enough.
 
-    No single source is reliably best. Last.fm's tags are the most accurate
-    when there's a key. Apple's genre index is a real search — any genre you
-    can name, ranked by popularity, no key needed — and it's the main keyless
-    route. MusicBrainz is hand-tagged and precise but obscure, so it covers
-    the corners Apple ranks badly. YouTube's shelves are curated lists that
-    only exist for a dozen broad names, so they're last.
+    Last.fm's tags are the most accurate answer when there's a key. Apple's
+    genre index is a real search — any genre you can name, ranked by
+    popularity, no key — and carries the whole thing on its own otherwise.
+    Searching the plain words is the last resort and almost never runs.
 
-    Taking a share from all four and interleaving them was tried: it queried
-    four services every time, ran to fifteen seconds, and put each source's
-    worst guess near the top. Asking in order and stopping when there's enough
-    is faster and no worse.
+    MusicBrainz and YouTube's curated shelves were in here too. They were
+    accurate but obscure and narrow respectively, they each cost a request,
+    and neither changed what you actually heard often enough to keep.
     """
     key = f"genre:{genre}:{limit}"
     hit = _cached(key)
@@ -645,8 +538,7 @@ def genre_tracks(genre: str, limit: int = 25) -> list[Track]:
             per_artist[who] = per_artist.get(who, 0) + 1
             res.append(t)
 
-    for source in (_from_genre_tag, _from_itunes_genre,
-                   _from_genre_artists, _shelf_tracks, _word_search):
+    for source in (_from_genre_tag, _from_itunes_genre, _word_search):
         if len(res) >= limit:
             break
         try:
