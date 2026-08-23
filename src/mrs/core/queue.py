@@ -47,6 +47,7 @@ class QueueManager:
         self._claimed: set[str] = set()
         self._hold_radio = False                 # album/artist runs pure first
         self._request_kind = "song"              # what you last asked for
+        self._anchor: Track | None = None        # the song that started it off
         self._undo: deque[tuple] = deque(maxlen=20)
         self._workers: list[threading.Thread] = []
         self._activity = Activity()
@@ -92,6 +93,7 @@ class QueueManager:
             self._claimed.clear()
             self._hold_radio = hold_radio
             self._request_kind = kind
+            self._anchor = tracks[0]
             self._work.append(WorkItem(tracks[0], mode="now", alternates=alternates))
             for t in tracks[1:]:
                 self._work.append(WorkItem(t, mode="append"))
@@ -293,7 +295,10 @@ class QueueManager:
                 self._track_progress()
                 if self._hold_radio:
                     if self.ready_ahead() <= 0:
+                        # the album/artist run is done; the radio after it is
+                        # not an artist request and shouldn't behave like one
                         self._hold_radio = False
+                        self._request_kind = "song"
                     continue
                 need_ready = (self.minutes_ahead() < self.target_minutes()
                               and self.ready_ahead() < self.target_depth())
@@ -314,7 +319,9 @@ class QueueManager:
         focus = 1.0 if self._request_kind in ("artist", "album", "playlist") else 0.4
         try:
             cands = self.context.build(self.current_track(), exclude=ids,
-                                       exclude_keys=keys, focus=focus)
+                                       exclude_keys=keys, focus=focus,
+                                       anchor=self._anchor,
+                                       artist_counts=self._recent_artists())
         except Exception as exc:
             log.warning("context build failed: %s", exc)
             return
@@ -330,6 +337,17 @@ class QueueManager:
                 have.add(c.track.video_id)
                 keys.add(c.track.key())
         log.info("pool now %d candidates", len(self._pool))
+
+    def _recent_artists(self, look_back: int = 30) -> dict[str, int]:
+        """Who this session has been leaning on lately."""
+        counts: dict[str, int] = {}
+        for row in taste.recent(limit=look_back):
+            # same normalisation the ranker uses, or the tally never matches
+            a = Track(title="", artist=row.get("artist") or "").primary_artist()
+            if a:
+                # capped: this should push a band down the list, not ban them
+                counts[a] = min(counts.get(a, 0) + 1, 3)
+        return counts
 
     def _exclusions(self) -> tuple[set[str], set[str]]:
         """(video ids, normalized names) that must not come back."""

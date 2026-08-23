@@ -541,6 +541,8 @@ body.mini .miniwave i{width:2px;height:10%;background:var(--accent);border-radiu
       <section class="spane" data-s="queue">
         <div class="srow"><span class="slabel">Stay on the artist<em>How hard the radio sticks to the band you asked for</em></span>
           <div class="chips" id="cohesion"></div></div>
+        <div class="srow"><span class="slabel">Remember the first song<em>Stops a long session wandering off — every step is close to the last, but the end isn't close to the start</em></span>
+          <div class="chips" id="anchor"></div></div>
         <div class="srow"><span class="slabel">Where songs come from</span>
           <select id="source"><option value="youtube">YouTube</option><option value="soundcloud">SoundCloud</option><option value="bandcamp">Bandcamp</option></select></div>
         <div class="srow"><span class="slabel">Keep playlists on disk<em>Downloads them into their folder</em></span>
@@ -1132,6 +1134,8 @@ buildChips("sleep", [{label:"Off",val:0},{label:"15m",val:15},{label:"30m",val:3
   v => api("/api/sleep?minutes=" + v).then(r => { toast(r && r.message); markChips("sleep", v); }));
 buildChips("cohesion", [{label:"Explore",val:0},{label:"Balanced",val:1},{label:"Stay put",val:2}],
   v => { api("/api/setting?key=artist_cohesion&value=" + v); markChips("cohesion", v); });
+buildChips("anchor", [{label:"Let it wander",val:0},{label:"Soft",val:0.35},{label:"Strong",val:0.6}],
+  v => { api("/api/setting?key=anchor_pull&value=" + v); markChips("anchor", v); });
 
 // generic on/off row -> endpoint with ?enabled=
 const toggleRow = (id, path) => {
@@ -1398,6 +1402,7 @@ async function loadSettings() {
   $("pldl").classList.toggle("on", !!s.playlist_download);
   markChips("crossfade", s.crossfade || 0);
   markChips("cohesion", Math.round(s.artist_cohesion ?? 1));
+  markChips("anchor", s.anchor_pull ?? 0.35);
   $("groqkey").placeholder = s.groq_set ? "•••••••• saved" : "gsk_…";
   const g = s.groq || {};
   setDot("groqdot", !s.groq_set ? "" : (g.working ? "ok" : "bad"));

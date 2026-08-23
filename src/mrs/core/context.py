@@ -18,6 +18,7 @@ log = get("context")
 SOURCE_WEIGHT = {
     "artist": 3.0,     # more from the band you're playing
     "radio": 2.0,      # YouTube's related tracks
+    "anchor": 2.6,     # radio from the song you actually asked for
     "liked": 2.5,      # seeded from something you liked
     "genre": 1.5,
 }
@@ -40,7 +41,9 @@ class ContextBuilder:
 
     def build(self, current: Track | None, exclude: set[str] | None = None,
               exclude_keys: set[str] | None = None,
-              limit: int = 40, focus: float = 1.0) -> list[Candidate]:
+              limit: int = 40, focus: float = 1.0,
+              anchor: Track | None = None,
+              artist_counts: dict[str, int] | None = None) -> list[Candidate]:
         exclude = exclude or set()
         exclude_keys = exclude_keys or set()
         seeds = self._seeds(current)
@@ -59,7 +62,17 @@ class ContextBuilder:
             for t in self._safe(self.catalog.related, seed, 12 if focus >= 0.8 else 18):
                 raw.append((t, "radio"))
 
-        # 3. Occasionally pull from something you liked, to widen it out.
+        # 3. Radio from the song that started this, so the pool keeps being
+        #    offered things that sound like what was actually asked for.
+        #    Re-ranking can only reorder what it's given, and by track 100
+        #    everything on offer is whatever the last track dragged in.
+        if anchor is not None and anchor.video_id and float(config.get("anchor_pull", 0.35)):
+            here = tagstore.similarity(anchor, current)
+            if here is None or here < 0.75:      # only once it's actually strayed
+                for t in self._safe(self.catalog.related, anchor.video_id, 12):
+                    raw.append((t, "anchor"))
+
+        # 4. Occasionally pull from something you liked, to widen it out.
         if random.random() < 0.35:
             liked = taste.liked_seed()
             if liked:
@@ -67,7 +80,8 @@ class ContextBuilder:
                     raw.append((t, "liked"))
 
         tagstore.warm([t for t, _ in raw])     # next refill will know more
-        out = self._rank(raw, current, exclude, limit, exclude_keys, focus=focus)
+        out = self._rank(raw, current, exclude, limit, exclude_keys, focus=focus,
+                         anchor=anchor, artist_counts=artist_counts)
 
         # a thin pool is how the queue used to die — widen out first
         if len(out) < 8:
@@ -76,7 +90,8 @@ class ContextBuilder:
         if len(out) < 4:
             # Last resort: allow songs heard a while ago rather than run dry.
             out += self._rank(raw, current, exclude, limit, exclude_keys,
-                              ignore_recency=True, focus=focus)
+                              ignore_recency=True, focus=focus, anchor=anchor,
+                              artist_counts=artist_counts)
             seen, merged = set(), []
             for c in out:
                 if c.track.video_id not in seen:
@@ -134,7 +149,9 @@ class ContextBuilder:
 
     def _rank(self, raw: list[tuple[Track, str]], current: Track | None,
               exclude: set[str], limit: int, exclude_keys: set[str],
-              ignore_recency: bool = False, focus: float = 1.0) -> list[Candidate]:
+              ignore_recency: bool = False, focus: float = 1.0,
+              anchor: Track | None = None,
+              artist_counts: dict[str, int] | None = None) -> list[Candidate]:
         cohesion = float(config.get("artist_cohesion", 1.0)) * focus
         cur_artist = current.primary_artist() if current else ""
         seen_ids: set[str] = set()
@@ -142,7 +159,18 @@ class ContextBuilder:
         # Ask for one song and you get one song by that band, not their
         # discography. Artist and album requests want the opposite.
         stack_penalty = 0.0 if focus >= 0.8 else 1.6
-        per_artist: dict[str, int] = {}
+        # count what this session already played, not just this pool — an
+        # artist that got six tracks an hour ago has had its turn
+        per_artist: dict[str, int] = dict(artist_counts or {})
+        # How far this session has already wandered from what was asked for.
+        # Nothing to correct at the start; the further out it gets, the more
+        # the opening track is allowed to argue.
+        pull = float(config.get("anchor_pull", 0.35)) if anchor is not None else 0.0
+        drift = 0.0
+        if pull:
+            here = tagstore.similarity(anchor, current)
+            drift = 0.0 if here is None else max(0.0, 1.0 - here)
+        pull = min(0.8, pull * (0.5 + drift))
         out: list[Candidate] = []
 
         for track, source in raw:
@@ -162,6 +190,14 @@ class ContextBuilder:
             # How much this actually sounds like what's playing. None until the
             # tag cache catches up, in which case fall back to artist-only.
             sim = tagstore.similarity(current, track)
+            # Every step being close to the last one still walks a long way:
+            # Song 2 reached Ed Sheeran in 180 tracks, each hop reasonable. So
+            # blend in how much this sounds like the song that started it —
+            # everything downstream then works off that instead.
+            if pull:
+                back = tagstore.similarity(anchor, track)
+                if back is not None:
+                    sim = back if sim is None else (1 - pull) * sim + pull * back
             if sim is None:
                 # no tags yet: trust the band on an artist request, stay wary
                 # on a song request until the cache catches up
