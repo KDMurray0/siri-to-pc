@@ -99,6 +99,8 @@ class QueueManager:
             # ask for grunge and the whole hour should be grunge, not just the
             # first 25 tracks before the radio wanders off somewhere else
             self._theme = (theme or "").strip()
+            for t in tracks:
+                t.reason = t.reason or "asked"
             self._work.append(WorkItem(tracks[0], mode="now", alternates=alternates))
             for t in tracks[1:]:
                 self._work.append(WorkItem(t, mode="append"))
@@ -165,6 +167,7 @@ class QueueManager:
         cand = self._take_candidate()
         if cand is None:
             return None
+        cand.track.reason = cand.reason      # so the queue can say why
         return WorkItem(cand.track, mode="append")
 
     def _take_candidate(self) -> Candidate | None:
@@ -400,6 +403,7 @@ class QueueManager:
                 "art": tr.art if tr else "",
                 "video_id": tr.video_id if tr else "",
                 "origin": tr.origin if tr else "",
+                "reason": tr.reason if tr else "",
             })
         return out
 

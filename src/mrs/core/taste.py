@@ -30,6 +30,7 @@ class TasteEngine:
         self._played_at: dict[str, float] = {}  # norm title -> last play time
         self._dirty = False
         self._last_save = 0.0
+        self._fatigue = 0.0                    # late skips: bored of this run
         self._load()
 
     # -- persistence ---------------------------------------------------
@@ -109,11 +110,24 @@ class TasteEngine:
         asked_for = track.origin in ("request", "playlist", "library")
         learns = asked_for or not config.get("taste_from_requests", True)
         counts = learns or not completed        # a skip is a no wherever it came from
+
+        # Where you skipped says what you meant. Bailing in the first few
+        # seconds is "not this song" — the track is wrong, the direction is
+        # fine. Sitting through most of it and then skipping is "enough of
+        # this", which is about the run rather than the song, so it counts
+        # against the track much more gently.
+        early = not completed and ratio < 0.10
         with self._lock:
             if vid and counts:
                 self._song[vid][0 if completed else 1] += 1
             if artist and counts:
-                self._artist[artist][0 if completed else 1] += 1
+                # only a quick skip is held against the band
+                if completed or early:
+                    self._artist[artist][0 if completed else 1] += 1
+            if not completed:
+                self._fatigue = min(3.0, self._fatigue + (0.15 if early else 0.5))
+            else:
+                self._fatigue = max(0.0, self._fatigue - 0.35)
             if completed and vid:
                 if vid in self._history:
                     self._history.remove(vid)
@@ -136,6 +150,16 @@ class TasteEngine:
         if key:
             with self._lock:
                 self._played_at[key] = time.time()
+
+    def fatigue(self) -> float:
+        """How much the current run is being sat through, 0 to 3.
+
+        Late skips push it up, finished tracks pull it down. The pool widens
+        when it's high — you're not rejecting songs, you're rejecting the
+        direction.
+        """
+        with self._lock:
+            return self._fatigue
 
     def recently_used(self, track: Track) -> bool:
         key = norm_title(track.title, track.artist)

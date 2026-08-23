@@ -12,6 +12,7 @@ import time
 from ..config import config
 from ..events import Ev, bus
 from ..logging_setup import get
+from .tempo import blend_seconds as tempo_blend
 
 log = get("audio")
 
@@ -35,6 +36,7 @@ class AudioEngine:
         self._fading = threading.Lock()
         self._suppress_persist = False
         self._until = 0.0
+        self.track_for = None       # set by the player; path -> Track
 
     # -- filter chain --------------------------------------------------
     def build_chain(self) -> str:
@@ -88,6 +90,11 @@ class AudioEngine:
             nxt = pl[pos + 1].get("filename")
             if not nxt:
                 return False
+            # Let the tempo change decide how long to overlap. Nothing about
+            # which track is next — only how it's joined.
+            if self.track_for:
+                cf = tempo_blend(cf, self.track_for(pl[pos].get("filename", "")),
+                                 self.track_for(nxt))
             return self._run_fade(nxt, cf)
         except Exception as exc:
             log.warning("crossfade aborted: %s", exc)

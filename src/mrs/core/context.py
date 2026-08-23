@@ -179,7 +179,11 @@ class ContextBuilder:
               ignore_recency: bool = False, focus: float = 1.0,
               anchor: Track | None = None, theme: str = "",
               artist_counts: dict[str, int] | None = None) -> list[Candidate]:
-        cohesion = float(config.get("artist_cohesion", 1.0)) * focus
+        # Skipping late, again and again, means the run has gone stale rather
+        # than any one song being wrong. Loosen the grip a little when that
+        # happens — at worst it halves.
+        slack = 1.0 - min(0.5, taste.fatigue() * 0.18)
+        cohesion = float(config.get("artist_cohesion", 1.0)) * focus * slack
         cur_artist = current.primary_artist() if current else ""
         seen_ids: set[str] = set()
         seen_keys: set[str] = set()

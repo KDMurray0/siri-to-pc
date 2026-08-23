@@ -188,7 +188,11 @@ def artist_tracks(artist: str, limit: int = 20) -> list[Track]:
     except Exception as exc:
         log.debug("artist lookup failed for %r: %s", artist, exc)
     if len(tracks) < limit:
-        tracks += search_songs(artist, limit=limit)
+        # Searching the band name also finds songs *called* that — asking for
+        # Blur turned up "Blur" by Bella Kay and the queue called it same-artist.
+        want = Track(title="", artist=artist).primary_artist()
+        tracks += [t for t in search_songs(artist, limit=limit)
+                   if not want or t.primary_artist() == want]
     seen, out = set(), []
     for t in tracks:
         if t.video_id and t.video_id not in seen and _acceptable(t):

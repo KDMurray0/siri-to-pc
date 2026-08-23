@@ -77,6 +77,7 @@ class Track:
     source: str = "youtube"  # youtube | soundcloud | local
     path: str = ""           # local file once downloaded
     origin: str = "request"  # request | radio | playlist | library
+    reason: str = ""         # why the radio picked it, shown in the queue
 
     def key(self) -> str:
         return norm_title(self.title, self.artist)

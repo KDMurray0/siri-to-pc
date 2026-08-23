@@ -205,6 +205,10 @@ body.mini .magic{display:none}
 .q .qt{min-width:0;flex:1}
 .q .qn{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .q .qa{font-size:11px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.why{margin-left:6px;font-size:9px;letter-spacing:.04em;text-transform:uppercase;
+  border:1px solid var(--line);border-radius:4px;padding:0 4px;opacity:0;
+  color:var(--sub);transition:opacity .15s}
+.q:hover .why{opacity:.75}
 .q.cur .qn{color:var(--accent)}
 .qctl{display:flex;gap:2px;opacity:0;transition:opacity .15s}
 /* six dots you can grab; always visible, since a handle you can't see isn't
@@ -1000,11 +1004,26 @@ document.querySelectorAll(".navtab[data-panel]").forEach(tab => tab.onclick = ()
 
 /* ── queue ─────────────────────────────────────────────────────────── */
 let histOpen = false, lastQ = [];
+/* Why a track is here. The radio already records this; not showing it made
+   the queue impossible to argue with when it went somewhere odd. */
+const WHY = {
+  asked:  ["you asked for it", "asked"],
+  artist: ["same artist", "artist"],
+  anchor: ["like the song you started with", "anchor"],
+  theme:  ["fits the genre you asked for", "genre"],
+  liked:  ["you liked something like it", "liked"],
+  radio:  ["radio", "radio"],
+  genre:  ["fits the genre", "genre"],
+};
+
 function qRow(t) {
   const art = t.art ? `<img class="qi" src="${t.art}" onerror="this.removeAttribute('src')">` : `<div class="qi"></div>`;
   const eq = t.current ? `<div class="eq"></div>` : "";
+  const w = WHY[t.reason] || null;
+  const why = w ? `<span class="why" title="${w[0]}">${w[1]}</span>` : "";
   return `<div class="q${t.current?" cur":""}" data-idx="${t.index}">${art}` +
-    `<div class="qt"><div class="qn">${esc(t.title)}</div><div class="qa">${esc(t.artist||"")}</div></div>${eq}` +
+    `<div class="qt"><div class="qn">${esc(t.title)}</div>` +
+    `<div class="qa">${esc(t.artist||"")}${why}</div></div>${eq}` +
     `<div class="qctl">` +
       `<button class="qc" data-act="del" data-i="${t.index}" title="Remove">✕</button>` +
       `<span class="grip" title="Drag to reorder">${GRIP}</span>` +

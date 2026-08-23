@@ -36,6 +36,7 @@ class PlayerService:
         self.alt = MpvClient(PIPE_ALT, primary=False)
         self.audio = AudioEngine(self.mpv, self.alt)
         self.queue = QueueManager(self.mpv, ContextBuilder(catalog))
+        self.audio.track_for = self.queue.track_for
         self._stop = threading.Event()
         self._restarting = threading.Lock()
         self._watch: dict = {}
@@ -100,6 +101,7 @@ class PlayerService:
             pass
         self.audio.mpv = self.mpv
         self.audio.alt = self.alt
+        self.audio.track_for = self.queue.track_for
         self.queue.mpv = self.mpv
         self.audio.apply_all()
         bus.publish(Ev.TOAST, "Player restarted")
