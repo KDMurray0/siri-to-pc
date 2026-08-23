@@ -406,8 +406,17 @@ class QueueManager:
         bus.publish(Ev.QUEUE, self.snapshot())
 
     def move(self, frm: int, to: int) -> bool:
+        """Put the track at `frm` at position `to`.
+
+        mpv's playlist-move takes the entry to insert *before*, so dragging a
+        track downwards needs one added or it lands a slot short.
+        """
+        frm, to = int(frm), int(to)
+        if frm == to:
+            return True
         self._undo.append(("move", to, frm))
-        self.mpv.command("playlist-move", int(frm), int(to), wait=False)
+        self.mpv.command("playlist-move", frm, to + 1 if to > frm else to,
+                         wait=False)
         self.publish_queue()
         return True
 

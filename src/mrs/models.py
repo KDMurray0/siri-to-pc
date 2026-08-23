@@ -11,12 +11,26 @@ _BRACKETS = re.compile(r"\(.*?\)|\[.*?\]")
 # No "with": it truncates real titles ("Bullet With Butterfly Wings" -> "bullet").
 # A parenthesised "(with X)" is already removed by _BRACKETS.
 _FEAT = re.compile(r"\b(feat\.?|ft\.?|featuring)\b.*", re.I)
+# Apostrophes are deleted rather than collapsed to a space: YouTube lists both
+# "Don't Stop Me Now" and "Dont Stop Me Now", and turning them into spaces gave
+# "don t stop me now" vs "dont stop me now" — two keys for one song.
+_QUOTES = re.compile(r"['\u2018\u2019\u02bc`]")
 _NONWORD = re.compile(r"[^a-z0-9]+")
 
-_DERIVATIVE = re.compile(
-    r"\b(remix|live|acoustic|cover|karaoke|instrumental|sped\s*up|slowed|"
-    r"nightcore|8d|reverb|mashup|edit|bootleg|snippet|preview|teaser|"
-    r"lyric video|visualizer)\b", re.I)
+# Words that are never part of a real title.
+_JUNK = (r"karaoke|nightcore|8d|sped\s*up|slowed|bootleg|mashup|reverb|"
+         r"lyric video|visuali[sz]er|snippet|preview|teaser")
+# Words that often are: Live Forever, Live and Let Die, Cover Me, Remix Culture.
+# These only mean "not the real release" when they sit where a descriptor sits.
+_TAGS = r"remix|live|acoustic|cover|instrumental|edit|version|mix"
+
+_DERIV_JUNK = re.compile(r"\b(" + _JUNK + r")\b", re.I)
+# inside brackets: "Song (Live)", "Song [Acoustic Version]"
+_DERIV_BRACKET = re.compile(r"[(\[][^)\]]*\b(" + _TAGS + r")\b", re.I)
+# after a dash: "Song - Live", "Song — Acoustic"
+_DERIV_DASH = re.compile(r"[-\u2013\u2014]\s*[^-\u2013\u2014]*\b(" + _TAGS + r")\b", re.I)
+# "Live at Wembley", "Acoustic from the studio"
+_DERIV_WHERE = re.compile(r"\b(live|acoustic|unplugged)\s+(at|in|from|on)\b", re.I)
 
 
 def _strip_article(name: str) -> str:
@@ -30,14 +44,24 @@ def norm_title(title: str, artist: str = "") -> str:
     t = (title or "").lower()
     t = _BRACKETS.sub(" ", t)
     t = _FEAT.sub(" ", t)
+    t = _QUOTES.sub("", t)
     t = _NONWORD.sub(" ", t).strip()
     t = re.sub(r"\s+(remaster(ed)?|mix|version|edit)(\s+\d{4})?$", "", t).strip()
-    a = _NONWORD.sub(" ", (artist or "").split(",")[0].lower()).strip()
+    a = _QUOTES.sub("", (artist or "").split(",")[0].lower())
+    a = _NONWORD.sub(" ", a).strip()
     return f"{_strip_article(a)}|{t}" if t else ""
 
 
 def is_derivative(title: str) -> bool:
-    return bool(_DERIVATIVE.search(title or ""))
+    """A remix/live/cover rather than the release you asked for.
+
+    "Live Forever" and "Live and Let Die" are real songs, so the softer words
+    only count when they sit where a descriptor sits — in brackets, after a
+    dash, or followed by "at"/"from".
+    """
+    t = title or ""
+    return bool(_DERIV_JUNK.search(t) or _DERIV_BRACKET.search(t)
+                or _DERIV_DASH.search(t) or _DERIV_WHERE.search(t))
 
 
 @dataclass

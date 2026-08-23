@@ -118,6 +118,16 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .q .n{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .q .a{font-size:11px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .q.cur .n{color:var(--accent)}
+/* six dots to drag a track up or down the queue. bigger than the desktop
+   ones — it's a thumb, not a mouse pointer. touch-action:none or the browser
+   scrolls the page instead of letting us move the row. */
+.grip{margin-left:auto;display:grid;grid-template-columns:1fr 1fr;gap:3px;
+  padding:9px 6px;cursor:grab;touch-action:none;opacity:.5;flex:0 0 auto;
+  align-content:center}
+.grip i{width:3.5px;height:3.5px;border-radius:50%;background:var(--sub);display:block}
+.q.dragging{background:color-mix(in srgb,var(--accent) 18%,var(--panel));
+  box-shadow:0 8px 22px rgba(0,0,0,.5);position:relative;z-index:5}
+.q.dragging .grip{opacity:1;cursor:grabbing}
 .muted{color:var(--sub);font-size:12.5px;padding:10px 6px}
 
 .sheet{position:fixed;inset:auto 0 0 0;z-index:40;background:var(--panel);
@@ -407,7 +417,10 @@ $("newplgo").onclick = async () => {
   toast(((await api("/api/playlist/add?name=" + encodeURIComponent(n))) || {}).message);
 };
 
+const GRIP = "<i></i><i></i><i></i><i></i><i></i><i></i>";
 function renderQueue(rows) {
+  // don't rebuild the list while a row is being dragged
+  if (dragging()) return;
   const box = $("queue");
   if (!rows || !rows.length) { box.innerHTML = `<div class="muted">Nothing queued.</div>`; return; }
   const cur = rows.findIndex(r => r.current);
@@ -415,9 +428,58 @@ function renderQueue(rows) {
   box.innerHTML = show.map(t =>
     `<div class="q${t.current ? " cur" : ""}" data-i="${t.index}">` +
     (t.art ? `<img src="${t.art}" onerror="this.removeAttribute('src')">` : `<div class="ph"></div>`) +
-    `<div class="t"><div class="n">${esc(t.title)}</div><div class="a">${esc(t.artist)}</div></div></div>`).join("");
+    `<div class="t"><div class="n">${esc(t.title)}</div><div class="a">${esc(t.artist)}</div></div>` +
+    `<span class="grip" title="Drag to reorder">${GRIP}</span></div>`).join("");
 }
+/* Reorder by dragging the dots. Rows are reordered in place for feedback and
+   the real playlist index is sent once, on release. */
+function enableDrag(box, onDrop) {
+  let drag = null;
+  box.addEventListener("pointerdown", e => {
+    const grip = e.target.closest(".grip");
+    if (!grip) return;
+    const row = grip.closest(".q[data-i]");
+    if (!row) return;
+    e.preventDefault();
+    drag = { row, order: [...box.querySelectorAll(".q[data-i]")].map(r => +r.dataset.i),
+             from: +row.dataset.i };
+    row.setPointerCapture(e.pointerId);
+    row.classList.add("dragging");
+  });
+  box.addEventListener("pointermove", e => {
+    if (!drag) return;
+    e.preventDefault();
+    for (const other of box.querySelectorAll(".q[data-i]")) {
+      if (other === drag.row) continue;
+      const r = other.getBoundingClientRect();
+      const mid = r.top + r.height / 2;
+      const after = drag.row.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING;
+      if (e.clientY < mid && !after) { box.insertBefore(drag.row, other); break; }
+      if (e.clientY > mid && after) { box.insertBefore(drag.row, other.nextSibling); break; }
+    }
+  });
+  const finish = () => {
+    if (!drag) return;
+    const { row, order, from } = drag;
+    drag = null;
+    row.classList.remove("dragging");
+    const to = order[[...box.querySelectorAll(".q[data-i]")].indexOf(row)];
+    if (to !== undefined && to !== from) onDrop(from, to);
+  };
+  box.addEventListener("pointerup", finish);
+  box.addEventListener("pointercancel", finish);
+  return () => !!drag;
+}
+
+let justDragged = 0;
+let dragging = () => false;
+dragging = enableDrag($("queue"), (from, to) => {
+  justDragged = Date.now();
+  api("/api/queue/move?from=" + from + "&to=" + to);
+});
+
 $("queue").addEventListener("click", e => {
+  if (e.target.closest(".grip") || Date.now() - justDragged < 250) return;
   const row = e.target.closest(".q[data-i]"); if (!row) return;
   api("/api/queue/jump?index=" + row.dataset.i);
 });
