@@ -98,6 +98,23 @@ def _clean(title: str) -> str:
     return t
 
 
+def split_title(text: str) -> tuple[str, str]:
+    """"Artist - Title" off the wire, into its two halves.
+
+    Stations are inconsistent about the dash and about padding, and some send
+    only a show name with no separator at all — that isn't a song and gets
+    treated as one.
+    """
+    t = _clean(text)
+    for dash in (" - ", " – ", " — ", " -", "- "):
+        if dash in t:
+            left, _, right = t.partition(dash)
+            left, right = left.strip(" -"), right.strip(" -")
+            if left and right:
+                return left, right
+    return "", ""
+
+
 class NowPlaying:
     """Polls mpv for the stream's ICY title while a station is on.
 
@@ -110,11 +127,15 @@ class NowPlaying:
         self._stop = threading.Event()
         self.title = ""
         self.station = ""
+        self.artist = ""
+        self.song = ""
 
     def start(self, mpv, station: str) -> None:
         self.stop()
         self.station = station
         self.title = ""
+        self.artist = ""
+        self.song = ""
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, args=(mpv,),
                                         daemon=True, name="icy")
@@ -123,6 +144,8 @@ class NowPlaying:
     def stop(self) -> None:
         self._stop.set()
         self.title = ""
+        self.artist = ""
+        self.song = ""
 
     def _loop(self, mpv) -> None:
         misses = 0
@@ -137,6 +160,7 @@ class NowPlaying:
                             break
                 if found and found != self.title:
                     self.title = found
+                    self.artist, self.song = split_title(found)
                     log.info("%s: %s", self.station, found)
                     misses = 0
                 elif not found:

@@ -138,6 +138,8 @@ body.live #prev,body.live #next,body.live #shuffle,body.live #repeat,
 body.live #like,body.live #download,body.live #addlist{
   opacity:0;max-width:0;transform:scale(.8);pointer-events:none;
   margin-left:0;margin-right:0;overflow:hidden}
+body.live.onsong #like,body.live.onsong #download,body.live.onsong #addlist{
+  opacity:1;max-width:44px;transform:none;pointer-events:auto}
 body.live .prog,body.live .times{
   opacity:0;max-height:0;margin:0;overflow:hidden;pointer-events:none}
 .onair{display:none}
@@ -1758,6 +1760,7 @@ function applyStatus(d) {
                         one: "Repeating this song" }[d.repeat] || "Repeat";
   $("shuffle").classList.toggle("on", !!d.shuffle);
   document.body.classList.toggle("live", !!t.live);
+  document.body.classList.toggle("onsong", !!t.song_known);
   liked = !!t.liked;
   $("like").classList.toggle("liked", liked);
   if (key !== state.trackKey) {

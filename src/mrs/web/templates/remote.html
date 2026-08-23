@@ -146,6 +146,8 @@ body.live #prev,body.live #next,body.live #shuffle,body.live #repeat,
 body.live #like{
   opacity:0;max-width:0;transform:scale(.8);pointer-events:none;
   margin:0;overflow:hidden;padding:0;border:0}
+body.live.onsong #like{opacity:1;max-width:44px;transform:none;
+  pointer-events:auto;padding:initial;border:1px solid var(--line)}
 body.live .bar,body.live .times{
   opacity:0;max-height:0;margin:0;overflow:hidden;pointer-events:none}
 .onair{display:none}
@@ -528,6 +530,7 @@ function apply(d) {
   $("repeat").classList.toggle("on", d.repeat && d.repeat !== "off");
   $("repeat").dataset.mode = d.repeat || "off";
   document.body.classList.toggle("live", !!(d.track && d.track.live));
+  document.body.classList.toggle("onsong", !!(d.track && d.track.song_known));
   const a = d.activity || {};
   const busy = a.stage && !["idle", "playing"].includes(a.stage);
   $("stage").textContent = busy

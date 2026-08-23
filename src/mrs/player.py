@@ -295,14 +295,19 @@ class PlayerService:
                             else (props.get("duration")
                                   or (track.duration if track else 0)),
                 "live": radio.is_station(track),
+                # a station mid-song can be liked and saved; mid-news it can't
+                "song_known": bool(radio.is_station(track)
+                                   and radio.now_playing.song),
                 "liked": taste.is_liked(track.video_id) if track else False,
             } if track else {"name": "", "artist": "", "art": "", "duration": 0,
-                             "live": False},
+                             "live": False, "song_known": False},
         }
 
     # -- transport -----------------------------------------------------
+    # Liking, saving and adding all work on a station — the song announced
+    # itself. What can't work is anything about order or position.
     ON_AIR_BLOCKED = {"next", "skip", "previous", "prev", "back", "shuffle",
-                      "repeat", "like", "seek"}
+                      "repeat", "seek"}
 
     def control(self, action: str, value=None) -> dict:
         a = (action or "").lower()
@@ -376,8 +381,24 @@ class PlayerService:
         return {"ok": True}
 
     # -- likes / similar -----------------------------------------------
-    def like_current(self) -> dict:
+    def _acting_on(self) -> Track | None:
+        """The track a like/save/add should apply to.
+
+        On a station that's the song it just announced, found on YouTube —
+        we know the name, so there's no reason those buttons shouldn't work.
+        Everywhere else it's simply what's playing.
+        """
         track = self.queue.current_track()
+        if not radio.is_station(track):
+            return track
+        artist, song = radio.now_playing.artist, radio.now_playing.song
+        if not song:
+            return None
+        hits = catalog.search_songs(f"{song} {artist}".strip(), limit=1)
+        return hits[0] if hits else None
+
+    def like_current(self) -> dict:
+        track = self._acting_on()
         if not track:
             return {"ok": False, "message": "Nothing playing"}
         liked = taste.toggle_like(track)
@@ -421,9 +442,14 @@ class PlayerService:
 
     # -- export / pin --------------------------------------------------
     def export_current(self) -> dict:
-        track = self.queue.current_track()
-        if not track or not track.path:
+        track = self._acting_on()
+        if not track:
             return {"ok": False, "message": "Nothing playing"}
+        if not track.path:
+            # off the radio it hasn't been fetched yet, so fetch it
+            track.path = downloader.fetch(track) or ""
+        if not track.path:
+            return {"ok": False, "message": f"Couldn't get {track.title}"}
         dest_dir = os.path.join(os.path.expanduser("~"), "Music", "MusicRequest")
         os.makedirs(dest_dir, exist_ok=True)
         import re
@@ -449,7 +475,7 @@ class PlayerService:
         return playlists.summary()
 
     def playlist_add_current(self, name: str) -> dict:
-        track = self.queue.current_track()
+        track = self._acting_on()
         if not track:
             return {"ok": False, "message": "Nothing playing"}
         return playlists.add(name, track)
