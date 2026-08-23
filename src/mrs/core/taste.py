@@ -28,6 +28,8 @@ class TasteEngine:
         self._history: list[str] = []          # completed video ids, newest last
         self._recent_meta: list[dict] = []     # for the Recent panel
         self._played_at: dict[str, float] = {}  # norm title -> last play time
+        self._dirty = False
+        self._last_save = 0.0
         self._load()
 
     # -- persistence ---------------------------------------------------
@@ -46,8 +48,22 @@ class TasteEngine:
         except Exception:
             self._liked = []
 
+    def _prune(self) -> None:
+        """Drop the play times we can no longer act on.
+
+        played_at only exists to answer "did this play recently", and recently
+        means dedupe_hours. Entries older than that are dead weight, but it was
+        keeping one per track forever and writing the lot to disk on every
+        song change.
+        """
+        window = float(config.get("dedupe_hours", 12)) * 3600
+        cutoff = time.time() - max(window * 2, 86400)
+        if len(self._played_at) > 400:
+            self._played_at = {k: v for k, v in self._played_at.items() if v > cutoff}
+
     def save(self) -> None:
         with self._lock:
+            self._prune()
             try:
                 state_file("play_stats.json").write_text(json.dumps({
                     "songs": self._song, "artists": self._artist,
@@ -57,6 +73,17 @@ class TasteEngine:
                 }), encoding="utf-8")
             except Exception as exc:
                 log.debug("stats save failed: %s", exc)
+            self._dirty = False
+            self._last_save = time.monotonic()
+
+    def save_soon(self) -> None:
+        """Write at most every few seconds; a skipped track shouldn't cost a
+        full rewrite of the stats file."""
+        with self._lock:
+            self._dirty = True
+            if time.monotonic() - self._last_save < 20:
+                return
+        self.save()
 
     def _save_liked(self) -> None:
         try:
@@ -100,7 +127,7 @@ class TasteEngine:
             key = norm_title(track.title, track.artist)
             if key:
                 self._played_at[key] = time.time()
-        self.save()
+        self.save_soon()
         return completed
 
     def mark_queued(self, track: Track) -> None:

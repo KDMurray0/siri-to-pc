@@ -328,7 +328,46 @@ class MpvClient:
         return default if val is None else val
 
     def get_many(self, props: list[str]) -> dict:
-        return {p: self.command("get_property", p) for p in props}
+        """Ask for several properties at once.
+
+        This used to wait for each reply before sending the next, so the status
+        the monitor builds every second cost eight round-trips down the pipe
+        instead of one. Send them all, then collect.
+        """
+        if not self._handle:
+            return {p: None for p in props}
+        sent: list[tuple[str, int, Future]] = []
+        for prop in props:
+            with self._lock:
+                self._req_id += 1
+                rid = self._req_id
+                fut: Future = Future()
+                self._pending[rid] = fut
+            payload = json.dumps({"command": ["get_property", prop],
+                                  "request_id": rid}).encode() + b"\n"
+            try:
+                _write(self._handle, payload)
+            except Exception as exc:
+                with self._lock:
+                    self._pending.pop(rid, None)
+                if is_pipe_dead(exc):
+                    self._mark_broken()
+                    return {p: None for p in props}
+                continue
+            sent.append((prop, rid, fut))
+
+        out: dict = {p: None for p in props}
+        deadline = time.monotonic() + 4.0
+        for prop, rid, fut in sent:
+            try:
+                msg = fut.result(timeout=max(0.05, deadline - time.monotonic()))
+            except Exception:
+                with self._lock:
+                    self._pending.pop(rid, None)
+                continue
+            if msg.get("error") in (None, "success"):
+                out[prop] = msg.get("data")
+        return out
 
     def set(self, prop: str, value) -> None:
         self.command("set_property", prop, value, wait=False)

@@ -5,7 +5,7 @@ the bars moved for audio that had nothing to do with what's playing. This
 reads the actual file mpv is playing instead: ffmpeg decodes it to 8 kHz mono,
 a Goertzel bank measures seven bands at 20 fps, and the result is cached.
 
-About a second and a half for a four-minute track, once, in the background.
+Under half a second for a four-minute track, once, on one background worker.
 The page then just indexes the envelope by playback position, so it's exactly
 in step with the music and costs nothing at runtime.
 """
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import array
 import math
+import queue
 import subprocess
 import threading
 from pathlib import Path
@@ -121,27 +122,53 @@ def cached(path: str) -> bytes | None:
         return None
 
 
-_working: set[str] = set()
+_queued: set[str] = set()
 _lock = threading.Lock()
+_jobs: "queue.Queue[str]" = queue.Queue()
+_worker: threading.Thread | None = None
+
+
+def _run() -> None:
+    global _worker
+    done = 0
+    while True:
+        try:
+            path = _jobs.get(timeout=30)
+        except queue.Empty:
+            break
+        try:
+            analyse(path)
+            done += 1
+        except Exception:
+            pass
+        finally:
+            with _lock:
+                _queued.discard(path)
+        if done % 25 == 0:
+            prune()          # the cache is small, but not infinite
+    with _lock:
+        _worker = None
 
 
 def ensure(path: str) -> None:
-    """Analyse in the background so it's ready before the track plays."""
+    """Analyse in the background so it's ready before the track plays.
+
+    One worker, not one thread per track. Measured on its own the analysis
+    takes under half a second, but it's pure Python and several at once — two
+    download workers finishing together while a track plays — turn that into
+    eight seconds of everything fighting over the interpreter.
+    """
     if not path or cached(path) is not None:
         return
+    global _worker
     with _lock:
-        if path in _working:
+        if path in _queued:
             return
-        _working.add(path)
-
-    def work() -> None:
-        try:
-            analyse(path)
-        finally:
-            with _lock:
-                _working.discard(path)
-
-    threading.Thread(target=work, daemon=True, name="spectrum").start()
+        _queued.add(path)
+        _jobs.put(path)
+        if _worker is None or not _worker.is_alive():
+            _worker = threading.Thread(target=_run, daemon=True, name="spectrum")
+            _worker.start()
 
 
 def prune(keep: int = 400) -> None:

@@ -22,7 +22,9 @@ log = get("listen")
 BANDS = [60, 160, 400, 1000, 2500, 6000, 11000]
 TARGET_RATE = 24000        # what we downsample to
 WINDOW = 1024              # samples per measurement (~43ms)
-PUBLISH_HZ = 30
+PUBLISH_HZ = 14        # the page reads the track's own envelope now;
+                       # this is the fallback, and 30/s of it was most
+                       # of what the app pushed over the network
 
 
 class Listener:
@@ -164,8 +166,8 @@ class Listener:
             out.append(max(0.0, min(1.0, mag / self._peaks[bi])))
 
         overall = sum(out) / len(out)
-        bus.publish(Ev.LEVEL, {"bands": [round(v, 3) for v in out],
-                               "m": round(overall, 3), "live": True},
+        bus.publish(Ev.LEVEL, {"bands": [round(v, 2) for v in out],
+                               "m": round(overall, 2), "live": True},
                     sticky=False)
 
 

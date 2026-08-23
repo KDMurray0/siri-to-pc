@@ -49,6 +49,7 @@ class QueueManager:
         self._request_kind = "song"              # what you last asked for
         self._anchor: Track | None = None        # the song that started it off
         self._theme = ""                         # genre/vibe asked for, if any
+        self._queue_stamp = None                 # so we only push real changes
         self._undo: deque[tuple] = deque(maxlen=20)
         self._workers: list[threading.Thread] = []
         self._activity = Activity()
@@ -402,8 +403,19 @@ class QueueManager:
             })
         return out
 
-    def publish_queue(self) -> None:
-        bus.publish(Ev.QUEUE, self.snapshot())
+    def publish_queue(self, *, force: bool = False) -> None:
+        """Send the queue out, but only when it's actually different.
+
+        The monitor calls this every second. The queue changes maybe once a
+        song, so re-sending an identical 4KB of json 60 times a minute to every
+        phone and every open tab was most of the traffic this app produced.
+        """
+        snap = self.snapshot()
+        stamp = hash(tuple((r["index"], r["video_id"], r["current"]) for r in snap))
+        if not force and stamp == self._queue_stamp:
+            return
+        self._queue_stamp = stamp
+        bus.publish(Ev.QUEUE, snap)
 
     def move(self, frm: int, to: int) -> bool:
         """Put the track at `frm` at position `to`.
