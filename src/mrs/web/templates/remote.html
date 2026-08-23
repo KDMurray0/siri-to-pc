@@ -69,7 +69,14 @@ button{background:none;border:0;color:var(--fg);font-family:inherit;cursor:point
   background:var(--panel);border:1px solid var(--line);transition:.12s}
 .ib:active{transform:scale(.93)}
 .ib svg{width:20px;height:20px;fill:currentColor;display:block}
-.ib.on{color:var(--accent);border-color:var(--accent)}
+.ib.on{color:var(--accent);border-color:var(--accent);background:color-mix(in srgb,var(--accent) 20%,var(--panel))}
+/* Repeat had only a colour change to say it was on, and looked identical
+   whether it was repeating the queue or the one track. Now: a filled pill for
+   on, and a "1" for repeating this song, which is the usual shorthand. */
+#repeat,#shuffle{position:relative}
+#repeat[data-mode="one"]::after{content:"1";position:absolute;right:1px;bottom:0;
+  font-size:8.5px;font-weight:800;line-height:1;padding:1px 2px;border-radius:4px;
+  background:var(--accent);color:var(--accent-ink)}
 .play{width:58px;height:58px;border-radius:18px;background:var(--accent);
   color:var(--accent-ink);border:0}
 .play svg{width:26px;height:26px}
@@ -501,6 +508,7 @@ function apply(d) {
   $("like").classList.toggle("on", !!t.liked);
   $("shuffle").classList.toggle("on", !!d.shuffle);
   $("repeat").classList.toggle("on", d.repeat && d.repeat !== "off");
+  $("repeat").dataset.mode = d.repeat || "off";
   const a = d.activity || {};
   const busy = a.stage && !["idle", "playing"].includes(a.stage);
   $("stage").textContent = busy

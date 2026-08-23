@@ -85,6 +85,20 @@ def _duration(row: dict) -> int:
     return 0
 
 
+_THUMB_SIZE = re.compile(r"=w\d+-h\d+")
+ART_PX = 544          # the player draws it at 152, and phones at 2x or 3x
+
+
+def _bigger(url: str) -> str:
+    """Ask googleusercontent for a usable size.
+
+    Radio rows hand back a 60px thumbnail and search rows 120px, both of which
+    look like mush blown up to the player's artwork. The size lives in the URL,
+    so just ask for a bigger one.
+    """
+    return _THUMB_SIZE.sub(f"=w{ART_PX}-h{ART_PX}", url or "", count=1)
+
+
 def _thumb(row: dict) -> str:
     # search rows say "thumbnails", watch/radio rows say "thumbnail" — miss the
     # second and every song the radio picks turns up with a blank cover
@@ -94,9 +108,10 @@ def _thumb(row: dict) -> str:
     if not thumbs:
         return ""
     try:
-        return sorted(thumbs, key=lambda t: t.get("width", 0))[-1].get("url", "")
+        best = sorted(thumbs, key=lambda t: t.get("width", 0))[-1].get("url", "")
     except Exception:
-        return thumbs[-1].get("url", "")
+        best = thumbs[-1].get("url", "")
+    return _bigger(best)
 
 
 def to_track(row: dict, origin: str = "radio") -> Track:
