@@ -288,14 +288,30 @@ class PlayerService:
                 "album": track.album if track else "",
                 "art": track.art if track else "",
                 "video_id": track.video_id if track else "",
-                "duration": props.get("duration") or (track.duration if track else 0),
+                # mpv reports a minute-ish "duration" for a stream — its own
+                # buffer window — and a progress bar built on that sits at 75%
+                # and creeps, as though the song were about to end.
+                "duration": 0 if radio.is_station(track)
+                            else (props.get("duration")
+                                  or (track.duration if track else 0)),
+                "live": radio.is_station(track),
                 "liked": taste.is_liked(track.video_id) if track else False,
-            } if track else {"name": "", "artist": "", "art": "", "duration": 0},
+            } if track else {"name": "", "artist": "", "art": "", "duration": 0,
+                             "live": False},
         }
 
     # -- transport -----------------------------------------------------
+    ON_AIR_BLOCKED = {"next", "skip", "previous", "prev", "back", "shuffle",
+                      "repeat", "like", "seek"}
+
     def control(self, action: str, value=None) -> dict:
         a = (action or "").lower()
+        # Live radio has no next track, nothing to shuffle and nothing to like.
+        # The buttons are hidden, but Siri, the media keys and the API can all
+        # still ask, so refuse here rather than in the page.
+        if a in self.ON_AIR_BLOCKED and radio.is_station(self.queue.current_track()):
+            station = (self.queue.current_track() or Track()).title
+            return {"message": f"{station} is live", "ignored": True}
         if a in ("pause", "stop"):
             self.mpv.set("pause", True)
             return {"message": "Paused"}

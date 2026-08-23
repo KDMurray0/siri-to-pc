@@ -137,6 +137,24 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .q.dragging .grip{opacity:1;cursor:grabbing}
 .muted{color:var(--sub);font-size:12.5px;padding:10px 6px}
 
+/* Live radio: no next track, no scrubbing, nothing to like. Collapse them
+   instead of leaving buttons that do nothing. */
+#prev,#next,#shuffle,#repeat,#like,.bar,.times{
+  transition:opacity .22s ease,max-width .22s ease,max-height .22s ease,
+             margin .22s ease,transform .22s ease}
+body.live #prev,body.live #next,body.live #shuffle,body.live #repeat,
+body.live #like{
+  opacity:0;max-width:0;transform:scale(.8);pointer-events:none;
+  margin:0;overflow:hidden;padding:0;border:0}
+body.live .bar,body.live .times{
+  opacity:0;max-height:0;margin:0;overflow:hidden;pointer-events:none}
+.onair{display:none}
+body.live .onair{display:inline-flex;align-items:center;gap:5px;margin-left:8px;
+  font-size:9.5px;font-weight:800;letter-spacing:.1em;color:#ff4d6d}
+.onair i{width:6px;height:6px;border-radius:50%;background:#ff4d6d;
+  animation:livepulse 1.4s ease-in-out infinite}
+@keyframes livepulse{0%,100%{opacity:.35}50%{opacity:1}}
+
 .sheet{position:fixed;inset:auto 0 0 0;z-index:40;background:var(--panel);
   border-radius:18px 18px 0 0;border-top:1px solid var(--line);
   transform:translateY(105%);transition:transform .25s cubic-bezier(.2,.8,.2,1);
@@ -207,7 +225,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
         <img class="art placeholder" id="art" alt="">
         <div class="meta">
           <h1 id="title">Nothing playing</h1>
-          <div class="by" id="artist"></div>
+          <div class="by" id="artist"></div><span class="onair"><i></i>ON AIR</span>
         </div>
       </div>
 
@@ -509,6 +527,7 @@ function apply(d) {
   $("shuffle").classList.toggle("on", !!d.shuffle);
   $("repeat").classList.toggle("on", d.repeat && d.repeat !== "off");
   $("repeat").dataset.mode = d.repeat || "off";
+  document.body.classList.toggle("live", !!(d.track && d.track.live));
   const a = d.activity || {};
   const busy = a.stage && !["idle", "playing"].includes(a.stage);
   $("stage").textContent = busy
