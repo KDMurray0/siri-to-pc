@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from ..config import config
 from ..events import Ev, bus
 from ..logging_setup import get
-from ..models import Activity, Candidate, Track, is_derivative, norm_title
+from ..models import Activity, Candidate, Track
 from . import radio, spectrum
 from .downloader import downloader
 from .taste import taste
@@ -503,10 +503,6 @@ class QueueManager:
             self.play_next(tr)
             return f"Restoring {tr.title}"
         return "Nothing to undo"
-
-    def clear_radio(self) -> None:
-        with self._lock:
-            self._pool.clear()
 
     def stats(self) -> dict:
         with self._lock:

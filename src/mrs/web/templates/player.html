@@ -58,7 +58,8 @@ html,body{height:100%;overflow:hidden;background:var(--bg);
   letter-spacing:.02em;pointer-events:none}
 body.timing .timeleft{display:flex}
 body.mini .timeleft{display:none}
-.timeleft svg{width:12px;height:12px;fill:currentColor;display:block}
+.timeleft svg{width:12px;height:12px;display:block;fill:none;
+  stroke:currentColor;stroke-width:2.1;stroke-linecap:round}
 
 .stage{position:relative;z-index:2;padding:22px 22px 12px;flex:1;display:flex;
   flex-direction:column;min-height:0}
@@ -261,6 +262,8 @@ body.reordering .q{transition:transform .12s ease}
 .qhistory:hover{color:var(--accent)}
 
 /* the level meter — fed by mpv's real loudness + per-channel peaks */
+.nowdot{width:6px;height:6px;border-radius:50%;background:var(--accent);
+  flex:0 0 auto;box-shadow:0 0 6px var(--accent)}
 .eq{flex:0 0 auto;display:flex;gap:2px;align-items:flex-end;height:16px}
 .eq i{width:2px;height:8%;border-radius:1px;background:var(--accent);
   transform-origin:bottom;will-change:height}
@@ -450,19 +453,29 @@ body.mini .controls .ib.small svg{width:14px;height:14px}
 
 /* the level meter sits on the artwork in mini mode */
 .miniwave{display:none}
-body.mini .miniwave{display:flex;position:absolute;left:0;right:0;bottom:0;height:22px;
-  align-items:flex-end;justify-content:center;gap:1.5px;padding:0 5px 4px;
-  border-radius:0 0 12px 12px;pointer-events:none;
-  background:linear-gradient(to top,rgba(0,0,0,.55),transparent)}
-body.mini .miniwave i{width:2px;height:10%;background:var(--accent);border-radius:1px;
-  box-shadow:0 0 4px color-mix(in srgb,var(--accent) 55%,transparent)}
+/* The meter sits across the bottom of the cover, big and mini alike. It used
+   to be a row of specks in the queue, where you'd never look. */
+.miniwave{display:flex;position:absolute;bottom:0;left:50%;width:152px;
+  transform:translateX(-50%);height:34px;
+  align-items:flex-end;justify-content:center;gap:2.5px;padding:0 10px 7px;
+  border-radius:0 0 18px 18px;pointer-events:none;
+  background:linear-gradient(to top,rgba(0,0,0,.5),transparent)}
+.miniwave i{width:3px;height:8%;background:var(--accent);border-radius:1.5px;
+  box-shadow:0 0 5px color-mix(in srgb,var(--accent) 55%,transparent)}
+body.mini .miniwave{height:22px;gap:1.5px;padding:0 5px 4px;width:auto;
+  left:0;right:0;transform:none;border-radius:0 0 12px 12px}
+body.mini .miniwave i{width:2px;border-radius:1px}
+/* flat when it's paused, gone when it's switched off */
+.miniwave{transition:opacity .3s}
+body.paused .miniwave{opacity:.25}
+body.noviz .miniwave{display:none}
 </style>
 </head>
 <body>
 <div class="frame" id="frame">
   <div class="topdrag"></div>
   <div class="timeleft" id="timeleft">
-    <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 10.6V6h-2v7.4l5.3 3.2 1-1.7z"/></svg>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.2l3.4 2"/></svg>
     <span id="timeleftv"></span>
   </div>
   <button class="winbtn" id="shrink" title="Shrink to mini" aria-label="Shrink">
@@ -579,6 +592,8 @@ body.mini .miniwave i{width:2px;height:10%;background:var(--accent);border-radiu
       <section class="spane open" data-s="sound">
         <div class="srow"><span class="slabel">Theme</span><div class="swatches" id="swatches"></div></div>
         <div class="srow"><span class="slabel">Equaliser</span><select id="eq"></select></div>
+        <div class="srow"><span class="slabel">Visualiser<em>The bars across the artwork</em></span>
+          <div class="toggle" id="viz"></div></div>
         <div class="srow"><span class="slabel">Even out volume<em>Keeps quiet and loud songs level</em></span>
           <div class="toggle" id="normalize"></div></div>
         <div class="srow"><span class="slabel">Crossfade<em>Overlap between tracks</em></span>
@@ -1062,7 +1077,7 @@ const WHY = {
 
 function qRow(t) {
   const art = t.art ? `<img class="qi" src="${t.art}" onerror="this.removeAttribute('src')">` : `<div class="qi"></div>`;
-  const eq = t.current ? `<div class="eq"></div>` : "";
+  const eq = t.current ? `<span class="nowdot"></span>` : "";
   const w = WHY[t.reason] || null;
   const why = w ? `<span class="why" title="${w[0]}">${w[1]}</span>` : "";
   return `<div class="q${t.current?" cur":""}" data-idx="${t.index}">${art}` +
@@ -1138,15 +1153,18 @@ function renderQueue(rows) {
     box.innerHTML = '<div class="muted">Nothing queued. Ask for a song, an artist, or a vibe.</div>';
     return;
   }
+  // The song that's on is already at the top of the window in big type, so
+  // the list starts with what's next.
   const cur = lastQ.findIndex(x => x.current);
-  const cut = cur < 0 ? 0 : cur;
+  const cut = cur < 0 ? 0 : cur + 1;
   const played = lastQ.slice(0, cut), upcoming = lastQ.slice(cut);
-  let html = "";
+  let html = upcoming.length
+    ? upcoming.map(qRow).join("")
+    : '<div class="muted">Nothing after this one yet.</div>';
   if (played.length) {
     html += `<button class="qhistory" id="qHist">${histOpen?"▾":"▸"} ${played.length} already played</button>`;
     if (histOpen) html += played.map(qRow).join("");
   }
-  html += upcoming.map(qRow).join("");
   box.innerHTML = html;
   buildMeters();
   const h = $("qHist");
@@ -1321,6 +1339,13 @@ const toggleRow = (id, path) => {
 toggleRow("announce", "/api/announce");
 toggleRow("boot", "/api/boot");
 toggleRow("lockips", "/api/lockips");
+$("viz").onclick = () => {
+  const on = !$("viz").classList.contains("on");
+  $("viz").classList.toggle("on", on);
+  document.body.classList.toggle("noviz", !on);
+  api("/api/setting?key=show_visualiser&value=" + (on ? 1 : 0));
+};
+
 $("normalize").onclick = () => {
   const on = !$("normalize").classList.contains("on");
   $("normalize").classList.toggle("on", on);
@@ -1576,6 +1601,9 @@ async function loadSettings() {
     s.eq_presets.forEach(p => { const o = document.createElement("option"); o.value = o.textContent = p; $("eq").appendChild(o); });
   if (s.eq) $("eq").value = s.eq;
   if (s.source) $("source").value = s.source;
+  const viz = s.show_visualiser !== false;
+  $("viz").classList.toggle("on", viz);
+  document.body.classList.toggle("noviz", !viz);
   $("normalize").classList.toggle("on", !!s.normalize);
   $("announce").classList.toggle("on", s.announce !== false);
   $("boot").classList.toggle("on", !!s.start_on_boot);

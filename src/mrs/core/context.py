@@ -173,10 +173,6 @@ class ContextBuilder:
             log.info("pool was thin — widened out to %d more", len(widened))
         return widened
 
-    def for_genre(self, genre: str, limit: int = 25) -> list[Candidate]:
-        raw = [(t, "genre") for t in self._safe(self.catalog.genre_tracks, genre, limit)]
-        return self._rank(raw, None, set(), limit, set())
-
     # -- internals -----------------------------------------------------
     def _seeds(self, current: Track | None) -> list[str]:
         seeds: list[str] = []

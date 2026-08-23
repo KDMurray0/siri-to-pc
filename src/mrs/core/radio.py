@@ -1,16 +1,10 @@
-"""Live radio.
+"""Live radio, from radio-browser.info. No key needed.
 
-Stations come from radio-browser.info, which is a community directory with no
-key and no account. A station is played straight from its stream URL — nothing
-to download, nothing to cache.
+Played straight off the stream — nothing downloads. Most stations announce the
+song over ICY metadata, so the player shows that with the station underneath;
+speech radio doesn't, and just shows its own name.
 
-Most stations announce what's playing over ICY metadata, so the player can show
-"Olivia Rodrigo - Stupid Song" with Capital's logo beside it. The ones that
-don't — the BBC's HLS streams among them — just show the station name, which
-is the honest answer for speech radio anyway.
-
-Radio is famously unreliable: streams move, time out and lie about their
-bitrate. Nothing here retries hard or blocks the player if a station is down.
+Streams move, time out and lie. Nothing here retries hard or blocks the player.
 """
 
 from __future__ import annotations
@@ -26,17 +20,63 @@ from ..models import Track
 
 log = get("radio")
 
-# the directory round-robins across mirrors; any of them will answer
-BASE = "https://all.api.radio-browser.info/json"
+# all.api round-robins across mirrors and drops the connection if you ask it
+# twice quickly — searching for eighteen stations in a row lost half of them
+# to "connection forcibly closed". Named mirrors, tried in turn, fix it.
+HOSTS = ("https://de2.api.radio-browser.info/json",
+         "https://nl1.api.radio-browser.info/json",
+         "https://at1.api.radio-browser.info/json",
+         "https://all.api.radio-browser.info/json")
 UA = {"User-Agent": "MusicRequestServer/2.0 (personal LAN music player)"}
 TIMEOUT = 8
+CACHE_TTL = 600
+MIN_GAP = 0.4          # the search box fires on every keystroke
+COOLDOWN = 15.0        # after it keeps refusing, leave it alone a while
+
+_cache: dict[str, tuple[float, list]] = {}
+_last_call = 0.0
+_blocked_until = 0.0
+_misses = 0
+_gate = threading.Lock()
 
 
 def _call(path: str) -> list:
-    req = urllib.request.Request(BASE + path, headers=UA)
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-        data = json.loads(r.read().decode("utf-8", "replace"))
-    return data if isinstance(data, list) else []
+    """One request, spaced out, with the mirrors as backup.
+
+    The directory drops connections if you ask it twice in quick succession,
+    and the search box asks on every keystroke. Left unchecked that loses
+    perfectly good stations to "connection forcibly closed" — Virgin Radio
+    among them.
+    """
+    global _last_call, _blocked_until, _misses
+    with _gate:
+        now = time.time()
+        if now < _blocked_until:
+            raise RuntimeError("station directory is cooling off")
+        wait = MIN_GAP - (now - _last_call)
+        if wait > 0:
+            time.sleep(wait)
+        _last_call = time.time()
+
+    last = None
+    for host in HOSTS:
+        try:
+            req = urllib.request.Request(host + path, headers=UA)
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                data = json.loads(r.read().decode("utf-8", "replace"))
+            with _gate:
+                _misses = 0
+            return data if isinstance(data, list) else []
+        except Exception as exc:
+            last = exc
+            time.sleep(0.2)
+    with _gate:
+        # one blip is just a blip; back off only when it keeps happening
+        _misses += 1
+        if _misses >= 3:
+            _blocked_until = time.time() + COOLDOWN
+            _misses = 0
+    raise last or RuntimeError("no mirror answered")
 
 
 def _to_track(row: dict) -> Track | None:
@@ -60,7 +100,12 @@ def search(query: str, limit: int = 4) -> list[Track]:
     query = (query or "").strip()
     if len(query) < 3:
         return []
-    q = urllib.parse.urlencode({"name": query, "limit": limit * 3,
+    ck = f"{query.lower()}:{limit}"
+    hit = _cache.get(ck)
+    if hit and time.time() - hit[0] < CACHE_TTL:
+        return hit[1]
+
+    q = urllib.parse.urlencode({"name": query, "limit": limit * 6,
                                 "hidebroken": "true", "order": "votes",
                                 "reverse": "true"})
     try:
@@ -68,8 +113,18 @@ def search(query: str, limit: int = 4) -> list[Track]:
     except Exception as exc:
         log.debug("station search failed for %r: %s", query, exc)
         return []
+
+    want = query.lower()
+
+    def rank(row: dict) -> tuple:
+        """Asking for Virgin Radio should offer Virgin Radio, not Virgin Radio
+        Classic Rock, however many votes the spin-off has."""
+        name = (row.get("name") or "").lower()
+        votes = int(row.get("votes") or 0)
+        return (name != want, not name.startswith(want), -votes)
+
     out, seen = [], set()
-    for row in rows:
+    for row in sorted(rows, key=rank):
         t = _to_track(row)
         if not t:
             continue
@@ -80,6 +135,7 @@ def search(query: str, limit: int = 4) -> list[Track]:
         out.append(t)
         if len(out) >= limit:
             break
+    _cache[ck] = (time.time(), out)
     return out
 
 

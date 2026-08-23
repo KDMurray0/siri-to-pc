@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 from ..config import config
-from ..events import Ev, bus
+from ..events import Ev
 from ..logging_setup import get
 from ..models import Track
 from ..paths import cache_dir, pinned_dir
@@ -88,17 +88,6 @@ class Downloader:
         except Exception as exc:
             log.warning("pin failed: %s", exc)
             return None
-
-    def unpin(self, video_id: str) -> bool:
-        sid = self._safe_id(video_id)
-        gone = False
-        for f in pinned_dir().glob(f"{sid}.*"):
-            try:
-                f.unlink()
-                gone = True
-            except Exception:
-                pass
-        return gone
 
     def prune_cache(self, keep_mb: int = 2000) -> int:
         """Drop the oldest cached files once the cache gets fat."""

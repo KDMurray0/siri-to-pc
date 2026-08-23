@@ -1,12 +1,8 @@
 """Reading numbers out of dictated speech.
 
-Siri transcribes the same number half a dozen ways depending on the sentence,
-the accent and the day: "forty five", "45", "fourty-five", "no. 45", "number
-45", "1,290". Everything that wants a number goes through here so they all end
-up the same.
-
-Also handles the ones people say but nobody writes as digits — "an hour",
-"half an hour", "a couple of minutes", "an hour and a half".
+Siri writes the same number a dozen ways — "forty five", "45", "fourty-five",
+"no. 45", "1,290" — plus the ones nobody writes as digits: "half an hour",
+"a couple of minutes". Everything that wants a number comes through here.
 """
 
 from __future__ import annotations
@@ -127,3 +123,79 @@ def duration_minutes(text: str) -> float | None:
     if _MINUTES.search(text) or value is not None:
         return value
     return None
+
+
+def _chunks(tokens: list[str]) -> list[int]:
+    """Split a run into the numbers a person would say as separate parts.
+
+    "nineteen seventy nine" is nineteen, then seventy-nine — the way you say
+    a year — not one number to be added up.
+    """
+    out: list[int] = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in TENS:
+            value = TENS[tok]
+            if i + 1 < len(tokens) and tokens[i + 1] in UNITS:
+                value += UNITS[tokens[i + 1]]
+                i += 1
+            out.append(value)
+        elif tok in UNITS:
+            out.append(UNITS[tok])
+        elif tok.isdigit():
+            out.append(int(tok))
+        i += 1
+    return out
+
+
+def digit_variants(text: str) -> list[str]:
+    """The same phrase with its number words written as digits.
+
+    Two readings, because both happen: "twenty one" is 21 added up, and
+    "nineteen seventy nine" is 1979 run together. Always extra searches,
+    never a replacement — "Twenty One Pilots" is a band and "21 Pilots"
+    is not.
+    """
+    if not text:
+        return []
+    words = text.split()
+    runs: list[tuple[int, int]] = []      # start, end of each run of number words
+    start = None
+    for i, word in enumerate(words + [""]):
+        w = word.lower().strip(",.")
+        is_num = w in UNITS or w in TENS or w in SCALES
+        if is_num and start is None:
+            start = i
+        elif not is_num and start is not None:
+            runs.append((start, i))
+            start = None
+    if not runs:
+        return []
+
+    def rebuild(joiner) -> str:
+        out, last = [], 0
+        for a, b in runs:
+            out.extend(words[last:a])
+            toks = [w.lower().strip(",.") for w in words[a:b]]
+            piece = joiner(toks)
+            out.append(piece if piece else " ".join(words[a:b]))
+            last = b
+        out.extend(words[last:])
+        return " ".join(out)
+
+    def added(toks) -> str:
+        value = _words_to_number(toks)
+        return str(int(value)) if value is not None and value == int(value) else ""
+
+    def joined(toks) -> str:
+        parts = _chunks(toks)
+        return "".join(str(p) for p in parts) if len(parts) > 1 else ""
+
+    seen, out = {text.lower()}, []
+    for joiner in (added, joined):
+        variant = rebuild(joiner)
+        if variant and variant.lower() not in seen:
+            seen.add(variant.lower())
+            out.append(variant)
+    return out

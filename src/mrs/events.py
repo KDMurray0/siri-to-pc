@@ -65,10 +65,6 @@ class EventBus:
                 except Exception:
                     pass
 
-    def latest(self, kind: str, default: Any = None) -> Any:
-        return self._latest.get(kind, default)
-
-
 bus = EventBus()
 
 

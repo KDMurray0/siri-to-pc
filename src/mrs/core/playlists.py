@@ -135,14 +135,6 @@ class Playlists:
                 return {"ok": False, "message": str(exc)}
         return {"ok": True, "message": f"Deleted {name}"}
 
-    def rename(self, name: str, new_name: str) -> dict:
-        with self._lock:
-            rows = [t.to_dict() for t in self.tracks(name)]
-            self.create(new_name)
-            self._save(new_name, rows)
-            self.delete(name)
-        return {"ok": True, "message": f"Renamed to {new_name}"}
-
     # -- offline copies ------------------------------------------------
     def download_async(self, name: str) -> None:
         if name in self._downloading:

@@ -114,21 +114,12 @@ def resolve(plan: Plan) -> Resolution:
 
 
 def _on_theme(genre: str, tracks: list[Track]) -> list[Track]:
-    """Put the confirmed-on-genre tracks first and drop the clear misses.
+    """On-genre first, obvious misses dropped.
 
-    Asking for grunge returned twenty-five tracks with Thong Song among them —
-    YouTube's genre lookup is a search, and a search for a word returns what it
-    returns. Worse, that became track one, so it also became the anchor, and
-    the radio spent the next hour faithfully anchored to Sisqo.
-
-    The refill already scores candidates against the genre's tags. This is the
-    same check on the batch that goes straight to the queue, which nothing was
-    looking at. Ordering matters as much as dropping: whatever ends up first
-    becomes the anchor, so it has to be something we actually verified.
-
-    Only tracks we can positively rule out are dropped. Anything we have no
-    tags for is kept, just later in the list — with no Last.fm key the order
-    and the contents are unchanged.
+    A grunge request came back with Thong Song at number one, which then
+    became the anchor. Track one matters twice over, so verified ones go
+    first. Unknowns are kept but demoted — with no Last.fm key nothing
+    changes.
     """
     from ..core.context import _matches, _theme_words
     from ..core.tags import tagstore

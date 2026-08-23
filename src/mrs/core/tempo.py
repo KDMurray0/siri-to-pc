@@ -1,11 +1,10 @@
-"""How fast a song is, from Deezer's public API.
+"""How fast a song is, from Deezer's public API. No key.
 
-No key, no account — search for the track, read the bpm off it. Answers are
-cached on disk, looked up on a background thread, and nothing waits on them:
-until an answer arrives the caller just gets None and carries on.
+Cached to disk and looked up in the background; callers get None until it
+lands and carry on regardless.
 
-This deliberately does not touch what gets queued. Tempo decides how long a
-crossfade runs, nothing more — the queue picks songs the way it always has.
+Tempo only decides how long a crossfade runs. It does not touch what gets
+queued — that picks songs the way it always has.
 """
 
 from __future__ import annotations

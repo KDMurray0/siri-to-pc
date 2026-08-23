@@ -1,16 +1,13 @@
-"""What a song actually sounds like.
+"""What a song actually sounds like, from Last.fm tags.
 
-YouTube Music gives us a title, an artist and sometimes an album. That's not
-enough to tell that Song 2 isn't representative of Blur, or that Minutes to
-Midnight is a different band-era to Hybrid Theory. Last.fm's community tags
-are, and they only need the API key we already have.
+A title and an artist can't tell you Song 2 isn't much like the rest of Blur.
+Tags can:
 
-    One Step Closer vs Crawling          0.99   (same album)
-    One Step Closer vs Shadow of the Day 0.70   (six years later)
-    One Step Closer vs Song 2            0.44   (different band entirely)
+    One Step Closer vs Crawling          0.99   same album
+    One Step Closer vs Shadow of the Day 0.70   six years later
+    One Step Closer vs Song 2            0.44   different band
 
-Lookups happen on a background thread and every answer is cached to disk, so
-ranking never waits on the network — it just gets smarter as the cache fills.
+Looked up on a background thread and cached to disk, so ranking never waits.
 """
 
 from __future__ import annotations
@@ -181,6 +178,15 @@ class TagStore:
                 break
             artist, _, title = payload.partition("\x00")
             try:
+                if key.startswith("n:"):
+                    # who people play alongside this: a different question, and
+                    # a different cache from the tags
+                    with self._lock:
+                        self._near[key[2:]] = self._fetch_near(artist, title)
+                        self._queued.discard(key)
+                    dirty += 1
+                    time.sleep(PACE)
+                    continue
                 found = (self._fetch_artist(artist) if key.startswith("a:")
                          else self._fetch_track(artist, title))
                 with self._lock:

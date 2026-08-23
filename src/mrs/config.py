@@ -63,6 +63,7 @@ DEFAULTS: dict[str, Any] = {
     "artist_run_limit": 3,    # max consecutive tracks by one artist
     "artist_cohesion": 1.0,   # 0 = pure discovery, 2 = stay on the band
     "anchor_pull": 0.35,      # how much the song you asked for still counts
+    "show_visualiser": True,
     "taste_from_requests": True,   # radio plays don't count as liking it
     "use_tags": True,         # Last.fm genre tags steer the radio
     "history_size": 200,
@@ -153,9 +154,6 @@ class Config:
             self.save()
         for k, v in values.items():
             self._notify(k, v)
-
-    def as_dict(self) -> dict[str, Any]:
-        return dict(self._data)
 
     def public(self) -> dict[str, Any]:
         """Everything except secrets — safe to hand to the UI."""

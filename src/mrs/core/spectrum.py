@@ -1,13 +1,10 @@
-"""The visualiser's numbers, taken from the song itself.
+"""The visualiser's numbers, measured off the song itself.
 
-WASAPI loopback hears the whole machine — Discord, the browser, a game — so
-the bars moved for audio that had nothing to do with what's playing. This
-reads the actual file mpv is playing instead: ffmpeg decodes it to 8 kHz mono,
-a Goertzel bank measures seven bands at 20 fps, and the result is cached.
+Loopback hears the whole machine, so Discord moved the bars. This reads the
+file mpv is playing: ffmpeg decodes to 8kHz mono, a Goertzel bank measures
+seven bands at 20fps, cached to disk. Under half a second a track, once.
 
-Under half a second for a four-minute track, once, on one background worker.
-The page then just indexes the envelope by playback position, so it's exactly
-in step with the music and costs nothing at runtime.
+The page indexes the result by playback position, so it costs nothing to draw.
 """
 
 from __future__ import annotations

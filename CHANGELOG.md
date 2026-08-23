@@ -1,5 +1,45 @@
 # CHANGELOG -
 
+## 2026-08-24 — live radio, timed playback, genres that stay put
+
+- **Live radio.** Stations from radio-browser.info, no key. They show up in
+  search with a `radio` tag and play straight off the stream. Most announce
+  the song over ICY metadata, so you get "KATSEYE - Hootie Frutti" with
+  Capital's logo; speech radio shows its own name. Like/save/add-to-playlist
+  work on the announced song — they look it up and act on the real track.
+  Next, previous, shuffle and seek are hidden and refused, including from Siri
+  and the media keys, because a stream has no running order.
+- **"Play X for twenty minutes" / "play X in ten minutes".** The delayed one
+  fetches immediately and holds the track paused at 0:00, so it starts the
+  instant the timer fires instead of downloading then. A countdown sits in the
+  top-left corner while either clock is running.
+- **Numbers as people say them.** One parser for "forty five", "45",
+  "fourty-five", "no. 5", "1,290", "half an hour", "an hour and a half".
+  Spoken numbers in song requests are searched as digits too, so "nineteen
+  seventy nine" finds 1979 and not a band called Nineteen Seventy Nine.
+- **Genres don't drift.** Ask for grunge and every track is grunge — it's a
+  filter now, not a preference, and it checks the tracks the genre lookup
+  itself supplied. Genre lookup asks Apple's genre index (a real search, no
+  key) rather than leaning on curated shelves.
+- **Artists and albums stop when they run out** instead of sliding into a
+  radio nobody asked for.
+- **The queue says why** each track is there — asked, artist, your pick,
+  genre, liked, similar — and leads with the *next* song rather than the one
+  already playing.
+- **Drag the queue by the six dots** on the right of each row, in the app and
+  on the phone.
+- **Visualiser sits on the artwork** now, and can be turned off in Settings.
+- **Fixes:** radio-picked songs had no cover art at all (wrong thumbnail key);
+  covers were 120px upscaled to 152 and are now 544; a failed cover load
+  blanked the artwork permanently; repeat looked identical whether it was
+  repeating the queue or one track; the window couldn't be dragged to a second
+  monitor; Oasis's "Live Forever" and Springsteen's "Cover Me" were being
+  filtered out as if they were live recordings; "Don't" and "Dont" counted as
+  two different songs.
+- **Under the hood:** idle network traffic down from 8.8 KB/s to 2.4 KB/s per
+  client, dead code removed, and two test suites (`tests/test_numbers.py`,
+  `tests/test_normalise.py`).
+
 ## 2026-08-16 (pt 5) — Groq parsing, smarter resolution, better voice, standalone .exe
 
 - **Groq LLM parsing (optional):** with a free Groq key (`use_groq` + `groq_api_key`), requests are parsed by an LLM into structured intent (`interpret.py`) — much better at casual phrasing. Any failure falls back to the local grammar parser, so it always works.

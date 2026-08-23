@@ -10,7 +10,7 @@ import threading
 import time
 
 from ..config import config
-from ..events import Ev, bus
+from ..events import bus
 from ..logging_setup import get
 from .tempo import blend_seconds as tempo_blend
 
@@ -203,7 +203,3 @@ class AudioEngine:
             "l": round(pl if pl is not None else m, 3),
             "r": round(pr if pr is not None else m, 3),
         }
-
-    def read_level(self) -> float | None:
-        levels = self.read_levels()
-        return levels["m"] if levels else None

@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
 import threading
 import time
 
-from .config import config, state_file
+from .config import config
 from .core.audio import EQ_PRESETS, AudioEngine
 from .core.context import ContextBuilder
 from .core.downloader import downloader
-from .core.extras import AlarmClock, caster, scrobbler
+from .core.extras import AlarmClock, scrobbler
 from .core.library import library
 from .core.listen import listener
 from .core.playlists import playlists
@@ -496,12 +495,6 @@ class PlayerService:
         if not track:
             return {"ok": False, "message": "Nothing playing"}
         return playlists.add(name, track)
-
-    def playlist_add_track(self, name: str, track: Track) -> dict:
-        return playlists.add(name, track)
-
-    def playlist_delete(self, name: str) -> dict:
-        return playlists.delete(name)
 
     def playlist_play(self, name: str, shuffle: bool = False) -> dict:
         tracks = playlists.tracks(name)

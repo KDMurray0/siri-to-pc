@@ -379,7 +379,7 @@ def api_audio(eq: str = "", normalize: int | None = None,
 
 # Settings the UI is allowed to change, with how to coerce them.
 _SETTABLE = {
-    "artist_cohesion": float, "anchor_pull": float, "queue_target": int, "queue_min_ready": int,
+    "artist_cohesion": float, "anchor_pull": float, "show_visualiser": bool, "queue_target": int, "queue_min_ready": int,
     "artist_run_limit": int, "min_duration": int, "dedupe_hours": int,
     "cookie_close_browser_optin": bool, "cookie_auto_refresh": bool,
     "playlist_download": bool, "queue_max": int, "artist_track_count": int,

@@ -1,12 +1,8 @@
 """Play something I'd like.
 
-Builds a queue out of what you've actually asked for before — the artists you
-request, the songs you've liked — rather than one seed track. Seeds are drawn
-from across your taste instead of all from one place, so it opens on something
-recognisable and wanders through the rest of what you listen to instead of
-committing to one band for an hour.
-
-Works with nothing configured. Last.fm sharpens it if a key is there.
+Built from what you ask for and what you've liked, several seeds at once
+rather than one — so it opens on something familiar and doesn't spend an hour
+on one band. Needs nothing configured; Last.fm sharpens it.
 """
 
 from __future__ import annotations

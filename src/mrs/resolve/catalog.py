@@ -18,6 +18,7 @@ import urllib.request
 from ..config import config
 from ..logging_setup import get
 from ..models import Track, is_derivative
+from . import numbers
 
 log = get("catalog")
 
@@ -167,6 +168,22 @@ def search_songs(query: str, limit: int = 12, *, allow_variant: bool = False) ->
         return []
     out = [to_track(r, "request") for r in rows]
     out = [t for t in out if _acceptable(t, allow_variant=allow_variant)]
+
+    # Dictation spells numbers out. "nineteen seventy nine" found Nineteen
+    # Seventy Nine by the Strokes and never 1979; "song two" found Two. Search
+    # the digit spellings as well and put them after, so a band with a spelled
+    # number in its name — Twenty One Pilots — still wins on its own name.
+    for alt in numbers.digit_variants(query):
+        try:
+            extra = client().search(alt, filter="songs", limit=6)
+        except Exception:
+            continue
+        have = {t.video_id for t in out}
+        for row in extra:
+            t = to_track(row, "request")
+            if t.video_id not in have and _acceptable(t, allow_variant=allow_variant):
+                out.append(t)
+
     return _store(key, _prefer(out)[:limit])
 
 
@@ -597,10 +614,6 @@ def related(video_id: str, limit: int = 10) -> list[Track]:
         if t.video_id != video_id and _acceptable(t):
             out.append(t)
     return _store(key, out[:limit])
-
-
-def _squash(text: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
 
 
 # -- other sources -----------------------------------------------------

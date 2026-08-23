@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-import sys
 import threading
 
 import socket

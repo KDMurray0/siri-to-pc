@@ -205,10 +205,6 @@ class MpvClient:
     def alive(self) -> bool:
         return bool(self.proc and self.proc.poll() is None and not self.broken)
 
-    # -- reading --
-    def on_event(self, fn) -> None:
-        self._event_handlers.append(fn)
-
     def _read_loop(self, gen: int) -> None:
         buf = b""
         size = 65536
@@ -318,10 +314,6 @@ class MpvClient:
             log.debug("mpv error for %s: %s", args, msg.get("error"))
             return None
         return msg.get("data")
-
-    def fire(self, *args) -> None:
-        """Send without waiting for a reply."""
-        self.command(*args, wait=False)
 
     def get(self, prop: str, default=None):
         val = self.command("get_property", prop)

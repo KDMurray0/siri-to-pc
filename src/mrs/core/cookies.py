@@ -21,7 +21,6 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from urllib import request as urllib_request
 
 from ..config import config
 from ..events import Ev, bus
