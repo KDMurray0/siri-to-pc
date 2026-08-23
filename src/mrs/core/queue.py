@@ -48,6 +48,7 @@ class QueueManager:
         self._hold_radio = False                 # album/artist runs pure first
         self._request_kind = "song"              # what you last asked for
         self._anchor: Track | None = None        # the song that started it off
+        self._theme = ""                         # genre/vibe asked for, if any
         self._undo: deque[tuple] = deque(maxlen=20)
         self._workers: list[threading.Thread] = []
         self._activity = Activity()
@@ -79,7 +80,7 @@ class QueueManager:
     # -- public API ----------------------------------------------------
     def play_now(self, tracks: list[Track], alternates: list[str] | None = None,
                  *, shuffle: bool = False, hold_radio: bool = False,
-                 kind: str = "song") -> None:
+                 kind: str = "song", theme: str = "") -> None:
         """Replace what's playing with these tracks."""
         import random
         tracks = [t for t in tracks if t.video_id or t.url]
@@ -94,6 +95,9 @@ class QueueManager:
             self._hold_radio = hold_radio
             self._request_kind = kind
             self._anchor = tracks[0]
+            # ask for grunge and the whole hour should be grunge, not just the
+            # first 25 tracks before the radio wanders off somewhere else
+            self._theme = (theme or "").strip()
             self._work.append(WorkItem(tracks[0], mode="now", alternates=alternates))
             for t in tracks[1:]:
                 self._work.append(WorkItem(t, mode="append"))
@@ -298,7 +302,8 @@ class QueueManager:
                         # the album/artist run is done; the radio after it is
                         # not an artist request and shouldn't behave like one
                         self._hold_radio = False
-                        self._request_kind = "song"
+                        if self._request_kind != "genre":
+                            self._request_kind = "song"
                     continue
                 need_ready = (self.minutes_ahead() < self.target_minutes()
                               and self.ready_ahead() < self.target_depth())
@@ -320,7 +325,7 @@ class QueueManager:
         try:
             cands = self.context.build(self.current_track(), exclude=ids,
                                        exclude_keys=keys, focus=focus,
-                                       anchor=self._anchor,
+                                       anchor=self._anchor, theme=self._theme,
                                        artist_counts=self._recent_artists())
         except Exception as exc:
             log.warning("context build failed: %s", exc)

@@ -369,47 +369,32 @@ body.mini .meta{grid-area:meta;margin:0;text-align:left;min-height:0;min-width:0
 body.mini .title{font-size:13.5px;line-height:1.2}
 body.mini .artist{font-size:11px;margin-top:1px}
 body.mini .controls{grid-area:ctl;display:flex;justify-content:flex-start;
-  align-items:center;gap:12px;margin:0;max-height:0;opacity:0;overflow:hidden;
+  align-items:center;gap:6px;margin:0;max-height:0;opacity:0;overflow:hidden;
   transition:max-height .18s ease,opacity .16s ease,margin-top .18s ease}
-body.mini .controls .ib{width:30px;height:30px;border-radius:9px}
-body.mini .controls .ib svg{width:18px;height:18px}
-body.mini .controls .play{width:36px;height:36px;border-radius:11px}
+body.mini .controls .ib{width:28px;height:28px;border-radius:9px}
+body.mini .controls .ib svg{width:17px;height:17px}
+body.mini .controls .play{width:32px;height:32px;border-radius:10px}
 body.mini .controls .play svg{width:18px;height:18px}
 body.mini.mini-hover .art{width:74px;height:74px}
 body.mini.mini-hover .meta{align-self:start}
 body.mini.mini-hover .controls{max-height:44px;opacity:1;margin-top:8px}
 /* the overflow button lives at the end of the transport row */
-.more{display:none}
-body.mini.mini-hover .more{display:grid;place-items:center;width:26px;height:26px;
-  border-radius:8px;background:none;border:0;color:var(--sub);cursor:pointer;
-  margin-left:auto;font-size:15px;line-height:1;letter-spacing:1px}
-body.mini.mini-hover .more:hover{color:var(--accent);
-  background:color-mix(in srgb,var(--accent) 14%,transparent)}
 body.mini .minivol{display:none}
 body.mini.mini-hover .minivol{display:block;position:absolute;top:40px;right:21px;
   width:6px;height:52px;background:var(--line);border-radius:3px;cursor:pointer;z-index:6}
 body.mini.mini-hover .minivol i{position:absolute;left:0;right:0;bottom:0;
   background:var(--accent);border-radius:3px;display:block}
-.minimenu{display:none}
-/* an opaque sheet that fills the mini frame — no window resize, nothing to clip */
-/* the sheet owns the frame while it's up */
-body.mini.menu-open .minivol,body.mini.menu-open .winbtn{display:none}
-body.mini.mini-hover .minimenu.show{display:flex;flex-direction:column;
-  justify-content:center;gap:1px;position:absolute;inset:0;z-index:100;
-  background:var(--panel);border-radius:12px;padding:6px 9px}
-.mm{display:flex;align-items:center;gap:9px;width:100%;background:none;border:0;
-  color:var(--fg);font-family:inherit;font-size:12px;text-align:left;padding:5px 8px;
-  border-radius:8px;cursor:pointer}
-.mm:hover{background:color-mix(in srgb,var(--accent) 15%,transparent);color:var(--accent)}
-.mm.on{color:#ff4d6d}
-.mmi{width:14px;text-align:center;opacity:.8;font-size:12px}
-.mm-top{display:flex;align-items:center;justify-content:space-between;
-  padding:0 4px 3px;border-bottom:1px solid var(--line);margin-bottom:3px}
-.mm-next{font-size:10.5px;color:var(--sub);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.mm-x{background:none;border:0;color:var(--sub);cursor:pointer;font-size:16px;
-  line-height:1;padding:0 2px}
-.mm-x:hover{color:var(--accent)}
+/* Secondary controls sit on the toolbar itself rather than behind a menu.
+   They're the full player's own buttons, moved here while mini is open. */
+.upnext{display:none}
+body.mini.mini-hover .upnext{display:block;position:absolute;left:12px;right:44px;
+  bottom:4px;font-size:9.5px;color:var(--sub);opacity:.7;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+.controls .sep{display:none}
+body.mini .controls .sep{display:block;width:1px;height:16px;flex:0 0 auto;
+  background:var(--line);margin:0 3px}
+body.mini .controls .ib.small{width:24px;height:24px;border-radius:7px}
+body.mini .controls .ib.small svg{width:14px;height:14px}
 
 /* the level meter sits on the artwork in mini mode */
 .miniwave{display:none}
@@ -459,8 +444,9 @@ body.mini .miniwave i{width:2px;height:10%;background:var(--accent);border-radiu
       <button class="ib play" id="play" title="Play/Pause"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
       <button class="ib" id="next" title="Next"><svg viewBox="0 0 24 24"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg></button>
       <button class="ib small" id="repeat" title="Repeat"><svg viewBox="0 0 24 24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2z"/></svg></button>
-      <button class="more" id="more" title="More" aria-label="More">•••</button>
     </div>
+
+    <div class="upnext" id="upnext"></div>
 
     <div class="row2">
       <button class="ib small heart" id="like" title="Like"><svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54z"/></svg></button>
@@ -501,14 +487,6 @@ body.mini .miniwave i{width:2px;height:10%;background:var(--accent);border-radiu
     <div class="panel" id="panel-lyrics"></div>
     <div class="panel" id="panel-recent"></div>
     <div class="panel" id="panel-lists"></div>
-  </div>
-
-  <div class="minimenu" id="minimenu">
-    <div class="mm-top"><span class="mm-next" id="mmnext"></span>
-      <button class="mm-x" id="mmx" aria-label="Close">×</button></div>
-    <button class="mm" data-act="like"><span class="mmi">♥</span>Like</button>
-    <button class="mm" data-act="save"><span class="mmi">↓</span>Save to Music</button>
-    <button class="mm" data-act="list"><span class="mmi">≡</span>Add to playlist</button>
   </div>
 
   <div class="picker devpick" id="devpicker">
@@ -855,7 +833,6 @@ async function showResults(v) {
   const seq = ++searchSeq;
   if (SPOTIFY_RE.test(v)) {
     $("results").innerHTML =
-      `<div class="rgroup">Spotify</div>` +
       `<div class="rres" data-act="spotify"><div class="qi"></div>` +
       `<div class="rt"><div class="rn">Import this Spotify link</div>` +
       `<div class="ra">Matches each track up — press Enter or click</div></div></div>`;
@@ -873,46 +850,67 @@ async function showResults(v) {
   const esc2 = s => esc(s || "");
   const art = u => u ? `<img class="qi" src="${u}" onerror="this.removeAttribute('src')">`
                      : `<div class="qi"></div>`;
-  let html = "";
 
-  // your own things first
-  if (r.playlists && r.playlists.length) {
-    html += `<div class="rgroup">Your playlists</div>`;
-    html += r.playlists.map(p =>
-      `<div class="rres" data-act="playlist" data-n="${esc2(p.name)}"><div class="qi pl"></div>` +
-      `<div class="rt"><div class="rn">${esc2(p.name)}</div>` +
-      `<div class="ra">${p.count} track${p.count === 1 ? "" : "s"}` +
-      `${p.downloaded ? " · " + p.downloaded + " offline" : ""}</div></div></div>`).join("");
-  }
-  if (r.library && r.library.length) {
-    html += `<div class="rgroup">On this PC</div>`;
-    html += r.library.map(t =>
-      `<div class="rres" data-act="song" data-v="${esc2(t.video_id)}" data-t="${esc2(t.title)}" ` +
-      `data-ar="${esc2(t.artist)}" data-img="${esc2(t.art)}">${art(t.art)}` +
-      `<div class="rt"><div class="rn">${esc2(t.title)}</div><div class="ra">${esc2(t.artist)}</div></div>` +
-      `<span class="tag">on disk</span></div>`).join("");
-  }
-  if (r.artists && r.artists.length) {
-    html += `<div class="rgroup">Artists</div>`;
-    html += r.artists.map(a =>
+  // One list. An artist or album row only earns its place if the thing you
+  // typed really is that artist or album — otherwise it's a header and a row
+  // of wasted space above the song you were looking for.
+  const norm = x => (x || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const typed = norm(v);
+  const closeness = name => {
+    const a = norm(name);
+    if (!a || !typed) return 0;
+    if (a === typed) return 1;
+    if (a.startsWith(typed) || typed.startsWith(a)) return 0.85;
+    if (a.includes(typed) || typed.includes(a)) return 0.7;
+    return 0;
+  };
+  const NAME_MATCH = 0.85;
+
+  const rows = [];
+  const push = (score, html) => rows.push({ score, html });
+  const label = t => `<span class="tag">${t}</span>`;
+
+  (r.playlists || []).forEach(p => push(0.95,
+    `<div class="rres" data-act="playlist" data-n="${esc2(p.name)}"><div class="qi pl"></div>` +
+    `<div class="rt"><div class="rn">${esc2(p.name)}</div>` +
+    `<div class="ra">${p.count} track${p.count === 1 ? "" : "s"}` +
+    `${p.downloaded ? " · " + p.downloaded + " offline" : ""}</div></div>` +
+    label("playlist") + `</div>`));
+
+  (r.library || []).forEach(t => push(0.9,
+    `<div class="rres" data-act="song" data-v="${esc2(t.video_id)}" data-t="${esc2(t.title)}" ` +
+    `data-ar="${esc2(t.artist)}" data-img="${esc2(t.art)}">${art(t.art)}` +
+    `<div class="rt"><div class="rn">${esc2(t.title)}</div><div class="ra">${esc2(t.artist)}</div></div>` +
+    label("on disk") + `</div>`));
+
+  (r.artists || []).forEach(a => {
+    if (closeness(a.name) < NAME_MATCH) return;
+    push(1.0,
       `<div class="rres" data-act="artist" data-n="${esc2(a.name)}">${art(a.art)}` +
       `<div class="rt"><div class="rn">${esc2(a.name)}</div>` +
-      `<div class="ra">Play everything by them</div></div></div>`).join("");
-  }
-  if (r.albums && r.albums.length) {
-    html += `<div class="rgroup">Albums</div>`;
-    html += r.albums.map(a =>
+      `<div class="ra">Everything by them</div></div>` + label("artist") + `</div>`);
+  });
+
+  // If a song is called exactly what you typed, that's what you meant — the
+  // album of the same name is a single, and it shouldn't sit above the song.
+  const songExact = (r.results || []).some(t => closeness(t.title) >= 0.95);
+  (r.albums || []).forEach(a => {
+    if (closeness(a.name) < NAME_MATCH) return;
+    push(songExact ? 0.55 : 0.98,
       `<div class="rres" data-act="album" data-n="${esc2(a.name)}" data-ar="${esc2(a.artist)}">` +
       `${art(a.art)}<div class="rt"><div class="rn">${esc2(a.name)}</div>` +
-      `<div class="ra">${esc2(a.artist) || "Album"}</div></div></div>`).join("");
-  }
-  if (r.results && r.results.length) {
-    html += `<div class="rgroup">Songs</div>`;
-    html += r.results.map(t =>
-      `<div class="rres" data-act="song" data-v="${esc2(t.video_id)}" data-t="${esc2(t.title)}" ` +
-      `data-ar="${esc2(t.artist)}" data-img="${esc2(t.art)}">${art(t.art)}` +
-      `<div class="rt"><div class="rn">${esc2(t.title)}</div><div class="ra">${esc2(t.artist)}</div></div></div>`).join("");
-  }
+      `<div class="ra">${esc2(a.artist) || "Album"}</div></div>` + label("album") + `</div>`);
+  });
+
+  (r.results || []).forEach((t, i) => push(0.8 - i * 0.001,
+    `<div class="rres" data-act="song" data-v="${esc2(t.video_id)}" data-t="${esc2(t.title)}" ` +
+    `data-ar="${esc2(t.artist)}" data-img="${esc2(t.art)}">${art(t.art)}` +
+    `<div class="rt"><div class="rn">${esc2(t.title)}</div>` +
+    `<div class="ra">${esc2(t.artist)}</div></div></div>`));
+
+  rows.sort((a, b) => b.score - a.score);
+  const html = rows.map(x => x.html).join("");
+
   if (!html) { hideResults(); return; }
   $("results").innerHTML = html;
   $("results").classList.add("show");
@@ -985,6 +983,7 @@ function qRow(t) {
 }
 function renderQueue(rows) {
   lastQ = rows || [];
+  showUpNext();
   const box = $("panel-queue");
   if (!lastQ.length) {
     box.innerHTML = '<div class="muted">Nothing queued. Ask for a song, an artist, or a vibe.</div>';
@@ -1456,34 +1455,31 @@ async function loadSettings() {
 
 /* ── mini mode ─────────────────────────────────────────────────────── */
 /* the ⋯ menu keeps the mini player to one row of controls */
-const minimenu = $("minimenu");
-function closeMiniMenu() {
-  minimenu.classList.remove("show");
-  document.body.classList.remove("menu-open");
+/* Shared buttons: on the mini toolbar while it's small, back in their own row
+   in the full player. Same elements, so handlers and liked state follow. */
+const SHARED = ["like", "download", "addlist"];
+function moveControls(toMini) {
+  const controls = document.querySelector(".controls");
+  const row2 = document.querySelector(".row2");
+  if (toMini) {
+    if (!controls.querySelector(".sep")) {
+      const sep = document.createElement("span");
+      sep.className = "sep";
+      controls.appendChild(sep);
+    }
+    SHARED.forEach(id => controls.appendChild($(id)));
+  } else {
+    const sep = controls.querySelector(".sep");
+    if (sep) sep.remove();
+    SHARED.slice().reverse().forEach(id => row2.insertBefore($(id), row2.firstChild));
+  }
 }
-$("more").onclick = e => {
-  e.stopPropagation();
-  if (minimenu.classList.contains("show")) { closeMiniMenu(); return; }
-  const nxt = (lastQ.findIndex(x => x.current) + 1);
-  const up = nxt > 0 && lastQ[nxt] ? lastQ[nxt] : null;
-  $("mmnext").textContent = up ? "Up next · " + up.title : "Nothing queued";
-  minimenu.querySelector('[data-act="like"]').classList.toggle("on", liked);
-  minimenu.classList.add("show");
-  document.body.classList.add("menu-open");
-};
-$("mmx").onclick = e => { e.stopPropagation(); closeMiniMenu(); };
-minimenu.addEventListener("click", async e => {
-  const b = e.target.closest(".mm"); if (!b) return;
-  closeMiniMenu();
-  const act = b.dataset.act;
-  if (act === "like") toast(((await api("/api/control/like")) || {}).message);
-  else if (act === "save") { const r = await api("/api/download"); toast(r && r.ok ? r.message : "Nothing to save"); }
-  else if (act === "list") openPicker();
-});
-document.addEventListener("click", e => {
-  if (minimenu.classList.contains("show") && !minimenu.contains(e.target) &&
-      !e.target.closest("#more")) closeMiniMenu();
-});
+
+function showUpNext() {
+  const at = lastQ.findIndex(x => x.current);
+  const up = at >= 0 ? lastQ[at + 1] : null;
+  $("upnext").textContent = up ? "Up next · " + up.title : "";
+}
 
 let mini = false, liked = false;
 $("shrink").onclick = () => {
@@ -1491,10 +1487,11 @@ $("shrink").onclick = () => {
   document.body.classList.toggle("mini", mini);
   document.body.classList.toggle("mini-hover", mini);
   $("shrink").title = mini ? "Back to full size" : "Shrink to mini";
+  moveControls(mini);
+  showUpNext();
   const b = bridge(); if (b && b.set_mini) b.set_mini(mini);
 };
 function miniHover(on) {
-  if (!on) closeMiniMenu();
   if (!mini || document.body.classList.contains("mini-hover") === on) return;
   document.body.classList.toggle("mini-hover", on);
   const b = bridge(); if (b && b.set_mini_hover) b.set_mini_hover(on);

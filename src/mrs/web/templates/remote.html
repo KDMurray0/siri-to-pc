@@ -148,6 +148,30 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
   border-radius:22px;opacity:0;transition:.2s;pointer-events:none;max-width:88vw;
   text-align:center}
 .toast.show{opacity:1;transform:translate(-50%,0)}
+/* A 16:9 phone gives about 560px of usable height and the now-playing card was
+   taking 317 of it, so the queue and the search box started below the fold.
+   Everything still fits, it just fits smaller. */
+@media (max-height:740px) and (max-width:819px){
+  .app{gap:10px}
+  .card{padding:12px}
+  .art{width:64px;height:64px}
+  .np{gap:11px}
+  .title{font-size:15px}
+  .artist{font-size:11.5px}
+  .controls{margin-top:8px}
+  .ib{width:40px;height:40px}
+  .play{width:50px;height:50px}
+  .extras{margin-top:6px}
+  .times{font-size:10px}
+}
+/* Sideways on a phone: put the card and the queue next to each other, or
+   there's no room for either. */
+@media (max-height:520px) and (orientation:landscape){
+  .app{grid-template-columns:minmax(240px,300px) 1fr;gap:12px}
+  .art{width:52px;height:52px}
+  .extras{display:none}
+  .bar-top{grid-column:1/-1}
+}
 </style>
 </head>
 <body>

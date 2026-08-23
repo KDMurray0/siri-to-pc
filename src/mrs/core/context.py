@@ -6,6 +6,7 @@ score = source + taste + cohesion - staleness + a bit of randomness
 from __future__ import annotations
 
 import random
+import re
 
 from ..config import config
 from ..logging_setup import get
@@ -19,6 +20,7 @@ SOURCE_WEIGHT = {
     "artist": 3.0,     # more from the band you're playing
     "radio": 2.0,      # YouTube's related tracks
     "anchor": 2.6,     # radio from the song you actually asked for
+    "theme": 2.8,      # the genre or vibe you asked for
     "liked": 2.5,      # seeded from something you liked
     "genre": 1.5,
 }
@@ -33,6 +35,24 @@ def _fit(sim: float) -> float:
     return max(0.15, min(1.0, (sim - 0.65) / 0.30))
 
 
+def _theme_words(theme: str) -> set[str]:
+    """The words a track's tags would have to carry to count as this genre."""
+    t = (theme or "").strip().lower()
+    if not t:
+        return set()
+    words = {t}
+    words.update(w for w in re.split(r"[^a-z0-9]+", t) if len(w) > 2)
+    return words
+
+
+def _matches(want: set[str], tags: dict) -> bool:
+    for tag in tags:
+        for w in want:
+            if w in tag or tag in w:
+                return True
+    return False
+
+
 class ContextBuilder:
     """Turns 'what's playing' into 'what might play next'."""
 
@@ -42,7 +62,7 @@ class ContextBuilder:
     def build(self, current: Track | None, exclude: set[str] | None = None,
               exclude_keys: set[str] | None = None,
               limit: int = 40, focus: float = 1.0,
-              anchor: Track | None = None,
+              anchor: Track | None = None, theme: str = "",
               artist_counts: dict[str, int] | None = None) -> list[Candidate]:
         exclude = exclude or set()
         exclude_keys = exclude_keys or set()
@@ -72,7 +92,14 @@ class ContextBuilder:
                 for t in self._safe(self.catalog.related, anchor.video_id, 12):
                     raw.append((t, "anchor"))
 
-        # 4. Occasionally pull from something you liked, to widen it out.
+        # 4. If a genre was asked for, keep drawing from it. Twenty-five
+        #    tracks run out in an hour and a half; the radio should still be
+        #    playing that genre afterwards, not whatever it wandered into.
+        if theme:
+            for t in self._safe(self.catalog.genre_tracks, theme, 20):
+                raw.append((t, "theme"))
+
+        # 5. Occasionally pull from something you liked, to widen it out.
         if random.random() < 0.35:
             liked = taste.liked_seed()
             if liked:
@@ -81,7 +108,7 @@ class ContextBuilder:
 
         tagstore.warm([t for t, _ in raw])     # next refill will know more
         out = self._rank(raw, current, exclude, limit, exclude_keys, focus=focus,
-                         anchor=anchor, artist_counts=artist_counts)
+                         anchor=anchor, theme=theme, artist_counts=artist_counts)
 
         # a thin pool is how the queue used to die — widen out first
         if len(out) < 8:
@@ -91,7 +118,7 @@ class ContextBuilder:
             # Last resort: allow songs heard a while ago rather than run dry.
             out += self._rank(raw, current, exclude, limit, exclude_keys,
                               ignore_recency=True, focus=focus, anchor=anchor,
-                              artist_counts=artist_counts)
+                              theme=theme, artist_counts=artist_counts)
             seen, merged = set(), []
             for c in out:
                 if c.track.video_id not in seen:
@@ -150,7 +177,7 @@ class ContextBuilder:
     def _rank(self, raw: list[tuple[Track, str]], current: Track | None,
               exclude: set[str], limit: int, exclude_keys: set[str],
               ignore_recency: bool = False, focus: float = 1.0,
-              anchor: Track | None = None,
+              anchor: Track | None = None, theme: str = "",
               artist_counts: dict[str, int] | None = None) -> list[Candidate]:
         cohesion = float(config.get("artist_cohesion", 1.0)) * focus
         cur_artist = current.primary_artist() if current else ""
@@ -165,6 +192,7 @@ class ContextBuilder:
         # How far this session has already wandered from what was asked for.
         # Nothing to correct at the start; the further out it gets, the more
         # the opening track is allowed to argue.
+        want = _theme_words(theme)
         pull = float(config.get("anchor_pull", 0.35)) if anchor is not None else 0.0
         drift = 0.0
         if pull:
@@ -226,6 +254,14 @@ class ContextBuilder:
                     score += 1.0 * cohesion      # same record, same era
             if sim is not None:
                 score += 3.0 * (sim - 0.55)      # genre and mood lead
+
+            # You asked for a genre, so the genre is the brief. Tracks whose
+            # own tags say they belong get a real push; ones we can't confirm
+            # only drift in if nothing better is going.
+            if want:
+                tags = tagstore.get(track) or {}
+                if tags:
+                    score += 3.5 if _matches(want, tags) else -2.0
             score -= stack_penalty * per_artist.get(track.primary_artist(), 0)
             score += random.random() * 0.8
 
