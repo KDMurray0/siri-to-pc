@@ -10,6 +10,7 @@ import random
 from ..config import config
 from ..logging_setup import get
 from ..models import Candidate, Track, is_derivative
+from .tags import tagstore
 from .taste import taste
 
 log = get("context")
@@ -20,6 +21,15 @@ SOURCE_WEIGHT = {
     "liked": 2.5,      # seeded from something you liked
     "genre": 1.5,
 }
+
+
+def _fit(sim: float) -> float:
+    """Tag similarity -> how much to trust the artist bonus.
+
+    Measured against real data: same album lands ~0.98, the same band a few
+    albums later ~0.70, a different band ~0.44.
+    """
+    return max(0.15, min(1.0, (sim - 0.65) / 0.30))
 
 
 class ContextBuilder:
@@ -56,12 +66,13 @@ class ContextBuilder:
                 for t in self._safe(self.catalog.related, liked, 6):
                     raw.append((t, "liked"))
 
+        tagstore.warm([t for t, _ in raw])     # next refill will know more
         out = self._rank(raw, current, exclude, limit, exclude_keys, focus=focus)
 
         # a thin pool is how the queue used to die — widen out first
         if len(out) < 8:
             out += self._widen(current, exclude, exclude_keys,
-                               have={c.track.video_id for c in out})
+                               have={c.track.video_id for c in out}, focus=focus)
         if len(out) < 4:
             # Last resort: allow songs heard a while ago rather than run dry.
             out += self._rank(raw, current, exclude, limit, exclude_keys,
@@ -75,7 +86,7 @@ class ContextBuilder:
         return out[:limit]
 
     def _widen(self, current, exclude: set[str], exclude_keys: set[str],
-               have: set[str]) -> list[Candidate]:
+               have: set[str], focus: float = 1.0) -> list[Candidate]:
         """Pull in neighbouring artists and your own favourites."""
         raw: list[tuple[Track, str]] = []
         for artist in taste.top_artists(4):
@@ -91,7 +102,8 @@ class ContextBuilder:
             for t in self._safe(self.catalog.search_songs,
                                 f"{current.primary_artist()} similar artists", 10):
                 raw.append((t, "radio"))
-        widened = self._rank(raw, current, exclude | have, 25, exclude_keys)
+        widened = self._rank(raw, current, exclude | have, 25, exclude_keys,
+                             focus=focus)
         if widened:
             log.info("pool was thin — widened out to %d more", len(widened))
         return widened
@@ -127,6 +139,10 @@ class ContextBuilder:
         cur_artist = current.primary_artist() if current else ""
         seen_ids: set[str] = set()
         seen_keys: set[str] = set()
+        # Ask for one song and you get one song by that band, not their
+        # discography. Artist and album requests want the opposite.
+        stack_penalty = 0.0 if focus >= 0.8 else 1.6
+        per_artist: dict[str, int] = {}
         out: list[Candidate] = []
 
         for track, source in raw:
@@ -142,14 +158,39 @@ class ContextBuilder:
                 continue
 
             score = SOURCE_WEIGHT.get(source, 1.0)
-            score += taste.score(track)
+
+            # How much this actually sounds like what's playing. None until the
+            # tag cache catches up, in which case fall back to artist-only.
+            sim = tagstore.similarity(current, track)
+            if sim is None:
+                # no tags yet: trust the band on an artist request, stay wary
+                # on a song request until the cache catches up
+                fit = 1.0 if focus >= 0.8 else 0.5
+            else:
+                fit = _fit(sim)
+
+            ts = taste.score(track)
+            if ts > 0 and sim is not None:
+                ts *= 0.5 + 0.5 * fit      # you replay it, but is it this mood
+            score += ts
+
             if cur_artist and track.primary_artist() == cur_artist:
-                score += 3.0 * cohesion
+                # Same band only counts for as much as it sounds like the song
+                # you asked for — Song 2 shouldn't drag in the rest of Blur.
+                score += 3.0 * cohesion * fit
+                if current and current.album and track.album == current.album:
+                    score += 1.5 * cohesion      # same record, same era
+            if sim is not None:
+                score += 1.5 * (sim - 0.65)      # nudge toward the genre
+            score -= stack_penalty * per_artist.get(track.primary_artist(), 0)
             score += random.random() * 0.8
 
             seen_ids.add(vid)
             if key:
                 seen_keys.add(key)
+            a = track.primary_artist()
+            if a:
+                per_artist[a] = per_artist.get(a, 0) + 1
             track.origin = "radio"
             out.append(Candidate(track=track, score=score, reason=source))
 

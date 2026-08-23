@@ -12,6 +12,8 @@ are kept, the rest of the export isn't our business.
 
 from __future__ import annotations
 
+import calendar
+import email.utils
 import os
 import re
 import shutil
@@ -131,6 +133,43 @@ def save_master(text: str) -> None:
     except Exception:
         pass
     ensure_session()
+
+
+def from_webview(jars: list) -> str:
+    """Turn WebView2's cookies into the Netscape file yt-dlp wants.
+
+    The sign-in window is a real browser with a real Google login, so these
+    are first-party cookies handed to us by the engine — no decrypting anyone
+    else's database, no App-Bound Encryption to fight.
+    """
+    from http.cookies import SimpleCookie
+
+    rows: dict[tuple[str, str, str], str] = {}
+    for jar in jars or []:
+        if isinstance(jar, str):
+            jar = SimpleCookie(jar)
+        for name, morsel in (jar.items() if hasattr(jar, "items") else []):
+            domain = morsel.get("domain") or ""
+            path = morsel.get("path") or "/"
+            if not domain or not name:
+                continue
+            expires = 0
+            raw = morsel.get("expires") or ""
+            if raw:
+                try:
+                    expires = int(calendar.timegm(
+                        email.utils.parsedate_to_datetime(raw).utctimetuple()))
+                except Exception:
+                    expires = 0
+            secure = "TRUE" if morsel.get("secure") else "FALSE"
+            flag = "TRUE" if domain.startswith(".") else "FALSE"
+            rows[(domain, path, name)] = "\t".join(
+                [domain, flag, path, secure, str(expires), name, morsel.value])
+
+    out = ["# Netscape HTTP Cookie File",
+           "# Written by Music Request Server from the sign-in window", ""]
+    out += [rows[k] for k in sorted(rows)]
+    return "\n".join(out) + "\n"
 
 
 def _publish() -> None:

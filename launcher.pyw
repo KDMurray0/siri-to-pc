@@ -92,7 +92,6 @@ class Flyout:
     MINI_W = 344
     MINI_IDLE_H = 80
     MINI_HOVER_H = 108
-    MINI_MENU_H = 148        # the ... menu is taller than the frame; grow for it
 
     def __init__(self) -> None:
         self.window = None
@@ -242,15 +241,6 @@ class Flyout:
             self._resize_centered(Flyout.MINI_W, Flyout.MINI_HOVER_H)
         else:
             self._resize_centered(Flyout.W, Flyout.H, dur=0.2)
-        return bool(on)
-
-    def set_mini_menu(self, on) -> bool:
-        """Grow to fit the overflow menu, shrink back when it closes."""
-        if not self._mini:
-            return False
-        self._resize_centered(Flyout.MINI_W,
-                              Flyout.MINI_MENU_H if on else Flyout.MINI_HOVER_H,
-                              dur=0.12)
         return bool(on)
 
     def set_mini_hover(self, on) -> bool:
@@ -462,11 +452,73 @@ class Bridge:
     def set_mini_hover(self, on):
         return flyout.set_mini_hover(on) if flyout else False
 
-    def set_mini_menu(self, on):
-        return flyout.set_mini_menu(on) if flyout else False
+    def sign_in(self):
+        threading.Thread(target=sign_in_window, daemon=True, name="signin").start()
+        return True
 
 
 flyout: Flyout | None = None
+
+SIGNIN_URL = "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmusic.youtube.com%2F"
+# where the cookies we need actually live
+COOKIE_STOPS = ("https://music.youtube.com/", "https://www.youtube.com/",
+                "https://accounts.google.com/")
+
+
+def sign_in_window() -> None:
+    """A real Google login in our own WebView2, then take the cookies.
+
+    This is the whole reason the Chrome route was a dead end: we can't decrypt
+    someone else's cookie jar, but we can own the browser that made them.
+    """
+    from mrs.core import cookies as ck
+
+    win = webview.create_window("Sign in to YouTube", url=SIGNIN_URL,
+                                width=520, height=680, on_top=True)
+
+    def collect() -> None:
+        jars, seen = [], set()
+        for url in COOKIE_STOPS:
+            try:
+                win.load_url(url)
+                time.sleep(3.0)          # let the navigation settle
+                for jar in win.get_cookies() or []:
+                    for name in (jar.keys() if hasattr(jar, "keys") else []):
+                        morsel = jar[name]
+                        tag = (morsel.get("domain") or "", name)
+                        if tag in seen:
+                            continue
+                        seen.add(tag)
+                        jars.append(jar)
+            except Exception as exc:
+                log.debug("no cookies from %s: %s", url, exc)
+        text = ck.from_webview(jars)
+        found = [n for n in ck.AUTH_COOKIES if f"	{n}	" in text]
+        if found:
+            ck.save_master(text)
+            log.info("signed in — saved %d cookies (%s)",
+                     len(text.splitlines()) - 3, ", ".join(found))
+        else:
+            log.warning("sign-in window had no auth cookies — not saved")
+        try:
+            win.destroy()
+        except Exception:
+            pass
+        _api("/api/cookies/find")
+
+    def on_loaded() -> None:
+        # once Google hands us off to YouTube, the login is done
+        try:
+            url = win.get_current_url() or ""
+        except Exception:
+            return
+        if "music.youtube.com" in url or "//www.youtube.com" in url:
+            win.events.loaded -= on_loaded
+            threading.Thread(target=collect, daemon=True, name="cookies-grab").start()
+
+    win.events.loaded += on_loaded
+
+
 
 
 def _icon_image():

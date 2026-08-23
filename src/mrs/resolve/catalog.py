@@ -346,6 +346,34 @@ def genre_tracks(genre: str, limit: int = 25) -> list[Track]:
     return _store(key, res[:limit])
 
 
+def _watch_rows(video_id: str, limit: int) -> list[dict]:
+    """Radio rows for a track.
+
+    ytmusicapi reads the Related tab's browse id before it parses the tracks,
+    and YouTube stopped sending that key — so a KeyError('endpoint') threw away
+    a response that had 50 perfectly good tracks in it. Try the library first
+    (in case it gets fixed), then parse the same response ourselves.
+    """
+    try:
+        wp = client().get_watch_playlist(videoId=video_id, radio=True, limit=limit + 10)
+        return wp.get("tracks") or []
+    except Exception as exc:
+        log.debug("watch playlist fell back for %s: %s", video_id, exc)
+
+    from ytmusicapi.navigation import TAB_CONTENT, nav
+    from ytmusicapi.parsers.watch import parse_watch_playlist
+    body = {"enablePersistentPlaylistPanel": True, "isAudioOnly": True,
+            "tunerSettingValue": "AUTOMIX_SETTING_NORMAL",
+            "videoId": video_id, "playlistId": "RDAMVM" + video_id,
+            "params": "wAEB"}
+    resp = client()._send_request("next", body)
+    watch = nav(resp, ["contents", "singleColumnMusicWatchNextResultsRenderer",
+                       "tabbedRenderer", "watchNextTabbedResultsRenderer"])
+    results = nav(watch, [*TAB_CONTENT, "musicQueueRenderer", "content",
+                          "playlistPanelRenderer"], True)
+    return parse_watch_playlist(results["contents"]) if results else []
+
+
 def related(video_id: str, limit: int = 10) -> list[Track]:
     """The 'radio' continuation for a track."""
     if not video_id:
@@ -355,8 +383,7 @@ def related(video_id: str, limit: int = 10) -> list[Track]:
     if hit is not None:
         return hit
     try:
-        wp = client().get_watch_playlist(videoId=video_id, radio=True, limit=limit + 10)
-        rows = wp.get("tracks") or []
+        rows = _watch_rows(video_id, limit)
     except Exception as exc:
         log.debug("radio failed for %s: %s", video_id, exc)
         return []

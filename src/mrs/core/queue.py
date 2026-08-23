@@ -17,6 +17,7 @@ from ..config import config
 from ..events import Ev, bus
 from ..logging_setup import get
 from ..models import Activity, Candidate, Track, is_derivative, norm_title
+from . import spectrum
 from .downloader import downloader
 from .taste import taste
 
@@ -214,6 +215,7 @@ class QueueManager:
             return
 
         track.path = path
+        spectrum.ensure(path)          # visualiser data, ready before it plays
         with self._lock:
             self._meta[path] = track
             if track.key():

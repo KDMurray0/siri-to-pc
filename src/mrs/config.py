@@ -62,6 +62,7 @@ DEFAULTS: dict[str, Any] = {
     "queue_pool_min": 20,     # candidate ideas kept in reserve
     "artist_run_limit": 3,    # max consecutive tracks by one artist
     "artist_cohesion": 1.0,   # 0 = pure discovery, 2 = stay on the band
+    "use_tags": True,         # Last.fm genre tags steer the radio
     "history_size": 200,
     "dedupe_hours": 12,
 

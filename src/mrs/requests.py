@@ -144,12 +144,17 @@ def _run_command(plan) -> dict:
             "via": plan.via}
 
 
-def _import_spotify(url: str, *, announce: bool = True) -> dict:
-    """Read a Spotify link, save it as a playlist, and start playing it."""
+def _import_spotify(url: str, *, announce: bool = True, play: bool = True) -> dict:
+    """Read a Spotify link and save it as a playlist, keeping its name.
+
+    play=False just files it away — for when you're collecting playlists
+    rather than asking for one right now.
+    """
     from .core.playlists import playlists
 
     player.queue._set_activity("finding", "Reading Spotify link")
     bus.publish(Ev.TOAST, "Reading that Spotify link…")
+    verb = "Playing" if play else "Saved"
 
     def work() -> None:
         names = spotify.track_names(url)
@@ -175,15 +180,26 @@ def _import_spotify(url: str, *, announce: bool = True) -> dict:
         for t in tracks:
             playlists.add(label, t)
 
-        player.queue.play_now(tracks, hold_radio=True)
-        msg = f"Playing {label} — {len(tracks)} tracks"
-        bus.publish(Ev.TOAST, msg + " (saved as a playlist)")
-        if announce:
-            player.announce(msg)
+        msg = f"{verb} {label} — {len(tracks)} tracks"
+        if play:
+            player.queue.play_now(tracks, hold_radio=True)
+            bus.publish(Ev.TOAST, msg + " (saved as a playlist)")
+            if announce:
+                player.announce(msg)
+        else:
+            bus.publish(Ev.TOAST, msg)
+            bus.publish(Ev.SETTINGS, {"playlists": True})
 
     threading.Thread(target=work, daemon=True).start()
     return {"status": "ok", "message": "Importing that Spotify link…",
             "via": "spotify"}
+
+
+def add_spotify(url: str) -> dict:
+    """Save a Spotify link as a playlist without interrupting what's on."""
+    if not spotify.is_spotify_url(url):
+        return {"status": "error", "message": "That isn't a Spotify link"}
+    return _import_spotify(url, announce=False, play=False)
 
 
 def play_video(video_id: str, *, title: str = "", artist: str = "", art: str = "",

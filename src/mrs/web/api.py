@@ -28,7 +28,7 @@ from ..events import Ev, bus
 from ..logging_setup import get, log_path
 from ..paths import resource_dir
 from ..player import player
-from ..requests import handle_request, play_video
+from ..requests import add_spotify, handle_request, play_video
 from ..resolve import catalog, llm, lyrics as lyrics_mod, spotify
 
 log = get("api")
@@ -277,6 +277,36 @@ def api_playlists(_: bool = Auth):
     return {"status": "ok", "playlists": playlists.summary(),
             "folder": str(playlists.root()),
             "download": bool(config.get("playlist_download"))}
+
+
+@app.get("/api/spectrum")
+def api_spectrum(_: bool = Auth):
+    """The visualiser envelope for whatever is playing, base64'd.
+
+    Read off the file itself, so the meter follows mpv and not whatever else
+    the machine happens to be playing.
+    """
+    import base64
+
+    from ..core import spectrum as spec
+
+    track = player.queue.current_track()
+    path = player.mpv.get("path", "") or (track.path if track else "")
+    if not path:
+        return {"status": "ok", "ready": False}
+    data = spec.cached(path)
+    if data is None:
+        spec.ensure(path)
+        return {"status": "ok", "ready": False}
+    return {"status": "ok", "ready": True, "fps": spec.FPS,
+            "bands": len(spec.BANDS),
+            "data": base64.b64encode(data).decode("ascii")}
+
+
+@app.get("/api/spotify/add")
+def api_spotify_add(url: str = "", _: bool = Auth):
+    """Save a Spotify link as a playlist without hijacking what's playing."""
+    return add_spotify(url)
 
 
 @app.get("/api/playlist/{op}")
