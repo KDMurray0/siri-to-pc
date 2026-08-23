@@ -354,6 +354,88 @@ def _is_channel(artist: str) -> bool:
     return bool(_FARM.search(name))
 
 
+ITUNES = "https://itunes.apple.com/search"
+# Apple files things by format as well as by sound, and those buckets are what
+# turns a search for classical into lullabies and show tunes.
+_NOT_A_GENRE = {"children's music", "holiday", "musicals", "soundtrack",
+                "karaoke", "spoken word", "books", "new age", "easy listening"}
+
+
+def _from_itunes_genre(genre: str, limit: int) -> list[Track]:
+    """Ask Apple's genre index, which is a real search rather than a shelf.
+
+    attribute=genreTerm queries the whole catalogue by genre and comes back
+    ordered by popularity, for any genre you can name — grime, bossa nova,
+    shoegaze — in about half a second. It's the closest keyless thing to what
+    Spotify does.
+
+    Its own genre labels are too coarse to filter with: they call Stone Temple
+    Pilots "Rock" and Alice In Chains "Alternative", so trusting them drops
+    real results. Only the format buckets get dropped.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    key = f"itunes:{genre}:{limit}"
+    hit = _cached(key)
+    if hit is not None:
+        return hit
+
+    url = ITUNES + "?" + urllib.parse.urlencode(
+        {"term": genre, "entity": "song", "attribute": "genreTerm",
+         "limit": min(80, limit * 4)})
+    try:
+        req = urllib.request.Request(url, headers=MB_UA)
+        with urllib.request.urlopen(req, timeout=8) as r:
+            rows = json.loads(r.read().decode("utf-8", "replace")).get("results", [])
+    except Exception as exc:
+        log.debug("itunes genre search failed for %r: %s", genre, exc)
+        return []
+
+    wanted: list[tuple[str, str]] = []
+    per_artist: dict[str, int] = {}
+    for row in rows:
+        title = (row.get("trackName") or "").strip()
+        artist = (row.get("artistName") or "").strip()
+        bucket = (row.get("primaryGenreName") or "").strip().lower()
+        if not title or not artist or bucket in _NOT_A_GENRE:
+            continue
+        if _is_channel(artist):
+            continue
+        who = Track(title="", artist=artist).primary_artist()
+        if per_artist.get(who, 0) >= 2:
+            continue
+        per_artist[who] = per_artist.get(who, 0) + 1
+        wanted.append((title, artist))
+        if len(wanted) >= limit + 6:
+            break
+
+    if not wanted:
+        return []
+
+    deadline = time.monotonic() + 6.0
+
+    def find(pair):
+        if time.monotonic() > deadline:
+            return None
+        hits = search_songs(f"{pair[0]} {pair[1]}", limit=1)
+        return hits[0] if hits else None
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        found = list(pool.map(find, wanted))
+
+    out, seen = [], set()
+    for t in found:
+        if t and t.video_id and t.video_id not in seen and _acceptable(t):
+            seen.add(t.video_id)
+            out.append(t)
+        if len(out) >= limit:
+            break
+    if out:
+        log.info("%s: %d tracks from apple's genre index, %d artists",
+                 genre, len(out), len({t.primary_artist() for t in out}))
+    return _store(key, out)
+
+
 def _shelf_params(cats: dict, genre: str) -> str:
     """Find YouTube's own shelf for a genre.
 
@@ -487,68 +569,93 @@ def _from_genre_tag(genre: str, limit: int, budget: float = 6.0) -> list[Track]:
     return out
 
 
+def _shelf_tracks(genre: str, limit: int) -> list[Track]:
+    """YouTube's own genre shelf, if it has one for this word."""
+    out: list[Track] = []
+    try:
+        params = _shelf_params(client().get_mood_categories(), genre)
+        if not params:
+            return []
+        for pl in (client().get_mood_playlists(params) or [])[:2]:
+            try:
+                items = client().get_playlist(pl["playlistId"], limit=limit)
+                out += [to_track(r) for r in items.get("tracks", [])]
+            except Exception:
+                continue
+    except Exception as exc:
+        log.debug("mood lookup failed for %r: %s", genre, exc)
+    return out[:limit]
+
+
+def _word_search(genre: str, limit: int) -> list[Track]:
+    """Searching the words. Knows nothing about genre — "grunge music" has
+    returned Sk8er Boi and Anti-Hero — so filter it against the artists
+    MusicBrainz says belong, when we know any."""
+    loose = search_songs(f"{genre} music", limit=limit)
+    known = {Track(title="", artist=a).primary_artist()
+             for a in _mb_genre_artists(genre, 25)}
+    if known:
+        kept = [t for t in loose if t.primary_artist() in known]
+        log.info("%s: word search gave %d, %d were on-genre",
+                 genre, len(loose), len(kept))
+        return kept
+    return loose
+
+
 def genre_tracks(genre: str, limit: int = 25) -> list[Track]:
+    """Tracks for a genre, from whichever source can answer first.
+
+    No single source is reliably best. Last.fm's tags are the most accurate
+    when there's a key. Apple's genre index is a real search — any genre you
+    can name, ranked by popularity, no key needed — and it's the main keyless
+    route. MusicBrainz is hand-tagged and precise but obscure, so it covers
+    the corners Apple ranks badly. YouTube's shelves are curated lists that
+    only exist for a dozen broad names, so they're last.
+
+    Taking a share from all four and interleaving them was tried: it queried
+    four services every time, ran to fifteen seconds, and put each source's
+    worst guess near the top. Asking in order and stopping when there's enough
+    is faster and no worse.
+    """
     key = f"genre:{genre}:{limit}"
     hit = _cached(key)
     if hit is not None:
         return hit
 
-    # 1. What the genre actually means, if we can ask.
-    out: list[Track] = _from_genre_tag(genre, limit)
+    seen: set[str] = set()
+    names: set[str] = set()
+    per_artist: dict[str, int] = {}
+    res: list[Track] = []
 
-    # 2. The same question, keyless, for anyone without a Last.fm key.
-    if len(out) < limit:
-        out += _from_genre_artists(genre, limit - len(out))
+    def absorb(tracks: list[Track]) -> None:
+        for t in tracks:
+            if len(res) >= limit:
+                return
+            name, who = t.key(), t.primary_artist()
+            if not t.video_id or t.video_id in seen or not _acceptable(t):
+                continue
+            if name and name in names:
+                continue
+            # two per band, and nothing from a wallpaper-music channel
+            if _is_channel(t.artist) or per_artist.get(who, 0) >= 2:
+                continue
+            seen.add(t.video_id)
+            if name:
+                names.add(name)
+            per_artist[who] = per_artist.get(who, 0) + 1
+            res.append(t)
 
-    # 3. YouTube's own mood/genre shelves, when the name matches one exactly.
-    if len(out) < limit:
+    for source in (_from_genre_tag, _from_itunes_genre,
+                   _from_genre_artists, _shelf_tracks, _word_search):
+        if len(res) >= limit:
+            break
         try:
-            cats = client().get_mood_categories()
-            params = _shelf_params(cats, genre)
-            if params:
-                for pl in (client().get_mood_playlists(params) or [])[:2]:
-                    try:
-                        items = client().get_playlist(pl["playlistId"], limit=limit)
-                        out += [to_track(r) for r in items.get("tracks", [])]
-                    except Exception:
-                        continue
+            absorb(source(genre, limit))
         except Exception as exc:
-            log.debug("mood lookup failed for %r: %s", genre, exc)
+            log.debug("%s failed for %r: %s", source.__name__, genre, exc)
 
-    # 4. Last resort: the words, searched. This knows nothing about genre —
-    #    "grunge music" has returned Sk8er Boi and Anti-Hero — so if we know
-    #    which bands belong, keep only those. If we don't, take what we get
-    #    rather than hand back nothing.
-    if len(out) < limit:
-        loose = search_songs(f"{genre} music", limit=limit)
-        known = {Track(title="", artist=a).primary_artist()
-                 for a in _mb_genre_artists(genre, 25)}
-        if known:
-            kept = [t for t in loose if t.primary_artist() in known]
-            log.info("%s: word search gave %d, %d were on-genre",
-                     genre, len(loose), len(kept))
-            # only take the filtered list if it left us something; reggae came
-            # back with nothing at all when every result was filtered out
-            if kept or out:
-                loose = kept
-        out += loose
-
-    # by name as well as by id: the tag lookup and the fallback search find
-    # the same song under two different uploads, and Plush turned up twice
-    seen, names, res = set(), set(), []
-    for t in out:
-        name = t.key()
-        if not t.video_id or t.video_id in seen or not _acceptable(t):
-            continue
-        if _is_channel(t.artist):
-            continue
-        if name and name in names:
-            continue
-        seen.add(t.video_id)
-        if name:
-            names.add(name)
-        res.append(t)
-    return _store(key, res[:limit])
+    log.info("%s: %d tracks, %d artists", genre, len(res), len(per_artist))
+    return _store(key, res)
 
 
 def _watch_rows(video_id: str, limit: int) -> list[dict]:
