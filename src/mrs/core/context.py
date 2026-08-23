@@ -29,8 +29,18 @@ SOURCE_WEIGHT = {
     "anchor": 2.6,     # radio from the song you actually asked for
     "theme": 2.8,      # the genre or vibe you asked for
     "liked": 1.6,      # seeded from something you liked, so it has to fit too
+    # Real records in the genre the asked-for song sits in. Set to land level
+    # with anchor once the discount below is applied, because which of the two
+    # is better depends entirely on the genre and there's no telling in
+    # advance: YouTube's related list is superb for Fela Kuti and useless for
+    # Bikini Kill, and Last.fm's tag is the other way round. Level pegging
+    # means the pool always holds some of each.
+    "root": 2.0,
     "genre": 1.5,
 }
+# Last.fm has been asked and has never heard of them. Every real act has a
+# page, so what's left is AI piano and stock-library uploads.
+NOBODY_PENALTY = 2.5
 
 
 def _fit(sim: float) -> float:
@@ -115,8 +125,15 @@ class ContextBuilder:
         #    request.
         if current and current.artist:
             want = 30 if focus >= 0.8 else 10
-            for t in self._safe(self.catalog.artist_tracks, current.artist, want):
-                raw.append((t, "artist"))
+            # Only for a band that belongs here. Something generic drifts in,
+            # and pulling its catalogue turns one stray track into six — the
+            # radio ends up playing an artist you never asked for because it
+            # played them once. Unknown still gets the benefit of the doubt;
+            # a measured bad fit doesn't.
+            here = tagstore.similarity(anchor, current) if anchor is not None else None
+            if focus >= 0.8 or here is None or here >= 0.45:
+                for t in self._safe(self.catalog.artist_tracks, current.artist, want):
+                    raw.append((t, "artist"))
 
         # 2. Related tracks seeded from recent context.
         for seed in seeds[:3]:
@@ -140,6 +157,28 @@ class ContextBuilder:
             for t in self._safe(self.catalog.genre_tracks, theme, 20):
                 raw.append((t, "theme"))
 
+        # 4b. No genre was asked for, but the song you asked for has one, so
+        #     keep a lane of real records open. YouTube's related list for
+        #     solo piano is almost entirely AI uploads — thirty tracks off
+        #     Nuvole Bianche and not one is by anybody who exists. Re-ranking
+        #     can only reorder what it's given, so it has to be given better.
+        #     It also has to be deep. The anchor's own related list is about
+        #     twenty videos long and the exclusions eat it in ten tracks —
+        #     that's why a Fela Kuti run reached Depeche Mode by track 30,
+        #     with nothing pulling back once the anchor lane ran dry.
+        root = ""
+        if not theme and anchor is not None:
+            root = tagstore.top_tag(anchor)
+            if not root:
+                tagstore.prime(anchor)      # worth one blocking call
+                root = tagstore.top_tag(anchor)
+            if root:
+                # Deep on purpose. Thirty gets eaten by track sixteen and then
+                # a riot grrrl run has nothing left to pull on and slides into
+                # pop-punk; the lookup is cached, so depth is nearly free.
+                fresh = self._safe(self.catalog.genre_tracks, root, 60)
+                raw.extend((t, "root") for t in fresh)
+
         # 5. Occasionally pull from something you liked, to widen it out — but
         #    only when nothing was actually asked for. One of five likes being
         #    a piano piece shouldn't mean one refill in three of a metal queue
@@ -152,7 +191,8 @@ class ContextBuilder:
 
         tagstore.warm([t for t, _ in raw])     # next refill will know more
         out = self._rank(raw, current, exclude, limit, exclude_keys, focus=focus,
-                         anchor=anchor, theme=theme, artist_counts=artist_counts)
+                         anchor=anchor, theme=theme, root=root,
+                         artist_counts=artist_counts)
 
         # a thin pool is how the queue used to die — widen out first
         if len(out) < 8:
@@ -162,7 +202,7 @@ class ContextBuilder:
             # Last resort: allow songs heard a while ago rather than run dry.
             out += self._rank(raw, current, exclude, limit, exclude_keys,
                               ignore_recency=True, focus=focus, anchor=anchor,
-                              theme=theme, artist_counts=artist_counts)
+                              theme=theme, root=root, artist_counts=artist_counts)
             seen, merged = set(), []
             for c in out:
                 if c.track.video_id not in seen:
@@ -235,7 +275,7 @@ class ContextBuilder:
     def _rank(self, raw: list[tuple[Track, str]], current: Track | None,
               exclude: set[str], limit: int, exclude_keys: set[str],
               ignore_recency: bool = False, focus: float = 1.0,
-              anchor: Track | None = None, theme: str = "",
+              anchor: Track | None = None, theme: str = "", root: str = "",
               artist_counts: dict[str, int] | None = None) -> list[Candidate]:
         # Skipping late, again and again, means the run has gone stale rather
         # than any one song being wrong. Loosen the grip a little when that
@@ -256,6 +296,7 @@ class ContextBuilder:
         # Nothing to correct at the start; the further out it gets, the more
         # the opening track is allowed to argue.
         want = _theme_words(theme)
+        root_words = _theme_words(root)
         pull = float(config.get("anchor_pull", 0.35)) if anchor is not None else 0.0
         drift = 0.0
         if pull:
@@ -329,7 +370,28 @@ class ContextBuilder:
                 # that's what a Thunderstruck cover by a stranger looks like.
                 # Double it if the title credits somebody in the title itself:
                 # unknown and hand-typed is a re-upload nearly every time.
-                score -= UNKNOWN_PENALTY * (2.0 if _dash_credit(track.title) else 1.0)
+                #
+                # A genre you asked for by name is exempt; the one we guessed
+                # from the song only gets a discount. Exempting that outright
+                # handed it a point and a bit over every other lane, and since
+                # most tracks are untagged when the pool is built, it quietly
+                # became the only lane that ever won — a Fela Kuti queue made
+                # of Drake and Selena Gomez.
+                soft = {"theme": 0.0, "genre": 0.0, "root": 0.5}.get(source, 1.0)
+                if soft:
+                    score -= (UNKNOWN_PENALTY * soft
+                              * (2.0 if _dash_credit(track.title) else 1.0))
+            if tagstore.nobody(track) and track.primary_artist() != cur_artist:
+                score -= NOBODY_PENALTY
+
+            # The implicit-genre lane is only as good as the tag it drew
+            # from, and Last.fm's afrobeat tag has K-pop filed under it.
+            # A track that came from that lane and carries tags saying it
+            # belongs to something else is exactly what it looks like.
+            if source == "root" and root_words:
+                own = tagstore.get(track)
+                if own and not _matches(root_words, own):
+                    continue
 
             # You asked for a genre, so the genre is the brief. Tracks whose
             # own tags say they belong get a real push; ones we can't confirm

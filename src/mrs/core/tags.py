@@ -34,6 +34,14 @@ TOP_N = 10
 MAX_ENTRIES = 4000     # keep the cache file from growing forever
 PACE = 0.2             # Last.fm asks for <=5 requests a second
 
+# Tags that describe half of music. Fine as a description, useless as a steer:
+# ask Last.fm for "piano" and it hands you Billy Joel and Bruno Mars.
+_CATCH_ALL = {"rock", "pop", "electronic", "indie", "alternative", "classical",
+              "jazz", "metal", "hip-hop", "hip hop", "rap", "dance", "soul",
+              "folk", "instrumental", "piano", "guitar", "acoustic", "chillout",
+              "ambient", "experimental", "singer-songwriter", "female vocalists",
+              "male vocalists", "british", "american", "oldies", "favorites"}
+
 
 def _clean(name: str) -> str:
     return (name or "").strip().lower()
@@ -108,6 +116,84 @@ class TagStore:
             self._enqueue("n:" + sk, seed)
             return None
         return near.get(ok, 0.0)
+
+    def prime(self, track: Track | None) -> None:
+        """Look this up now instead of queueing it.
+
+        The worker takes things in order, so a fresh request's own tags sit
+        behind the few hundred the last run queued — and by the time they
+        arrive the radio has already picked twenty tracks without knowing what
+        it was meant to sound like. The song you actually asked for is worth
+        one blocking call.
+        """
+        if not track or not self.enabled():
+            return
+        self.load()
+        tk, ak = self._track_key(track), self._artist_key(track)
+        with self._lock:
+            if self._cache.get(tk) or self._cache.get(ak):
+                return
+            if tk in self._missing and ak in self._missing:
+                return
+        artist, title = track.primary_artist(), track.title
+        try:
+            song = self._fetch_track(artist, title)
+            band = {} if song else self._fetch_artist(artist)
+        except Exception as exc:
+            log.debug("prime failed for %s: %s", artist, exc)
+            return
+        with self._lock:
+            if song:
+                self._cache[tk] = song
+            elif band:
+                self._cache[ak] = band
+                self._missing.add(tk)
+            else:
+                self._missing.add(tk)
+                self._missing.add(ak)
+
+    def top_tag(self, track: Track | None) -> str:
+        """The tag worth fetching more records by, or "" if we don't know yet.
+
+        Not the commonest one. Nuvole Bianche is tagged piano 100, classical
+        67, contemporary classical 44 — and asking for "piano" gets you Billy
+        Joel and Bruno Mars, which is not what was wanted. The specific tag is
+        the useful one, so among the tags with real weight behind them the
+        wordiest wins.
+        """
+        tags = self.get(track) if track else None
+        if not tags:
+            return ""
+        skip = ("seen live", "favourite", "favorite", "albums i own",
+                "check out", "spotify", "awesome", "beautiful")
+        top = max(tags.values()) or 1
+        best, best_rank = "", ()
+        for tag, count in tags.items():
+            if len(tag) < 3 or count < top * 0.35 or any(s in tag for s in skip):
+                continue
+            if tag[:2].isdigit():
+                continue                      # "90s", "80s": an era, not a sound
+            # Blur is tagged rock 100, britpop 83. Britpop is the answer.
+            rank = (tag not in _CATCH_ALL, len(tag.split()), count)
+            if rank > best_rank:
+                best, best_rank = tag, rank
+        return best
+
+    def nobody(self, track: Track | None) -> bool:
+        """Last.fm has been asked about this artist and has never heard of them.
+
+        Different from "we haven't looked yet", which is most of the pool most
+        of the time. An artist only lands in _missing after a call that came
+        back empty, and every real act — however obscure — has a page. What's
+        left is the AI piano and stock-library uploads that fill YouTube's
+        related list for anything soft: Dennis Korn, Frozen Silence, and the
+        rest of the names you've never heard because nobody has.
+        """
+        if not track or not self.enabled():
+            return False
+        self.load()
+        with self._lock:
+            return self._artist_key(track) in self._missing
 
     def neighbours(self, seed: Track | None) -> dict[str, float]:
         """Names of what sits alongside this, once we've looked."""
