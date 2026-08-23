@@ -17,7 +17,7 @@ from .taste import taste
 log = get("context")
 
 SOURCE_WEIGHT = {
-    "artist": 3.0,     # more from the band you're playing
+    "artist": 2.0,     # the band gets no head start just for being the band
     "radio": 2.0,      # YouTube's related tracks
     "anchor": 2.6,     # radio from the song you actually asked for
     "theme": 2.8,      # the genre or vibe you asked for
@@ -250,12 +250,18 @@ class ContextBuilder:
                 score += 3.0 * near
 
             if cur_artist and track.primary_artist() == cur_artist:
-                # A pull, not a rule. Same band is worth something, but only as
-                # much as it actually sounds alike: put on Song 2 and the rest
-                # of Blur is not what you asked for.
-                score += 1.2 * cohesion * fit
+                # A nudge, not a rule. Tags can't separate two songs by one
+                # band — Song 2 and Girls & Boys read as the same britpop — so
+                # lean on whether people actually play them together. Song 2's
+                # neighbours are Beetlebum and Parklife; Girls & Boys isn't
+                # among them, and it shouldn't ride in on the band name.
+                if near is None:
+                    kin = fit               # no neighbour data yet
+                else:
+                    kin = 0.2 + min(0.8, near * 2.5)
+                score += 0.9 * cohesion * kin
                 if current and current.album and track.album == current.album:
-                    score += 1.0 * cohesion      # same record, same era
+                    score += 0.8 * cohesion      # same record, same era
             if sim is not None:
                 score += 3.0 * (sim - 0.55)      # genre and mood lead
 
