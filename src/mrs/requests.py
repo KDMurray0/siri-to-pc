@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 
 from .config import config
 from .core.extras import caster
@@ -14,7 +15,7 @@ from .events import Ev, bus
 from .logging_setup import get
 from .models import Track
 from .player import player
-from .resolve import parser, resolver, spotify
+from .resolve import numbers, parser, resolver, spotify
 
 log = get("request")
 
@@ -48,6 +49,12 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
                 player.announce(res["message"])
             return {"status": "played" if res.get("ok") else "error",
                     "message": res.get("message", ""), "via": "playlist"}
+
+        # "for twenty minutes" / "in half an hour" — strip the timing off and
+        # deal with whatever's left as an ordinary request
+        timed = _timing(text)
+        if timed:
+            return timed
 
         # "play something I'd like" — build off your taste, not one seed song
         if _FOR_YOU.search(text):
@@ -177,6 +184,132 @@ def play_for_you(*, announce: bool = True) -> dict:
     log.info("for-you: %d tracks", len(tracks))
     return {"status": "played", "message": msg, "via": "foryou",
             "kind": "foryou", "tracks": len(tracks)}
+
+
+# "play some jazz for twenty minutes" / "...in half an hour". The tail is the
+# timing; everything before it is the actual request.
+_UNIT = r"(?:min|mins|minute|minutes|hr|hrs|hour|hours)"
+# "an hour and a half" ends on the fraction rather than on the unit
+_TAIL = r"(?:\s+and\s+a\s+(?:half|quarter))?"
+_FOR_A_WHILE = re.compile(
+    r"^(?P<what>.*?)\s*\bfor\s+(?P<when>(?:the\s+next\s+)?[^,]*?"
+    + _UNIT + _TAIL + r")\s*$", re.I)
+_IN_A_WHILE = re.compile(
+    r"^(?P<what>.*?)\s*\bin\s+(?P<when>[^,]*?" + _UNIT + _TAIL + r")\s*$", re.I)
+
+
+def _timing(text: str):
+    """Handle the timed forms, or return None and let the normal path run."""
+    m = _FOR_A_WHILE.match(text)
+    if m:
+        mins = numbers.duration_minutes(m.group("when"))
+        if mins and mins > 0:
+            return play_for_a_while(m.group("what"), mins)
+    m = _IN_A_WHILE.match(text)
+    if m:
+        mins = numbers.duration_minutes(m.group("when"))
+        if mins and mins > 0:
+            return play_later(m.group("what"), mins)
+    return None
+
+
+def _tidy(what: str) -> str:
+    """What's left after the timing is stripped off."""
+    t = re.sub(r"^\s*(?:please\s+)?(?:can you\s+)?(?:play|put on|start)\s+",
+               "", (what or "").strip(), flags=re.I).strip()
+    return t or "something I'd like"
+
+
+def _spoken_length(mins: float) -> str:
+    mins = int(round(mins))
+    if mins % 60 == 0 and mins >= 60:
+        hours = mins // 60
+        return "an hour" if hours == 1 else f"{hours} hours"
+    if mins > 60:
+        return f"{mins // 60}h {mins % 60}m"
+    return "a minute" if mins == 1 else f"{mins} minutes"
+
+
+def play_for_a_while(what: str, minutes: float, *, announce: bool = True) -> dict:
+    """Play something, then stop after a while. It's the sleep timer, asked
+    for the way people actually ask for it."""
+    res = handle_request(_tidy(what), announce=False)
+    if res.get("status") not in ("played", "ok"):
+        return res
+    player.set_sleep(int(round(minutes)))
+    msg = f"{res.get('message', 'Playing')} for {_spoken_length(minutes)}"
+    bus.publish(Ev.TOAST, msg)
+    if announce:
+        player.announce(msg)
+    log.info("timed session: %s for %s min", what, round(minutes))
+    return {**res, "message": msg, "for_minutes": int(round(minutes))}
+
+
+def play_later(what: str, minutes: float, *, announce: bool = True) -> dict:
+    """Start in a while — but fetch it now, so it actually starts on time.
+
+    The point of asking in advance is that it's ready. Resolving and
+    downloading at the moment the timer fires would leave you listening to
+    nothing for the first twenty seconds.
+    """
+    want = _tidy(what)
+    msg = f"{want} in {_spoken_length(minutes)}"
+
+    holding: dict = {"path": ""}
+
+    def prepare() -> None:
+        """Fetch it now and hold it at the start line.
+
+        Pausing straight after the request doesn't work: the request returns
+        as soon as the track is queued, and mpv starts playing when the
+        download lands a few seconds later — after the pause. So wait for a
+        file to actually be loaded, then pause and rewind it.
+        """
+        try:
+            res = handle_request(want, announce=False)
+            if res.get("status") not in ("played", "ok"):
+                return
+            for _ in range(120):                 # up to a minute to fetch
+                path = player.mpv.get("path", "") or ""
+                if path:
+                    player.mpv.set("pause", True)
+                    player.mpv.command("seek", 0, "absolute", wait=False)
+                    holding["path"] = path
+                    log.info("holding %r ready, starting in %s min",
+                             want, round(minutes))
+                    return
+                time.sleep(0.5)
+            log.warning("nothing loaded in time for %r", want)
+        except Exception as exc:
+            log.warning("couldn't prepare %r: %s", want, exc)
+
+    def begin() -> None:
+        try:
+            # If something else got played in the meantime, that's what the
+            # listener wanted — don't hijack it.
+            now = player.mpv.get("path", "") or ""
+            if holding["path"] and now and now != holding["path"]:
+                log.info("skipping the timed start; something else is on")
+                return
+            player.control("resume")
+            bus.publish(Ev.TOAST, f"Playing {want}")
+            if announce:
+                player.announce(f"Playing {want}")
+        except Exception as exc:
+            log.warning("timed start failed: %s", exc)
+
+    threading.Thread(target=prepare, daemon=True).start()
+    timer = threading.Timer(minutes * 60, begin)
+    timer.daemon = True
+    timer.start()
+    player.pending_start = timer
+
+    bus.publish(Ev.TOAST, msg)
+    if announce:
+        player.announce(msg)
+    log.info("scheduled: %s", msg)
+    return {"status": "scheduled", "message": msg,
+            "in_minutes": int(round(minutes)), "via": "timer"}
 
 
 def _import_spotify(url: str, *, announce: bool = True, play: bool = True) -> dict:
