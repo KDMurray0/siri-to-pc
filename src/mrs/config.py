@@ -80,6 +80,8 @@ DEFAULTS: dict[str, Any] = {
     "lastfm_api_key": "",
     "lastfm_secret": "",
     "lastfm_session": "",
+    "lastfm_token": "",
+    "lastfm_user": "",
     "library_paths": [],
     "playlist_download": False,   # keep playlist audio on disk
     "artist_track_count": 60,

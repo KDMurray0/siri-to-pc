@@ -92,6 +92,7 @@ class Flyout:
     MINI_W = 344
     MINI_IDLE_H = 80
     MINI_HOVER_H = 108
+    MINI_MENU_H = 148        # the ... menu is taller than the frame; grow for it
 
     def __init__(self) -> None:
         self.window = None
@@ -243,6 +244,15 @@ class Flyout:
             self._resize_centered(Flyout.W, Flyout.H, dur=0.2)
         return bool(on)
 
+    def set_mini_menu(self, on) -> bool:
+        """Grow to fit the overflow menu, shrink back when it closes."""
+        if not self._mini:
+            return False
+        self._resize_centered(Flyout.MINI_W,
+                              Flyout.MINI_MENU_H if on else Flyout.MINI_HOVER_H,
+                              dur=0.12)
+        return bool(on)
+
     def set_mini_hover(self, on) -> bool:
         if not self._mini:
             return False
@@ -356,7 +366,7 @@ class Flyout:
                   and r.right >= m.right and r.bottom >= m.bottom)
         if not covers:
             return False
-        # Only yield to a game on OUR monitor — fullscreen elsewhere is irrelevant.
+        # only yield on OUR monitor; fullscreen elsewhere is irrelevant
         if h:
             ours = U32.MonitorFromWindow(ctypes.c_void_p(h), 2)
             if ours and mon and ours != mon:
@@ -364,7 +374,7 @@ class Flyout:
         return True
 
     def set_click_through(self, on: bool) -> None:
-        """Discord-style overlay: visible and on top, but the cursor goes through."""
+        """Overlay mode: visible and on top, but the cursor passes through."""
         if on == self._click_through:
             return
         try:
@@ -393,7 +403,7 @@ class Flyout:
                     if not self._force_interactive:
                         self.set_click_through(True)
                 elif fs and self._fs_active and self._click_through:
-                    self._topmost(True)      # borderless games keep re-raising
+                    self._topmost(True)      # borderless apps keep re-raising
                 elif not fs and self._fs_active:
                     self._fs_active = False
                     self._force_interactive = False
@@ -451,6 +461,9 @@ class Bridge:
 
     def set_mini_hover(self, on):
         return flyout.set_mini_hover(on) if flyout else False
+
+    def set_mini_menu(self, on):
+        return flyout.set_mini_menu(on) if flyout else False
 
 
 flyout: Flyout | None = None

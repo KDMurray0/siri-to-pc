@@ -45,6 +45,7 @@ class QueueManager:
         # claimed when a candidate is taken, not when it finishes downloading
         self._claimed: set[str] = set()
         self._hold_radio = False                 # album/artist runs pure first
+        self._request_kind = "song"              # what you last asked for
         self._undo: deque[tuple] = deque(maxlen=20)
         self._workers: list[threading.Thread] = []
         self._activity = Activity()
@@ -75,7 +76,8 @@ class QueueManager:
 
     # -- public API ----------------------------------------------------
     def play_now(self, tracks: list[Track], alternates: list[str] | None = None,
-                 *, shuffle: bool = False, hold_radio: bool = False) -> None:
+                 *, shuffle: bool = False, hold_radio: bool = False,
+                 kind: str = "song") -> None:
         """Replace what's playing with these tracks."""
         import random
         tracks = [t for t in tracks if t.video_id or t.url]
@@ -88,6 +90,7 @@ class QueueManager:
             self._pool.clear()
             self._claimed.clear()
             self._hold_radio = hold_radio
+            self._request_kind = kind
             self._work.append(WorkItem(tracks[0], mode="now", alternates=alternates))
             for t in tracks[1:]:
                 self._work.append(WorkItem(t, mode="append"))
@@ -304,9 +307,12 @@ class QueueManager:
 
     def _refill_pool(self) -> None:
         ids, keys = self._exclusions()
+        # Ask for a band and you get that band. Ask for a song and the radio
+        # should be allowed to wander.
+        focus = 1.0 if self._request_kind in ("artist", "album", "playlist") else 0.4
         try:
             cands = self.context.build(self.current_track(), exclude=ids,
-                                       exclude_keys=keys)
+                                       exclude_keys=keys, focus=focus)
         except Exception as exc:
             log.warning("context build failed: %s", exc)
             return

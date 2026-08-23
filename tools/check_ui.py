@@ -37,9 +37,26 @@ def ids_present(html: str) -> set[str]:
     return set(re.findall(r'id="([^"]+)"', html))
 
 
+def flyout_attrs() -> list[str]:
+    """`Flyout.SOMETHING` that was never defined — python only notices at runtime,
+    by which point the button just quietly does nothing."""
+    src = (ROOT / "launcher.pyw").read_text(encoding="utf-8")
+    defined: set[str] = set()
+    for names in re.findall(r"^ {4}([A-Z_]+(?:\s*,\s*[A-Z_]+)*)\s*=", src, re.M):
+        defined.update(n.strip() for n in names.split(","))
+    defined |= set(re.findall(r"^\s{4}def (\w+)", src, re.M))
+    used = set(re.findall(r"Flyout\.(\w+)", src))
+    return sorted(used - defined)
+
+
 def main() -> int:
     node = shutil.which("node")
     problems = 0
+
+    missing_attrs = flyout_attrs()
+    if missing_attrs:
+        problems += 1
+        print("[launcher.pyw] Flyout has no: " + ", ".join(missing_attrs))
 
     for page in sorted(TEMPLATES.glob("*.html")):
         html = page.read_text(encoding="utf-8")

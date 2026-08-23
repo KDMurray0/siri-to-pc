@@ -72,31 +72,56 @@ class Scrobbler:
             "timestamp": str(int(time.time() - played_seconds))}), daemon=True).start()
         log.info("scrobbled %s — %s", track.artist, track.title)
 
-    # -- setup helpers --
-    def auth_url(self) -> str | None:
+    # -- setup --
+    # Last.fm's flow is: fetch a request token, send the user to approve it,
+    # then trade that same token for a session key. The approve URL is useless
+    # without the token in it.
+    def begin_auth(self) -> dict:
         key = config.get("lastfm_api_key")
         if not key:
-            return None
-        return f"https://www.last.fm/api/auth/?api_key={key}"
+            return {"ok": False, "message": "Add your Last.fm API key first"}
+        url = LASTFM_API + "?" + urllib.parse.urlencode(
+            {"method": "auth.gettoken", "api_key": key, "format": "json"})
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=UA),
+                                        timeout=10) as r:
+                token = json.loads(r.read().decode()).get("token")
+        except Exception as exc:
+            return {"ok": False, "message": f"Last.fm didn't answer: {exc}"}
+        if not token:
+            return {"ok": False, "message": "Last.fm didn't give a token"}
+        config.set("lastfm_token", token)
+        return {"ok": True, "token": token,
+                "auth_url": f"https://www.last.fm/api/auth/?api_key={key}&token={token}",
+                "message": "Approve it in the browser, then press Finish"}
 
-    def complete_auth(self, token: str) -> bool:
-        """Exchange a token for a session key after the user approves."""
-        params = {"method": "auth.getSession", "api_key": config.get("lastfm_api_key"),
-                  "token": token}
+    def complete_auth(self, token: str = "") -> dict:
+        token = token or config.get("lastfm_token") or ""
+        if not token:
+            return {"ok": False, "message": "Press Approve first"}
+        params = {"method": "auth.getSession",
+                  "api_key": config.get("lastfm_api_key"), "token": token}
         params["api_sig"] = self._sign(params)
         url = LASTFM_API + "?" + urllib.parse.urlencode({**params, "format": "json"})
         try:
             with urllib.request.urlopen(urllib.request.Request(url, headers=UA),
                                         timeout=10) as r:
                 data = json.loads(r.read().decode())
-            sk = (data.get("session") or {}).get("key")
-            if sk:
-                config.set("lastfm_session", sk)
-                log.info("last.fm connected")
-                return True
         except Exception as exc:
-            log.warning("last.fm auth failed: %s", exc)
-        return False
+            return {"ok": False,
+                    "message": "Not approved yet — approve it in the browser first"
+                               if "403" in str(exc) else f"Last.fm said: {exc}"}
+        session = (data.get("session") or {})
+        sk, name = session.get("key"), session.get("name")
+        if not sk:
+            return {"ok": False, "message": data.get("message") or "No session key"}
+        config.update({"lastfm_session": sk, "lastfm_user": name or "", "lastfm_token": ""})
+        log.info("last.fm connected as %s", name)
+        return {"ok": True, "user": name, "message": f"Connected as {name}"}
+
+    def status(self) -> dict:
+        return {"connected": self.enabled(), "user": config.get("lastfm_user", ""),
+                "has_key": bool(config.get("lastfm_api_key"))}
 
 
 scrobbler = Scrobbler()

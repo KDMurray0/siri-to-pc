@@ -70,7 +70,7 @@ Current size: **6,725 lines** across 11 files (`player.py` 2,133 · `app.py` 964
 - Search box with a live dropdown of up to 12 song matches
 - Playlists: save the current track, list, play, delete
 - 7 themes, persisted server-side
-- Mini mode, pin/always-on-top, drag-to-move, click-through game overlay
+- Mini mode, pin/always-on-top, drag-to-move, click-through overlay for other apps
 
 ### 1.6 Platform
 
@@ -110,7 +110,7 @@ Current size: **6,725 lines** across 11 files (`player.py` 2,133 · `app.py` 964
 | Shrink ⤢ | Mini mode |
 | **Mini hover** | Expands 344×80 → 344×108, reveals transport + vertical volume |
 | Click outside | Auto-hides (unless pinned) |
-| Ctrl+Alt+M | Toggles click-through while a fullscreen game is up |
+| Ctrl+Alt+M | Toggles click-through so it sits over a fullscreen app |
 | Keyboard | Space, ←/→, ↑/↓, N, P, L, / |
 
 ---

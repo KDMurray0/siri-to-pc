@@ -84,7 +84,7 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
             player.queue.enqueue(res.tracks)
         else:
             player.queue.play_now(res.tracks, res.alternates, shuffle=shuffle,
-                                  hold_radio=res.hold_radio)
+                                  hold_radio=res.hold_radio, kind=plan.kind)
 
         if announce:
             player.announce(res.spoken)

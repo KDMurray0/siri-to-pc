@@ -30,20 +30,23 @@ class ContextBuilder:
 
     def build(self, current: Track | None, exclude: set[str] | None = None,
               exclude_keys: set[str] | None = None,
-              limit: int = 40) -> list[Candidate]:
+              limit: int = 40, focus: float = 1.0) -> list[Candidate]:
         exclude = exclude or set()
         exclude_keys = exclude_keys or set()
         seeds = self._seeds(current)
         raw: list[tuple[Track, str]] = []
 
-        # 1. The current artist's own catalogue — the strongest cohesion signal.
+        # 1. The current artist's own catalogue. Pull fewer of them when you
+        #    only asked for a song — otherwise every request becomes an artist
+        #    request.
         if current and current.artist:
-            for t in self._safe(self.catalog.artist_tracks, current.artist, 30):
+            want = 30 if focus >= 0.8 else 10
+            for t in self._safe(self.catalog.artist_tracks, current.artist, want):
                 raw.append((t, "artist"))
 
         # 2. Related tracks seeded from recent context.
         for seed in seeds[:3]:
-            for t in self._safe(self.catalog.related, seed, 12):
+            for t in self._safe(self.catalog.related, seed, 12 if focus >= 0.8 else 18):
                 raw.append((t, "radio"))
 
         # 3. Occasionally pull from something you liked, to widen it out.
@@ -53,7 +56,7 @@ class ContextBuilder:
                 for t in self._safe(self.catalog.related, liked, 6):
                     raw.append((t, "liked"))
 
-        out = self._rank(raw, current, exclude, limit, exclude_keys)
+        out = self._rank(raw, current, exclude, limit, exclude_keys, focus=focus)
 
         # a thin pool is how the queue used to die — widen out first
         if len(out) < 8:
@@ -62,7 +65,7 @@ class ContextBuilder:
         if len(out) < 4:
             # Last resort: allow songs heard a while ago rather than run dry.
             out += self._rank(raw, current, exclude, limit, exclude_keys,
-                              ignore_recency=True)
+                              ignore_recency=True, focus=focus)
             seen, merged = set(), []
             for c in out:
                 if c.track.video_id not in seen:
@@ -119,8 +122,8 @@ class ContextBuilder:
 
     def _rank(self, raw: list[tuple[Track, str]], current: Track | None,
               exclude: set[str], limit: int, exclude_keys: set[str],
-              ignore_recency: bool = False) -> list[Candidate]:
-        cohesion = float(config.get("artist_cohesion", 1.0))
+              ignore_recency: bool = False, focus: float = 1.0) -> list[Candidate]:
+        cohesion = float(config.get("artist_cohesion", 1.0)) * focus
         cur_artist = current.primary_artist() if current else ""
         seen_ids: set[str] = set()
         seen_keys: set[str] = set()

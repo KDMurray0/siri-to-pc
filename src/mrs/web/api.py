@@ -477,13 +477,6 @@ def api_cookies_extension(_: bool = Auth):
     return {"status": "ok", **cookie_mod.extension_flow()}
 
 
-@app.get("/api/cookies/chrome")
-def api_cookies_chrome(restart: int = 0, _: bool = Auth):
-    """Read cookies straight out of Chrome over the devtools protocol.
-    Needs Chrome restarted, so it asks first."""
-    return {"status": "ok", **cookie_mod.grab_via_devtools(restart=bool(restart))}
-
-
 @app.get("/api/cookies/import")
 def api_cookies_import(path: str = "", _: bool = Auth):
     """Import a cookies.txt the user points at (or the newest in Downloads)."""
@@ -544,16 +537,16 @@ def api_library_paths(add: str = "", remove: str = "", _: bool = Auth):
 # ── last.fm / alarms / cast ───────────────────────────────────────────
 
 @app.get("/api/lastfm")
-def api_lastfm(token: str = "", api_key: str = "", secret: str = "", _: bool = Auth):
+def api_lastfm(step: str = "", api_key: str = "", secret: str = "", _: bool = Auth):
     if api_key:
-        config.set("lastfm_api_key", api_key)
+        config.set("lastfm_api_key", api_key.strip())
     if secret:
-        config.set("lastfm_secret", secret)
-    if token:
-        ok = scrobbler.complete_auth(token)
-        return {"status": "ok", "connected": ok}
-    return {"status": "ok", "connected": scrobbler.enabled(),
-            "auth_url": scrobbler.auth_url()}
+        config.set("lastfm_secret", secret.strip())
+    if step == "begin":
+        return {"status": "ok", **scrobbler.begin_auth()}
+    if step == "finish":
+        return {"status": "ok", **scrobbler.complete_auth()}
+    return {"status": "ok", **scrobbler.status()}
 
 
 @app.get("/api/alarms")

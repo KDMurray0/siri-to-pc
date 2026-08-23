@@ -73,9 +73,10 @@ html,body{height:100%;overflow:hidden;background:var(--bg);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* what the server is doing, when it isn't simply playing */
-.activity{display:none;align-items:center;justify-content:center;gap:8px;
+.activity{display:none;align-items:center;justify-content:center;gap:7px;
   margin-top:8px;font-size:11.5px;color:var(--accent);font-weight:600;
-  letter-spacing:.02em}
+  letter-spacing:.02em;height:16px;white-space:nowrap;overflow:hidden;max-width:100%}
+#actlabel{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:190px}
 body.busy .activity{display:flex}
 .activity .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);
   animation:pulse 1s ease-in-out infinite}
@@ -120,7 +121,7 @@ body.busy .activity{display:flex}
   border-radius:3px}
 .knob{position:absolute;top:50%;width:12px;height:12px;border-radius:50%;
   background:var(--fg);transform:translate(-50%,-50%);pointer-events:none}
-.heart.liked{color:var(--accent)}
+.heart.liked,.heart.liked:hover{color:var(--accent)}
 .heart.liked svg{fill:var(--accent)}
 
 /* search */
@@ -300,7 +301,15 @@ select,.keyin{background:var(--panel);border:1px solid var(--line);color:var(--f
 .hint code{background:var(--panel);padding:1px 5px;border-radius:4px;font-size:10.5px}
 
 /* add-to-playlist picker */
-#devpicker{bottom:auto;top:auto}
+/* anchored to the speaker icon rather than floating at the top */
+.devpick{left:10px;right:10px;bottom:auto;top:auto}
+.devpick::after{content:"";position:absolute;left:24px;bottom:-6px;width:12px;height:12px;
+  background:var(--panel);border-right:1px solid var(--line);
+  border-bottom:1px solid var(--line);transform:rotate(45deg)}
+.picker-head{display:flex;align-items:center;justify-content:space-between}
+.pickx{background:none;border:0;color:var(--sub);cursor:pointer;font-size:12px;
+  padding:0 2px;border-radius:5px;font-family:inherit}
+.pickx:hover{color:var(--fg)}
 .picker{position:absolute;left:14px;right:14px;bottom:66px;z-index:25;
   background:var(--panel);border:1px solid var(--line);border-radius:14px;
   box-shadow:0 18px 40px rgba(0,0,0,.55);display:none;overflow:hidden}
@@ -331,17 +340,10 @@ select,.keyin{background:var(--panel);border:1px solid var(--line);color:var(--f
 body.mini .ambient,body.mini .prog,body.mini .search,
 body.mini .nav,body.mini .panel,body.mini .toast,body.mini .frame::after,
 body.mini #shuffle,body.mini #repeat,body.mini .activity,
-body.mini .vol,body.mini .picker{display:none}
-body.mini .row2{display:none}
-body.mini.mini-hover .row2{display:flex;grid-area:extra;margin:0;gap:2px;
-  justify-content:flex-start}
-body.mini.mini-hover .row2 .ib{width:26px;height:26px;border-radius:7px}
-body.mini.mini-hover .row2 .ib svg{width:15px;height:15px}
+body.mini .vol,body.mini .row2,body.mini .devpick{display:none}
 body.mini .stage{display:grid;grid-template-columns:auto 1fr;
   grid-template-areas:"art meta" "art ctl";align-items:center;align-content:center;
-  column-gap:12px;row-gap:0;padding:11px 46px 11px 12px}
-body.mini.mini-hover .stage{grid-template-areas:"art meta" "art ctl" "art extra";
-  row-gap:1px}
+  column-gap:12px;row-gap:0;padding:11px 44px 11px 12px}
 body.mini .art-wrap{grid-area:art;margin:0;justify-content:flex-start;align-self:center}
 body.mini .art{width:58px;height:58px;border-radius:12px;box-shadow:0 6px 16px rgba(0,0,0,.5)}
 body.mini .meta{grid-area:meta;margin:0;text-align:left;min-height:0;min-width:0;
@@ -349,7 +351,7 @@ body.mini .meta{grid-area:meta;margin:0;text-align:left;min-height:0;min-width:0
 body.mini .title{font-size:13.5px;line-height:1.2}
 body.mini .artist{font-size:11px;margin-top:1px}
 body.mini .controls{grid-area:ctl;display:flex;justify-content:flex-start;
-  align-items:center;gap:15px;margin:0;max-height:0;opacity:0;overflow:hidden;
+  align-items:center;gap:12px;margin:0;max-height:0;opacity:0;overflow:hidden;
   transition:max-height .18s ease,opacity .16s ease,margin-top .18s ease}
 body.mini .controls .ib{width:30px;height:30px;border-radius:9px}
 body.mini .controls .ib svg{width:18px;height:18px}
@@ -357,16 +359,34 @@ body.mini .controls .play{width:36px;height:36px;border-radius:11px}
 body.mini .controls .play svg{width:18px;height:18px}
 body.mini.mini-hover .art{width:74px;height:74px}
 body.mini.mini-hover .meta{align-self:start}
-body.mini.mini-hover .controls{max-height:44px;opacity:1;margin-top:9px}
+body.mini.mini-hover .controls{max-height:44px;opacity:1;margin-top:8px}
+/* the overflow button lives at the end of the transport row */
+.more{display:none}
+body.mini.mini-hover .more{display:grid;place-items:center;width:26px;height:26px;
+  border-radius:8px;background:none;border:0;color:var(--sub);cursor:pointer;
+  margin-left:auto;font-size:15px;line-height:1;letter-spacing:1px}
+body.mini.mini-hover .more:hover{color:var(--accent);
+  background:color-mix(in srgb,var(--accent) 14%,transparent)}
 body.mini .minivol{display:none}
 body.mini.mini-hover .minivol{display:block;position:absolute;top:40px;right:21px;
   width:6px;height:52px;background:var(--line);border-radius:3px;cursor:pointer;z-index:6}
 body.mini.mini-hover .minivol i{position:absolute;left:0;right:0;bottom:0;
   background:var(--accent);border-radius:3px;display:block}
-.minihint{display:none}
-body.mini.mini-hover .minihint{display:block;position:absolute;left:14px;bottom:3px;
-  font-size:8.5px;color:var(--sub);opacity:.42;letter-spacing:.02em;
-  pointer-events:none;white-space:nowrap}
+.minimenu{display:none}
+body.mini .minimenu.show{display:block;position:absolute;right:8px;bottom:8px;z-index:30;
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  box-shadow:0 14px 30px rgba(0,0,0,.6);padding:5px;min-width:158px}
+.mm{display:flex;align-items:center;gap:9px;width:100%;background:none;border:0;
+  color:var(--fg);font-family:inherit;font-size:12px;text-align:left;padding:7px 9px;
+  border-radius:8px;cursor:pointer}
+.mm:hover{background:color-mix(in srgb,var(--accent) 15%,transparent);color:var(--accent)}
+.mm.on{color:var(--accent)}
+.mmi{width:14px;text-align:center;opacity:.8;font-size:12px}
+.mm-next{font-size:10.5px;color:var(--sub);padding:5px 9px 6px;
+  border-bottom:1px solid var(--line);margin-bottom:4px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:170px}
+.mm-hint{font-size:9px;color:var(--sub);opacity:.55;padding:6px 9px 3px;
+  border-top:1px solid var(--line);margin-top:4px;white-space:nowrap}
 
 /* the level meter sits on the artwork in mini mode */
 .miniwave{display:none}
@@ -395,7 +415,6 @@ body.mini .miniwave i{width:2.5px;height:10%;background:var(--accent);border-rad
       <img class="art placeholder" id="art" alt="" draggable="false">
       <div class="miniwave" id="miniwave" aria-hidden="true"></div>
     </div>
-    <div class="minihint">ctrl+alt+m over a fullscreen game</div>
     <div class="meta drag">
       <div class="title" id="title">Nothing playing</div>
       <div class="artist" id="artist"></div>
@@ -417,6 +436,14 @@ body.mini .miniwave i{width:2.5px;height:10%;background:var(--accent);border-rad
       <button class="ib play" id="play" title="Play/Pause"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
       <button class="ib" id="next" title="Next"><svg viewBox="0 0 24 24"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg></button>
       <button class="ib small" id="repeat" title="Repeat"><svg viewBox="0 0 24 24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2z"/></svg></button>
+      <button class="more" id="more" title="More" aria-label="More">•••</button>
+    </div>
+
+    <div class="minimenu" id="minimenu">
+      <div class="mm-next" id="mmnext"></div>
+      <button class="mm" data-act="like"><span class="mmi">♥</span>Like</button>
+      <button class="mm" data-act="save"><span class="mmi">↓</span>Save to Music</button>
+      <button class="mm" data-act="list"><span class="mmi">≡</span>Add to playlist</button>
     </div>
 
     <div class="row2">
@@ -457,8 +484,9 @@ body.mini .miniwave i{width:2.5px;height:10%;background:var(--accent);border-rad
     <div class="panel" id="panel-lists"></div>
   </div>
 
-  <div class="picker" id="devpicker">
-    <div class="picker-head">Play through</div>
+  <div class="picker devpick" id="devpicker">
+    <div class="picker-head">Play through
+      <button class="pickx" id="devclose" aria-label="Close">✕</button></div>
     <div class="picker-list" id="devlist"></div>
   </div>
 
@@ -519,9 +547,7 @@ body.mini .miniwave i{width:2.5px;height:10%;background:var(--accent);border-rad
         <div class="srow"><span class="slabel"><span class="status-dot" id="ckdot"></span> YouTube cookies</span>
           <button class="btn" id="findck">Test cookies</button></div>
         <div class="hint" id="ckhint"></div>
-        <div class="srow"><span class="slabel">Get them from Chrome<em>Restarts Chrome and reads them directly — tabs come back</em></span>
-          <button class="btn" id="ckchrome">Grab</button></div>
-        <div class="srow"><span class="slabel">Or use the export extension<em>No restart; you click Export and I pick it up</em></span>
+        <div class="srow"><span class="slabel">Get cookies from your browser<em>Install the extension, click Export, I pick it up automatically</em></span>
           <button class="btn" id="ckext">Set up</button></div>
         <div class="srow"><span class="slabel">Re-check cookies hourly</span>
           <div class="toggle" id="ckauto"></div></div>
@@ -582,6 +608,8 @@ body.mini .miniwave i{width:2.5px;height:10%;background:var(--accent);border-rad
           <button class="btn" id="restart">Restart</button></div>
         <div class="srow"><span class="slabel">Where your data lives</span>
           <button class="btn" id="openfolder">Open folder</button></div>
+        <div class="srow"><span class="slabel">Show over other apps<em>Ctrl+Alt+M — clicks pass straight through</em></span>
+          <span class="sval">Ctrl+Alt+M</span></div>
         <div class="hint" id="diaghint"></div>
       </section>
 
@@ -1114,8 +1142,13 @@ async function openDevices() {
 }
 $("volicon").onclick = e => {
   e.stopPropagation();
-  devpicker.classList.contains("show") ? devpicker.classList.remove("show") : openDevices();
+  if (devpicker.classList.contains("show")) { devpicker.classList.remove("show"); return; }
+  openDevices();
+  // sit it directly above the speaker rather than pinned to the top
+  const r = $("volicon").getBoundingClientRect();
+  devpicker.style.bottom = (window.innerHeight - r.top + 8) + "px";
 };
+$("devclose").onclick = e => { e.stopPropagation(); devpicker.classList.remove("show"); };
 $("devlist").addEventListener("click", async e => {
   const row = e.target.closest(".picker-row[data-d]");
   if (!row) return;
@@ -1174,22 +1207,6 @@ $("libscan").onclick = async () => { toast("Scanning your library…"); await ap
 $("openfolder").onclick = async () => {
   const r = await api("/api/openfolder");
   toast((r && r.message) || "Opened");
-};
-let chromeArmed = false;
-$("ckchrome").onclick = async () => {
-  $("ckchrome").disabled = true;
-  $("ckchrome").textContent = chromeArmed ? "Restarting…" : "Checking…";
-  const r = await api("/api/cookies/chrome?restart=" + (chromeArmed ? 1 : 0));
-  $("ckchrome").disabled = false;
-  if (r && r.needs_restart) {
-    chromeArmed = true;
-    $("ckchrome").textContent = "Restart Chrome";
-    toast("Press again to restart Chrome and grab them");
-    return;
-  }
-  chromeArmed = false;
-  $("ckchrome").textContent = "Grab";
-  if (r) { toast(r.message || ""); applyCookies(r); }
 };
 $("ckext").onclick = async () => {
   const r = await api("/api/cookies/extension");
@@ -1375,7 +1392,37 @@ async function loadSettings() {
 }
 
 /* ── mini mode ─────────────────────────────────────────────────────── */
-let mini = false;
+/* the ⋯ menu keeps the mini player to one row of controls */
+const minimenu = $("minimenu");
+function closeMiniMenu() {
+  if (!minimenu.classList.contains("show")) return;
+  minimenu.classList.remove("show");
+  const b = bridge(); if (b && b.set_mini_menu) b.set_mini_menu(false);
+}
+$("more").onclick = e => {
+  e.stopPropagation();
+  if (minimenu.classList.contains("show")) { closeMiniMenu(); return; }
+  const nxt = (lastQ.findIndex(x => x.current) + 1);
+  const up = nxt > 0 && lastQ[nxt] ? lastQ[nxt] : null;
+  $("mmnext").textContent = up ? "Up next · " + up.title : "Nothing queued";
+  minimenu.querySelector('[data-act="like"]').classList.toggle("on", liked);
+  minimenu.classList.add("show");
+  const b = bridge(); if (b && b.set_mini_menu) b.set_mini_menu(true);
+};
+minimenu.addEventListener("click", async e => {
+  const b = e.target.closest(".mm"); if (!b) return;
+  closeMiniMenu();
+  const act = b.dataset.act;
+  if (act === "like") toast(((await api("/api/control/like")) || {}).message);
+  else if (act === "save") { const r = await api("/api/download"); toast(r && r.ok ? r.message : "Nothing to save"); }
+  else if (act === "list") openPicker();
+});
+document.addEventListener("click", e => {
+  if (minimenu.classList.contains("show") && !minimenu.contains(e.target) &&
+      !e.target.closest("#more")) closeMiniMenu();
+});
+
+let mini = false, liked = false;
 $("shrink").onclick = () => {
   mini = !mini;
   document.body.classList.toggle("mini", mini);
@@ -1384,6 +1431,7 @@ $("shrink").onclick = () => {
   const b = bridge(); if (b && b.set_mini) b.set_mini(mini);
 };
 function miniHover(on) {
+  if (!on) closeMiniMenu();
   if (!mini || document.body.classList.contains("mini-hover") === on) return;
   document.body.classList.toggle("mini-hover", on);
   const b = bridge(); if (b && b.set_mini_hover) b.set_mini_hover(on);
@@ -1481,7 +1529,8 @@ function applyStatus(d) {
   $("repeat").title = { off: "Repeat off", all: "Repeating the queue",
                         one: "Repeating this song" }[d.repeat] || "Repeat";
   $("shuffle").classList.toggle("on", !!d.shuffle);
-  $("like").classList.toggle("liked", !!t.liked);
+  liked = !!t.liked;
+  $("like").classList.toggle("liked", liked);
   if (key !== state.trackKey) {
     state.trackKey = key;
     if (activePanel === "lyrics") loadLyrics(true);
