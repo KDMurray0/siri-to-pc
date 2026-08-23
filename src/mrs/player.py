@@ -402,7 +402,12 @@ class PlayerService:
         if not track:
             return {"ok": False, "message": "Nothing playing"}
         liked = taste.toggle_like(track)
-        if liked:
+        # Liking normally lines up a few similar tracks. On a station there's
+        # nothing to line up behind — you're listening to a stream, not a
+        # queue — and doing it anyway downloaded three songs and stacked them
+        # behind the radio.
+        on_air = radio.is_station(self.queue.current_track())
+        if liked and not on_air:
             try:
                 similar = catalog.related(track.video_id, limit=3)
                 self.queue.enqueue([t for t in similar])

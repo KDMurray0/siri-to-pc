@@ -445,10 +445,16 @@ $("newplgo").onclick = async () => {
 };
 
 const GRIP = "<i></i><i></i><i></i><i></i><i></i><i></i>";
+let lastRows = [];
 function renderQueue(rows) {
+  lastRows = rows || lastRows;
   // don't rebuild the list while a row is being dragged
   if (dragging()) return;
   const box = $("queue");
+  if (document.body.classList.contains("live")) {
+    box.innerHTML = `<div class="muted">Live radio — nothing queued.</div>`;
+    return;
+  }
   if (!rows || !rows.length) { box.innerHTML = `<div class="muted">Nothing queued.</div>`; return; }
   const cur = rows.findIndex(r => r.current);
   const show = rows.slice(Math.max(0, cur), Math.max(0, cur) + 30);
@@ -529,8 +535,11 @@ function apply(d) {
   $("shuffle").classList.toggle("on", !!d.shuffle);
   $("repeat").classList.toggle("on", d.repeat && d.repeat !== "off");
   $("repeat").dataset.mode = d.repeat || "off";
+  const wasLive = document.body.classList.contains("live");
   document.body.classList.toggle("live", !!(d.track && d.track.live));
   document.body.classList.toggle("onsong", !!(d.track && d.track.song_known));
+  // a queue event can land before the status that says we're on air
+  if (wasLive !== document.body.classList.contains("live")) renderQueue(lastRows);
   const a = d.activity || {};
   const busy = a.stage && !["idle", "playing"].includes(a.stage);
   $("stage").textContent = busy

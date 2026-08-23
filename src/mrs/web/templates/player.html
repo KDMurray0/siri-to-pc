@@ -1115,6 +1115,12 @@ function renderQueue(rows) {
   // under the row you're holding
   if (dragging()) return;
   const box = $("panel-queue");
+  // A stream is one endless entry, not a running order. Showing it as a queue
+  // row implied there was something after it.
+  if (document.body.classList.contains("live")) {
+    box.innerHTML = '<div class="muted">Live radio — nothing queued.</div>';
+    return;
+  }
   if (!lastQ.length) {
     box.innerHTML = '<div class="muted">Nothing queued. Ask for a song, an artist, or a vibe.</div>';
     return;
@@ -1759,8 +1765,13 @@ function applyStatus(d) {
   $("repeat").title = { off: "Repeat off", all: "Repeating the queue",
                         one: "Repeating this song" }[d.repeat] || "Repeat";
   $("shuffle").classList.toggle("on", !!d.shuffle);
+  // Redraw the queue when this changes: a queue event can arrive before the
+  // status that says we're on air, and the queue only re-sends when it
+  // actually changes, so the stale list would sit there forever.
+  const wasLive = document.body.classList.contains("live");
   document.body.classList.toggle("live", !!t.live);
   document.body.classList.toggle("onsong", !!t.song_known);
+  if (wasLive !== !!t.live) renderQueue(lastQ);
   liked = !!t.liked;
   $("like").classList.toggle("liked", liked);
   if (key !== state.trackKey) {
