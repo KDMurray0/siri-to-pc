@@ -333,39 +333,110 @@ def album_tracks(album: str, artist: str = "", limit: int = 0) -> list[Track]:
         return []
 
 
+def _from_genre_tag(genre: str, limit: int, budget: float = 6.0) -> list[Track]:
+    """Tracks people have filed under this genre, resolved to playable ones.
+
+    Last.fm knows what "grunge" means; YouTube's song search only knows the
+    word. The names come back instantly but each still has to be found on
+    YouTube, so they're looked up a few at a time against a time budget — one
+    at a time took seven seconds before a note played.
+
+    Capped per artist, because a genre's top tracks are its most famous band
+    over and over: six of the first ten for grunge were Nirvana.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from ..core.tags import tagstore
+
+    names = tagstore.top_tracks_for_tag(genre, limit * 3)
+    if not names:
+        return []
+
+    per_artist: dict[str, int] = {}
+    wanted: list[tuple[str, str]] = []
+    for title, artist in names:
+        who = Track(title="", artist=artist).primary_artist()
+        if per_artist.get(who, 0) >= 2:
+            continue
+        per_artist[who] = per_artist.get(who, 0) + 1
+        wanted.append((title, artist))
+        if len(wanted) >= limit + 6:
+            break
+
+    deadline = time.monotonic() + budget
+
+    def find(pair):
+        if time.monotonic() > deadline:
+            return None
+        hits = search_songs(f"{pair[0]} {pair[1]}", limit=1)
+        return hits[0] if hits else None
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        found = list(pool.map(find, wanted))
+
+    out, seen = [], set()
+    for t in found:
+        if t and t.video_id and t.video_id not in seen and _acceptable(t):
+            seen.add(t.video_id)
+            out.append(t)
+        if len(out) >= limit:
+            break
+    if out:
+        log.info("%s: %d tracks from the tag itself, %d artists",
+                 genre, len(out), len({t.primary_artist() for t in out}))
+    return out
+
+
 def genre_tracks(genre: str, limit: int = 25) -> list[Track]:
     key = f"genre:{genre}:{limit}"
     hit = _cached(key)
     if hit is not None:
         return hit
-    out: list[Track] = []
-    try:
-        cats = client().get_mood_categories()
-        target = _squash(genre)
-        params = None
-        for group in cats.values():
-            for cat in group:
-                if _squash(cat.get("title", "")) == target:
-                    params = cat.get("params")
+
+    # 1. What the genre actually means, if we can ask.
+    out: list[Track] = _from_genre_tag(genre, limit)
+
+    # 2. YouTube's own mood/genre shelves, when the name matches one exactly.
+    if len(out) < limit:
+        try:
+            cats = client().get_mood_categories()
+            target = _squash(genre)
+            params = None
+            for group in cats.values():
+                for cat in group:
+                    if _squash(cat.get("title", "")) == target:
+                        params = cat.get("params")
+                        break
+                if params:
                     break
             if params:
-                break
-        if params:
-            for pl in (client().get_mood_playlists(params) or [])[:2]:
-                try:
-                    items = client().get_playlist(pl["playlistId"], limit=limit)
-                    out += [to_track(r) for r in items.get("tracks", [])]
-                except Exception:
-                    continue
-    except Exception as exc:
-        log.debug("mood lookup failed for %r: %s", genre, exc)
+                for pl in (client().get_mood_playlists(params) or [])[:2]:
+                    try:
+                        items = client().get_playlist(pl["playlistId"], limit=limit)
+                        out += [to_track(r) for r in items.get("tracks", [])]
+                    except Exception:
+                        continue
+        except Exception as exc:
+            log.debug("mood lookup failed for %r: %s", genre, exc)
+
+    # 3. Last resort: the words, searched. Knows nothing about genre, but it's
+    #    better than handing back nothing.
     if len(out) < limit:
         out += search_songs(f"{genre} music", limit=limit)
-    seen, res = set(), []
+
+    # by name as well as by id: the tag lookup and the fallback search find
+    # the same song under two different uploads, and Plush turned up twice
+    seen, names, res = set(), set(), []
     for t in out:
-        if t.video_id and t.video_id not in seen and _acceptable(t):
-            seen.add(t.video_id)
-            res.append(t)
+        name = t.key()
+        if not t.video_id or t.video_id in seen or not _acceptable(t):
+            continue
+        if name and name in names:
+            continue
+        seen.add(t.video_id)
+        if name:
+            names.add(name)
+        res.append(t)
     return _store(key, res[:limit])
 
 

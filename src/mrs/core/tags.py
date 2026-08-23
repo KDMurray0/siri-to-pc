@@ -285,5 +285,29 @@ class TagStore:
         for t in tracks[:60]:
             self.get(t)
 
+    def top_tracks_for_tag(self, tag: str, limit: int = 30) -> list[tuple[str, str]]:
+        """Songs people have actually filed under this genre, as (title, artist).
+
+        The alternative was searching YouTube for the words "grunge music" and
+        taking whatever came back, which is a text match and knows nothing
+        about genre. This is the real question being asked.
+        """
+        if not tag or not self.enabled():
+            return []
+        try:
+            data = self._call({"method": "tag.getTopTracks", "tag": tag,
+                               "limit": max(10, min(100, limit))})
+        except Exception as exc:
+            log.debug("tag lookup failed for %r: %s", tag, exc)
+            return []
+        rows = (data.get("tracks") or {}).get("track") or []
+        out = []
+        for row in rows if isinstance(rows, list) else []:
+            title = (row.get("name") or "").strip()
+            artist = ((row.get("artist") or {}) or {}).get("name", "").strip()
+            if title and artist:
+                out.append((title, artist))
+        return out
+
 
 tagstore = TagStore()
