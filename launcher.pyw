@@ -74,6 +74,8 @@ U32.MonitorFromWindow.restype = ctypes.c_void_p
 U32.MonitorFromWindow.argtypes = [ctypes.c_void_p, ctypes.c_uint]
 
 GWL_EXSTYLE = -20
+SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN = 76, 77
+SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 78, 79
 WS_EX_TOOLWINDOW, WS_EX_APPWINDOW = 0x80, 0x40000
 WS_EX_LAYERED, WS_EX_TRANSPARENT = 0x80000, 0x20
 HWND_TOPMOST, HWND_NOTOPMOST = -1, -2
@@ -170,8 +172,8 @@ class Flyout:
             while U32.GetAsyncKeyState(0x01) & 0x8000:
                 U32.GetCursorPos(ctypes.byref(pt))
                 U32.GetWindowRect(h, ctypes.byref(r))
-                x, y = self._clamp(pt.x - ox, pt.y - oy,
-                                   r.right - r.left, r.bottom - r.top)
+                x, y = self._clamp_drag(pt.x - ox, pt.y - oy,
+                                        r.right - r.left, r.bottom - r.top)
                 U32.SetWindowPos(h, 0, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER)
                 time.sleep(0.008)
         except Exception:
@@ -206,6 +208,33 @@ class Flyout:
         wa = self._work_area()
         x = min(max(x, wa.left), max(wa.left, wa.right - w))
         y = min(max(y, wa.top), max(wa.top, wa.bottom - h))
+        return x, y
+
+    @staticmethod
+    def _desktop():
+        """Every monitor together, not just the one we happen to be on."""
+        r = wintypes.RECT()
+        r.left = U32.GetSystemMetrics(SM_XVIRTUALSCREEN)
+        r.top = U32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+        r.right = r.left + U32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
+        r.bottom = r.top + U32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
+        if r.right <= r.left or r.bottom <= r.top:      # single monitor
+            r.left, r.top = 0, 0
+            r.right, r.bottom = U32.GetSystemMetrics(0), U32.GetSystemMetrics(1)
+        return r
+
+    def _clamp_drag(self, x: int, y: int, w: int, h: int):
+        """Dragging is allowed to cross monitors.
+
+        Clamping to the current monitor's work area meant the window stopped
+        dead at the edge of the screen it started on and could never be moved
+        to the other one. Bound it to the whole desktop instead, and let it
+        overhang as long as enough stays on screen to grab hold of.
+        """
+        d = self._desktop()
+        edge = max(60, min(160, w // 3))
+        x = min(max(x, d.left - (w - edge)), d.right - edge)
+        y = min(max(y, d.top), d.bottom - 28)
         return x, y
 
     def _resize_centered(self, tw: int, th: int, dur: float = 0.16, steps: int = 10) -> None:

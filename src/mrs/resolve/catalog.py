@@ -12,6 +12,8 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.parse
+import urllib.request
 
 from ..config import config
 from ..logging_setup import get
@@ -333,6 +335,104 @@ def album_tracks(album: str, artist: str = "", limit: int = 0) -> list[Track]:
         return []
 
 
+MB_API = "https://musicbrainz.org/ws/2"
+MB_UA = {"User-Agent": "MusicRequestServer/2.0 (personal LAN music player)"}
+
+
+# Channels that upload hours of wallpaper music. YouTube's Jazz and Ambient
+# shelves are full of them, and "Relaxing Music" is not a jazz artist.
+_FARM = re.compile(
+    r"\b(bgm|lo-?fi|relax\w*|sleep\w*|study\w*|meditat\w*|calm\w*|soothing|"
+    r"background|ambience|playlist|channel|topic|mix(es)?|vibes?|"
+    r"instrumental[s]? \w+|\d+ hours?)\b", re.I)
+
+
+def _is_channel(artist: str) -> bool:
+    name = (artist or "").strip()
+    if not name:
+        return True
+    return bool(_FARM.search(name))
+
+
+def _shelf_params(cats: dict, genre: str) -> str:
+    """Find YouTube's own shelf for a genre.
+
+    Their titles are compound — "Rap & hip-hop", "Reggae & caribbean",
+    "Country & Americana", "R&B & soul" — so matching the whole title exactly
+    found jazz, classical and metal and missed everything else. Match a word
+    of the title instead, which keeps "pop" off the J-Pop shelf.
+    """
+    target = _squash(genre)
+    if not target:
+        return ""
+    best = ""
+    for group in cats.values():
+        for cat in group or []:
+            title = cat.get("title", "")
+            if _squash(title) == target:
+                return cat.get("params", "")
+            words = {_squash(w) for w in re.split(r"[&/,]|\s+", title) if w}
+            if target in words and not best:
+                best = cat.get("params", "")
+    return best
+
+
+def _mb_genre_artists(genre: str, want: int = 8) -> list[str]:
+    """Bands filed under this genre, from MusicBrainz. No key, no account.
+
+    Asking MusicBrainz for *recordings* with the tag and then counting who made
+    them beats asking it for artists directly — the artist search is a text
+    match and returns Metallica and KISS for grunge, while the recordings are
+    tagged by hand and give Mudhoney, Green River and Alice in Chains.
+    """
+    key = f"mbgenre:{genre}:{want}"
+    hit = _cached(key)
+    if hit is not None:
+        return hit
+    url = MB_API + "/recording?" + urllib.parse.urlencode(
+        {"query": f'tag:"{genre}"', "fmt": "json", "limit": 100})
+    try:
+        req = urllib.request.Request(url, headers=MB_UA)
+        with urllib.request.urlopen(req, timeout=6) as r:
+            data = json.loads(r.read().decode("utf-8", "replace"))
+    except Exception as exc:
+        log.debug("musicbrainz genre lookup failed for %r: %s", genre, exc)
+        return []
+    counts: dict[str, int] = {}
+    for rec in data.get("recordings", []):
+        credit = (rec.get("artist-credit") or [{}])[0]
+        name = credit.get("name") or (credit.get("artist") or {}).get("name", "")
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+    ranked = [a for a, _ in sorted(counts.items(), key=lambda kv: -kv[1])][:want]
+    if ranked:
+        log.info("%s: %d artists from musicbrainz", genre, len(ranked))
+    return _store(key, ranked)
+
+
+def _from_genre_artists(genre: str, limit: int) -> list[Track]:
+    """Popular songs by the bands MusicBrainz files under this genre.
+
+    The tagged recordings themselves are mostly album tracks and B-sides —
+    "Bushpusher Man" is real grunge but nobody asked for it. The artists are
+    the useful part; YouTube already knows their well-known songs.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    artists = _mb_genre_artists(genre)
+    if not artists:
+        return []
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        batches = list(pool.map(lambda a: artist_tracks(a, 3)[:2], artists))
+    out, seen = [], set()
+    for batch in batches:
+        for t in batch:
+            if t.video_id and t.video_id not in seen and _acceptable(t):
+                seen.add(t.video_id)
+                out.append(t)
+    return out[:limit]
+
+
 def _from_genre_tag(genre: str, limit: int, budget: float = 6.0) -> list[Track]:
     """Tracks people have filed under this genre, resolved to playable ones.
 
@@ -396,19 +496,15 @@ def genre_tracks(genre: str, limit: int = 25) -> list[Track]:
     # 1. What the genre actually means, if we can ask.
     out: list[Track] = _from_genre_tag(genre, limit)
 
-    # 2. YouTube's own mood/genre shelves, when the name matches one exactly.
+    # 2. The same question, keyless, for anyone without a Last.fm key.
+    if len(out) < limit:
+        out += _from_genre_artists(genre, limit - len(out))
+
+    # 3. YouTube's own mood/genre shelves, when the name matches one exactly.
     if len(out) < limit:
         try:
             cats = client().get_mood_categories()
-            target = _squash(genre)
-            params = None
-            for group in cats.values():
-                for cat in group:
-                    if _squash(cat.get("title", "")) == target:
-                        params = cat.get("params")
-                        break
-                if params:
-                    break
+            params = _shelf_params(cats, genre)
             if params:
                 for pl in (client().get_mood_playlists(params) or [])[:2]:
                     try:
@@ -419,10 +515,23 @@ def genre_tracks(genre: str, limit: int = 25) -> list[Track]:
         except Exception as exc:
             log.debug("mood lookup failed for %r: %s", genre, exc)
 
-    # 3. Last resort: the words, searched. Knows nothing about genre, but it's
-    #    better than handing back nothing.
+    # 4. Last resort: the words, searched. This knows nothing about genre —
+    #    "grunge music" has returned Sk8er Boi and Anti-Hero — so if we know
+    #    which bands belong, keep only those. If we don't, take what we get
+    #    rather than hand back nothing.
     if len(out) < limit:
-        out += search_songs(f"{genre} music", limit=limit)
+        loose = search_songs(f"{genre} music", limit=limit)
+        known = {Track(title="", artist=a).primary_artist()
+                 for a in _mb_genre_artists(genre, 25)}
+        if known:
+            kept = [t for t in loose if t.primary_artist() in known]
+            log.info("%s: word search gave %d, %d were on-genre",
+                     genre, len(loose), len(kept))
+            # only take the filtered list if it left us something; reggae came
+            # back with nothing at all when every result was filtered out
+            if kept or out:
+                loose = kept
+        out += loose
 
     # by name as well as by id: the tag lookup and the fallback search find
     # the same song under two different uploads, and Plush turned up twice
@@ -430,6 +539,8 @@ def genre_tracks(genre: str, limit: int = 25) -> list[Track]:
     for t in out:
         name = t.key()
         if not t.video_id or t.video_id in seen or not _acceptable(t):
+            continue
+        if _is_channel(t.artist):
             continue
         if name and name in names:
             continue
