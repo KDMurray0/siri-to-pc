@@ -10,18 +10,25 @@ import re
 
 from ..config import config
 from ..logging_setup import get
-from ..models import Candidate, Track, is_derivative
+from ..models import (Candidate, Track, is_channel_act, is_derivative,
+                      norm_title)
 from .tags import tagstore
 from .taste import taste
 
 log = get("context")
+
+# Taste is worth about a third of the genre term at most, on purpose.
+TASTE_WEIGHT = 1.0
+# Nothing vouches for it: no tags, nobody plays it alongside anything, and it
+# isn't by the band that's on. Usually a re-upload or a soundalike.
+UNKNOWN_PENALTY = 1.2
 
 SOURCE_WEIGHT = {
     "artist": 2.0,     # the band gets no head start just for being the band
     "radio": 2.0,      # YouTube's related tracks
     "anchor": 2.6,     # radio from the song you actually asked for
     "theme": 2.8,      # the genre or vibe you asked for
-    "liked": 2.5,      # seeded from something you liked
+    "liked": 1.6,      # seeded from something you liked, so it has to fit too
     "genre": 1.5,
 }
 
@@ -33,6 +40,17 @@ def _fit(sim: float) -> float:
     albums later ~0.70, a different band ~0.44.
     """
     return max(0.15, min(1.0, (sim - 0.65) / 0.30))
+
+
+def _dash_credit(title: str) -> bool:
+    """"Artist - Song" typed into the title, which the catalogue never does.
+
+    Real rows keep the artist in its own field and use a colon for movements —
+    "Debussy: Preludes", "Carnival of the Animals: XIII". A dash means somebody
+    typed the lot into an upload box, so it's a re-upload of someone else's
+    record. Only held against tracks nothing else vouches for.
+    """
+    return " - " in (title or "")
 
 
 def _theme_words(theme: str) -> set[str]:
@@ -89,7 +107,7 @@ class ContextBuilder:
               artist_counts: dict[str, int] | None = None) -> list[Candidate]:
         exclude = exclude or set()
         exclude_keys = exclude_keys or set()
-        seeds = self._seeds(current)
+        seeds = self._seeds(current, anchor)
         raw: list[tuple[Track, str]] = []
 
         # 1. The current artist's own catalogue. Pull fewer of them when you
@@ -122,8 +140,11 @@ class ContextBuilder:
             for t in self._safe(self.catalog.genre_tracks, theme, 20):
                 raw.append((t, "theme"))
 
-        # 5. Occasionally pull from something you liked, to widen it out.
-        if random.random() < 0.35:
+        # 5. Occasionally pull from something you liked, to widen it out — but
+        #    only when nothing was actually asked for. One of five likes being
+        #    a piano piece shouldn't mean one refill in three of a metal queue
+        #    arrives full of it.
+        if anchor is None and not theme and random.random() < 0.35:
             liked = taste.liked_seed()
             if liked:
                 for t in self._safe(self.catalog.related, liked, 6):
@@ -174,14 +195,32 @@ class ContextBuilder:
         return widened
 
     # -- internals -----------------------------------------------------
-    def _seeds(self, current: Track | None) -> list[str]:
+    def _seeds(self, current: Track | None,
+               anchor: Track | None = None) -> list[str]:
+        """Tracks worth asking YouTube for a continuation from.
+
+        History used to go in unfiltered, and that's how a hip-hop request came
+        back full of ambient piano: the last three things you heard seeded the
+        pool regardless of what you'd just asked for, so an hour-old session
+        kept steering the new one. A past track only earns a seed now if it
+        sounds like what's on. Unknown counts as no.
+        """
         seeds: list[str] = []
         if current and current.video_id:
             seeds.append(current.video_id)
-        for vid in reversed(taste.history_ids()):
-            if vid not in seeds:
-                seeds.append(vid)
-            if len(seeds) >= 4:
+        ref = anchor or current
+        if ref is None:
+            return seeds
+        for row in taste.recent(12):
+            vid = row.get("video_id")
+            if not vid or vid in seeds:
+                continue
+            past = Track(video_id=vid, title=row.get("title") or "",
+                         artist=row.get("artist") or "")
+            if (tagstore.similarity(ref, past) or 0.0) < 0.70:
+                continue
+            seeds.append(vid)
+            if len(seeds) >= 3:
                 break
         return seeds
 
@@ -206,6 +245,7 @@ class ContextBuilder:
         cur_artist = current.primary_artist() if current else ""
         seen_ids: set[str] = set()
         seen_keys: set[str] = set()
+        seen_titles: set[str] = set()
         # Ask for one song and you get one song by that band, not their
         # discography. Artist and album requests want the opposite.
         stack_penalty = 0.0 if focus >= 0.8 else 1.6
@@ -256,10 +296,11 @@ class ContextBuilder:
             else:
                 fit = _fit(sim)
 
+            # Taste breaks ties, it doesn't choose. Liking a song is a reason
+            # to prefer it over something equally fitting — not a reason to
+            # play it in a queue it has no business in. A dislike still bites.
             ts = taste.score(track)
-            if ts > 0 and sim is not None:
-                ts *= 0.5 + 0.5 * fit      # you replay it, but is it this mood
-            score += ts
+            score += (TASTE_WEIGHT * ts * fit) if ts > 0 else (TASTE_WEIGHT * ts)
 
             # What people play alongside this, which is the only signal that
             # can tell Song 2 from The Universal — tags call those 0.86 alike
@@ -283,6 +324,12 @@ class ContextBuilder:
                     score += 0.8 * cohesion      # same record, same era
             if sim is not None:
                 score += 3.0 * (sim - 0.55)      # genre and mood lead
+            elif not near and track.primary_artist() != cur_artist:
+                # Nobody has tagged it and nobody plays it next to anything —
+                # that's what a Thunderstruck cover by a stranger looks like.
+                # Double it if the title credits somebody in the title itself:
+                # unknown and hand-typed is a re-upload nearly every time.
+                score -= UNKNOWN_PENALTY * (2.0 if _dash_credit(track.title) else 1.0)
 
             # You asked for a genre, so the genre is the brief. Tracks whose
             # own tags say they belong get a real push; ones we can't confirm
@@ -302,7 +349,18 @@ class ContextBuilder:
             score -= stack_penalty * per_artist.get(track.primary_artist(), 0)
             score += random.random() * 0.8
 
+            if is_channel_act(track.artist):
+                continue
+
+            # One version of a song is enough. The pool routinely holds the
+            # real Thunderstruck and three covers of it; they all pass the
+            # artist+title dedupe because the artist differs.
+            bare = norm_title(track.title)
+            if bare and bare in seen_titles:
+                continue
             seen_ids.add(vid)
+            if bare:
+                seen_titles.add(bare)
             if key:
                 seen_keys.add(key)
             a = track.primary_artist()

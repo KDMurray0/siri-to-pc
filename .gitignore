@@ -32,3 +32,6 @@ Thumbs.db
 
 # ── Not for the repo ──
 SKILL.md
+
+# ── Scratch ──
+.pytest_cache/

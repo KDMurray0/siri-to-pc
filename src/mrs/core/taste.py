@@ -225,19 +225,25 @@ class TasteEngine:
 
     # -- scoring -------------------------------------------------------
     def score(self, track: Track) -> float:
-        """Taste-only component of a candidate's score."""
+        """How much you like this, between -1 and 1.
+
+        It used to be unbounded: half a point per play meant an artist you'd
+        played twenty times scored +10, against a genre term that maxes out
+        around 3. Liking something once was enough to drag it into every
+        queue it didn't belong in. It's a tiebreaker, so it's bounded like one.
+        """
         artist = track.primary_artist()
         s = 0.0
         with self._lock:
             liked_artists = {(t.get("artist") or "").split(",")[0].strip().lower()
                              for t in self._liked}
             if artist and artist in liked_artists:
-                s += float(config.get("liked_boost", 2.0))
+                s += 0.4
             plays, skips = self._artist.get(artist, [0, 0])
-            s += 0.5 * plays - float(config.get("skip_penalty", 0.8)) * skips
+            s += min(0.4, 0.1 * plays) - min(0.8, 0.2 * skips)
             sp, ss = self._song.get(track.video_id, [0, 0])
-            s += 0.4 * sp - float(config.get("skip_penalty", 0.8)) * ss
-        return s
+            s += min(0.3, 0.1 * sp) - min(0.9, 0.3 * ss)
+        return max(-1.0, min(1.0, s))
 
 
 taste = TasteEngine()

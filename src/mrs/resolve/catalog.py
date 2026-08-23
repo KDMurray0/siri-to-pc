@@ -17,7 +17,7 @@ import urllib.request
 
 from ..config import config
 from ..logging_setup import get
-from ..models import Track, is_derivative
+from ..models import Track, is_channel_act, is_derivative
 from . import numbers
 
 log = get("catalog")
@@ -355,19 +355,12 @@ def album_tracks(album: str, artist: str = "", limit: int = 0) -> list[Track]:
 NET_UA = {"User-Agent": "MusicRequestServer/2.0 (personal LAN music player)"}
 
 
-# Channels that upload hours of wallpaper music. YouTube's Jazz and Ambient
-# shelves are full of them, and "Relaxing Music" is not a jazz artist.
-_FARM = re.compile(
-    r"\b(bgm|lo-?fi|relax\w*|sleep\w*|study\w*|meditat\w*|calm\w*|soothing|"
-    r"background|ambience|playlist|channel|topic|mix(es)?|vibes?|"
-    r"instrumental[s]? \w+|\d+ hours?)\b", re.I)
-
-
 def _is_channel(artist: str) -> bool:
+    """Wallpaper-music uploaders. YouTube's Jazz and Ambient shelves are full
+    of them, and "Relaxing Music" is not a jazz artist. No name at all is the
+    same problem wearing nothing."""
     name = (artist or "").strip()
-    if not name:
-        return True
-    return bool(_FARM.search(name))
+    return not name or is_channel_act(name)
 
 
 ITUNES = "https://itunes.apple.com/search"

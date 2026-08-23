@@ -77,7 +77,28 @@ def preflight() -> list[str]:
     return problems
 
 
+def be_polite() -> None:
+    """Run below normal priority.
+
+    This sits in the background all day and the actual audio comes out of mpv,
+    which is a separate process and stays at normal. Nothing here is worth
+    stealing a timeslice from whatever you're doing.
+    """
+    try:
+        import ctypes
+        BELOW_NORMAL = 0x00004000
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        # restype matters on 64-bit: the default int truncates the handle
+        k32.GetCurrentProcess.restype = ctypes.c_void_p
+        k32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        if k32.SetPriorityClass(k32.GetCurrentProcess(), BELOW_NORMAL):
+            log.info("running at below-normal priority")
+    except Exception as exc:
+        log.debug("couldn't lower priority: %s", exc)
+
+
 def startup() -> None:
+    be_polite()
     setup(config.get("api_key", ""))
     made = ensure_structure()
     if made["created"]:

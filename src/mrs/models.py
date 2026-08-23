@@ -19,7 +19,7 @@ _NONWORD = re.compile(r"[^a-z0-9]+")
 
 # Words that are never part of a real title.
 _JUNK = (r"karaoke|nightcore|8d|sped\s*up|slowed|bootleg|mashup|reverb|"
-         r"lyric video|visuali[sz]er|snippet|preview|teaser")
+         r"lyrics?|lyric video|visuali[sz]er|snippet|preview|teaser")
 # Words that often are: Live Forever, Live and Let Die, Cover Me, Remix Culture.
 # These only mean "not the real release" when they sit where a descriptor sits.
 _TAGS = r"remix|live|acoustic|cover|instrumental|edit|version|mix"
@@ -62,6 +62,31 @@ def is_derivative(title: str) -> bool:
     t = title or ""
     return bool(_DERIV_JUNK.search(t) or _DERIV_BRACKET.search(t)
                 or _DERIV_DASH.search(t) or _DERIV_WHERE.search(t))
+
+
+# Uploaders rather than bands: cover acts named after their instrument
+# (Penguin Piano), and the sleep/study/lounge farms that fill a jazz search
+# with New York Jazz Lounge.
+_CHANNEL_SURE = re.compile(
+    r"\b(covers?|tribute|karaoke|remake|backing track|in the style of|"
+    r"bgm|lo-?fi|playlist|topic|\d+\s*hours?)\b"
+    r"|\w\s+(piano|guitar|strings)$", re.I)
+# On their own these are band names — Sleep and Sleep Token are real, so is
+# Lounge Lizards. They only mean a farm next to a word about the music itself.
+_CHANNEL_MOOD = re.compile(
+    r"\b(relax\w*|sleep\w*|study|meditat\w*|calm\w*|soothing|background|"
+    r"ambien(ce|t)|lounge|chill\w*)\b", re.I)
+_CHANNEL_MUSIC = re.compile(
+    r"\b(music|beats?|sounds?|songs?|tunes?|piano|jazz|vibes?|radio|"
+    r"instrumental[s]?|playlist|hours?|mix(es)?)\b", re.I)
+
+
+def is_channel_act(artist: str) -> bool:
+    """An upload channel rather than the act that made the record."""
+    name = artist or ""
+    if _CHANNEL_SURE.search(name):
+        return True
+    return bool(_CHANNEL_MOOD.search(name) and _CHANNEL_MUSIC.search(name))
 
 
 @dataclass

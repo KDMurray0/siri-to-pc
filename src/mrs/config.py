@@ -71,8 +71,6 @@ DEFAULTS: dict[str, Any] = {
 
     # taste
     "completion_ratio": 0.30,
-    "liked_boost": 2.0,
-    "skip_penalty": 0.8,
 
     # llm
     "groq_api_key": "",
