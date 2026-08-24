@@ -18,6 +18,7 @@ import urllib.request
 from ..config import config
 from ..logging_setup import get
 from ..models import Track, _fold, is_channel_act, is_derivative
+from ..paths import data_dir, write_atomic
 from . import numbers
 
 log = get("catalog")
@@ -28,7 +29,18 @@ _client_lock = threading.Lock()
 _prefs: list[str] = []
 
 _cache: dict[str, tuple[float, list]] = {}
-_CACHE_TTL = 1800
+_cache_lock = threading.RLock()
+_cache_loaded = False
+_cache_dirty = 0
+# A week, not half an hour. The point of the cache is that the two editorial
+# lanes ask for the same artists and the same records every refill, and those
+# names don't change between now and next Tuesday. Half an hour meant every
+# restart, and every long listening session, paid for the same lookups again.
+# Not forever, though: unlike a birth year, a search result genuinely does
+# change — a video gets taken down, an artist releases something.
+_CACHE_TTL = 7 * 24 * 3600
+_CACHE_MAX = 1500
+_CACHE_VERSION = 1
 
 # YouTube says no sometimes — a truncated body, a closed connection, a 429 —
 # and every one of those used to cost the pool a lane's worth of candidates
@@ -125,17 +137,76 @@ def set_preferences(artists: list[str]) -> None:
     _prefs = [a.lower() for a in artists if a]
 
 
+def _cache_file():
+    return data_dir() / "searches.json"
+
+
+def _load_cache() -> None:
+    """Read last week's answers back off disk. Once, lazily."""
+    global _cache_loaded
+    with _cache_lock:
+        if _cache_loaded:
+            return
+        _cache_loaded = True
+        try:
+            raw = json.loads(_cache_file().read_text(encoding="utf-8"))
+            if raw.get("v") != _CACHE_VERSION:
+                return
+            now = time.time()
+            for key, row in (raw.get("rows") or {}).items():
+                at = float(row.get("at") or 0)
+                if now - at >= _CACHE_TTL:
+                    continue
+                _cache[key] = (at, [Track.from_dict(d)
+                                    for d in (row.get("tracks") or [])])
+            log.info("%d cached searches still good", len(_cache))
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            log.debug("search cache unreadable: %s", exc)
+
+
+def save_cache() -> None:
+    global _cache_dirty
+    with _cache_lock:
+        if not _cache_dirty:
+            return
+        rows = {k: {"at": at, "tracks": [t.to_dict() for t in v]}
+                for k, (at, v) in _cache.items() if v}
+        _cache_dirty = 0
+    try:
+        write_atomic(_cache_file(), json.dumps({"v": _CACHE_VERSION,
+                                                "rows": rows}))
+    except Exception as exc:
+        log.debug("couldn't save searches: %s", exc)
+
+
 def _cached(key: str):
-    hit = _cache.get(key)
-    if hit and time.time() - hit[0] < _CACHE_TTL:
-        return hit[1]
-    return None
+    _load_cache()
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit and time.time() - hit[0] < _CACHE_TTL:
+            return hit[1]
+        return None
 
 
 def _store(key: str, value):
-    if len(_cache) > 400:
-        _cache.clear()
-    _cache[key] = (time.time(), value)
+    global _cache_dirty
+    _load_cache()
+    with _cache_lock:
+        _cache[key] = (time.time(), value)
+        # Oldest out, rather than throwing the lot away at 400 and paying for
+        # every lookup again.
+        if len(_cache) > _CACHE_MAX:
+            for old in sorted(_cache, key=lambda k: _cache[k][0])[:_CACHE_MAX // 4]:
+                _cache.pop(old, None)
+        # Empty answers stay in memory but never reach the disk: they cost
+        # nothing to work out again, and one that came back empty for a
+        # passing reason shouldn't be believed for a week.
+        if value:
+            _cache_dirty += 1
+    if _cache_dirty >= 25:
+        save_cache()
     return value
 
 

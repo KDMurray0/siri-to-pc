@@ -85,6 +85,12 @@ class PlayerService:
         listener.stop()
         self.queue.stop()
         taste.save()
+        # a week of search answers, and whatever the tag worker has picked
+        # up since its last flush, are worth the writes on the way out
+        from .resolve.catalog import save_cache
+        from .core.tags import tagstore
+        save_cache()
+        tagstore.save()
         for m in (self.mpv, self.alt):
             try:
                 m.close()

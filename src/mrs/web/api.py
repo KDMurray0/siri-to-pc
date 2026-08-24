@@ -188,6 +188,7 @@ def health(_: bool = Auth):
         "era": safe(era.stats),
         "kin": safe(kin.stats),
         "catalog": safe(cat.stats),
+        "searches": safe(lambda: {"cached": len(cat._cache)}),
         "downloads": safe(downloader.cache_stats),
         "queue": safe(lambda: {
             "pool": len(player.queue._pool),

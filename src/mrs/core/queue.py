@@ -19,6 +19,7 @@ from ..logging_setup import get
 from ..models import Activity, Candidate, Track
 from . import radio, spectrum
 from .downloader import downloader
+from ..resolve import catalog as catalog_cache
 from .taste import taste
 
 log = get("queue")
@@ -350,6 +351,7 @@ class QueueManager:
                     gone = downloader.prune_cache(keep=set(self._meta))
                     if gone:
                         log.info("pruned %d cached files", gone)
+                    catalog_cache.save_cache()
                 if self._hold_radio:
                     if self.ready_ahead() <= 0 and not self._end_after_run:
                         # the run is done; whatever follows is not an artist
