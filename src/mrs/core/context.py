@@ -63,6 +63,40 @@ def _dash_credit(title: str) -> bool:
     return " - " in (title or "")
 
 
+RUN_LOOK_BACK = 10        # how much of the recent run a candidate has to suit
+# Tempo is deliberately not part of this. Measured against the case it was
+# meant to fix — a metal run sagging into Nickelback — Deezer's bpm turned out
+# anti-correlated with it: Creed's ballad sits at 127 next to Chop Suey's 129
+# and scores a near-perfect match, while Down with the Sickness reads 180 and
+# scores zero. Speed isn't weight. It still sets the crossfade length, which
+# is what it's actually good for.
+
+
+def _run_fit(run: list[Track], track: Track) -> float:
+    """How well this sits with the last few records, 0 to 1.
+
+    The newest counts most, but the older ones still get a say — that's the
+    point. One song only has to follow the song before it, so a chain of
+    perfectly reasonable steps still walks from Fela Kuti to Depeche Mode.
+    Asking it to suit ten at once leaves nowhere for that walk to go.
+
+    Averaging the *tag* similarity over the same ten was tried and made drift
+    worse, not better: the average is the run's own centre, which moves with
+    the run, so it anchors to nothing and quietly penalises anything that
+    still sounds like the song you asked for. Similarity stays measured
+    against what's on and against the anchor, which don't move.
+    """
+    total = weight = 0.0
+    for i, past in enumerate(run):
+        w = 1.0 - (i * 0.07)          # newest first, gently decayed
+        val = tagstore.affinity(past, track)
+        if val is None:
+            continue                  # not looked up yet; don't count it
+        total += w * val
+        weight += w
+    return (total / weight) if weight else 0.0
+
+
 def _theme_words(theme: str) -> set[str]:
     """The words a track's tags would have to carry to count as this genre."""
     t = (theme or "").strip().lower()
@@ -176,7 +210,7 @@ class ContextBuilder:
                 # Deep on purpose. Thirty gets eaten by track sixteen and then
                 # a riot grrrl run has nothing left to pull on and slides into
                 # pop-punk; the lookup is cached, so depth is nearly free.
-                fresh = self._safe(self.catalog.genre_tracks, root, 60)
+                fresh = self._safe(self.catalog.genre_tracks, root, 90)
                 raw.extend((t, "root") for t in fresh)
 
         # 5. Occasionally pull from something you liked, to widen it out — but
@@ -292,6 +326,16 @@ class ContextBuilder:
         seen_titles: set[str] = {norm_title(r.get("title") or "")
                                  for r in taste.recent(60)}
         seen_titles.discard("")
+        # The last few records, newest first, for the run-fit tests below.
+        # What's on hasn't been recorded yet, so it goes on the front itself.
+        recent_run = [Track(video_id=r.get("video_id") or "",
+                            title=r.get("title") or "",
+                            artist=r.get("artist") or "")
+                      for r in taste.recent(RUN_LOOK_BACK)]
+        run_now = ([current] if current else []) + [
+            t for t in recent_run
+            if not current or t.video_id != current.video_id]
+        run_now = run_now[:RUN_LOOK_BACK]
         # Ask for one song and you get one song by that band, not their
         # discography. Artist and album requests want the opposite.
         stack_penalty = 0.0 if focus >= 0.8 else 1.6
@@ -346,7 +390,7 @@ class ContextBuilder:
                 # that down wasn't enough, because once the disco ran out a
                 # track on 0.35 won by default and Bee Gees was followed by
                 # a-ha. Better to widen the search than to play it.
-                if sim < 0.12 and source not in ("theme", "genre"):
+                if sim < 0.20 and source not in ("theme", "genre"):
                     continue
 
             # Taste breaks ties, it doesn't choose. Liking a song is a reason
@@ -362,15 +406,15 @@ class ContextBuilder:
             if near:
                 score += 3.0 * near
 
-            # Whether it follows the record that's actually on, which is a
-            # different question from whether it suits the request. With an
-            # anchor set the line above only ever asked about the anchor, so
-            # nothing was judging the join between one track and the next —
-            # the thing a DJ is actually doing.
-            flow = (tagstore.affinity(current, track)
-                    if anchor is not None and current is not anchor else None)
+            # How well it sits with the last few records, not just the one
+            # that's on. Matching only the current track is how a run wanders:
+            # every single step is a fair follow-on and thirty of them end up
+            # somewhere else entirely. Something that belongs with four of the
+            # last ten can't be the far end of a slow walk.
+            flow = _run_fit(run_now, track)
             if flow:
-                score += 1.5 * flow
+                score += 3.0 * flow
+
 
             if cur_artist and track.primary_artist() == cur_artist:
                 # A nudge, not a rule. Tags can't separate two songs by one
