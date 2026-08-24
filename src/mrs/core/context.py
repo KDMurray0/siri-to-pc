@@ -40,14 +40,19 @@ SOURCE_WEIGHT = {
     # Bikini Kill, and Last.fm's tag is the other way round. Level pegging
     # means the pool always holds some of each.
     "root": 2.0,
-    # Records by the artists Deezer files next to this one. Below the genre
-    # lanes on purpose: being a neighbour gets you considered, the tag
-    # similarity still decides. It also collects KIN_WEIGHT on top.
-    "kin": 1.6,
-    # The records people play alongside this one, by name. The most precise
-    # thing we have, so the highest — it isn't a guess from a label, it's
-    # thirty tracks somebody's listening history actually put together.
-    "near": 2.9,
+    # The two editorial lanes. Both sit above a genre lane that has matched
+    # the label and collected PRIMARY_GENRE for it, because a shared label is
+    # a weaker claim than either of these makes and it kept winning by a
+    # tenth of a point: Pyramid Song is tagged alternative rock, and so are
+    # Hoobastank, Staind, Creed and Hinder.
+    #
+    # Records by the artists Deezer files next to this one. Collects
+    # KIN_WEIGHT on top, so 3.6 in total.
+    "kin": 2.2,
+    # The records people play alongside this one, asked for by name. The most
+    # precise thing here — not a guess from a label, thirty tracks somebody's
+    # listening history actually put together.
+    "near": 3.6,
 }
 # Last.fm has been asked and has never heard of them. Every real act has a
 # page, so what's left is AI piano and stock-library uploads.
@@ -552,6 +557,8 @@ class ContextBuilder:
         root_words: set[str] = set()
         for r in (roots or []):
             root_words |= _theme_words(r)
+        searched = {_flatten(t) for t in ([theme] if theme else []) + list(roots or [])
+                    if t}
         pull = float(config.get("anchor_pull", 0.35)) if anchor is not None else 0.0
         drift = 0.0
         if pull:
@@ -753,6 +760,12 @@ class ContextBuilder:
             score += random.random() * 0.8
 
             if is_channel_act(track.artist, track.title):
+                continue
+            # Nobody names their band after the genre they're filed under.
+            # Searching trip-hop returned "Trip Hop 08" by "Trip Hop", and
+            # the psychedelic soul lane returned "Psychedelic Soul Train" —
+            # library uploads named to match whatever you typed.
+            if _flatten(track.primary_artist()) in searched:
                 continue
 
             # One version of a song is enough. The pool routinely holds the
