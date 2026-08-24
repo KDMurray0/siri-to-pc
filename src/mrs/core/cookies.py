@@ -584,8 +584,8 @@ def start_watch() -> None:
                         for name, image, locks in BROWSERS:
                             if locks and name in installed_browsers() \
                                     and browser_running(image):
-                                threading.Thread(target=grab_after_close,
-                                                 args=(name,), daemon=True).start()
+                                spawn(grab_after_close, name,
+                                      name="cookie grab")
                                 break
             except Exception as exc:
                 log.warning("cookie watch: %s", exc)

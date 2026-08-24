@@ -26,7 +26,7 @@ from ..core.library import library
 from ..core.playlists import playlists
 from ..core.taste import taste
 from ..events import Ev, bus
-from ..logging_setup import get, log_path
+from ..logging_setup import get, log_path, spawn
 from ..paths import resource_dir
 from ..player import player
 from ..requests import (add_spotify, handle_request, play_for_you,
@@ -621,8 +621,7 @@ def api_cookies_grab(browser: str, close: int = 0, _: bool = Auth):
             return {"status": "error",
                     "message": "Enable 'let me close your browser' in settings first"}
         cookie_mod.close_browser(browser)
-    threading.Thread(target=cookie_mod.grab_after_close, args=(browser,),
-                     daemon=True).start()
+    spawn(cookie_mod.grab_after_close, browser, name="cookie grab")
     return {"status": "ok",
             "message": f"Watching for {browser} to close, then grabbing cookies"}
 
