@@ -348,6 +348,13 @@ body.expand .prog{margin-top:10px}
 .stab:hover{color:var(--fg)}
 .stab.on{color:var(--accent-ink);background:var(--accent)}
 .sheet-body{flex:1;overflow-y:auto;padding:8px 18px 24px}
+.health{display:none;margin:2px 0 10px;font-size:11.5px;line-height:1.55;
+  border:1px solid var(--line);border-radius:9px;padding:9px 11px}
+.health.on{display:block}
+.health b{font-weight:600}
+.health .hr{display:flex;justify-content:space-between;gap:10px}
+.health .hk{opacity:.62}
+.health .warn{color:var(--bad,#e0645a)}
 .spane{display:none}
 .spane.open{display:block}
 .slabel em{display:block;font-style:normal;font-size:10.5px;color:var(--sub);
@@ -732,6 +739,9 @@ body.noviz .miniwave{display:none}
           <button class="btn" id="openfolder">Open folder</button></div>
         <div class="srow"><span class="slabel">Show over other apps<em>Ctrl+Alt+M — clicks pass straight through</em></span>
           <span class="sval">Ctrl+Alt+M</span></div>
+        <div class="srow"><span class="slabel">What the queue knows<em>Refreshes when you open this tab</em></span>
+          <button class="btn" id="healthbtn">Check</button></div>
+        <div class="health" id="health"></div>
         <div class="hint" id="diaghint"></div>
       </section>
 
@@ -1147,6 +1157,49 @@ const WHY = {
   near:   ["people play this alongside the song you asked for", "played with"],
 };
 
+function healthLine(k, v, bad) {
+  return `<div class="hr"><span class="hk">${k}</span>` +
+         `<span class="${bad ? "warn" : ""}">${v}</span></div>`;
+}
+
+async function loadHealth() {
+  const box = $("health");
+  box.classList.add("on");
+  box.innerHTML = `<div class="hr"><span class="hk">checking…</span></div>`;
+  let d;
+  try {
+    d = await api("/api/health");
+  } catch (e) {
+    box.innerHTML = healthLine("couldn't ask", String(e), true);
+    return;
+  }
+  const rows = [];
+  const store = (name, s, unit) => {
+    if (!s || s.error) { rows.push(healthLine(name, s ? s.error : "—", true)); return; }
+    const held = s.tracks !== undefined ? s.tracks : s.artists;
+    let note = `<b>${held}</b> ${unit}`;
+    if (s.queued) note += `, ${s.queued} waiting`;
+    // A worker that isn't running is normal — they stop when idle and start
+    // again on the next lookup. Only say something when there's a backlog.
+    rows.push(healthLine(name, note, s.queued > 40));
+  };
+  store("Sounds like (Last.fm)", d.tags, "tracks");
+  store("Belongs next to (Deezer)", d.kin, "artists");
+  store("Era (MusicBrainz)", d.era, "artists");
+
+  const c = d.catalog || {};
+  rows.push(healthLine("YouTube",
+    c.throttled_for ? `backing off for ${Math.ceil(c.throttled_for)}s`
+                    : `ok, ${c.recent_failures || 0} recent failures`,
+    !!c.throttled_for));
+  const dl = d.downloads || {};
+  rows.push(healthLine("Downloaded", `${dl.files || 0} files, ${dl.mb || 0} MB`));
+  const q = d.queue || {};
+  rows.push(healthLine("Queue",
+    `${q.pool || 0} to choose from, ${q.ready || 0} ready`, (q.pool || 0) < 4));
+  box.innerHTML = rows.join("");
+}
+
 function qRow(t) {
   const art = t.art ? `<img class="qi" src="${t.art}" onerror="qiFail(this)">` : `<div class="qi"></div>`;
   const eq = t.current ? `<span class="nowdot"></span>` : "";
@@ -1376,7 +1429,11 @@ document.querySelectorAll(".stab").forEach(tab => tab.onclick = () => {
   document.querySelectorAll(".spane").forEach(p =>
     p.classList.toggle("open", p.dataset.s === tab.dataset.s));
   $("sheet").querySelector(".sheet-body").scrollTop = 0;
+  // Only ask when the tab is actually on screen: it walks three caches and
+  // stats the download folder.
+  if (tab.dataset.s === "system") loadHealth();
 });
+$("healthbtn").onclick = loadHealth;
 $("closeSettings").onclick = () => $("sheet").classList.remove("open");
 
 function buildChips(id, options, onPick) {
