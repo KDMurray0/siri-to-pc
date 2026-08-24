@@ -24,7 +24,7 @@ from pathlib import Path
 
 from ..config import config
 from ..events import Ev, bus
-from ..logging_setup import get
+from ..logging_setup import get, spawn
 from ..paths import data_dir
 
 log = get("cookies")
@@ -559,7 +559,7 @@ def extension_flow() -> dict:
     existing = scan_downloads()
     if existing:
         return import_file(existing)
-    threading.Thread(target=watch_downloads, daemon=True).start()
+    spawn(watch_downloads, name="cookie watch")
     return {
         "ok": False,
         "watching": True,

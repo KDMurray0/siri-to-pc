@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import sys
+import threading
 
 from .paths import data_dir
 
@@ -66,3 +67,33 @@ def get(name: str) -> logging.Logger:
 
 def log_path():
     return _LOG
+
+
+def spawn(fn, *args, name: str = "", on_error=None, **kw) -> threading.Thread:
+    """Start a daemon thread whose crash gets written down.
+
+    A bare `Thread(target=...)` that raises prints to stderr and vanishes, and
+    a windowed build has no stderr — so a background worker dying is silent
+    and permanent. Every symptom of it looks like something else: the queue
+    stops refilling, cookies never arrive, the activity spinner sticks on
+    "finding" because the line that clears it was three statements below the
+    one that threw.
+
+    `on_error` runs afterwards, for whatever state the thread was holding.
+    """
+    label = name or getattr(fn, "__name__", "thread")
+
+    def run():
+        try:
+            fn(*args, **kw)
+        except Exception as exc:
+            get("tasks").exception("%s died: %s", label, exc)
+            if on_error is not None:
+                try:
+                    on_error(exc)
+                except Exception:
+                    get("tasks").debug("%s cleanup failed too", label)
+
+    t = threading.Thread(target=run, daemon=True, name=label[:24])
+    t.start()
+    return t

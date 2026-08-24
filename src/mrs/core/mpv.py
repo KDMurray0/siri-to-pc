@@ -29,6 +29,7 @@ GENERIC_READ, GENERIC_WRITE = 0x80000000, 0x40000000
 OPEN_EXISTING = 3
 FILE_FLAG_OVERLAPPED = 0x40000000
 INVALID_HANDLE = ctypes.c_void_p(-1).value
+_MAX_LINE = 4 * 1024 * 1024   # a reply this big means a broken stream
 ERROR_IO_PENDING = 997
 CREATE_NO_WINDOW = 0x08000000
 
@@ -211,6 +212,18 @@ class MpvClient:
         return bool(self.proc and self.proc.poll() is None and not self.broken)
 
     def _read_loop(self, gen: int) -> None:
+        """Every event mpv sends arrives here, so this thread dying is about
+        the worst failure in the program: playback stops advancing at the end
+        of a track and nothing says why. Anything unexpected marks the pipe
+        broken instead, which is what the watchdog already knows how to fix.
+        """
+        try:
+            self._read_forever(gen)
+        except Exception as exc:
+            log.warning("%s reader stopped: %s", self.pipe_name, exc)
+            self._mark_broken()
+
+    def _read_forever(self, gen: int) -> None:
         buf = b""
         size = 65536
         chunk = self._chunk
@@ -244,6 +257,13 @@ class MpvClient:
                 line, buf = buf.split(b"\n", 1)
                 if line.strip():
                     self._dispatch(line)
+            # A stream that never sends a newline would otherwise grow
+            # until the process dies. mpv's longest reply is a track
+            # list, nowhere near this.
+            if len(buf) > _MAX_LINE:
+                log.warning("%s sent %d bytes with no newline, dropping",
+                            self.pipe_name, len(buf))
+                buf = b""
 
     def _dispatch(self, line: bytes) -> None:
         try:

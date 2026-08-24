@@ -13,7 +13,7 @@ from .core import cookies as cookie_mod
 from .core.downloader import downloader
 from .core.library import library
 from .events import bus
-from .logging_setup import get, setup
+from .logging_setup import get, spawn, setup
 from .paths import data_dir, ensure_structure, migrate_legacy_data
 from .player import player
 from .resolve import catalog, llm
@@ -144,7 +144,7 @@ def startup() -> None:
 
     # Groq self-heals a config pinned to a model Groq has retired.
     if llm.available():
-        threading.Thread(target=llm.ensure_model, daemon=True).start()
+        spawn(llm.ensure_model, name="groq warmup")
         log.info("Groq enabled (%s)", config.get("groq_model"))
     else:
         log.info("Groq off — using the local parser")

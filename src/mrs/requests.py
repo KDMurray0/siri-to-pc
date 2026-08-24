@@ -12,7 +12,7 @@ from .core.library import library
 from .core.playlists import playlists
 from .core.taste import taste
 from .events import Ev, bus
-from .logging_setup import get
+from .logging_setup import get, spawn
 from .models import Track
 from .player import player
 from .resolve import numbers, parser, resolver, spotify
@@ -361,7 +361,13 @@ def _import_spotify(url: str, *, announce: bool = True, play: bool = True) -> di
             bus.publish(Ev.TOAST, msg)
             bus.publish(Ev.SETTINGS, {"playlists": True})
 
-    threading.Thread(target=work, daemon=True).start()
+    def unstick(_exc):
+        # Whatever went wrong, the spinner has to come back down — the line
+        # that lowers it sits three statements past the one that threw.
+        player.queue._set_activity("idle")
+        bus.publish(Ev.TOAST, "That import failed — see the log")
+
+    spawn(work, name="spotify import", on_error=unstick)
     return {"status": "ok", "message": "Importing that Spotify link…",
             "via": "spotify"}
 
