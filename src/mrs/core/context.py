@@ -39,7 +39,6 @@ SOURCE_WEIGHT = {
     # Bikini Kill, and Last.fm's tag is the other way round. Level pegging
     # means the pool always holds some of each.
     "root": 2.0,
-    "genre": 1.5,
     # Records by the artists Deezer files next to this one. Below the genre
     # lanes on purpose: being a neighbour gets you considered, the tag
     # similarity still decides. It also collects KIN_WEIGHT on top.
@@ -545,7 +544,7 @@ class ContextBuilder:
                 # that down wasn't enough, because once the disco ran out a
                 # track on 0.35 won by default and Bee Gees was followed by
                 # a-ha. Better to widen the search than to play it.
-                if sim < 0.20 and source not in ("theme", "genre"):
+                if sim < 0.20 and source != "theme":
                     continue
 
             # And the same test against the song you asked for, which is the
@@ -554,7 +553,7 @@ class ContextBuilder:
             # Out Boy and Fall Out Boy scored well after the thing before it,
             # and thirty steps like that leave a metal request playing pop
             # punk. Against Chop Suey blink-182 is 0.09, and that settles it.
-            if anchor is not None and source not in ("theme", "genre"):
+            if anchor is not None and source != "theme":
                 far = tagstore.similarity(anchor, track)
                 if far is not None and far < 0.18:
                     continue
@@ -650,7 +649,7 @@ class ContextBuilder:
                 # most tracks are untagged when the pool is built, it quietly
                 # became the only lane that ever won — a Fela Kuti queue made
                 # of Drake and Selena Gomez.
-                soft = {"theme": 0.0, "genre": 0.0, "root": 0.5}.get(source, 1.0)
+                soft = {"theme": 0.0, "root": 0.5}.get(source, 1.0)
                 if soft:
                     score -= (UNKNOWN_PENALTY * soft
                               * (2.0 if _dash_credit(track.title) else 1.0))
