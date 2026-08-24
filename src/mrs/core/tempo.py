@@ -18,7 +18,7 @@ import urllib.request
 
 from ..logging_setup import get
 from ..models import Track
-from ..paths import data_dir
+from ..paths import data_dir, write_atomic
 
 log = get("tempo")
 
@@ -66,9 +66,7 @@ class TempoStore:
         try:
             with self._lock:
                 data = dict(list(self._bpm.items())[-MAX_ENTRIES:])
-            tmp = self._file().with_suffix(".tmp")
-            tmp.write_text(json.dumps(data), encoding="utf-8")
-            tmp.replace(self._file())
+            write_atomic(self._file(), json.dumps(data))
         except Exception as exc:
             log.debug("couldn't save tempos: %s", exc)
 

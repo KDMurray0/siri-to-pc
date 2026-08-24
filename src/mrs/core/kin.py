@@ -27,7 +27,7 @@ from functools import lru_cache
 
 from ..logging_setup import get
 from ..models import Track, _fold, _strip_article
-from ..paths import data_dir
+from ..paths import data_dir, write_atomic
 
 log = get("kin")
 
@@ -106,10 +106,7 @@ class KinStore:
         try:
             with self._lock:
                 items = dict(list(self._near.items())[-MAX_ENTRIES:])
-            tmp = self._file().with_suffix(".tmp")
-            tmp.write_text(json.dumps({"v": VERSION, "near": items}),
-                           encoding="utf-8")
-            tmp.replace(self._file())
+            write_atomic(self._file(), json.dumps({"v": VERSION, "near": items}))
         except Exception as exc:
             log.debug("couldn't save kin: %s", exc)
 

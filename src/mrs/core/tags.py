@@ -24,7 +24,7 @@ import urllib.request
 from ..config import config
 from ..logging_setup import get
 from ..models import Track, _strip_article
-from ..paths import data_dir
+from ..paths import data_dir, write_atomic
 
 log = get("tags")
 
@@ -117,9 +117,7 @@ class TagStore:
                 near = list(self._near.items())[-MAX_ENTRIES:]
                 data = {"tags": dict(items), "near": dict(near),
                         "missing": list(self._missing)[-MAX_ENTRIES:]}
-            tmp = self._file().with_suffix(".tmp")
-            tmp.write_text(json.dumps(data), encoding="utf-8")
-            tmp.replace(self._file())
+            write_atomic(self._file(), json.dumps(data))
         except Exception as exc:
             log.debug("couldn't save tags: %s", exc)
 

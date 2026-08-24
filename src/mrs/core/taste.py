@@ -13,6 +13,7 @@ import time
 from collections import defaultdict
 
 from ..config import config, state_file
+from ..paths import write_atomic
 from ..logging_setup import get
 from ..models import Track, norm_title
 
@@ -66,12 +67,12 @@ class TasteEngine:
         with self._lock:
             self._prune()
             try:
-                state_file("play_stats.json").write_text(json.dumps({
+                write_atomic(state_file("play_stats.json"), json.dumps({
                     "songs": self._song, "artists": self._artist,
                     "history": self._history[-config.get("history_size", 200):],
                     "recent": self._recent_meta[-100:],
                     "played_at": self._played_at,
-                }), encoding="utf-8")
+                }))
             except Exception as exc:
                 log.debug("stats save failed: %s", exc)
             self._dirty = False

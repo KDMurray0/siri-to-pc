@@ -13,7 +13,7 @@ from ..config import config
 from ..events import Ev, bus
 from ..logging_setup import get
 from ..models import Track, norm_title
-from ..paths import data_dir
+from ..paths import data_dir, write_atomic
 
 log = get("playlists")
 
@@ -97,7 +97,7 @@ class Playlists:
         return name
 
     def _save(self, name: str, rows: list[dict]) -> None:
-        self._index(name).write_text(json.dumps(rows, indent=1), encoding="utf-8")
+        write_atomic(self._index(name), json.dumps(rows, indent=1))
         bus.publish(Ev.SETTINGS, {"playlists": True})
 
     def add(self, name: str, track: Track) -> dict:

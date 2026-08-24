@@ -7,6 +7,7 @@ import threading
 from pathlib import Path
 
 from ..config import config, state_file
+from ..paths import write_atomic
 from ..events import Ev, bus
 from ..logging_setup import get
 from ..models import Track, norm_title
@@ -40,7 +41,7 @@ class LocalLibrary:
         try:
             with self._lock:
                 rows = [t.to_dict() for t in self._tracks]
-            self._index_file().write_text(json.dumps(rows), encoding="utf-8")
+            write_atomic(self._index_file(), json.dumps(rows))
         except Exception as exc:
             log.debug("library save failed: %s", exc)
 

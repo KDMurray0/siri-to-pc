@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 APP_NAME = "MusicRequestServer"
@@ -118,3 +119,32 @@ def migrate_legacy_data() -> list[str]:
                 except Exception:
                     pass
     return moved
+
+
+def write_atomic(path: Path, text: str) -> None:
+    """Write a file so a crash can't leave half of one behind.
+
+    Playlists and play stats were written straight over the top of
+    themselves. A power cut or a full disk in the middle of that doesn't
+    give you the old version back, it gives you a truncated file that won't
+    parse — and the taste store is weeks of listening.
+
+    The temp name carries the pid, because two copies of the server sharing
+    a data directory would otherwise both write "x.tmp" and one would rename
+    the other's half-finished file into place.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".",
+                               suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())     # rename is atomic; the write wasn't
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise

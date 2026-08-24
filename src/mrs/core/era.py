@@ -37,7 +37,7 @@ import urllib.request
 
 from ..logging_setup import get
 from ..models import Track
-from ..paths import data_dir
+from ..paths import data_dir, write_atomic
 
 log = get("era")
 
@@ -85,10 +85,7 @@ class EraStore:
         try:
             with self._lock:
                 items = dict(list(self._year.items())[-MAX_ENTRIES:])
-            tmp = self._file().with_suffix(".tmp")
-            tmp.write_text(json.dumps({"v": VERSION, "years": items}),
-                           encoding="utf-8")
-            tmp.replace(self._file())
+            write_atomic(self._file(), json.dumps({"v": VERSION, "years": items}))
         except Exception as exc:
             log.debug("couldn't save eras: %s", exc)
 
