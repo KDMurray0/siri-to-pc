@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 import time
 from dataclasses import dataclass, field, asdict
 from typing import Any
@@ -33,6 +34,13 @@ _DERIV_DASH = re.compile(r"[-\u2013\u2014]\s*[^-\u2013\u2014]*\b(" + _TAGS + r")
 _DERIV_WHERE = re.compile(r"\b(live|acoustic|unplugged)\s+(at|in|from|on)\b", re.I)
 
 
+def _fold(text: str) -> str:
+    """Drop accents. Ill Nino and Ill Nino are one band, Beyonce is one singer,
+    and spelled both ways each got its own slot in every dedupe we have."""
+    return "".join(c for c in unicodedata.normalize("NFKD", text or "")
+                   if not unicodedata.combining(c))
+
+
 def _strip_article(name: str) -> str:
     """"The Smashing Pumpkins" and "Smashing Pumpkins" are the same band —
     YouTube Music returns both spellings and they were dodging the dedupe."""
@@ -41,13 +49,13 @@ def _strip_article(name: str) -> str:
 
 def norm_title(title: str, artist: str = "") -> str:
     """Collapse to "artist|title" for name-based dedupe."""
-    t = (title or "").lower()
+    t = _fold((title or "").lower())
     t = _BRACKETS.sub(" ", t)
     t = _FEAT.sub(" ", t)
     t = _QUOTES.sub("", t)
     t = _NONWORD.sub(" ", t).strip()
     t = re.sub(r"\s+(remaster(ed)?|mix|version|edit)(\s+\d{4})?$", "", t).strip()
-    a = _QUOTES.sub("", (artist or "").split(",")[0].lower())
+    a = _QUOTES.sub("", _fold((artist or "").split(",")[0].lower()))
     a = _NONWORD.sub(" ", a).strip()
     return f"{_strip_article(a)}|{t}" if t else ""
 
@@ -119,8 +127,10 @@ class Track:
 
     def primary_artist(self) -> str:
         # article-stripped so cohesion and run limits treat "The Smashing
-        # Pumpkins" and "Smashing Pumpkins" as one band
-        return _strip_article((self.artist or "").split(",")[0].strip().lower())
+        # Pumpkins" and "Smashing Pumpkins" as one band, and accent-folded so
+        # they treat Ill Nino and Ill Nino as one too — spelled both ways they
+        # each got their own slot and the run limit never bit
+        return _strip_article(_fold((self.artist or "").split(",")[0].strip().lower()))
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

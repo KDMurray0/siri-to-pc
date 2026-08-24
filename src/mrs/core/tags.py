@@ -38,6 +38,7 @@ PACE = 0.2             # Last.fm asks for <=5 requests a second
 # Tags that describe half of music. Fine as a description, useless as a steer:
 # ask Last.fm for "piano" and it hands you Billy Joel and Bruno Mars.
 _CATCH_ALL = {"rock", "pop", "electronic", "indie", "alternative", "classical",
+              "country", "blues", "world", "latin",
               "jazz", "metal", "hip-hop", "hip hop", "rap", "dance", "soul",
               "folk", "instrumental", "piano", "guitar", "acoustic", "chillout",
               "ambient", "experimental", "singer-songwriter", "female vocalists",
@@ -46,6 +47,17 @@ _CATCH_ALL = {"rock", "pop", "electronic", "indie", "alternative", "classical",
 
 def _clean(name: str) -> str:
     return (name or "").strip().lower()
+
+
+def _flatten(tag: str) -> str:
+    """A tag stripped to its bones, for spotting restatements.
+
+    "drum and bass" and "drum n bass" are one genre, and giving each of
+    them a lane wastes half the supply.
+    """
+    bare = re.sub(r"[^a-z0-9 ]", " ", (tag or "").lower())
+    drop = {"and", "n", "the", "of", "music"}
+    return "".join(w for w in bare.split() if w not in drop)
 
 
 class TagStore:
@@ -154,17 +166,27 @@ class TagStore:
                 self._missing.add(ak)
 
     def top_tag(self, track: Track | None) -> str:
-        """The tag worth fetching more records by, or "" if we don't know yet.
+        """The single best tag to fetch more records by, or "" if unknown."""
+        found = self.top_tags(track, 1)
+        return found[0] if found else ""
 
-        Not the commonest one. Nuvole Bianche is tagged piano 100, classical
-        67, contemporary classical 44 — and asking for "piano" gets you Billy
-        Joel and Bruno Mars, which is not what was wanted. The specific tag is
-        the useful one, so among the tags with real weight behind them the
-        wordiest wins.
+    def top_tags(self, track: Track | None, limit: int = 2) -> list[str]:
+        """The tags worth fetching more records by, best first.
+
+        Not the commonest. Nuvole Bianche is piano 100, classical 67,
+        contemporary classical 44 — and asking for "piano" gets you Billy Joel
+        and Bruno Mars. The specific tag is the useful one, so among the tags
+        with real weight behind them the wordiest wins.
+
+        More than one, because a single tag is a narrow seam and it runs out.
+        Chop Suey is alternative metal 100 and nu metal 9; ninety records from
+        the first covers post-grunge as well as metal, and by track fifteen
+        the heavy ones are gone and Nickelback is the best thing left. The
+        second tag is another ninety records of the right stuff.
         """
         tags = self.get(track) if track else None
         if not tags:
-            return ""
+            return []
         skip = ("seen live", "favourite", "favorite", "albums i own",
                 "check out", "spotify", "awesome", "beautiful")
         # People tag tracks with the band's name. Feeding that to a genre
@@ -173,23 +195,34 @@ class TagStore:
         who = (track.primary_artist() or "").lower()
         parts = {w for w in re.split(r"[^a-z0-9]+", who) if len(w) > 2}
         top = max(tags.values()) or 1
-        best, best_rank = "", ()
+        ranked = []
         for tag, count in tags.items():
-            # 0.22, not a third: Jolene is country 1.0 and classic country
-            # 0.24, and the difference between those two is Kenny Rogers or
-            # Morgan Wallen.
-            if len(tag) < 3 or count < top * 0.22 or any(s in tag for s in skip):
+            # A twentieth of the top, because the tag that really pins a song
+            # down is often a minor one: Chop Suey wears nu metal at 9 against
+            # alternative metal at 100, and nu metal is the honest answer.
+            if len(tag) < 3 or count < top * 0.05 or any(s in tag for s in skip):
                 continue
             if tag[:2].isdigit():
                 continue                      # "90s", "80s": an era, not a sound
             if who and (tag in who or who in tag
                         or any(p in tag.split() for p in parts)):
                 continue                      # the band's own name
-            # Blur is tagged rock 100, britpop 83. Britpop is the answer.
-            rank = (tag not in _CATCH_ALL, len(tag.split()), count)
-            if rank > best_rank:
-                best, best_rank = tag, rank
-        return best
+            # Anything specific beats anything broad, whatever the counts say.
+            # Blur is rock 100 and britpop 83; britpop is the answer.
+            ranked.append(((tag not in _CATCH_ALL, count,
+                            len(tag.split())), tag))
+        ranked.sort(reverse=True)
+        out: list[str] = []
+        for _, tag in ranked:
+            # Skip a tag that's just a restatement of one we have. Compared
+            # without punctuation, or rnb and r&b both get a lane.
+            flat = _flatten(tag)
+            if any(flat in _flatten(h) or _flatten(h) in flat for h in out):
+                continue
+            out.append(tag)
+            if len(out) >= limit:
+                break
+        return out
 
     def nobody(self, track: Track | None) -> bool:
         """Last.fm has been asked about this artist and has never heard of them.

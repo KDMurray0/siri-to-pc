@@ -200,18 +200,24 @@ class ContextBuilder:
         #     twenty videos long and the exclusions eat it in ten tracks —
         #     that's why a Fela Kuti run reached Depeche Mode by track 30,
         #     with nothing pulling back once the anchor lane ran dry.
-        root = ""
+        roots: list[str] = []
         if not theme and anchor is not None:
-            root = tagstore.top_tag(anchor)
-            if not root:
+            roots = tagstore.top_tags(anchor, 2)
+            if not roots:
                 tagstore.prime(anchor)      # worth one blocking call
-                root = tagstore.top_tag(anchor)
-            if root:
-                # Deep on purpose. Thirty gets eaten by track sixteen and then
-                # a riot grrrl run has nothing left to pull on and slides into
-                # pop-punk; the lookup is cached, so depth is nearly free.
-                fresh = self._safe(self.catalog.genre_tracks, root, 90)
-                raw.extend((t, "root") for t in fresh)
+                roots = tagstore.top_tags(anchor, 2)
+            # Deep on purpose, and from both tags. Thirty gets eaten by track
+            # sixteen and then a riot grrrl run has nothing left to pull on and
+            # slides into pop-punk. One tag isn't enough either: everything
+            # Chop Suey has in common with Nickelback is the word "alternative
+            # metal", and once the heavy records in that tag are used up the
+            # soft ones are all that's left. Its second tag is nu metal, which
+            # is ninety more of the right thing. The lookups are cached, so
+            # depth is nearly free.
+            for i, tag in enumerate(roots):
+                for t in self._safe(self.catalog.genre_tracks, tag,
+                                    90 if i == 0 else 60):
+                    raw.append((t, "root"))
 
         # 5. Occasionally pull from something you liked, to widen it out — but
         #    only when nothing was actually asked for. One of five likes being
@@ -225,7 +231,7 @@ class ContextBuilder:
 
         tagstore.warm([t for t, _ in raw])     # next refill will know more
         out = self._rank(raw, current, exclude, limit, exclude_keys, focus=focus,
-                         anchor=anchor, theme=theme, root=root,
+                         anchor=anchor, theme=theme, roots=roots,
                          artist_counts=artist_counts)
 
         # Rank twice. The first pass is done on whatever tags happen to be
@@ -239,7 +245,7 @@ class ContextBuilder:
             for t in unknown[:8]:
                 tagstore.prime(t)
             out = self._rank(raw, current, exclude, limit, exclude_keys,
-                             focus=focus, anchor=anchor, theme=theme, root=root,
+                             focus=focus, anchor=anchor, theme=theme, roots=roots,
                              artist_counts=artist_counts)
 
         # a thin pool is how the queue used to die — widen out first
@@ -250,7 +256,7 @@ class ContextBuilder:
             # Last resort: allow songs heard a while ago rather than run dry.
             out += self._rank(raw, current, exclude, limit, exclude_keys,
                               ignore_recency=True, focus=focus, anchor=anchor,
-                              theme=theme, root=root, artist_counts=artist_counts)
+                              theme=theme, roots=roots, artist_counts=artist_counts)
             seen, merged = set(), []
             for c in out:
                 if c.track.video_id not in seen:
@@ -323,7 +329,8 @@ class ContextBuilder:
     def _rank(self, raw: list[tuple[Track, str]], current: Track | None,
               exclude: set[str], limit: int, exclude_keys: set[str],
               ignore_recency: bool = False, focus: float = 1.0,
-              anchor: Track | None = None, theme: str = "", root: str = "",
+              anchor: Track | None = None, theme: str = "",
+              roots: list[str] | None = None,
               artist_counts: dict[str, int] | None = None) -> list[Candidate]:
         # Skipping late, again and again, means the run has gone stale rather
         # than any one song being wrong. Loosen the grip a little when that
@@ -360,7 +367,11 @@ class ContextBuilder:
         # Nothing to correct at the start; the further out it gets, the more
         # the opening track is allowed to argue.
         want = _theme_words(theme)
-        root_words = _theme_words(root)
+        # Either tag counts. A nu metal record that never picked up the
+        # alternative metal tag still belongs in the lane it came from.
+        root_words: set[str] = set()
+        for r in (roots or []):
+            root_words |= _theme_words(r)
         pull = float(config.get("anchor_pull", 0.35)) if anchor is not None else 0.0
         drift = 0.0
         if pull:
@@ -405,6 +416,17 @@ class ContextBuilder:
                 # track on 0.35 won by default and Bee Gees was followed by
                 # a-ha. Better to widen the search than to play it.
                 if sim < 0.20 and source not in ("theme", "genre"):
+                    continue
+
+            # And the same test against the song you asked for, which is the
+            # one reference that doesn't move. Measuring only against what's on
+            # is how the tail of a run goes: blink-182 scores well after Fall
+            # Out Boy and Fall Out Boy scored well after the thing before it,
+            # and thirty steps like that leave a metal request playing pop
+            # punk. Against Chop Suey blink-182 is 0.09, and that settles it.
+            if anchor is not None and source not in ("theme", "genre"):
+                far = tagstore.similarity(anchor, track)
+                if far is not None and far < 0.18:
                     continue
 
             # Taste breaks ties, it doesn't choose. Liking a song is a reason
