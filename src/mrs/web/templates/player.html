@@ -464,10 +464,17 @@ body.mini.mini-hover .minivol i{position:absolute;left:0;right:0;bottom:0;
   background:var(--accent);border-radius:3px;display:block}
 /* Secondary controls sit on the toolbar itself rather than behind a menu.
    They're the full player's own buttons, moved here while mini is open. */
+/* What's coming, in the strip under the title. It used to appear only while
+   hovering, which is the one time mini has no room to spare — the controls
+   have taken the row. Idle is when the space is free and when you'd want to
+   know without touching anything. */
 .upnext{display:none}
-body.mini.mini-hover .upnext{display:block;position:absolute;left:12px;right:44px;
-  bottom:4px;font-size:9.5px;color:var(--sub);opacity:.7;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+body.mini .upnext{display:block;position:absolute;left:82px;right:78px;
+  bottom:9px;font-size:9.5px;color:var(--sub);opacity:.72;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;
+  transition:opacity .18s ease}
+/* On hover the controls need that row, so it steps aside. */
+body.mini.mini-hover .upnext{opacity:0}
 .controls .sep{display:none}
 body.mini .controls .sep{display:block;width:1px;height:16px;flex:0 0 auto;
   background:var(--line);margin:0 3px}
