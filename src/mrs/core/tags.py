@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import queue
 import threading
 import time
@@ -166,13 +167,24 @@ class TagStore:
             return ""
         skip = ("seen live", "favourite", "favorite", "albums i own",
                 "check out", "spotify", "awesome", "beautiful")
+        # People tag tracks with the band's name. Feeding that to a genre
+        # search asks for songs *called* Bob Marley, and you get five of them
+        # by five different artists.
+        who = (track.primary_artist() or "").lower()
+        parts = {w for w in re.split(r"[^a-z0-9]+", who) if len(w) > 2}
         top = max(tags.values()) or 1
         best, best_rank = "", ()
         for tag, count in tags.items():
-            if len(tag) < 3 or count < top * 0.35 or any(s in tag for s in skip):
+            # 0.22, not a third: Jolene is country 1.0 and classic country
+            # 0.24, and the difference between those two is Kenny Rogers or
+            # Morgan Wallen.
+            if len(tag) < 3 or count < top * 0.22 or any(s in tag for s in skip):
                 continue
             if tag[:2].isdigit():
                 continue                      # "90s", "80s": an era, not a sound
+            if who and (tag in who or who in tag
+                        or any(p in tag.split() for p in parts)):
+                continue                      # the band's own name
             # Blur is tagged rock 100, britpop 83. Britpop is the answer.
             rank = (tag not in _CATCH_ALL, len(tag.split()), count)
             if rank > best_rank:

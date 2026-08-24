@@ -355,12 +355,12 @@ def album_tracks(album: str, artist: str = "", limit: int = 0) -> list[Track]:
 NET_UA = {"User-Agent": "MusicRequestServer/2.0 (personal LAN music player)"}
 
 
-def _is_channel(artist: str) -> bool:
+def _is_channel(artist: str, title: str = "") -> bool:
     """Wallpaper-music uploaders. YouTube's Jazz and Ambient shelves are full
     of them, and "Relaxing Music" is not a jazz artist. No name at all is the
     same problem wearing nothing."""
     name = (artist or "").strip()
-    return not name or is_channel_act(name)
+    return not name or is_channel_act(name, title)
 
 
 ITUNES = "https://itunes.apple.com/search"
@@ -408,7 +408,7 @@ def _from_itunes_genre(genre: str, limit: int) -> list[Track]:
         bucket = (row.get("primaryGenreName") or "").strip().lower()
         if not title or not artist or bucket in _NOT_A_GENRE:
             continue
-        if _is_channel(artist):
+        if _is_channel(artist, title):
             continue
         who = Track(title="", artist=artist).primary_artist()
         if per_artist.get(who, 0) >= 2:
@@ -540,7 +540,7 @@ def genre_tracks(genre: str, limit: int = 25) -> list[Track]:
             if name and name in names:
                 continue
             # two per band, and nothing from a wallpaper-music channel
-            if _is_channel(t.artist) or per_artist.get(who, 0) >= 2:
+            if _is_channel(t.artist, t.title) or per_artist.get(who, 0) >= 2:
                 continue
             seen.add(t.video_id)
             if name:

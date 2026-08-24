@@ -285,7 +285,13 @@ class ContextBuilder:
         cur_artist = current.primary_artist() if current else ""
         seen_ids: set[str] = set()
         seen_keys: set[str] = set()
-        seen_titles: set[str] = set()
+        # Seeded from what's already been on, not just what's in this pool.
+        # The artist+title dedupe lets a different act's version straight
+        # through, so a Marvin Gaye request played Ain't No Mountain High
+        # Enough again four tracks later, by Diana Ross.
+        seen_titles: set[str] = {norm_title(r.get("title") or "")
+                                 for r in taste.recent(60)}
+        seen_titles.discard("")
         # Ask for one song and you get one song by that band, not their
         # discography. Artist and album requests want the opposite.
         stack_penalty = 0.0 if focus >= 0.8 else 1.6
@@ -336,6 +342,12 @@ class ContextBuilder:
                 fit = 1.0 if focus >= 0.8 else 0.5
             else:
                 fit = _fit(sim)
+                # Not "a bit different" — nothing whatsoever in common. Scoring
+                # that down wasn't enough, because once the disco ran out a
+                # track on 0.35 won by default and Bee Gees was followed by
+                # a-ha. Better to widen the search than to play it.
+                if sim < 0.12 and source not in ("theme", "genre"):
+                    continue
 
             # Taste breaks ties, it doesn't choose. Liking a song is a reason
             # to prefer it over something equally fitting — not a reason to
@@ -349,6 +361,16 @@ class ContextBuilder:
             near = tagstore.affinity(anchor or current, track)
             if near:
                 score += 3.0 * near
+
+            # Whether it follows the record that's actually on, which is a
+            # different question from whether it suits the request. With an
+            # anchor set the line above only ever asked about the anchor, so
+            # nothing was judging the join between one track and the next —
+            # the thing a DJ is actually doing.
+            flow = (tagstore.affinity(current, track)
+                    if anchor is not None and current is not anchor else None)
+            if flow:
+                score += 1.5 * flow
 
             if cur_artist and track.primary_artist() == cur_artist:
                 # A nudge, not a rule. Tags can't separate two songs by one
@@ -365,7 +387,7 @@ class ContextBuilder:
                     score += 0.8 * cohesion      # same record, same era
             if sim is not None:
                 score += 3.0 * (sim - 0.55)      # genre and mood lead
-            elif not near and track.primary_artist() != cur_artist:
+            elif not near and not flow and track.primary_artist() != cur_artist:
                 # Nobody has tagged it and nobody plays it next to anything —
                 # that's what a Thunderstruck cover by a stranger looks like.
                 # Double it if the title credits somebody in the title itself:
@@ -411,7 +433,7 @@ class ContextBuilder:
             score -= stack_penalty * per_artist.get(track.primary_artist(), 0)
             score += random.random() * 0.8
 
-            if is_channel_act(track.artist):
+            if is_channel_act(track.artist, track.title):
                 continue
 
             # One version of a song is enough. The pool routinely holds the

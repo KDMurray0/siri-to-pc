@@ -69,7 +69,8 @@ def is_derivative(title: str) -> bool:
 # with New York Jazz Lounge.
 _CHANNEL_SURE = re.compile(
     r"\b(covers?|tribute|karaoke|remake|backing track|in the style of|"
-    r"bgm|lo-?fi|playlist|topic|\d+\s*hours?)\b"
+    r"bgm|lo-?fi|playlist|topic|wallpaper|\d+\s*hours?|"
+    r"(piano|jazz|cocktail|coffee)\s?bar)\b"
     r"|\w\s+(piano|guitar|strings)$", re.I)
 # On their own these are band names — Sleep and Sleep Token are real, so is
 # Lounge Lizards. They only mean a farm next to a word about the music itself.
@@ -81,12 +82,21 @@ _CHANNEL_MUSIC = re.compile(
     r"instrumental[s]?|playlist|hours?|mix(es)?)\b", re.I)
 
 
-def is_channel_act(artist: str) -> bool:
-    """An upload channel rather than the act that made the record."""
-    name = artist or ""
-    if _CHANNEL_SURE.search(name):
+def is_channel_act(artist: str, title: str = "") -> bool:
+    """Wallpaper music rather than a record somebody made.
+
+    Reads the title as well, because that's where the tell usually is: the
+    act may be called Palm Tree Lounge, but the giveaway is a track called
+    "Jazz Background Music". Real jazz records are called Django.
+    """
+    text = f"{artist or ''} {title or ''}".strip()
+    if _CHANNEL_SURE.search(artist or "") or _CHANNEL_SURE.search(title or ""):
         return True
-    return bool(_CHANNEL_MOOD.search(name) and _CHANNEL_MUSIC.search(name))
+    if _CHANNEL_MOOD.search(text) and _CHANNEL_MUSIC.search(text):
+        return True
+    # Two mood words and no song in sight: "Buddha Lounge Bar Chillout".
+    return len(set(m.group(0).lower()
+                   for m in _CHANNEL_MOOD.finditer(text))) >= 2
 
 
 @dataclass
