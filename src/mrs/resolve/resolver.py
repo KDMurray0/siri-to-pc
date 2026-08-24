@@ -26,6 +26,23 @@ class Resolution:
         return bool(self.tracks)
 
 
+
+def _nothing(said: str) -> "Resolution":
+    """Nothing came back — but say which kind of nothing it was.
+
+    YouTube's circuit breaker returns None for everything while it's open,
+    and reporting that as "I couldn't find it" is a lie that sends you off
+    rewording a query that was fine.
+    """
+    wait = catalog.throttled()
+    if wait:
+        # This gets spoken back, so it reads as a sentence rather than a
+        # status code.
+        return Resolution([], f"YouTube is throttling us. Try again in about "
+                              f"{int(wait) + 1} seconds.", error="throttled")
+    return Resolution([], said, error="no results")
+
+
 def _first_minutes(tracks: list[Track], minutes: float) -> list[Track]:
     """Take roughly `minutes` worth off the front of a track list."""
     budget = minutes * 60
@@ -62,7 +79,7 @@ def resolve(plan: Plan) -> Resolution:
         fn = catalog.search_soundcloud if source == "soundcloud" else catalog.search_bandcamp
         hits = fn(query, limit=5)
         if not hits:
-            return Resolution([], f"Nothing found on {source}", error="no results")
+            return _nothing(f"Nothing found on {source}")
         return Resolution(hits[:1], f"Playing {hits[0].title} from {source}")
 
     if kind == "auto":
@@ -78,7 +95,7 @@ def resolve(plan: Plan) -> Resolution:
             preferred = [t for t in hits if wanted in (t.artist or "").lower()]
             hits = preferred + [t for t in hits if t not in preferred]
         if not hits:
-            return Resolution([], f"I couldn't find {query}", error="no results")
+            return _nothing(f"I couldn't find {query}")
         best = hits[0]
         return Resolution([best], f"Playing {best.title} by {best.artist}",
                           alternates=[t.video_id for t in hits[1:4]])
@@ -86,8 +103,7 @@ def resolve(plan: Plan) -> Resolution:
     if kind == "album":
         tracks = catalog.album_tracks(query, plan.artist)
         if not tracks:
-            return Resolution([], f"I couldn't find the album {query}",
-                              error="no results")
+            return _nothing(f"I couldn't find the album {query}")
         who = tracks[0].artist or plan.artist
         return Resolution(tracks, f"Playing {query} by {who}", hold_radio=True)
 
@@ -97,7 +113,7 @@ def resolve(plan: Plan) -> Resolution:
         # it runs out does the radio take over (hold_radio).
         tracks = catalog.artist_all_tracks(who)
         if not tracks:
-            return Resolution([], f"I couldn't find {who}", error="no results")
+            return _nothing(f"I couldn't find {who}")
         # Queue about half an hour of them rather than the whole discography;
         # the queue tops itself up from the same catalogue as you listen.
         tracks = _first_minutes(tracks, float(config.get("queue_minutes", 30)))
@@ -106,8 +122,7 @@ def resolve(plan: Plan) -> Resolution:
     if kind == "genre":
         tracks = _on_theme(query, catalog.genre_tracks(query, limit=25))
         if not tracks:
-            return Resolution([], f"I couldn't find anything for {query}",
-                              error="no results")
+            return _nothing(f"I couldn't find anything for {query}")
         return Resolution(tracks, f"Playing some {query}")
 
     return Resolution([], f"I couldn't work out what {query} means", error="unknown")

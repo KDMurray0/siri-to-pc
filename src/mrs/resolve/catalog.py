@@ -81,6 +81,16 @@ def _yt(what: str, fn, *args, **kwargs):
     return None
 
 
+def throttled() -> float:
+    """Seconds until we'll talk to YouTube again, 0 if we already will.
+
+    While the breaker is open every call returns None, so a request made in
+    that window came back "I couldn't find it" — which is untrue and sends
+    you off rewording a query that was fine.
+    """
+    return max(0.0, _quiet_until - time.time())
+
+
 def client():
     global _client
     with _client_lock:
