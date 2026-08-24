@@ -26,7 +26,7 @@ import urllib.request
 from functools import lru_cache
 
 from ..logging_setup import get
-from ..models import Track, _fold
+from ..models import Track, _fold, _strip_article
 from ..paths import data_dir
 
 log = get("kin")
@@ -45,12 +45,39 @@ def _key(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", _fold((name or "").strip().lower()))
 
 
+# How a band's name gets extended on a credit. "Bob Marley" and "Bob Marley &
+# The Wailers" are one act; "Bob Marley's Legend In Sax" is a covers record.
+_JOINS = (" & ", " and ", " with ", " feat", " featuring", ";", " + ")
+
+
+def _same(ours: str, theirs: str) -> bool:
+    """Two spellings of one act."""
+    a, b = (ours or "").strip().lower(), (theirs or "").strip().lower()
+    if not a or not b:
+        return False
+    # article-insensitive, because primary_artist() drops it on our side only
+    # and "The Chieftains" then failed to match The Chieftains
+    ka = {_key(a), _key(_strip_article(a))}
+    kb = {_key(b), _key(_strip_article(b))}
+    if ka & kb:
+        return True
+    long, short = (b, a) if len(b) > len(a) else (a, b)
+    return long.startswith(short) and long[len(short):].startswith(_JOINS)
+
+
+def _billing(track: Track) -> str:
+    """The artist as written, for searching with. primary_artist() folds the
+    accents off and drops the article, which is right for a cache key and
+    wrong for a query — Deezer knows Sigur Rós, not sigurros."""
+    return (track.artist or "").split(",")[0].strip()
+
+
 class KinStore:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._near: dict[str, list[str]] = {}   # artist -> related artists
         self._queued: set[str] = set()
-        self._jobs: queue.Queue[str] = queue.Queue()
+        self._jobs: queue.Queue[str] = queue.Queue()   # display names
         self._worker: threading.Thread | None = None
         self._loaded = False
 
@@ -100,7 +127,7 @@ class KinStore:
             if who in self._queued:
                 return []
             self._queued.add(who)
-        self._jobs.put(who)
+        self._jobs.put(_billing(track) or who)
         self._start()
         return []
 
@@ -117,7 +144,7 @@ class KinStore:
             if who in self._near:
                 return self._near[who]
         try:
-            found = self._fetch(who)
+            found = self._fetch(_billing(track) or who)
         except Exception as exc:
             log.debug("kin lookup failed for %s: %s", who, exc)
             return []
@@ -146,14 +173,15 @@ class KinStore:
         dirty = 0
         while True:
             try:
-                who = self._jobs.get(timeout=30)
+                name = self._jobs.get(timeout=30)
             except queue.Empty:
                 break
+            who = _key(_strip_article(name.lower()))
             found: list[str] = []
             try:
-                found = self._fetch(who)
+                found = self._fetch(name)
             except Exception as exc:
-                log.debug("kin lookup failed for %s: %s", who, exc)
+                log.debug("kin lookup failed for %s: %s", name, exc)
             with self._lock:
                 self._near[who] = found
                 self._queued.discard(who)
@@ -172,21 +200,25 @@ class KinStore:
         with urllib.request.urlopen(req, timeout=10) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
 
-    def _fetch(self, who: str) -> list[str]:
-        found = self._get("/search/artist?limit=6&q=" + urllib.parse.quote(who))
-        rows = found.get("data") or []
-        # Deezer carries duplicate artist entries and the search doesn't
-        # always put the real one first: asking for Michael Jackson returned
-        # a stub with 140 fans and no related artists at all, so the whole
-        # signal came back empty for one of the most connected acts alive.
-        # Take the exact name match with the most fans behind it.
-        exact = [r for r in rows if r.get("id") and _key(r.get("name", "")) == who]
-        if not exact:
+    def _fetch(self, name: str) -> list[str]:
+        found = self._get("/search/artist?limit=10&q=" + urllib.parse.quote(name))
+        rows = [r for r in (found.get("data") or [])
+                if r.get("id") and _same(name, r.get("name", ""))]
+        if not rows:
             return []
-        best = max(exact, key=lambda r: int(r.get("nb_fan") or 0))
-        rel = self._get(f"/artist/{best['id']}/related?limit=12")
-        # The name as Deezer writes it, not the key: these get searched for.
-        return [a["name"] for a in (rel.get("data") or []) if a.get("name")]
+        # Deezer carries duplicate entries and the search doesn't rank them:
+        # Michael Jackson came back as a stub with 140 fans and no relations
+        # at all, so the best-connected act in pop contributed nothing. Most
+        # fans first — and if that one turns out to be a stub too, try the
+        # next, which is how Godspeed You! Black Emperor got a list.
+        rows.sort(key=lambda r: -int(r.get("nb_fan") or 0))
+        for row in rows[:2]:
+            rel = self._get(f"/artist/{row['id']}/related?limit=12")
+            # Names as Deezer writes them, not keys: the lane searches these.
+            names = [a["name"] for a in (rel.get("data") or []) if a.get("name")]
+            if names:
+                return names
+        return []
 
     def warm(self, tracks: list[Track]) -> None:
         seen = set()
