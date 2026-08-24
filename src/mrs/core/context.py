@@ -293,35 +293,42 @@ class ContextBuilder:
                          anchor=anchor, theme=theme, roots=roots,
                          artist_counts=artist_counts)
 
-        # Rank twice. The first pass is done on whatever tags happen to be
-        # cached, which means the checks that need tags — the low-similarity
-        # floor especially — can't see the tracks that matter most. So look up
-        # the handful that came out on top and rank again knowing what they
-        # are. Only the leaders, because it blocks; everything else can wait
-        # for the worker.
-        unknown = [c.track for c in out[:12] if tagstore.get(c.track) is None]
-        for t in unknown[:8]:
-            tagstore.prime(t)
-
-        # Same problem with eras, and worse, because MusicBrainz is paced at
-        # a request a second so the background worker is forty seconds behind
-        # from a standing start. On a cold cache the opening picks are made
-        # with the era check switched off entirely — a Billie Jean queue led
+        # The first pass ranks on whatever happens to be cached, which means
+        # the checks that need tags — the similarity floors especially — are
+        # blind to the tracks that matter most. So look the leaders up and
+        # rank again knowing what they are. Only the leaders, because it
+        # blocks; the rest can wait for the worker.
+        #
+        # And keep going until the leaders stop changing. Looking up the top
+        # eight and stopping is whack-a-mole: it demoted the eight it knew
+        # about and handed the queue to the ninth, which is how a stock-
+        # library upload called "Psychedelic Soul Train" — by an act Last.fm
+        # has never heard of, so nothing could object — came sixth in a
+        # Childish Gambino run.
+        #
+        # Eras go in the same loop and are the reason for the deadline:
+        # MusicBrainz is paced at a request a second, so from a cold cache
+        # the background worker is forty seconds behind and the opening picks
+        # get made with the era check switched off. A Billie Jean queue led
         # with Miley Cyrus, Ariana Grande and Britney Spears, then settled
-        # into the eighties once the lookups landed and the check woke up.
-        # A refill runs while a record is playing, so a few seconds is
-        # affordable; a stalled lookup is not, hence the deadline.
-        slow = 0
-        if anchor is not None and era.get(anchor):
-            stop = time.monotonic() + 6.0
-            for c in out[:12]:
+        # into the eighties once the lookups landed. A refill runs while a
+        # record is playing so a few seconds is affordable; a stalled lookup
+        # is not.
+        stop = time.monotonic() + 8.0
+        want_era = anchor is not None and era.get(anchor)
+        for _ in range(3):
+            looked = 0
+            for c in out[:8]:
                 if time.monotonic() >= stop:
                     break
-                if not era.known(c.track):
+                if tagstore.get(c.track) is None:
+                    self._safe(tagstore.prime, c.track)
+                    looked += 1
+                if want_era and not era.known(c.track):
                     self._safe(era.prime, c.track)
-                    slow += 1
-
-        if unknown or slow:
+                    looked += 1
+            if not looked:
+                break
             out = self._rank(raw, current, exclude, limit, exclude_keys,
                              focus=focus, anchor=anchor, theme=theme, roots=roots,
                              artist_counts=artist_counts)
