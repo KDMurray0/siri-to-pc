@@ -84,7 +84,7 @@ and `prime_near`. Worth doing as one change, not incrementally.
 
 ## Backend
 
-### 5. A diagnostics page
+### 5. A diagnostics page — *endpoint done, page not*
 
 **What:** one screen showing what the external services are doing — cache
 sizes (tags, eras, kin, catalog), how many lookups are queued, circuit-breaker
@@ -100,6 +100,11 @@ returned nothing", which is exactly the failure a status page catches.
 
 **Cost:** small-to-medium. The stores already hold the numbers; it's mostly a
 read-only endpoint and a template.
+
+**Done so far:** `/api/health` returns all of it — per-store counts, queued
+lookups, whether each worker is alive, the circuit breaker, cache size on
+disk, queue depth. What's left is somewhere to *look* at it: a block in the
+settings sheet, refreshed off the existing SSE stream.
 
 ---
 
@@ -172,6 +177,60 @@ withdrawn from `taste.py`.
 teaches it something false, and there's currently no way to take it back.
 
 **Cost:** small.
+
+---
+
+### 11. Back the profile up
+
+**What:** one button that writes config, playlists, play stats and the three
+caches to a zip, and one that reads it back.
+
+**Evidence:** a playlist called ".." resolved to the data directory and the
+delete endpoint rmtree'd it — the api key, the cookies, weeks of play stats
+and every cache, from one call. That's fixed, but the amount of state now
+sitting in one folder with no copy of it anywhere is the actual lesson. The
+tag, era and kin caches alone are thousands of lookups that took days of
+listening to accumulate.
+
+**Cost:** small. It's one directory and everything in it is already json.
+
+**Watch out for:** config.json holds the api key and the Last.fm session. An
+export is a credential file — say so, and don't put it in Downloads by
+default.
+
+---
+
+### 12. A global budget on outside calls
+
+**What:** one place that counts calls per service per minute and makes the
+lanes back off when they're over, rather than each store pacing itself on its
+own.
+
+**Evidence:** a cold refill makes roughly thirty network calls across four
+services, and each one paces itself in isolation — Last.fm at 5/sec,
+MusicBrainz at 1/sec, Deezer at 3/sec, YouTube behind a circuit breaker. They
+have no idea about each other, so the actual burst when a new song starts is
+whatever they all happen to do at once. It has been fine so far, but the only
+reason we know is that the breaker hasn't opened much.
+
+**Cost:** medium. The pacing logic is duplicated in four stores already;
+pulling it into one limiter would remove that duplication as well.
+
+---
+
+### 13. Self-test in the shipped build
+
+**What:** `MusicRequestServer.exe --selftest` — boot the app, hit the health
+endpoint, check every store loads and every worker starts, print a verdict,
+exit.
+
+**Evidence:** the test suite lives outside the repo and runs against source.
+Nothing checks the *frozen* build beyond it launching, and PyInstaller
+problems are exactly the kind that only show up frozen — a missing hidden
+import, a template not collected, a data file in the wrong place.
+
+**Cost:** small. The boot check in the test suite already does this; it needs
+an argv flag and somewhere to print.
 
 ---
 
