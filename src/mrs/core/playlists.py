@@ -20,8 +20,23 @@ log = get("playlists")
 _SAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
+# CON, PRN, AUX, NUL, COM1-9, LPT1-9: Windows won't make a directory with
+# any of these names, with or without an extension.
+_RESERVED = re.compile(r"^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)", re.I)
+
+
 def _safe_name(name: str) -> str:
-    return _SAFE.sub("_", (name or "").strip())[:80] or "untitled"
+    """A folder name that can only ever land inside the playlists directory.
+
+    The slash substitution already stopped "../../etc" walking out, but "."
+    and ".." came through untouched — and folder("..") is the data directory,
+    which delete() would then rmtree. That's the config, the cookies, the
+    play stats and every cache, from one API call.
+    """
+    clean = _SAFE.sub("_", (name or "").strip())[:80]
+    if not clean or clean.strip(".") == "" or _RESERVED.match(clean):
+        return "untitled"
+    return clean
 
 
 class Playlists:
@@ -36,12 +51,21 @@ class Playlists:
         return p
 
     def folder(self, name: str) -> Path:
-        p = self.root() / _safe_name(name)
+        p = self._inside(_safe_name(name))
         p.mkdir(parents=True, exist_ok=True)
         return p
 
     def _index(self, name: str) -> Path:
         return self.folder(name) / "tracks.json"
+
+    def _inside(self, leaf: str) -> Path:
+        """Belt and braces: whatever _safe_name let through, this is still
+        a child of the playlists directory or it doesn't happen at all."""
+        root = self.root().resolve()
+        p = (root / leaf).resolve()
+        if p == root or root not in p.parents:
+            raise ValueError(f"playlist name escapes its directory: {leaf!r}")
+        return p
 
     # -- reads ---------------------------------------------------------
     def names(self) -> list[str]:
