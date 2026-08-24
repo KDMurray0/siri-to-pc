@@ -37,12 +37,28 @@ PACE = 0.2             # Last.fm asks for <=5 requests a second
 
 # Tags that describe half of music. Fine as a description, useless as a steer:
 # ask Last.fm for "piano" and it hands you Billy Joel and Bruno Mars.
-_CATCH_ALL = {"rock", "pop", "electronic", "indie", "alternative", "classical",
-              "country", "blues", "world", "latin",
-              "jazz", "metal", "hip-hop", "hip hop", "rap", "dance", "soul",
-              "folk", "instrumental", "piano", "guitar", "acoustic", "chillout",
-              "ambient", "experimental", "singer-songwriter", "female vocalists",
-              "male vocalists", "british", "american", "oldies", "favorites"}
+# Tags that aren't a destination: a quality, a nationality, or what's holding
+# the instrument. Ask Last.fm for "piano" and it hands you Billy Joel and
+# Bruno Mars; ask for "saxophone" after A Love Supreme and it hands you Kenny
+# G. Nothing should ever lead with one of these.
+_TOO_BROAD = {"electronic", "alternative", "indie", "experimental", "world",
+              "chillout", "ambient", "oldies", "favorites",
+              "singer-songwriter", "female vocalists", "male vocalists",
+              "british", "american", "german", "french", "japanese",
+              "swedish", "irish", "italian", "spanish", "russian", "korean",
+              "canadian", "australian", "english", "brazilian",
+              "instrumental", "piano", "guitar", "acoustic", "saxophone",
+              "sax", "trumpet", "violin", "cello", "drums", "bass", "flute",
+              "harp", "organ", "synth", "strings", "vocal", "vocals"}
+
+# Real genres, only wide ones. Worth falling back on — searching "country"
+# returns country music — but not worth preferring over something precise.
+_WIDE = {"rock", "pop", "classical", "country", "blues", "latin", "jazz",
+         "metal", "hip-hop", "hip hop", "rap", "dance", "soul", "folk"}
+
+# Both together describe half of music, so neither can vouch for a track
+# that isn't the first thing the anchor is.
+_CATCH_ALL = _TOO_BROAD | _WIDE
 
 
 def _clean(name: str) -> str:
@@ -194,41 +210,65 @@ class TagStore:
         # by five different artists.
         who = (track.primary_artist() or "").lower()
         parts = {w for w in re.split(r"[^a-z0-9]+", who) if len(w) > 2}
-        top = max(tags.values()) or 1
-        dominant = max(tags, key=lambda t: tags[t])
-        ranked = []
+        rows: list[tuple[str, int]] = []
         for tag, count in tags.items():
-            # A twentieth of the top, because the tag that really pins a song
-            # down is often a minor one: Chop Suey wears nu metal at 9 against
-            # alternative metal at 100, and nu metal is the honest answer.
-            if len(tag) < 3 or count < top * 0.05 or any(s in tag for s in skip):
+            if len(tag) < 3 or any(s in tag for s in skip):
                 continue
             if tag[:2].isdigit():
                 continue                      # "90s", "80s": an era, not a sound
             if who and (tag in who or who in tag
                         or any(p in tag.split() for p in parts)):
                 continue                      # the band's own name
-            # Specific beats broad, but not at any weight. Billie Jean is
-            # pop 100, 80s 48, dance 28, soul 27, funk 12 — and taking the
-            # only non-catch-all in the list made a twelve-percent tag the
-            # answer, so a pop song went looking for funk. A narrow tag has
-            # to either carry real weight of its own, or be a refinement of
-            # the broad one that's winning: classic country earns it against
-            # country, "king of pop" at five percent does not.
-            #
-            # A fifth of the top tag, not a third. A third was enough to fix
-            # the first slot and left the second one landing on catch-alls
-            # with a perfectly good narrow tag just underneath — Blue Monday
-            # took electronic over synthpop at 29%, Teardrop took chillout
-            # over downtempo, Midnight City took electronic over electropop.
-            # Across twenty-six seeds those three are the only ones that move.
-            refines = _flatten(dominant) in _flatten(tag) and tag != dominant
-            specific = tag not in _CATCH_ALL and (
-                count >= top * 0.20 or (refines and count >= top * 0.15))
-            ranked.append(((specific, count, len(tag.split())), tag))
-        ranked.sort(reverse=True)
+            rows.append((tag, count))
+        if not rows:
+            return []
+        # Measured against the tags we'd actually use, not everything Last.fm
+        # said. Blue Monday's biggest tag is "80s", which gets dropped for
+        # being an era — and leaving it in the total made every real tag look
+        # smaller than it is, so synthpop at 29 of 100 missed a bar it clears
+        # comfortably at 29 of 83.
+        top = max(c for _, c in rows) or 1
+        dominant = max(rows, key=lambda r: r[1])[0]
+        # A twentieth of the top, because the tag that really pins a song down
+        # is often a minor one: Chop Suey wears nu metal at 9 against
+        # alternative metal at 100, and nu metal is the honest answer.
+        rows = [(t, c) for t, c in rows if c >= top * 0.05]
+
+        # Specific beats broad, but not at any weight. Billie Jean is pop 100,
+        # 80s 48, dance 28, soul 27, funk 12 — and taking the only
+        # non-catch-all in the list made a twelve-percent tag the answer, so a
+        # pop song went looking for funk.
+        #
+        # How much weight depends on which slot, and on what it's up against.
+        # The first tag answers "what is this", so a narrow tag has to be a
+        # real contender to take it off a genre that's merely wide: Johnny
+        # Cash is country 100 and classic rock 23, and at a low bar the
+        # twenty-three percent tag decided Ring of Fire was classic rock.
+        # Against a tag that isn't a genre at all there's nothing to defend,
+        # so the bar drops — Blue Monday is electronic 100 and synthpop 29,
+        # and electronic is not what that record is.
+        #
+        # The second tag is a supplementary seam and is always loose. At the
+        # strict bar it kept landing on catch-alls with a perfectly good
+        # narrow tag underneath: chillout over downtempo, jazz over bebop.
+        #
+        # Either way a refinement of the winning broad tag counts for more
+        # than its weight: classic country earns it against country, while
+        # "king of pop" at five percent does not.
+        def _ranked(bar: float) -> list[str]:
+            scored = []
+            for tag, count in rows:
+                refines = _flatten(dominant) in _flatten(tag) and tag != dominant
+                narrow = tag not in _CATCH_ALL and (
+                    count >= top * bar or (refines and count >= top * 0.15))
+                scored.append(((narrow, count, len(tag.split())), tag))
+            scored.sort(reverse=True)
+            return [t for _, t in scored]
+
+        lead = 0.20 if dominant in _TOO_BROAD else 0.35
+        order = _ranked(lead)[:1] + _ranked(0.20)
         out: list[str] = []
-        for _, tag in ranked:
+        for tag in order:
             # Skip a tag that's just a restatement of one we have. Compared
             # without punctuation, or rnb and r&b both get a lane.
             flat = _flatten(tag)

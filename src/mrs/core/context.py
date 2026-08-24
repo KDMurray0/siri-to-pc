@@ -352,7 +352,7 @@ class ContextBuilder:
             # going straight from "must be new wave" to "anything at all"
             # throws away the middle step — must at least be electronic —
             # which is still worth standing on.
-            narrow = [r for r in roots if r not in _CATCH_ALL] or list(roots)
+            narrow = roots[:1] + [r for r in roots[1:] if r not in _CATCH_ALL]
             rungs = [] if narrow == list(roots) else [dict(wide_gate=True)]
             rungs.append(dict(strict=False))
             for kw in rungs:
@@ -490,14 +490,18 @@ class ContextBuilder:
         want = _theme_words(theme)
         # Either tag counts. A nu metal record that never picked up the
         # alternative metal tag still belongs in the lane it came from.
-        # A broad tag can find records but it can't vouch for them. Teardrop
-        # is trip-hop and electronic, and the second one let the gate below
-        # wave through LMFAO, Calvin Harris and Avicii — every one of them
-        # electronic, none of them trip-hop, and the last four tracks of the
-        # run. So the check only uses the narrow tags, unless narrow is all
-        # there isn't: Billie Jean is pop and dance and has nothing better.
+        # A broad tag in second place can find records but it can't vouch for
+        # them. Teardrop is trip-hop and electronic, and the second one let
+        # the gate below wave through LMFAO, Calvin Harris and Avicii — all
+        # electronic, none trip-hop, and the last four tracks of the run.
+        #
+        # The first tag always vouches, broad or not. It's the answer to what
+        # the song is: Johnny Cash is country before he's anything else, and
+        # dropping country for being a common word left Ring of Fire gated on
+        # classic rock.
         gate = list(roots or []) if wide_gate else (
-            [r for r in (roots or []) if r not in _CATCH_ALL] or list(roots or []))
+            (roots or [])[:1] + [r for r in (roots or [])[1:]
+                                 if r not in _CATCH_ALL])
         root_words: set[str] = set()
         for r in (roots or []):
             root_words |= _theme_words(r)
