@@ -228,6 +228,20 @@ class ContextBuilder:
                          anchor=anchor, theme=theme, root=root,
                          artist_counts=artist_counts)
 
+        # Rank twice. The first pass is done on whatever tags happen to be
+        # cached, which means the checks that need tags — the low-similarity
+        # floor especially — can't see the tracks that matter most. So look up
+        # the handful that came out on top and rank again knowing what they
+        # are. Only the leaders, because it blocks; everything else can wait
+        # for the worker.
+        unknown = [c.track for c in out[:12] if tagstore.get(c.track) is None]
+        if unknown:
+            for t in unknown[:8]:
+                tagstore.prime(t)
+            out = self._rank(raw, current, exclude, limit, exclude_keys,
+                             focus=focus, anchor=anchor, theme=theme, root=root,
+                             artist_counts=artist_counts)
+
         # a thin pool is how the queue used to die — widen out first
         if len(out) < 8:
             out += self._widen(current, exclude, exclude_keys,
