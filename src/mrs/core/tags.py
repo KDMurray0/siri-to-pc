@@ -393,22 +393,27 @@ class TagStore:
             artist, _, title = payload.partition("\x00")
             try:
                 if key.startswith("n:"):
-                    # who people play alongside this: a different question, and
-                    # a different cache from the tags
+                    # who people play alongside this: a different question,
+                    # and a different cache from the tags.
+                    #
+                    # Fetched outside the lock. It used to be called with the
+                    # lock held, and that lock is the one every similarity()
+                    # needs — so a slow reply from Last.fm, up to fifteen
+                    # seconds of it, froze a ranking pass that asks the same
+                    # store a few hundred questions.
+                    near = self._fetch_near(artist, title)
                     with self._lock:
-                        self._near[key[2:]] = self._fetch_near(artist, title)
+                        self._near[key[2:]] = near
                         self._queued.discard(key)
-                    dirty += 1
-                    time.sleep(PACE)
-                    continue
-                found = (self._fetch_artist(artist) if key.startswith("a:")
-                         else self._fetch_track(artist, title))
-                with self._lock:
-                    if found:
-                        self._cache[key] = found
-                    else:
-                        self._missing.add(key)
-                    self._queued.discard(key)
+                else:
+                    found = (self._fetch_artist(artist) if key.startswith("a:")
+                             else self._fetch_track(artist, title))
+                    with self._lock:
+                        if found:
+                            self._cache[key] = found
+                        else:
+                            self._missing.add(key)
+                        self._queued.discard(key)
                 dirty += 1
             except Exception as exc:
                 log.debug("tag lookup failed for %s: %s", key, exc)
