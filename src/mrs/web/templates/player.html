@@ -13,6 +13,8 @@
   --bg:#0e0f16; --panel:#171826; --fg:#f5f6fb; --sub:#9aa0b8;
   --line:#252739; --accent:#6d8bff; --accent-ink:#0b0c12; --radius:22px;
   --ok:#3fd48a; --warn:#ffb454; --bad:#ff6b6b;
+  /* stands in for a cover we couldn't get */
+  --note:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='M9 18V5l10-2v13'/><circle cx='6.5' cy='18' r='2.5'/><circle cx='16.5' cy='16' r='2.5'/></svg>");
 }
 [data-theme="mono"]   {--bg:#0c0c0d;--panel:#161617;--fg:#f4f4f5;--sub:#8a8a8f;--line:#242426;--accent:#e6e6ea;}
 [data-theme="ember"]  {--bg:#140d0b;--panel:#221512;--fg:#fceee7;--sub:#b58c7d;--line:#33201a;--accent:#ff7a4d;}
@@ -75,6 +77,16 @@ body.mini .timeleft{display:none}
   transition:transform .5s cubic-bezier(.2,.8,.2,1),opacity .4s,width .2s,height .2s}
 .art.placeholder{box-shadow:none;
   background:linear-gradient(145deg,color-mix(in srgb,var(--accent) 12%,var(--panel)),var(--panel))}
+/* Shown only while the cover is missing. An <img> can't carry a pseudo
+   element, so the note is a sibling sitting under it. */
+.artnote{position:absolute;top:50%;left:50%;translate:-50% -50%;
+  width:152px;height:152px;display:grid;place-items:center;pointer-events:none;
+  opacity:0;transition:opacity .3s ease,width .2s,height .2s}
+.artnote svg{width:38%;height:38%;fill:none;stroke:var(--sub);stroke-width:1.5;
+  stroke-linecap:round;stroke-linejoin:round;opacity:.5}
+.art.placeholder + .artnote{opacity:1}
+body.mini .artnote{width:58px;height:58px;left:0;translate:0 -50%}
+body.mini.mini-hover .artnote{width:74px;height:74px}
 
 .meta{text-align:center;margin-top:16px;min-height:52px}
 .title{font-size:22px;font-weight:800;letter-spacing:-.022em;line-height:1.15;
@@ -201,6 +213,14 @@ body.mini .magic{display:none}
 .rres{display:flex;gap:9px;align-items:center;padding:8px 10px;cursor:pointer}
 .rres:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
 .rres .qi{width:30px;height:30px;border-radius:6px;object-fit:cover;background:var(--bg);flex:0 0 auto}
+/* A row with no cover gets a faint note rather than an empty hole or the
+   browser's broken-image icon. It has to be a div — pseudo elements don't
+   render on an <img> — so a cover that fails is swapped for one. */
+div.qi{position:relative}
+div.qi::after{content:"";position:absolute;inset:24%;opacity:.4;
+  background:var(--sub);
+  -webkit-mask:var(--note) center/contain no-repeat;
+  mask:var(--note) center/contain no-repeat}
 .rres .rt{min-width:0}
 .rres .rn{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rres .ra{font-size:11px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -490,6 +510,9 @@ body.noviz .miniwave{display:none}
   <div class="stage">
     <div class="art-wrap drag">
       <img class="art placeholder" id="art" alt="" draggable="false">
+      <div class="artnote" aria-hidden="true"><svg viewBox="0 0 24 24">
+        <path d="M9 18V5l10-2v13"/><circle cx="6.5" cy="18" r="2.5"/>
+        <circle cx="16.5" cy="16" r="2.5"/></svg></div>
       <div class="miniwave" id="miniwave" aria-hidden="true"></div>
     </div>
     <div class="meta drag">
@@ -771,35 +794,62 @@ function extractAccent(img) {
   } catch (e) {}
   return null;
 }
+// A cover that won't load becomes an empty div, because that's the thing the
+// note placeholder can be drawn on — <img> won't take a pseudo element.
+function qiFail(el) {
+  const d = document.createElement("div");
+  d.className = el.className || "qi";
+  el.replaceWith(d);
+}
 let lastArt = "", artRetries = 0, artRetryFor = "";
+function artBlank() {
+  const img = $("art"), amb = $("ambient");
+  img.removeAttribute("src");
+  img.classList.add("placeholder");
+  amb.innerHTML = "";
+  artAccent = null; applyAccent();
+}
 function setArt(url) {
   if (url === lastArt) return;
   lastArt = url;
   if (url !== artRetryFor) { artRetries = 0; artRetryFor = ""; }
-  const img = $("art"), amb = $("ambient");
-  if (!url) {
-    img.removeAttribute("src"); img.classList.add("placeholder");
-    amb.innerHTML = ""; artAccent = null; applyAccent(); return;
-  }
-  img.src = url; img.classList.remove("placeholder");
-  amb.innerHTML = `<img src="${url}" alt="">`;
-  const probe = new Image(); probe.crossOrigin = "anonymous";
-  probe.onload = () => { artAccent = extractAccent(probe); applyAccent(); };
+  if (!url) { artBlank(); return; }
+
+  // Load it out of sight before showing it. Assigning a dead link straight to
+  // the visible <img> paints the browser's own broken-image glyph for a beat
+  // before onerror can clear it — and again on every retry, which is that
+  // little torn-page icon sitting in the corner of the cover.
+  const probe = new Image();
+  probe.onload = () => {
+    if (lastArt !== url) return;          // the track moved on while we waited
+    const img = $("art"), amb = $("ambient");
+    img.src = url; img.classList.remove("placeholder");
+    amb.innerHTML = "";
+    const wash = new Image();
+    wash.alt = "";
+    wash.onerror = () => wash.remove();   // no glyph in the blur layer either
+    wash.src = url;
+    amb.appendChild(wash);
+    // Separate load for the colour: it needs CORS and plenty of hosts don't
+    // send it, and a canvas that won't read shouldn't cost us the cover.
+    const tint = new Image(); tint.crossOrigin = "anonymous";
+    tint.onload = () => { artAccent = extractAccent(tint); applyAccent(); };
+    tint.src = url;
+  };
+  probe.onerror = () => {
+    if (lastArt !== url) return;
+    artBlank();
+    lastArt = null;      // so a later status with the same url tries again
+    if (artRetries < 2) {
+      artRetries++; artRetryFor = url;
+      setTimeout(() => setArt(url), 1200);
+    }
+  };
   probe.src = url;
 }
-$("art").addEventListener("error", () => {
-  // Clear the cache too. setArt skips a url it thinks is already showing, so
-  // one failed load used to leave the cover blank until the track changed —
-  // switching to mini and back wouldn't bring it back either.
-  const failed = lastArt;
-  lastArt = null;
-  $("art").removeAttribute("src");
-  $("art").classList.add("placeholder");
-  if (failed && artRetries < 2) {
-    artRetries++; artRetryFor = failed;
-    setTimeout(() => setArt(failed), 1200);
-  }
-});
+// Belt and braces: if a cover dies after it was already on screen, fall back
+// to the note rather than leaving a broken image sitting there.
+$("art").addEventListener("error", () => { lastArt = null; artBlank(); });
 
 /* ── volume ────────────────────────────────────────────────────────── */
 const VOL_MAX = 150;
@@ -930,7 +980,7 @@ async function showResults(v) {
   if (!r) { hideResults(); return; }
 
   const esc2 = s => esc(s || "");
-  const art = u => u ? `<img class="qi" src="${u}" onerror="this.removeAttribute('src')">`
+  const art = u => u ? `<img class="qi" src="${u}" onerror="qiFail(this)">`
                      : `<div class="qi"></div>`;
 
   // One list. An artist or album row only earns its place if the thing you
@@ -1076,7 +1126,7 @@ const WHY = {
 };
 
 function qRow(t) {
-  const art = t.art ? `<img class="qi" src="${t.art}" onerror="this.removeAttribute('src')">` : `<div class="qi"></div>`;
+  const art = t.art ? `<img class="qi" src="${t.art}" onerror="qiFail(this)">` : `<div class="qi"></div>`;
   const eq = t.current ? `<span class="nowdot"></span>` : "";
   const w = WHY[t.reason] || null;
   const why = w ? `<span class="why" title="${w[0]}">${w[1]}</span>` : "";
@@ -1247,7 +1297,7 @@ async function loadRecent() {
   html += '<div class="seclbl">Recently played</div>';
   html += (r.history && r.history.length)
     ? r.history.map(t => {
-        const art = t.art ? `<img class="qi" src="${t.art}" onerror="this.removeAttribute('src')">` : `<div class="qi"></div>`;
+        const art = t.art ? `<img class="qi" src="${t.art}" onerror="qiFail(this)">` : `<div class="qi"></div>`;
         return `<div class="rrow" data-v="${t.video_id}" data-t="${esc(t.title)}" data-ar="${esc(t.artist||"")}">${art}<div class="qt"><div class="qn">${esc(t.title)}</div><div class="qa">${esc(t.artist||"")}</div></div></div>`;
       }).join("")
     : '<div class="muted">Nothing played through yet.</div>';

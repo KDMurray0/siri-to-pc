@@ -11,6 +11,8 @@
 :root{
   --bg:#0e0f16; --panel:#171826; --fg:#f5f6fb; --sub:#9aa0b8;
   --line:#252739; --accent:#6d8bff; --accent-ink:#0b0c12; --r:14px;
+  /* stands in for a cover we couldn't get */
+  --note:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='M9 18V5l10-2v13'/><circle cx='6.5' cy='18' r='2.5'/><circle cx='16.5' cy='16' r='2.5'/></svg>");
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{height:100%}
@@ -107,6 +109,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .res:hover,.res:active{background:color-mix(in srgb,var(--accent) 14%,transparent)}
 .res img,.res .ph{width:34px;height:34px;border-radius:7px;object-fit:cover;
   background:var(--bg);flex:0 0 auto}
+.ph{position:relative}
+.ph::after{content:"";position:absolute;inset:24%;opacity:.4;background:var(--sub);
+  -webkit-mask:var(--note) center/contain no-repeat;
+  mask:var(--note) center/contain no-repeat}
 .res .t{min-width:0;flex:1}
 .res .n{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .res .a{font-size:11.5px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -280,6 +286,13 @@ body.live .onair{display:inline-flex;align-items:center;gap:5px;margin-left:8px;
 <div class="toast" id="toast"></div>
 
 <script>
+// A cover that won't load becomes the placeholder div, so a dead link shows a
+// faint note rather than the browser's broken-image icon.
+function phFail(el) {
+  const d = document.createElement("div");
+  d.className = "ph";
+  el.replaceWith(d);
+}
 const KEY = "{{ api_key }}";
 const $ = id => document.getElementById(id);
 const api = p => fetch(p + (p.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(KEY))
@@ -379,7 +392,7 @@ async function search(v) {
   const mine = ++seq;
   const r = await api("/api/search?q=" + encodeURIComponent(v));
   if (mine !== seq || !r) return;
-  const img = u => u ? `<img src="${u}" onerror="this.removeAttribute('src')">` : `<div class="ph"></div>`;
+  const img = u => u ? `<img src="${u}" onerror="phFail(this)">` : `<div class="ph"></div>`;
   let h = "";
   if (r.spotify) h += `<div class="grp">Spotify</div><div class="res" data-act="spotify"><div class="ph"></div>` +
     `<div class="t"><div class="n">Import this link</div><div class="a">Saves it as a playlist</div></div></div>`;
@@ -460,7 +473,7 @@ function renderQueue(rows) {
   const show = rows.slice(Math.max(0, cur), Math.max(0, cur) + 30);
   box.innerHTML = show.map(t =>
     `<div class="q${t.current ? " cur" : ""}" data-i="${t.index}">` +
-    (t.art ? `<img src="${t.art}" onerror="this.removeAttribute('src')">` : `<div class="ph"></div>`) +
+    (t.art ? `<img src="${t.art}" onerror="phFail(this)">` : `<div class="ph"></div>`) +
     `<div class="t"><div class="n">${esc(t.title)}</div><div class="a">${esc(t.artist)}</div></div>` +
     `<span class="grip" title="Drag to reorder">${GRIP}</span></div>`).join("");
 }

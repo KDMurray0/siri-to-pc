@@ -262,6 +262,23 @@ class Flyout:
                     return
                 time.sleep(dur / steps)
 
+            # A window can refuse a size, and then the height we asked for and
+            # the height we got are different numbers. Centring the next
+            # resize on the one we asked for walks the window a few pixels
+            # down the screen every time, which over a dozen hovers is very
+            # noticeable. Settle it on what it actually is.
+            if gen != self._resize_gen:
+                return
+            got = self._rect()
+            gw, gh = got.right - got.left, got.bottom - got.top
+            fx, fy = self._clamp(round(cx - gw / 2), round(cy - gh / 2), gw, gh)
+            if (fx, fy) != (got.left, got.top):
+                try:
+                    U32.SetWindowPos(h, 0, fx, fy, gw, gh,
+                                     SWP_NOZORDER | SWP_NOACTIVATE)
+                except Exception:
+                    pass
+
         threading.Thread(target=run, daemon=True).start()
 
     def set_mini(self, on) -> bool:
@@ -701,6 +718,10 @@ def main() -> None:
         url=f"http://127.0.0.1:{port}/player?key={config.get('api_key','')}",
         js_api=Bridge(), frameless=True, easy_drag=False, on_top=True,
         resizable=False, width=Flyout.W, height=Flyout.H, x=x, y=y,
+        # pywebview defaults this to (200, 100), so the 80px idle bar was
+        # quietly being served at 100 and the recentring maths was working
+        # off a height the window never had.
+        min_size=(Flyout.MINI_W, Flyout.MINI_IDLE_H),
         background_color="#0e0f16", hidden=hidden)
     webview.start(_after_start)
     try:

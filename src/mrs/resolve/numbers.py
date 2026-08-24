@@ -32,6 +32,9 @@ FRACTIONS = {"half": 0.5, "quarter": 0.25, "third": 1 / 3}
 _WORD = re.compile(r"[a-z0-9]+")
 # "no. 5" / "number 5" / "#5" / "track 5"
 _LABEL = re.compile(r"\b(?:no\.?|num(?:ber)?|#|track|song)\s*[:.]?\s*(\d+)\b", re.I)
+# "1.5 hours" is ninety minutes. Tokenising splits it into 1 and 5, which then
+# get added up to six, so catch the whole thing before that happens.
+_DECIMAL = re.compile(r"\b\d+\.\d+\b")
 
 
 def _tokens(text: str) -> list[str]:
@@ -45,7 +48,7 @@ def _tokens(text: str) -> list[str]:
 def _words_to_number(tokens: list[str]) -> float | None:
     """A run of number words to a value. None if there wasn't one."""
     total, current, seen, frac = 0, 0, False, 0.0
-    for tok in tokens:
+    for i, tok in enumerate(tokens):
         if tok in UNITS:
             current += UNITS[tok]
             seen = True
@@ -64,6 +67,8 @@ def _words_to_number(tokens: list[str]) -> float | None:
             seen = True
         elif tok == "and":
             continue
+        elif tok in ARTICLES and i + 1 < len(tokens) and tokens[i + 1] in FRACTIONS:
+            continue          # "two and a half"
         elif tok.isdigit():
             current += int(tok)
             seen = True
@@ -81,6 +86,9 @@ def first_number(text: str) -> float | None:
     label = _LABEL.search(text)
     if label:
         return float(label.group(1))
+    point = _DECIMAL.search(text)
+    if point:
+        return float(point.group(0))
     toks = _tokens(text)
     for i, tok in enumerate(toks):
         if tok.isdigit() or tok in UNITS or tok in TENS or tok in FRACTIONS:
@@ -105,8 +113,17 @@ _HOURS = re.compile(r"\b(hr|hrs|hour|hours)\b", re.I)
 _SECONDS = re.compile(r"\b(sec|secs|second|seconds)\b", re.I)
 
 
+# A day is already a stretch for "play music for a while"; past that it's a
+# misheard number, not a request.
+MAX_MINUTES = 24 * 60
+
+
 def duration_minutes(text: str) -> float | None:
-    """How long, in minutes. Understands "an hour and a half"."""
+    """How long, in minutes. Understands "an hour and a half".
+
+    Never returns something silly: "999999 hours" is a mishearing, not a plan,
+    and a zero or negative length isn't a timer at all.
+    """
     if not text:
         return None
     value = first_number(text)
@@ -117,12 +134,22 @@ def duration_minutes(text: str) -> float | None:
         extra = first_number(tail) if tail else None
         if extra is not None:
             hours += extra if extra < 1 else extra / 60.0
-        return hours * 60.0
+        return _sane(hours * 60.0)
     if _SECONDS.search(text):
-        return (value if value is not None else 30.0) / 60.0
+        return _sane((value if value is not None else 30.0) / 60.0)
     if _MINUTES.search(text) or value is not None:
-        return value
+        return _sane(value)
     return None
+
+
+def _sane(mins: float | None) -> float | None:
+    """Keep a timer inside the bounds of a real listening session."""
+    if mins is None:
+        return None
+    mins = abs(mins)
+    if mins <= 0:
+        return None
+    return min(mins, MAX_MINUTES)
 
 
 def _chunks(tokens: list[str]) -> list[int]:
