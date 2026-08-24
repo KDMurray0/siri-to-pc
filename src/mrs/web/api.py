@@ -464,6 +464,30 @@ def api_groqkey(value: str = "", _: bool = Auth):
             "model": config.get("groq_model"), "detail": llm.status()}
 
 
+@app.get("/api/groqmodels")
+def api_groqmodels(refresh: int = 0, _: bool = Auth):
+    """What Groq will serve, so the picker can't offer a retired model."""
+    return {"status": "ok", "models": llm.models(force=bool(refresh)),
+            "current": config.get("groq_model") or llm.DEFAULT_MODEL,
+            "default": llm.DEFAULT_MODEL}
+
+
+@app.get("/api/groqmodel")
+def api_groqmodel(value: str = "", _: bool = Auth):
+    """Pick the model. Tested before it's kept, so a bad choice can't quietly
+    turn request parsing off — that failure looks exactly like a bad key."""
+    want = (value or "").strip()
+    if not want:
+        return {"status": "error", "detail": "no model given"}
+    if not llm.test(want):
+        return {"status": "error", "working": False,
+                "current": config.get("groq_model"),
+                "detail": llm.status().get("last_error") or "model wouldn't answer"}
+    config.set("groq_model", want)
+    return {"status": "ok", "working": True, "current": want,
+            "detail": llm.status()}
+
+
 @app.get("/api/boot")
 def api_boot(enabled: int = 0, _: bool = Auth):
     ok = _set_run_at_boot(bool(enabled))

@@ -99,6 +99,44 @@ def test(model: str | None = None) -> bool:
     return False
 
 
+MODELS_URL = "https://api.groq.com/openai/v1/models"
+_models: tuple[float, list[str]] = (0.0, [])
+
+
+def models(force: bool = False) -> list[str]:
+    """What Groq will actually serve us right now, best guess first.
+
+    Asked rather than hard-coded, because Groq retires models and a list
+    written down here goes stale the same way a pinned model does — that's
+    what made a perfectly good key look broken. Chat models only; the
+    transcription and guard models can't answer a request.
+    """
+    import time
+    now = time.time()
+    if not force and _models[1] and now - _models[0] < 900:
+        return _models[1]
+    if not config.get("groq_api_key"):
+        return []
+    try:
+        req = urllib.request.Request(
+            MODELS_URL,
+            headers={"Authorization": f"Bearer {config.get('groq_api_key')}",
+                     "User-Agent": "MusicRequestServer/3.0"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            rows = json.loads(r.read().decode("utf-8", "replace")).get("data") or []
+    except Exception as exc:
+        log.debug("couldn't list models: %s", exc)
+        return _models[1]
+    # speech and safety models: they answer, but not with a parsed request
+    skip = ("whisper", "tts", "guard", "orpheus", "playai", "canopylabs")
+    out = sorted(str(m.get("id") or "") for m in rows
+                 if m.get("id") and not any(s in str(m["id"]).lower() for s in skip))
+    # the one we know parses requests well goes to the top
+    out.sort(key=lambda m: (m != DEFAULT_MODEL, m))
+    globals()["_models"] = (now, out)
+    return out
+
+
 def ensure_model() -> bool:
     """Self-heal a config pinned to a model Groq has since retired."""
     if not available():

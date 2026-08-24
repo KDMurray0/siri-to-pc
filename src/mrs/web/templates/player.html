@@ -676,6 +676,8 @@ body.noviz .miniwave{display:none}
         <div class="seclbl">Understanding requests</div>
         <div class="srow"><span class="slabel"><span class="status-dot" id="groqdot"></span> Groq key<em>Optional — improves messy dictation</em></span>
           <input class="keyin" id="groqkey" type="password" placeholder="gsk_…"></div>
+        <div class="srow"><span class="slabel">Model<em>Which Groq model reads your requests</em></span>
+          <select class="keyin" id="groqmodel" style="width:168px"></select></div>
         <div class="hint" id="groqhint"></div>
       </section>
 
@@ -1542,7 +1544,46 @@ $("groqkey").addEventListener("input", () => {
       ? "Connected — " + (r.model || "")
       : "That key didn't work: " + ((r && r.detail && r.detail.last_error) || "unknown");
     toast(r && r.working ? "Groq connected" : "Groq key didn't work");
+    if (r && r.working) loadGroqModels(true);
   }, 700);
+});
+
+// The list comes from Groq rather than from us, because they retire models
+// and a hard-coded one goes stale exactly the way a pinned one does.
+async function loadGroqModels(refresh) {
+  const sel = $("groqmodel");
+  const r = await api("/api/groqmodels" + (refresh ? "?refresh=1" : ""));
+  const list = (r && r.models) || [];
+  if (!list.length) {
+    sel.innerHTML = '<option value="">Add a key first</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  const now = (r && r.current) || "";
+  sel.innerHTML = list.map(m =>
+    `<option value="${esc(m)}"${m === now ? " selected" : ""}>${esc(m)}</option>`).join("");
+  sel.dataset.was = now;
+}
+$("groqmodel").addEventListener("change", async () => {
+  const sel = $("groqmodel"), want = sel.value;
+  if (!want) return;
+  const was = sel.dataset.was || "";
+  sel.disabled = true;
+  $("groqhint").textContent = "Trying " + want + "…";
+  const r = await api("/api/groqmodel?value=" + encodeURIComponent(want));
+  sel.disabled = false;
+  if (r && r.status === "ok") {
+    sel.dataset.was = want;
+    setDot("groqdot", "ok");
+    $("groqhint").textContent = "Using " + want;
+    toast("Now using " + want);
+  } else {
+    // put the picker back rather than leaving it showing a model we rejected
+    if (was) sel.value = was;
+    $("groqhint").textContent = want + " wouldn't answer — kept the old one";
+    toast("That model didn't work");
+  }
 });
 
 const setDot = (id, cls) => { const d = $(id); d.className = "status-dot" + (cls ? " " + cls : ""); };
@@ -1681,6 +1722,9 @@ async function loadSettings() {
   markChips("cohesion", Math.round(s.artist_cohesion ?? 1));
   markChips("anchor", s.anchor_pull ?? 0.35);
   $("groqkey").placeholder = s.groq_set ? "•••••••• saved" : "gsk_…";
+  if (s.groq_set) loadGroqModels();
+  else { $("groqmodel").innerHTML = '<option value="">Add a key first</option>';
+         $("groqmodel").disabled = true; }
   const g = s.groq || {};
   setDot("groqdot", !s.groq_set ? "" : (g.working ? "ok" : "bad"));
   $("groqhint").textContent = !s.groq_set
