@@ -306,7 +306,23 @@ Double-click `launcher.pyw` to launch everything. It:
 
 ## Auto-Queue (endless play)
 
-With `auto_queue` on (default), playback never stops: when the queue runs low the server asks YouTube Music for a *radio* seeded by the current track and appends related songs — the same idea as Spotify's autoplay. Tracks are downloaded ahead of time so there's no gap between songs. Toggle it live from the music bar, or with:
+With `auto_queue` on (default), playback never stops. Tracks are downloaded ahead of time so there's no gap between songs.
+
+YouTube's own radio is one of the things it draws on, not the whole of it — on its own it drifts, because every step is a reasonable hop from the last one and thirty reasonable hops is a long way from where you started. So candidates come from several places at once and get ranked together:
+
+| lane | where the records come from |
+| --- | --- |
+| `near` | what people actually play alongside the song you asked for (Last.fm similar tracks, asked for by name) |
+| `anchor` | YouTube's radio for the song you asked for |
+| `radio` | YouTube's radio for what's on now |
+| `root` | the genre of the song you asked for, kept open so the seam doesn't run out |
+| `kin` | records by the artists Deezer files next to this one |
+| `artist` | the band's own catalogue |
+| `theme` | the genre, if you asked for one by name |
+
+Everything is then scored against **the song you asked for**, not just the one that's playing — measuring only against what's on is how a metal request ends up playing pop-punk half an hour later, each step looking fine. On top of that a track has to name the right genre to get in, it loses points for coming from a different era (MusicBrainz start years, adjusted so a person's birthday and a band's formation date mean the same thing), and it gains them for being somebody the anchor's artist belongs next to.
+
+Every row in the queue tells you which of these picked it. Toggle the whole thing live from the music bar, or with:
 
 ```
 GET /api/autoqueue?key=SECRET            # toggle
@@ -406,6 +422,12 @@ itunes_request_server/
       mpv.py             Named-pipe IPC (overlapped I/O, watchdog)
       queue.py           Candidate pool -> download workers -> playlist
       context.py         What could play next, and how it's scored
+      tags.py            Last.fm: what a song sounds like, and what sits beside it
+      kin.py             Deezer: which artists belong next to each other
+      era.py             MusicBrainz: roughly when an artist's records come from
+      tempo.py           BPM, for the crossfade
+      radio.py           Live stations
+      playlists.py       Saved playlists
       downloader.py      yt-dlp: retries, client fallback, cache, pinning
       taste.py           Play-throughs vs skips, likes, ranking
       audio.py           EQ, normalise, crossfade, level metering
@@ -414,14 +436,16 @@ itunes_request_server/
       extras.py          Last.fm, alarms, casting
     resolve/
       parser.py          One parsing decision (grammar for controls, LLM otherwise)
+      resolver.py        Turning a parsed plan into actual tracks
       grammar.py         Local phrase parsing
+      numbers.py         Spoken numbers: "half an hour", "one point five hours"
       llm.py             Groq
       catalog.py         YouTube Music, SoundCloud, Bandcamp
       spotify.py         Spotify links via spotdl
       lyrics.py          LRCLIB
     web/
       api.py             FastAPI routes + SSE
-      templates/         player.html, setup.html
+      templates/         player.html, remote.html, setup.html
 ```
 
 Config and state live in `%LOCALAPPDATA%\MusicRequestServer\` — one location,
