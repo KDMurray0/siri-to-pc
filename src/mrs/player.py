@@ -125,6 +125,10 @@ class PlayerService:
                     continue
                 self._watch_track()
                 self._persist_volume()
+                # cheap when it's already there, and the audio capture keeps
+                # undoing it
+                from .server import be_polite
+                be_polite(quiet=True)
                 if int(config.get("crossfade", 0)) > 0:
                     self._maybe_crossfade()
                 bus.publish(Ev.STATUS, self.status())

@@ -77,12 +77,17 @@ def preflight() -> list[str]:
     return problems
 
 
-def be_polite() -> None:
+def be_polite(quiet: bool = False) -> None:
     """Run below normal priority.
 
     This sits in the background all day and the actual audio comes out of mpv,
     which is a separate process and stays at normal. Nothing here is worth
     stealing a timeslice from whatever you're doing.
+
+    Called repeatedly, not once: PortAudio's WASAPI backend puts the process
+    back to normal whenever the loopback capture stream gets going, so setting
+    this at startup on its own held for about four seconds. `quiet` is for the
+    repeat calls, which shouldn't fill the log.
     """
     try:
         import ctypes
@@ -91,10 +96,23 @@ def be_polite() -> None:
         # restype matters on 64-bit: the default int truncates the handle
         k32.GetCurrentProcess.restype = ctypes.c_void_p
         k32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint]
-        if k32.SetPriorityClass(k32.GetCurrentProcess(), BELOW_NORMAL):
-            log.info("running at below-normal priority")
+        k32.GetPriorityClass.argtypes = [ctypes.c_void_p]
+        me = k32.GetCurrentProcess()
+        if k32.GetPriorityClass(me) == BELOW_NORMAL:
+            return
+        if not k32.SetPriorityClass(me, BELOW_NORMAL):
+            # Say so. This used to only log on success, so when it silently
+            # stopped working the app just quietly ran at normal priority.
+            if not quiet:
+                log.warning("couldn't lower priority (error %d)",
+                            ctypes.get_last_error())
+            return
+        if not quiet:
+            log.info("running at below-normal priority (0x%x)",
+                     k32.GetPriorityClass(me))
     except Exception as exc:
-        log.debug("couldn't lower priority: %s", exc)
+        if not quiet:
+            log.warning("couldn't lower priority: %s", exc)
 
 
 def startup() -> None:
