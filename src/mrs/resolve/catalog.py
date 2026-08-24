@@ -641,7 +641,12 @@ def genre_tracks(genre: str, limit: int = 25) -> list[Track]:
             per_artist[who] = per_artist.get(who, 0) + 1
             res.append(t)
 
-    for source in (_from_genre_tag, _from_itunes_genre, _word_search):
+    # Apple's genreTerm index used to sit in the middle here and it was
+    # measured out: across grunge, prog, riot grrrl and classic country, 44%
+    # of what it returned actually carried the genre, against 89% from Last.fm
+    # and 52% from simply searching the words it sits in front of. A lane
+    # that's beaten by the fallback behind it is just latency and noise.
+    for source in (_from_genre_tag, _word_search):
         if len(res) >= limit:
             break
         try:

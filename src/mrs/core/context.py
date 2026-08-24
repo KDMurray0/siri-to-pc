@@ -12,6 +12,7 @@ from ..config import config
 from ..logging_setup import get
 from ..models import (Candidate, Track, is_channel_act, is_derivative,
                       norm_title)
+from .era import era, gap as era_gap
 from .tags import _flatten, tagstore
 from .taste import taste
 
@@ -45,6 +46,10 @@ NOBODY_PENALTY = 2.5
 # we accept to keep the pool from running dry. Enough to lead, not enough to
 # shut the second tag out.
 PRIMARY_GENRE = 1.1
+# Half a century between two artists, in a genre that's run continuously for
+# all of it. Tags can't see this at all — Jolene and Morgan Wallen are both
+# country and nothing else in the data disagrees.
+ERA_WEIGHT = 2.0
 
 
 def _fit(sim: float) -> float:
@@ -220,6 +225,10 @@ class ContextBuilder:
         #     that's why a Fela Kuti run reached Depeche Mode by track 30,
         #     with nothing pulling back once the anchor lane ran dry.
         roots: list[str] = []
+        if anchor is not None:
+            # One lookup, cached for good, and the whole era comparison is
+            # against this artist — without it there's nothing to compare to.
+            self._safe(era.prime, anchor)
         if not theme and anchor is not None:
             roots = tagstore.top_tags(anchor, 2)
             if not roots:
@@ -249,6 +258,7 @@ class ContextBuilder:
                     raw.append((t, "liked"))
 
         tagstore.warm([t for t, _ in raw])     # next refill will know more
+        era.warm([t for t, _ in raw])
         out = self._rank(raw, current, exclude, limit, exclude_keys, focus=focus,
                          anchor=anchor, theme=theme, roots=roots,
                          artist_counts=artist_counts)
@@ -377,6 +387,7 @@ class ContextBuilder:
         cohesion = float(config.get("artist_cohesion", 1.0)) * focus * slack
         cur_artist = current.primary_artist() if current else ""
         anchor_artist = anchor.primary_artist() if anchor else ""
+        anchor_era = era.get(anchor) if anchor is not None else None
         seen_ids: set[str] = set()
         seen_keys: set[str] = set()
         # Seeded from what's already been on, not just what's in this pool.
@@ -495,6 +506,11 @@ class ContextBuilder:
                     # was asked for, so carrying it is worth something.
                     if _carries(roots[0], own):
                         score += PRIMARY_GENRE
+
+                # Same genre, different half-century. Only bites once both
+                # artists are known, and not at all under twenty years apart.
+                if anchor_era:
+                    score -= ERA_WEIGHT * era_gap(anchor_era, era.get(track))
 
             # Taste breaks ties, it doesn't choose. Liking a song is a reason
             # to prefer it over something equally fitting — not a reason to
