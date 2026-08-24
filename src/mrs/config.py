@@ -62,6 +62,8 @@ DEFAULTS: dict[str, Any] = {
     "queue_min_ready": 3,     # downloaded tracks that must sit ahead
     "queue_pool_min": 20,     # candidate ideas kept in reserve
     "artist_run_limit": 3,    # max consecutive tracks by one artist
+    "artist_gap": 4,          # prefer not to repeat an artist within this many
+    "artist_gap_slip": 0.15,  # ...but let it through this often anyway
     "artist_cohesion": 1.0,   # 0 = pure discovery, 2 = stay on the band
     "anchor_pull": 0.35,      # how much the song you asked for still counts
     "show_visualiser": True,

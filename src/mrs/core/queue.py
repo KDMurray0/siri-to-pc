@@ -8,6 +8,7 @@ download costs a candidate instead of killing the whole refill.
 
 from __future__ import annotations
 
+import random
 import threading
 import time
 from collections import deque
@@ -216,14 +217,31 @@ class QueueManager:
             # artist run past the cap — unless that's all we have.
             usable.sort(key=lambda c: c.score, reverse=True)
             if config.get("shuffle"):
-                # shuffle mode: pick from the good ones rather than the best one
-                import random as _r
-                _r.shuffle(usable[:12])
+                # shuffle mode: pick from the good ones rather than the best
+                # one. usable[:12] is a copy, so shuffling that shuffled
+                # nothing and shuffle mode played the same order as normal.
+                head = usable[:12]
+                random.shuffle(head)
+                usable[:len(head)] = head
             usable = [c for c in usable if c.track.key() not in self._claimed]
             if not usable:
                 return None
+
             pick = None
-            if recent_artists and len(set(recent_artists)) == 1:
+            # Two tracks by one act back to back isn't the mild same-artist
+            # bias that's wanted, it's a run. So prefer somebody who hasn't
+            # been on for a few records — but not every time. A rule that
+            # never bends is its own kind of wrong: sometimes the best thing
+            # to play next really is the same band again.
+            gap = int(config.get("artist_gap", 4))
+            slip = float(config.get("artist_gap_slip", 0.15))
+            near = {a for a in self._tail_artists(gap)}
+            if near and random.random() >= slip:
+                pick = next((c for c in usable
+                             if c.track.primary_artist() not in near), None)
+
+            # And a hard stop on an actual run, which bends for nobody.
+            if pick is None and recent_artists and len(set(recent_artists)) == 1:
                 blocked = recent_artists[0]
                 pick = next((c for c in usable
                              if c.track.primary_artist() != blocked), None)

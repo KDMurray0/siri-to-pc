@@ -52,19 +52,26 @@ Radiohead queue is not disliking the band.
 
 ---
 
-### 3. Space the same artist out
+### 3. Space the same artist out — *done*
 
-**What:** a minimum gap between two tracks by one artist — say four — rather
-than the current per-refill count limit.
+**What:** a minimum gap between two tracks by one artist, that bends
+occasionally rather than being mechanical about it.
 
-**Evidence:** runs regularly put two tracks by one act close together (Glen
-Campbell at 3 and 4, Portishead at 2 and 3, Soft Cell at 4 and 5). A mild
-same-artist bias is wanted, and back-to-back isn't the same thing as mild.
-The existing `artist_counts` limit works per refill, so two from one artist
-can still land adjacent.
+**Evidence:** the old rule only caught a *run* — all of the last three tracks
+being one act — so portishead, tricky, portishead sailed straight through.
+`artist_gap` (4) prefers somebody who hasn't been on for a few records, and
+`artist_gap_slip` (0.15) lets it through anyway about one time in seven,
+because sometimes the right next record really is the same band. The hard run
+cap sits underneath and doesn't bend.
 
-**Cost:** small, and it belongs in `Queue` at pick time, not in `_rank` —
-ranking doesn't know the running order.
+**Correction worth keeping:** the adjacency I first cited as evidence (Glen
+Campbell at 3 and 4, Portishead at 2 and 3) was an artefact of the test
+harness, which takes `pool[0]` directly and never calls `_take_candidate`.
+The real app was already avoiding back-to-back repeats. Check which code path
+a log actually came from before believing it.
+
+**Also fixed here:** shuffle mode never shuffled. `random.shuffle(usable[:12])`
+shuffles a copy, so it played in exactly the same order as normal.
 
 ---
 
