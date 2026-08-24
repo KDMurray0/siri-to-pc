@@ -92,6 +92,7 @@ def _dash_credit(title: str) -> bool:
     return " - " in (title or "")
 
 
+_NEAR_LOOKUPS = 8      # fresh searches the played-alongside lane may do
 RUN_LOOK_BACK = 10        # how much of the recent run a candidate has to suit
 # Tempo is deliberately not part of this. Measured against the case it was
 # meant to fix — a metal run sagging into Nickelback — Deezer's bpm turned out
@@ -187,6 +188,23 @@ class ContextBuilder:
 
     def __init__(self, catalog) -> None:
         self.catalog = catalog
+        # "artist|title" -> the record, or None if we looked and it wasn't
+        # there. The played-alongside lane walks the same thirty names over
+        # and over as the ones at the top get played, and the catalog's own
+        # cache expires after half an hour — long before a listening session
+        # does. Remembering the answer is what makes walking deep cheap.
+        self._resolved: dict[str, Track | None] = {}
+
+    def _find_by_name(self, pair: str, name: str, who: str) -> Track | None:
+        if pair in self._resolved:
+            return self._resolved[pair]
+        if len(self._resolved) > 600:
+            self._resolved.clear()
+        found = self._safe(self.catalog.search_songs, f"{name} {who}", 1)
+        # Search drifts. Only keep it if it's the record we asked for.
+        hit = found[0] if found and found[0].primary_artist() == who else None
+        self._resolved[pair] = hit
+        return hit
 
     def build(self, current: Track | None, exclude: set[str] | None = None,
               exclude_keys: set[str] | None = None,
@@ -299,14 +317,17 @@ class ContextBuilder:
             mine = anchor.primary_artist()
             rows = sorted(tagstore.neighbours(anchor).items(),
                           key=lambda kv: -kv[1])
-            picked = tried = 0
+            picked = fresh = 0
             for pair, _match in rows:
-                # Six new ones, but keep walking past the ones already played
-                # — the list belongs to the anchor and doesn't change, so
-                # offering the same top six every refill means the lane dries
-                # up after six tracks with twenty-four still on it. Searches
-                # are cached, so walking further is nearly free.
-                if picked >= 6 or tried >= 14:
+                # Six new records a refill, and keep walking past the ones
+                # already played: the list belongs to the anchor and doesn't
+                # change, so offering the same top six every time means the
+                # lane dries up after six tracks with twenty-four still on
+                # it. The budget is on lookups we haven't done before, not on
+                # how far down the list we get — once a name is resolved it
+                # stays resolved, so a later refill can walk the whole thirty
+                # for nothing.
+                if picked >= 6 or fresh >= _NEAR_LOOKUPS:
                     break
                 who, _, name = pair.partition("|")
                 # Skip the anchor's own back catalogue: it tops every list,
@@ -315,13 +336,11 @@ class ContextBuilder:
                 theirs = _strip_article(_fold(who))
                 if not name or not theirs or theirs == mine:
                     continue
-                found = self._safe(self.catalog.search_songs,
-                                   f"{name} {who}", 1)
-                tried += 1
-                # Search drifts. Only take it if it's the record we asked for.
-                if not found or found[0].primary_artist() != theirs:
+                if pair not in self._resolved:
+                    fresh += 1
+                hit = self._find_by_name(pair, name, theirs)
+                if hit is None:
                     continue
-                hit = found[0]
                 if hit.video_id in exclude or hit.key() in exclude_keys:
                     continue
                 raw.append((hit, "near"))
