@@ -41,6 +41,10 @@ SOURCE_WEIGHT = {
 # Last.fm has been asked and has never heard of them. Every real act has a
 # page, so what's left is AI piano and stock-library uploads.
 NOBODY_PENALTY = 2.5
+# Carrying the genre that was actually asked for, rather than the second one
+# we accept to keep the pool from running dry. Enough to lead, not enough to
+# shut the second tag out.
+PRIMARY_GENRE = 1.1
 
 
 def _fit(sim: float) -> float:
@@ -483,6 +487,14 @@ class ContextBuilder:
                     # four people; jazz piano lets the rest of the room in.
                     if not own or not any(_carries(r, own) for r in roots):
                         continue
+                    # Equal footing goes too far the other way, though. Tarkus
+                    # is progressive rock and classic rock, and letting the
+                    # second stand in for the first filled a prog request with
+                    # the Eagles, Survivor and Deep Purple — no Yes, no
+                    # Genesis, no King Crimson. The first tag is the one that
+                    # was asked for, so carrying it is worth something.
+                    if _carries(roots[0], own):
+                        score += PRIMARY_GENRE
 
             # Taste breaks ties, it doesn't choose. Liking a song is a reason
             # to prefer it over something equally fitting — not a reason to
