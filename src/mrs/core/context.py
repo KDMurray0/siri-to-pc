@@ -263,6 +263,25 @@ class ContextBuilder:
                              focus=focus, anchor=anchor, theme=theme, roots=roots,
                              artist_counts=artist_counts)
 
+        # The genre-name test is strict on purpose, but some tags barely exist
+        # at track level. Ask for drum and bass and it leaves Goldie's own back
+        # catalogue and almost nothing else — twenty-three of thirty by one
+        # man, which is a worse night than the drift it was there to stop. If
+        # it's squeezed the field down to one artist, drop it and take the
+        # wider one.
+        if out and roots:
+            counts: dict[str, int] = {}
+            for c in out:
+                a = c.track.primary_artist()
+                counts[a] = counts.get(a, 0) + 1
+            if len(out) < 10 or max(counts.values()) > len(out) * 0.4:
+                loose = self._rank(raw, current, exclude, limit, exclude_keys,
+                                   focus=focus, anchor=anchor, theme=theme,
+                                   roots=roots, strict=False,
+                                   artist_counts=artist_counts)
+                if len(loose) > len(out):
+                    out = loose
+
         # a thin pool is how the queue used to die — widen out first
         if len(out) < 8:
             out += self._widen(current, exclude, exclude_keys,
@@ -345,7 +364,7 @@ class ContextBuilder:
               exclude: set[str], limit: int, exclude_keys: set[str],
               ignore_recency: bool = False, focus: float = 1.0,
               anchor: Track | None = None, theme: str = "",
-              roots: list[str] | None = None,
+              roots: list[str] | None = None, strict: bool = True,
               artist_counts: dict[str, int] | None = None) -> list[Candidate]:
         # Skipping late, again and again, means the run has gone stale rather
         # than any one song being wrong. Loosen the grip a little when that
@@ -451,7 +470,7 @@ class ContextBuilder:
                 # and Hoobastank by track 25 with nothing looking wrong. The
                 # band that's on is exempt; so is anything we've no tags for.
                 own = tagstore.get(track)
-                if roots and track.primary_artist() != anchor_artist:
+                if strict and roots and track.primary_artist() != anchor_artist:
                     # No tags is not a free pass. Every guard here needs them,
                     # so one untagged upload gets in and all three go quiet at
                     # once — a Take Five run was faultless for nineteen tracks,
