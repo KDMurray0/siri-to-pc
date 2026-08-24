@@ -30,6 +30,56 @@ _prefs: list[str] = []
 _cache: dict[str, tuple[float, list]] = {}
 _CACHE_TTL = 1800
 
+# YouTube says no sometimes — a truncated body, a closed connection, a 429 —
+# and every one of those used to cost the pool a lane's worth of candidates
+# with nothing but a line in the log. A refill that quietly comes back half
+# empty is how a good queue turns into a thin one, so the transient failures
+# get another go, and if it's clearly throttling us we stop asking for a bit
+# rather than making it worse.
+_RETRIES = 2
+_BACKOFF = (0.7, 2.0)
+_fails: list[float] = []
+_quiet_until = 0.0
+_FAIL_WINDOW = 60.0     # how far back a run of failures counts
+_FAIL_LIMIT = 8         # that many in the window means we're being throttled
+_QUIET_FOR = 90.0
+
+
+def _transient(exc: Exception) -> bool:
+    """A "try again" failure rather than a "there's nothing there" one."""
+    msg = str(exc).lower()
+    return any(s in msg for s in (
+        "expecting value", "timed out", "timeout", "connection", "reset",
+        "429", "too many", "502", "503", "504", "temporarily", "unavailable"))
+
+
+def _yt(what: str, fn, *args, **kwargs):
+    """Call YouTube. Returns None if it wouldn't answer."""
+    global _quiet_until
+    now = time.time()
+    if now < _quiet_until:
+        return None
+    for attempt in range(_RETRIES + 1):
+        try:
+            out = fn(*args, **kwargs)
+            _fails.clear()
+            return out
+        except Exception as exc:
+            if not _transient(exc) or attempt == _RETRIES:
+                _fails.append(time.time())
+                del _fails[:-_FAIL_LIMIT]
+                recent = [t for t in _fails if time.time() - t < _FAIL_WINDOW]
+                if len(recent) >= _FAIL_LIMIT:
+                    _quiet_until = time.time() + _QUIET_FOR
+                    _fails.clear()
+                    log.warning("YouTube keeps refusing us — leaving it alone "
+                                "for %.0fs", _QUIET_FOR)
+                else:
+                    log.debug("%s failed: %s", what, exc)
+                return None
+            time.sleep(_BACKOFF[attempt])
+    return None
+
 
 def client():
     global _client
@@ -161,10 +211,9 @@ def search_songs(query: str, limit: int = 12, *, allow_variant: bool = False) ->
     hit = _cached(key)
     if hit is not None:
         return hit
-    try:
-        rows = client().search(query, filter="songs", limit=max(limit, 10))
-    except Exception as exc:
-        log.warning("search failed for %r: %s", query, exc)
+    rows = _yt(f"search {query!r}", lambda: client().search(
+        query, filter="songs", limit=max(limit, 10)))
+    if rows is None:
         return []
     out = [to_track(r, "request") for r in rows]
     out = [t for t in out if _acceptable(t, allow_variant=allow_variant)]
@@ -174,9 +223,9 @@ def search_songs(query: str, limit: int = 12, *, allow_variant: bool = False) ->
     # the digit spellings as well and put them after, so a band with a spelled
     # number in its name — Twenty One Pilots — still wins on its own name.
     for alt in numbers.digit_variants(query):
-        try:
-            extra = client().search(alt, filter="songs", limit=6)
-        except Exception:
+        extra = _yt(f"search {alt!r}", lambda: client().search(
+            alt, filter="songs", limit=6))
+        if extra is None:
             continue
         have = {t.video_id for t in out}
         for row in extra:
@@ -198,14 +247,13 @@ def artist_tracks(artist: str, limit: int = 20) -> list[Track]:
     if hit is not None:
         return hit
     tracks: list[Track] = []
-    try:
-        found = client().search(artist, filter="artists", limit=1)
-        if found:
-            info = client().get_artist(found[0]["browseId"])
-            songs = (info.get("songs") or {}).get("results") or []
-            tracks = [to_track(r, "request") for r in songs]
-    except Exception as exc:
-        log.debug("artist lookup failed for %r: %s", artist, exc)
+    found = _yt(f"artist {artist!r}", lambda: client().search(
+        artist, filter="artists", limit=1))
+    if found:
+        info = _yt(f"artist page {artist!r}",
+                   lambda: client().get_artist(found[0]["browseId"]))
+        songs = ((info or {}).get("songs") or {}).get("results") or []
+        tracks = [to_track(r, "request") for r in songs]
     if len(tracks) < limit:
         # Searching the band name also finds songs *called* that — asking for
         # Blur turned up "Blur" by Bella Kay and the queue called it same-artist.
@@ -596,10 +644,8 @@ def related(video_id: str, limit: int = 10) -> list[Track]:
     hit = _cached(key)
     if hit is not None:
         return hit
-    try:
-        rows = _watch_rows(video_id, limit)
-    except Exception as exc:
-        log.debug("radio failed for %s: %s", video_id, exc)
+    rows = _yt(f"radio {video_id}", _watch_rows, video_id, limit)
+    if rows is None:
         return []
     out = []
     for r in rows:

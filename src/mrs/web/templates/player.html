@@ -434,12 +434,13 @@ body.mini .ambient,body.mini .prog,body.mini .search,
 body.mini .nav,body.mini .panel,body.mini .toast,body.mini .frame::after,
 body.mini #shuffle,body.mini #repeat,body.mini .activity,
 body.mini .vol,body.mini .row2,body.mini .devpick{display:none}
-/* The right padding has to clear BOTH window buttons, not just the pin. At
-   44px the title ran under the shrink button, which sits 44-72px in from the
-   edge — a long song name covered the control you need to get out of mini. */
 body.mini .stage{display:grid;grid-template-columns:auto 1fr;
   grid-template-areas:"art meta" "art ctl";align-items:center;align-content:center;
-  column-gap:12px;row-gap:0;padding:11px 78px 11px 12px}
+  column-gap:12px;row-gap:0;padding:11px 14px 11px 12px}
+/* Only the text has to dodge the window buttons, and only because it sits at
+   the same height as them. Putting that clearance on the whole grid squeezed
+   the controls too, leaving a dead strip under the buttons that nothing used. */
+body.mini .meta{padding-right:64px}
 body.mini .art-wrap{grid-area:art;margin:0;justify-content:flex-start;align-self:center}
 body.mini .art{width:58px;height:58px;border-radius:12px;box-shadow:0 6px 16px rgba(0,0,0,.5)}
 body.mini .meta{grid-area:meta;margin:0;text-align:left;min-height:0;min-width:0;
@@ -449,13 +450,19 @@ body.mini .artist{font-size:11px;margin-top:1px}
 body.mini .controls{grid-area:ctl;display:flex;justify-content:flex-start;
   align-items:center;gap:6px;margin:0;max-height:0;opacity:0;overflow:hidden;
   transition:max-height .18s ease,opacity .16s ease,margin-top .18s ease}
-body.mini .controls .ib{width:28px;height:28px;border-radius:9px}
+/* Sized to the room that's actually there, now the row runs the full width
+   of the bar: 344 less the padding, the artwork and the volume strip leaves
+   212px. Seven items and six gaps come to 204. They were being flex-shrunk to
+   nineteen pixels before — asking for 28 in a 168px row and getting whatever
+   was left, which is why they looked so thin. */
+body.mini .controls{gap:6px;flex-wrap:nowrap}
+body.mini .controls .ib{width:28px;height:28px;border-radius:9px;flex:0 0 auto}
 body.mini .controls .ib svg{width:17px;height:17px}
-body.mini .controls .play{width:32px;height:32px;border-radius:10px}
-body.mini .controls .play svg{width:18px;height:18px}
+body.mini .controls .play{width:33px;height:33px;border-radius:11px;flex:0 0 auto}
+body.mini .controls .play svg{width:19px;height:19px}
 body.mini.mini-hover .art{width:74px;height:74px}
 body.mini.mini-hover .meta{align-self:start}
-body.mini.mini-hover .controls{max-height:44px;opacity:1;margin-top:8px}
+body.mini.mini-hover .controls{max-height:44px;opacity:1;margin-top:6px}
 /* the overflow button lives at the end of the transport row */
 body.mini .minivol{display:none}
 body.mini.mini-hover .minivol{display:block;position:absolute;top:40px;right:21px;
@@ -478,7 +485,7 @@ body.mini.mini-hover .upnext{opacity:0}
 .controls .sep{display:none}
 body.mini .controls .sep{display:block;width:1px;height:16px;flex:0 0 auto;
   background:var(--line);margin:0 3px}
-body.mini .controls .ib.small{width:24px;height:24px;border-radius:7px}
+body.mini .controls .ib.small{width:26px;height:26px;border-radius:8px}
 body.mini .controls .ib.small svg{width:14px;height:14px}
 
 /* the level meter sits on the artwork in mini mode */
