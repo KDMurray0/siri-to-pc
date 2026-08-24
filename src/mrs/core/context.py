@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import random
 import re
+import time
 
 from ..config import config
 from ..logging_setup import get
@@ -299,9 +300,28 @@ class ContextBuilder:
         # are. Only the leaders, because it blocks; everything else can wait
         # for the worker.
         unknown = [c.track for c in out[:12] if tagstore.get(c.track) is None]
-        if unknown:
-            for t in unknown[:8]:
-                tagstore.prime(t)
+        for t in unknown[:8]:
+            tagstore.prime(t)
+
+        # Same problem with eras, and worse, because MusicBrainz is paced at
+        # a request a second so the background worker is forty seconds behind
+        # from a standing start. On a cold cache the opening picks are made
+        # with the era check switched off entirely — a Billie Jean queue led
+        # with Miley Cyrus, Ariana Grande and Britney Spears, then settled
+        # into the eighties once the lookups landed and the check woke up.
+        # A refill runs while a record is playing, so a few seconds is
+        # affordable; a stalled lookup is not, hence the deadline.
+        slow = 0
+        if anchor is not None and era.get(anchor):
+            stop = time.monotonic() + 6.0
+            for c in out[:12]:
+                if time.monotonic() >= stop:
+                    break
+                if not era.known(c.track):
+                    self._safe(era.prime, c.track)
+                    slow += 1
+
+        if unknown or slow:
             out = self._rank(raw, current, exclude, limit, exclude_keys,
                              focus=focus, anchor=anchor, theme=theme, roots=roots,
                              artist_counts=artist_counts)

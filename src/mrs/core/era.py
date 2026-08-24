@@ -112,6 +112,17 @@ class EraStore:
         self._start()
         return None
 
+    def known(self, track: Track | None) -> bool:
+        """Have we looked this artist up? Unlike get(), asking doesn't queue."""
+        if not track:
+            return True
+        who = track.primary_artist()
+        if not who:
+            return True
+        self.load()
+        with self._lock:
+            return who in self._year
+
     def prime(self, track: Track | None) -> int | None:
         """Look one up now. Worth it for the song that was actually asked for,
         because the whole comparison is against that one."""
