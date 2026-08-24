@@ -47,6 +47,8 @@ class PlayerService:
         self.audio.track_for = self.queue.track_for
         self._stop = threading.Event()
         self._restarting = threading.Lock()
+        self._revives = 0            # consecutive failed restarts
+        self._revive_at = 0.0        # monotonic; don't try again before this
         self._watch: dict = {}
         self._sleep_timer: threading.Timer | None = None
         self._sleep_at: float | None = None
@@ -137,13 +139,41 @@ class PlayerService:
                 log.debug("monitor: %s", exc)
 
     def _recover(self) -> None:
+        """Bring mpv back, but slow down if it won't stay up.
+
+        The monitor checks once a second, so a player that can't start at all
+        — no mpv binary, no audio device, a bad argument — used to mean a
+        restart every second for as long as the program ran: a process spawn,
+        a warning and a toast, all of it once a second, forever.
+        """
+        now = time.monotonic()
+        if now < self._revive_at:
+            return
         if not self._restarting.acquire(blocking=False):
             return
         try:
-            log.warning("mpv died — restarting")
+            log.warning("mpv died — restarting (attempt %d)", self._revives + 1)
             self.restart()
+        except Exception as exc:
+            log.warning("restart failed: %s", exc)
         finally:
             self._restarting.release()
+        if self.mpv.alive():
+            if self._revives:
+                log.info("mpv is back after %d attempts", self._revives + 1)
+                bus.publish(Ev.TOAST, "Player recovered")
+            self._revives = 0
+            self._revive_at = 0.0
+            return
+        # Still down. Back off, and stop shouting about it — one toast when
+        # it first goes, not one a second while it's gone.
+        self._revives += 1
+        wait = min(60.0, 2.0 ** min(self._revives, 6))
+        self._revive_at = time.monotonic() + wait
+        if self._revives == 1:
+            bus.publish(Ev.TOAST, "The player won't start — check the log")
+        log.warning("mpv still down after %d attempts, waiting %.0fs",
+                    self._revives, wait)
 
     def _watch_track(self) -> None:
         props = self.mpv.get_many(["path", "time-pos", "duration", "pause"])
