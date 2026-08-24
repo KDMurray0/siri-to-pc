@@ -28,12 +28,12 @@ from functools import lru_cache
 from ..logging_setup import get
 from ..models import Track, _fold, _strip_article
 from ..paths import data_dir, write_atomic
+from .gate import gate
 
 log = get("kin")
 
 API = "https://api.deezer.com"
 UA = {"User-Agent": "MusicRequestServer/3.0"}
-PACE = 0.35
 MAX_ENTRIES = 1500
 VERSION = 2       # v1 stored keyed names, which can't be searched for
 
@@ -197,13 +197,13 @@ class KinStore:
             if dirty >= 15:
                 self.save()
                 dirty = 0
-            time.sleep(PACE)
         if dirty:
             self.save()
         with self._lock:
             self._worker = None
 
     def _get(self, path: str) -> dict:
+        gate.wait("deezer")
         req = urllib.request.Request(API + path, headers=UA)
         with urllib.request.urlopen(req, timeout=10) as r:
             return json.loads(r.read().decode("utf-8", "replace"))

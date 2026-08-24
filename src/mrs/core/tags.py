@@ -25,6 +25,7 @@ from ..config import config
 from ..logging_setup import get
 from ..models import Track, _strip_article
 from ..paths import data_dir, write_atomic
+from .gate import gate
 
 log = get("tags")
 
@@ -33,7 +34,6 @@ UA = {"User-Agent": "MusicRequestServer/2.0"}
 MIN_COUNT = 5          # ignore the long tail of one-off tags
 TOP_N = 10
 MAX_ENTRIES = 4000     # keep the cache file from growing forever
-PACE = 0.2             # Last.fm asks for <=5 requests a second
 
 # Tags that describe half of music. Fine as a description, useless as a steer:
 # ask Last.fm for "piano" and it hands you Billy Joel and Bruno Mars.
@@ -435,11 +435,11 @@ class TagStore:
             if dirty >= 20:
                 self.save()
                 dirty = 0
-            time.sleep(PACE)
         if dirty:
             self.save()
 
     def _call(self, params: dict) -> dict:
+        gate.wait("lastfm")
         params = {**params, "api_key": config.get("lastfm_api_key"),
                   "format": "json", "autocorrect": "1"}
         url = API + "?" + urllib.parse.urlencode(params)

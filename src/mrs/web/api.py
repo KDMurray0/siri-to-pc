@@ -176,6 +176,7 @@ def health(_: bool = Auth):
     from ..core.kin import kin
     from ..core.downloader import downloader
     from ..resolve import catalog as cat
+    from ..core.gate import gate
 
     def safe(fn, fallback=None):
         try:
@@ -189,6 +190,7 @@ def health(_: bool = Auth):
         "kin": safe(kin.stats),
         "catalog": safe(cat.stats),
         "searches": safe(lambda: {"cached": len(cat._cache)}),
+        "traffic": safe(gate.stats),
         "downloads": safe(downloader.cache_stats),
         "queue": safe(lambda: {
             "pool": len(player.queue._pool),

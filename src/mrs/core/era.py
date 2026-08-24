@@ -38,13 +38,13 @@ import urllib.request
 from ..logging_setup import get
 from ..models import Track
 from ..paths import data_dir, write_atomic
+from .gate import gate
 
 log = get("era")
 
 API = "https://musicbrainz.org/ws/2/artist"
 # They ask for a real one that identifies the app, and hand out 503s otherwise.
 UA = {"User-Agent": "MusicRequestServer/3.0 (personal LAN music player)"}
-PACE = 1.1
 BORN_TO_CAREER = 20   # roughly how long after birth a first record lands
 VERSION = 2           # v1 cached birth years for people, career years for bands             # their published limit is one a second
 MAX_ENTRIES = 3000
@@ -195,7 +195,6 @@ class EraStore:
             if dirty >= 10:
                 self.save()
                 dirty = 0
-            time.sleep(PACE)
         if dirty:
             self.save()
         with self._lock:
@@ -210,6 +209,7 @@ class EraStore:
         for wait in (0, 2.0, 5.0):
             if wait:
                 time.sleep(wait)
+            gate.wait("musicbrainz")
             try:
                 with urllib.request.urlopen(req, timeout=12) as r:
                     data = json.loads(r.read().decode("utf-8", "replace"))

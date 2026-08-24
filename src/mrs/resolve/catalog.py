@@ -19,6 +19,7 @@ from ..config import config
 from ..logging_setup import get
 from ..models import Track, _fold, is_channel_act, is_derivative
 from ..paths import data_dir, write_atomic
+from ..core.gate import gate
 from . import numbers
 
 log = get("catalog")
@@ -73,6 +74,7 @@ def _yt(what: str, fn, *args, **kwargs):
         return None
     for attempt in range(_RETRIES + 1):
         try:
+            gate.wait("youtube")
             out = fn(*args, **kwargs)
             _fails.clear()
             return out
