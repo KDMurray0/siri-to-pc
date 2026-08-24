@@ -573,6 +573,8 @@ class ContextBuilder:
                 continue
 
             score = SOURCE_WEIGHT.get(source, 1.0)
+            # Somebody other than the tag cache says this belongs here
+            vouched = source == "near"
 
             # How much this actually sounds like what's playing. None until the
             # tag cache catches up, in which case fall back to artist-only.
@@ -648,6 +650,7 @@ class ContextBuilder:
                 if anchor_era:
                     score -= ERA_WEIGHT * era_gap(anchor_era, era.get(track))
                 if kinstore.is_kin(anchor_kin, track):
+                    vouched = True
                     score += KIN_WEIGHT
 
             # Taste breaks ties, it doesn't choose. Liking a song is a reason
@@ -661,6 +664,7 @@ class ContextBuilder:
             # because tags describe Blur, not the song.
             near = tagstore.affinity(anchor or current, track)
             if near:
+                vouched = True
                 score += 3.0 * near
 
             # How well it sits with the last few records, not just the one
@@ -687,7 +691,21 @@ class ContextBuilder:
                 if current and current.album and track.album == current.album:
                     score += 0.8 * cohesion      # same record, same era
             if sim is not None:
-                score += 3.0 * (sim - 0.55)      # genre and mood lead
+                lift = 3.0 * (sim - 0.55)        # genre and mood lead
+                # Unless somebody who knows better has already vouched for it.
+                # This term is what a queue is mostly made of, and it's a
+                # measure of shared labels — so a record that doesn't wear the
+                # same words gets docked most of a point. Which is exactly
+                # backwards when the reason we're looking at it is that people
+                # play it alongside the anchor, or that the anchor's artist is
+                # filed next to this one. Pyramid Song is tagged alternative
+                # rock: Foo Fighters scored 0.61 and gained, Thom Yorke scored
+                # 0.28 and lost most of a point, and the tail of the run went
+                # to Nickelback and 3 Doors Down. Tags disagreeing with what
+                # people actually listen to is not evidence against the track.
+                if lift < 0 and vouched:
+                    lift *= 0.3
+                score += lift
             elif not near and not flow and track.primary_artist() != cur_artist:
                 # Nobody has tagged it and nobody plays it next to anything —
                 # that's what a Thunderstruck cover by a stranger looks like.
