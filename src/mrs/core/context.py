@@ -12,7 +12,7 @@ from ..config import config
 from ..logging_setup import get
 from ..models import (Candidate, Track, is_channel_act, is_derivative,
                       norm_title)
-from .tags import tagstore
+from .tags import _flatten, tagstore
 from .taste import taste
 
 log = get("context")
@@ -95,6 +95,21 @@ def _run_fit(run: list[Track], track: Track) -> float:
         total += w * val
         weight += w
     return (total / weight) if weight else 0.0
+
+
+def _carries(tag: str, tags: dict) -> bool:
+    """Is this actually filed under that genre, by that exact name?
+
+    Exact, not "contains" — the whole point is that post-grunge is not grunge
+    and country is not classic country, and a substring test calls both of
+    those a match. Has to be one of the track's real tags too, not a mention.
+    """
+    if not tag or not tags:
+        return False
+    want = _flatten(tag)
+    top = max(tags.values()) or 1
+    return any(count >= top * 0.25 and _flatten(t) == want
+               for t, count in tags.items())
 
 
 def _theme_words(theme: str) -> set[str]:
@@ -338,6 +353,7 @@ class ContextBuilder:
         slack = 1.0 - min(0.5, taste.fatigue() * 0.18)
         cohesion = float(config.get("artist_cohesion", 1.0)) * focus * slack
         cur_artist = current.primary_artist() if current else ""
+        anchor_artist = anchor.primary_artist() if anchor else ""
         seen_ids: set[str] = set()
         seen_keys: set[str] = set()
         # Seeded from what's already been on, not just what's in this pool.
@@ -428,6 +444,26 @@ class ContextBuilder:
                 far = tagstore.similarity(anchor, track)
                 if far is not None and far < 0.18:
                     continue
+                # And it has to be the same genre by name, not merely close on
+                # the numbers. Grunge and post-grunge score 0.55 against each
+                # other because they share rock, alternative rock and hard
+                # rock — which is how a Pearl Jam request reached Nickelback
+                # and Hoobastank by track 25 with nothing looking wrong. The
+                # band that's on is exempt; so is anything we've no tags for.
+                own = tagstore.get(track)
+                if roots and track.primary_artist() != anchor_artist:
+                    # No tags is not a free pass. Every guard here needs them,
+                    # so one untagged upload gets in and all three go quiet at
+                    # once — a Take Five run was faultless for nineteen tracks,
+                    # picked up an untagged "Private Jazz Piano" upload, and
+                    # spent the last ten in South African house with nothing
+                    # able to object. If we know what was asked for, a track
+                    # has to say what it is.
+                    # Either of its genres will do. Cool jazz on its own is a
+                    # small tag, and insisting on it gave thirty tracks by
+                    # four people; jazz piano lets the rest of the room in.
+                    if not own or not any(_carries(r, own) for r in roots):
+                        continue
 
             # Taste breaks ties, it doesn't choose. Liking a song is a reason
             # to prefer it over something equally fitting — not a reason to
