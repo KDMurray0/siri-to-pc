@@ -35,6 +35,8 @@ from ..resolve import catalog, llm, lyrics as lyrics_mod, spotify
 
 log = get("api")
 
+NEWLINE = chr(10)
+
 app = FastAPI(title="Music Request Server", docs_url=None, redoc_url=None)
 templates = Jinja2Templates(directory=str(Path(resource_dir()) / "web" / "templates"))
 _start = time.time()
@@ -119,6 +121,22 @@ async def ping():
             "app": "music-request-server", "version": 2}
 
 
+def _sse(evt: dict) -> str:
+    """One event as a wire frame, and never an exception.
+
+    A payload json can't encode used to raise inside the generator, which
+    breaks the stream for every client at once — and because sticky events
+    are replayed to whoever reconnects, they'd all break again on the way
+    back in. Anything odd gets str()'d instead.
+    """
+    try:
+        body = json.dumps(evt, default=str)
+    except Exception as exc:
+        log.warning("undeliverable %s event: %s", evt.get("type"), exc)
+        body = json.dumps({"type": evt.get("type") or "toast", "data": None})
+    return "data: " + body + NEWLINE + NEWLINE
+
+
 @app.get("/api/events")
 async def events(request: Request, key: str = Query(default="")):
     require_key(request, key)
@@ -126,15 +144,15 @@ async def events(request: Request, key: str = Query(default="")):
 
     async def stream():
         try:
-            yield f"data: {json.dumps({'type': 'hello'})}\n\n"
+            yield _sse({"type": "hello"})
             while True:
                 if await request.is_disconnected():
                     break
                 try:
                     evt = await asyncio.wait_for(queue.get(), timeout=15)
-                    yield f"data: {json.dumps(evt)}\n\n"
+                    yield _sse(evt)
                 except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"
+                    yield ": keepalive" + NEWLINE + NEWLINE
         finally:
             bus.unsubscribe(queue)
 
