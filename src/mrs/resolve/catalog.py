@@ -81,6 +81,16 @@ def _yt(what: str, fn, *args, **kwargs):
     return None
 
 
+def stats() -> dict:
+    recent = [t for t in _fails if time.time() - t < _FAIL_WINDOW]
+    return {
+        "cached_calls": len(_cache),
+        "throttled_for": round(throttled(), 1),
+        "recent_failures": len(recent),
+        "fail_limit": _FAIL_LIMIT,
+    }
+
+
 def throttled() -> float:
     """Seconds until we'll talk to YouTube again, 0 if we already will.
 

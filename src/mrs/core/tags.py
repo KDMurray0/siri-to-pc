@@ -179,6 +179,19 @@ class TagStore:
                 self._missing.add(tk)
                 self._missing.add(ak)
 
+    def stats(self) -> dict:
+        """What this store actually knows, for the diagnostics page."""
+        self.load()      # lazy, so a cold read would report zeroes
+        with self._lock:
+            return {
+                "tracks": len(self._cache),
+                "neighbours": len(self._near),
+                "nothing_known": len(self._missing),
+                "queued": len(self._queued),
+                "worker": bool(self._thread and self._thread.is_alive()),
+                "enabled": self.enabled(),
+            }
+
     def prime_near(self, seed: Track | None) -> None:
         """Look up what people play alongside this, now, blocking.
 

@@ -161,6 +161,43 @@ async def events(request: Request, key: str = Query(default="")):
         "Connection": "keep-alive"})
 
 
+@app.get("/api/health")
+def health(_: bool = Auth):
+    """What the outside services are actually doing.
+
+    Every queue bug worth the name this year was one of these quietly
+    returning nothing: MusicBrainz 503ing on the anchor and switching the era
+    check off for a whole run, Deezer handing back a stub with no related
+    artists, the affinity cache never being filled for the song everything is
+    measured against. None of it was visible from inside the program.
+    """
+    from ..core.tags import tagstore
+    from ..core.era import era
+    from ..core.kin import kin
+    from ..core.downloader import downloader
+    from ..resolve import catalog as cat
+
+    def safe(fn, fallback=None):
+        try:
+            return fn()
+        except Exception as exc:
+            return {"error": str(exc)[:120]} if fallback is None else fallback
+
+    return {
+        "tags": safe(tagstore.stats),
+        "era": safe(era.stats),
+        "kin": safe(kin.stats),
+        "catalog": safe(cat.stats),
+        "downloads": safe(downloader.cache_stats),
+        "queue": safe(lambda: {
+            "pool": len(player.queue._pool),
+            "ready": player.queue.ready_ahead(),
+            "minutes_ahead": round(player.queue.minutes_ahead(), 1),
+        }),
+        "log": str(log_path()),
+    }
+
+
 @app.get("/api/status")
 def status(_: bool = Auth):
     return {"status": "ok", **player.status(), "queue": player.queue.snapshot()}

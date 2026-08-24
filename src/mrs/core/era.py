@@ -109,6 +109,17 @@ class EraStore:
         self._start()
         return None
 
+    def stats(self) -> dict:
+        self.load()      # lazy, so a cold read would report zeroes
+        with self._lock:
+            known = sum(1 for v in self._year.values() if v)
+            return {
+                "artists": known,
+                "nothing_known": len(self._year) - known,
+                "queued": len(self._queued),
+                "worker": bool(self._worker and self._worker.is_alive()),
+            }
+
     def known(self, track: Track | None) -> bool:
         """Have we looked this artist up? Unlike get(), asking doesn't queue."""
         if not track:

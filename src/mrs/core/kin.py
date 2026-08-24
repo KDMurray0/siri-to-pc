@@ -110,6 +110,17 @@ class KinStore:
         except Exception as exc:
             log.debug("couldn't save kin: %s", exc)
 
+    def stats(self) -> dict:
+        self.load()      # lazy, so a cold read would report zeroes
+        with self._lock:
+            known = sum(1 for v in self._near.values() if v)
+            return {
+                "artists": known,
+                "nothing_known": len(self._near) - known,
+                "queued": len(self._queued),
+                "worker": bool(self._worker and self._worker.is_alive()),
+            }
+
     def related(self, track: Track | None) -> list[str]:
         """Neighbours we already hold. Anything unknown is queued."""
         if not track:

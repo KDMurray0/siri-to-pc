@@ -89,6 +89,14 @@ class Downloader:
             log.warning("pin failed: %s", exc)
             return None
 
+    def cache_stats(self) -> dict:
+        try:
+            files = [f for f in cache_dir().glob("*") if f.is_file()]
+            return {"files": len(files),
+                    "mb": round(sum(f.stat().st_size for f in files) / 1048576, 1)}
+        except Exception:
+            return {"files": 0, "mb": 0.0}
+
     def prune_cache(self, keep_mb: int = 2000, keep: set[str] | None = None) -> int:
         """Drop the oldest cached files once the cache gets fat.
 
