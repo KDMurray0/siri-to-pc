@@ -312,18 +312,32 @@ class ContextBuilder:
         # man, which is a worse night than the drift it was there to stop. If
         # it's squeezed the field down to one artist, drop it and take the
         # wider one.
-        if out and roots:
+        def _squeezed(cands: list[Candidate]) -> bool:
+            if len(cands) < 6:
+                return True
             counts: dict[str, int] = {}
-            for c in out:
+            for c in cands:
                 a = c.track.primary_artist()
                 counts[a] = counts.get(a, 0) + 1
-            if len(out) < 6 or max(counts.values()) > len(out) * 0.5:
-                loose = self._rank(raw, current, exclude, limit, exclude_keys,
+            return max(counts.values()) > len(cands) * 0.5
+
+        if out and roots and _squeezed(out):
+            # Two rungs, not a cliff. The narrow tag is the one we want, but
+            # going straight from "must be new wave" to "anything at all"
+            # throws away the middle step — must at least be electronic —
+            # which is still worth standing on.
+            narrow = [r for r in roots if r not in _CATCH_ALL] or list(roots)
+            rungs = [] if narrow == list(roots) else [dict(wide_gate=True)]
+            rungs.append(dict(strict=False))
+            for kw in rungs:
+                wider = self._rank(raw, current, exclude, limit, exclude_keys,
                                    focus=focus, anchor=anchor, theme=theme,
-                                   roots=roots, strict=False,
-                                   artist_counts=artist_counts)
-                if len(loose) > len(out):
-                    out = loose
+                                   roots=roots, artist_counts=artist_counts,
+                                   **kw)
+                if len(wider) > len(out):
+                    out = wider
+                if not _squeezed(out):
+                    break
 
         # a thin pool is how the queue used to die — widen out first
         if len(out) < 8:
@@ -408,6 +422,7 @@ class ContextBuilder:
               ignore_recency: bool = False, focus: float = 1.0,
               anchor: Track | None = None, theme: str = "",
               roots: list[str] | None = None, strict: bool = True,
+              wide_gate: bool = False,
               artist_counts: dict[str, int] | None = None) -> list[Candidate]:
         # Skipping late, again and again, means the run has gone stale rather
         # than any one song being wrong. Loosen the grip a little when that
@@ -455,7 +470,8 @@ class ContextBuilder:
         # electronic, none of them trip-hop, and the last four tracks of the
         # run. So the check only uses the narrow tags, unless narrow is all
         # there isn't: Billie Jean is pop and dance and has nothing better.
-        gate = [r for r in (roots or []) if r not in _CATCH_ALL] or list(roots or [])
+        gate = list(roots or []) if wide_gate else (
+            [r for r in (roots or []) if r not in _CATCH_ALL] or list(roots or []))
         root_words: set[str] = set()
         for r in (roots or []):
             root_words |= _theme_words(r)
