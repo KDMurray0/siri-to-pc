@@ -181,6 +181,36 @@ class TagStore:
                 self._missing.add(tk)
                 self._missing.add(ak)
 
+    def prime_near(self, seed: Track | None) -> None:
+        """Look up what people play alongside this, now, blocking.
+
+        It's the only signal that can tell Song 2 from The Universal — tags
+        score those 0.86 alike because tags describe Blur, not the song. And
+        it was only ever filled in behind us, so for the opening stretch of
+        every run the one thing that can see past a genre label wasn't there:
+        Pyramid Song is tagged alternative rock, and alternative rock fetches
+        Goo Goo Dolls and Matchbox Twenty, which nothing could argue with.
+
+        One call, for the song every candidate is measured against.
+        """
+        if not seed or not self.enabled():
+            return
+        self.load()
+        sk = self.near_key(seed)
+        if not sk:
+            return
+        with self._lock:
+            if sk in self._near:
+                return
+        try:
+            found = self._fetch_near(seed.primary_artist(), seed.title)
+        except Exception as exc:
+            log.debug("neighbour lookup failed for %s: %s", sk, exc)
+            return
+        with self._lock:
+            self._near[sk] = found
+            self._queued.discard("n:" + sk)
+
     def top_tag(self, track: Track | None) -> str:
         """The single best tag to fetch more records by, or "" if unknown."""
         found = self.top_tags(track, 1)

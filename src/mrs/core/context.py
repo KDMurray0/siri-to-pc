@@ -12,7 +12,8 @@ import time
 from ..config import config
 from ..logging_setup import get
 from ..models import (Candidate, Track, is_channel_act, is_derivative,
-                      norm_title)
+                      norm_title, _fold,
+                      _strip_article)
 from .era import era, gap as era_gap
 from .kin import kin as kinstore
 from .tags import _CATCH_ALL, _flatten, tagstore
@@ -43,6 +44,10 @@ SOURCE_WEIGHT = {
     # lanes on purpose: being a neighbour gets you considered, the tag
     # similarity still decides. It also collects KIN_WEIGHT on top.
     "kin": 1.6,
+    # The records people play alongside this one, by name. The most precise
+    # thing we have, so the highest — it isn't a guess from a label, it's
+    # thirty tracks somebody's listening history actually put together.
+    "near": 2.9,
 }
 # Last.fm has been asked and has never heard of them. Every real act has a
 # page, so what's left is AI piano and stock-library uploads.
@@ -240,6 +245,7 @@ class ContextBuilder:
             # against this artist — without them there's nothing to compare to.
             self._safe(era.prime, anchor)
             self._safe(kinstore.prime, anchor)
+            self._safe(tagstore.prime_near, anchor)
         if not theme and anchor is not None:
             roots = tagstore.top_tags(anchor, 2)
             if not roots:
@@ -274,6 +280,47 @@ class ContextBuilder:
                 for name in pick[:4]:
                     for t in self._safe(self.catalog.artist_tracks, name, 6):
                         raw.append((t, "kin"))
+
+        # 4d. The records people actually play alongside this one. Last.fm's
+        #     similar-track list is the most precise signal here — it's the
+        #     only one that knows Song 2 sits with Beetlebum rather than with
+        #     The Universal — and it was only ever used to score tracks some
+        #     other lane had already turned up. Pyramid Song's list is Thom
+        #     Yorke, Jeff Buckley, Muse and Pixies; the alternative rock lane
+        #     fetched Goo Goo Dolls, Hoobastank and Three Days Grace, and
+        #     with nothing to fetch the right records there was nothing to
+        #     rank. Asking for them by name costs six searches, cached.
+        if not theme and anchor is not None:
+            mine = anchor.primary_artist()
+            rows = sorted(tagstore.neighbours(anchor).items(),
+                          key=lambda kv: -kv[1])
+            picked = tried = 0
+            for pair, _match in rows:
+                # Six new ones, but keep walking past the ones already played
+                # — the list belongs to the anchor and doesn't change, so
+                # offering the same top six every refill means the lane dries
+                # up after six tracks with twenty-four still on it. Searches
+                # are cached, so walking further is nearly free.
+                if picked >= 6 or tried >= 14:
+                    break
+                who, _, name = pair.partition("|")
+                # Skip the anchor's own back catalogue: it tops every list,
+                # it would use the whole allowance, and the artist lane has
+                # it covered anyway.
+                theirs = _strip_article(_fold(who))
+                if not name or not theirs or theirs == mine:
+                    continue
+                found = self._safe(self.catalog.search_songs,
+                                   f"{name} {who}", 1)
+                tried += 1
+                # Search drifts. Only take it if it's the record we asked for.
+                if not found or found[0].primary_artist() != theirs:
+                    continue
+                hit = found[0]
+                if hit.video_id in exclude or hit.key() in exclude_keys:
+                    continue
+                raw.append((hit, "near"))
+                picked += 1
 
         # 5. Occasionally pull from something you liked, to widen it out — but
         #    only when nothing was actually asked for. One of five likes being
@@ -573,7 +620,7 @@ class ContextBuilder:
                 # a name check drops him — which is the one call Deezer got
                 # right and the tags got wrong. The similarity floors above
                 # still apply, so it can't let nonsense through.
-                if (strict and roots and source != "kin"
+                if (strict and roots and source not in ("kin", "near")
                         and track.primary_artist() != anchor_artist):
                     # No tags is not a free pass. Every guard here needs them,
                     # so one untagged upload gets in and all three go quiet at
