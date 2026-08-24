@@ -195,6 +195,7 @@ class TagStore:
         who = (track.primary_artist() or "").lower()
         parts = {w for w in re.split(r"[^a-z0-9]+", who) if len(w) > 2}
         top = max(tags.values()) or 1
+        dominant = max(tags, key=lambda t: tags[t])
         ranked = []
         for tag, count in tags.items():
             # A twentieth of the top, because the tag that really pins a song
@@ -207,10 +208,17 @@ class TagStore:
             if who and (tag in who or who in tag
                         or any(p in tag.split() for p in parts)):
                 continue                      # the band's own name
-            # Anything specific beats anything broad, whatever the counts say.
-            # Blur is rock 100 and britpop 83; britpop is the answer.
-            ranked.append(((tag not in _CATCH_ALL, count,
-                            len(tag.split())), tag))
+            # Specific beats broad, but not at any weight. Billie Jean is
+            # pop 100, 80s 48, dance 28, soul 27, funk 12 — and taking the
+            # only non-catch-all in the list made a twelve-percent tag the
+            # answer, so a pop song went looking for funk. A narrow tag has
+            # to either carry real weight of its own, or be a refinement of
+            # the broad one that's winning: classic country earns it against
+            # country, "king of pop" at five percent does not.
+            refines = _flatten(dominant) in _flatten(tag) and tag != dominant
+            specific = tag not in _CATCH_ALL and (
+                count >= top * 0.35 or (refines and count >= top * 0.15))
+            ranked.append(((specific, count, len(tag.split())), tag))
         ranked.sort(reverse=True)
         out: list[str] = []
         for _, tag in ranked:

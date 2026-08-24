@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import threading
 import time
 import urllib.parse
@@ -36,7 +37,9 @@ MAX_ENTRIES = 1500
 
 
 def _key(name: str) -> str:
-    return _fold((name or "").strip().lower())
+    """Punctuation stripped as well as accents, so Guns N' Roses and Guns N
+    Roses are one band however either side spells it."""
+    return re.sub(r"[^a-z0-9]", "", _fold((name or "").strip().lower()))
 
 
 class KinStore:
@@ -160,15 +163,18 @@ class KinStore:
             return json.loads(r.read().decode("utf-8", "replace"))
 
     def _fetch(self, who: str) -> list[str]:
-        found = self._get("/search/artist?limit=1&q=" + urllib.parse.quote(who))
+        found = self._get("/search/artist?limit=6&q=" + urllib.parse.quote(who))
         rows = found.get("data") or []
-        if not rows or not rows[0].get("id"):
+        # Deezer carries duplicate artist entries and the search doesn't
+        # always put the real one first: asking for Michael Jackson returned
+        # a stub with 140 fans and no related artists at all, so the whole
+        # signal came back empty for one of the most connected acts alive.
+        # Take the exact name match with the most fans behind it.
+        exact = [r for r in rows if r.get("id") and _key(r.get("name", "")) == who]
+        if not exact:
             return []
-        # A loose name match is somebody else's neighbours, which is worse
-        # than having none.
-        if _key(rows[0].get("name", "")) != who:
-            return []
-        rel = self._get(f"/artist/{rows[0]['id']}/related?limit=12")
+        best = max(exact, key=lambda r: int(r.get("nb_fan") or 0))
+        rel = self._get(f"/artist/{best['id']}/related?limit=12")
         return [_key(a.get("name", "")) for a in (rel.get("data") or [])
                 if a.get("name")]
 
