@@ -129,7 +129,12 @@ class MpvClient:
         self._stop = threading.Event()
         self.broken = False
         self._event_handlers: list = []
-        self.mpv_path = shutil.which("mpv") or "mpv"
+        # mpv.exe, not mpv.com. PATH finds the .com console shim first, which
+        # then launches the .exe — two processes per player instead of one,
+        # for a console we've turned off anyway with --no-terminal. It also
+        # broke the tidy-up: kill_stray_mpv only matches mpv.exe, so every
+        # shim it had launched was left running.
+        self.mpv_path = (shutil.which("mpv.exe") or shutil.which("mpv") or "mpv")
 
     # -- lifecycle --
     def spawn(self, volume: int = 70, extra_args: list[str] | None = None) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from functools import lru_cache
 import time
 from dataclasses import dataclass, field, asdict
 from typing import Any
@@ -34,9 +35,15 @@ _DERIV_DASH = re.compile(r"[-\u2013\u2014]\s*[^-\u2013\u2014]*\b(" + _TAGS + r")
 _DERIV_WHERE = re.compile(r"\b(live|acoustic|unplugged)\s+(at|in|from|on)\b", re.I)
 
 
+@lru_cache(maxsize=4096)
 def _fold(text: str) -> str:
     """Drop accents. Ill Nino and Ill Nino are one band, Beyonce is one singer,
-    and spelled both ways each got its own slot in every dedupe we have."""
+    and spelled both ways each got its own slot in every dedupe we have.
+
+    Cached because primary_artist() runs it, and ranking a pool calls that
+    five hundred times over a few dozen names — it was the fifth-hottest line
+    in a refill for no reason.
+    """
     return "".join(c for c in unicodedata.normalize("NFKD", text or "")
                    if not unicodedata.combining(c))
 
@@ -97,14 +104,19 @@ def is_channel_act(artist: str, title: str = "") -> bool:
     act may be called Palm Tree Lounge, but the giveaway is a track called
     "Jazz Background Music". Real jazz records are called Django.
     """
-    text = f"{artist or ''} {title or ''}".strip()
     if _CHANNEL_SURE.search(artist or "") or _CHANNEL_SURE.search(title or ""):
         return True
-    if _CHANNEL_MOOD.search(text) and _CHANNEL_MUSIC.search(text):
-        return True
-    # Two mood words and no song in sight: "Buddha Lounge Bar Chillout".
-    return len(set(m.group(0).lower()
-                   for m in _CHANNEL_MOOD.finditer(text))) >= 2
+    # Each field judged on its own. Pooling them meant the band Sleep playing
+    # anything with "song" in the name read as a sleep-music channel, and the
+    # same for Sleep Token, Lounge Lizards and Chilly Gonzales.
+    for field in (artist or "", title or ""):
+        if _CHANNEL_MOOD.search(field) and _CHANNEL_MUSIC.search(field):
+            return True
+        # Two mood words and no song in sight: "Buddha Lounge Bar Chillout".
+        if len(set(m.group(0).lower()
+                   for m in _CHANNEL_MOOD.finditer(field))) >= 2:
+            return True
+    return False
 
 
 @dataclass

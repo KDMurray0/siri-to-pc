@@ -434,9 +434,12 @@ body.mini .ambient,body.mini .prog,body.mini .search,
 body.mini .nav,body.mini .panel,body.mini .toast,body.mini .frame::after,
 body.mini #shuffle,body.mini #repeat,body.mini .activity,
 body.mini .vol,body.mini .row2,body.mini .devpick{display:none}
+/* The right padding has to clear BOTH window buttons, not just the pin. At
+   44px the title ran under the shrink button, which sits 44-72px in from the
+   edge — a long song name covered the control you need to get out of mini. */
 body.mini .stage{display:grid;grid-template-columns:auto 1fr;
   grid-template-areas:"art meta" "art ctl";align-items:center;align-content:center;
-  column-gap:12px;row-gap:0;padding:11px 44px 11px 12px}
+  column-gap:12px;row-gap:0;padding:11px 78px 11px 12px}
 body.mini .art-wrap{grid-area:art;margin:0;justify-content:flex-start;align-self:center}
 body.mini .art{width:58px;height:58px;border-radius:12px;box-shadow:0 6px 16px rgba(0,0,0,.5)}
 body.mini .meta{grid-area:meta;margin:0;text-align:left;min-height:0;min-width:0;
