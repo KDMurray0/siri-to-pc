@@ -274,7 +274,7 @@ class ContextBuilder:
             for c in out:
                 a = c.track.primary_artist()
                 counts[a] = counts.get(a, 0) + 1
-            if len(out) < 10 or max(counts.values()) > len(out) * 0.4:
+            if len(out) < 6 or max(counts.values()) > len(out) * 0.5:
                 loose = self._rank(raw, current, exclude, limit, exclude_keys,
                                    focus=focus, anchor=anchor, theme=theme,
                                    roots=roots, strict=False,
