@@ -23,6 +23,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from functools import lru_cache
 
 from ..logging_setup import get
 from ..models import Track, _fold
@@ -34,8 +35,10 @@ API = "https://api.deezer.com"
 UA = {"User-Agent": "MusicRequestServer/3.0"}
 PACE = 0.35
 MAX_ENTRIES = 1500
+VERSION = 2       # v1 stored keyed names, which can't be searched for
 
 
+@lru_cache(maxsize=4096)
 def _key(name: str) -> str:
     """Punctuation stripped as well as accents, so Guns N' Roses and Guns N
     Roses are one band however either side spells it."""
@@ -60,8 +63,11 @@ class KinStore:
         self._loaded = True
         try:
             raw = json.loads(self._file().read_text(encoding="utf-8"))
+            # v1 held names already stripped to keys, which match fine but
+            # can't be searched for. Drop it rather than carry two shapes.
+            rows = raw.get("near") if raw.get("v") == VERSION else {}
             with self._lock:
-                self._near = {k: list(v) for k, v in raw.items()
+                self._near = {k: list(v) for k, v in (rows or {}).items()
                               if isinstance(v, list)}
             log.info("%d artists with neighbours cached", len(self._near))
         except FileNotFoundError:
@@ -74,7 +80,8 @@ class KinStore:
             with self._lock:
                 items = dict(list(self._near.items())[-MAX_ENTRIES:])
             tmp = self._file().with_suffix(".tmp")
-            tmp.write_text(json.dumps(items), encoding="utf-8")
+            tmp.write_text(json.dumps({"v": VERSION, "near": items}),
+                           encoding="utf-8")
             tmp.replace(self._file())
         except Exception as exc:
             log.debug("couldn't save kin: %s", exc)
@@ -121,8 +128,11 @@ class KinStore:
         return found
 
     def is_kin(self, anchor_related: list[str], track: Track | None) -> bool:
-        return bool(anchor_related and track
-                    and _key(track.primary_artist()) in anchor_related)
+        """Both sides keyed, so how either spells the name doesn't matter."""
+        if not anchor_related or not track:
+            return False
+        who = _key(track.primary_artist())
+        return bool(who) and any(_key(n) == who for n in anchor_related)
 
     def _start(self) -> None:
         with self._lock:
@@ -175,8 +185,8 @@ class KinStore:
             return []
         best = max(exact, key=lambda r: int(r.get("nb_fan") or 0))
         rel = self._get(f"/artist/{best['id']}/related?limit=12")
-        return [_key(a.get("name", "")) for a in (rel.get("data") or [])
-                if a.get("name")]
+        # The name as Deezer writes it, not the key: these get searched for.
+        return [a["name"] for a in (rel.get("data") or []) if a.get("name")]
 
     def warm(self, tracks: list[Track]) -> None:
         seen = set()

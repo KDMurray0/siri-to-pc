@@ -39,6 +39,10 @@ SOURCE_WEIGHT = {
     # means the pool always holds some of each.
     "root": 2.0,
     "genre": 1.5,
+    # Records by the artists Deezer files next to this one. Below the genre
+    # lanes on purpose: being a neighbour gets you considered, the tag
+    # similarity still decides. It also collects KIN_WEIGHT on top.
+    "kin": 1.6,
 }
 # Last.fm has been asked and has never heard of them. Every real act has a
 # page, so what's left is AI piano and stock-library uploads.
@@ -253,6 +257,23 @@ class ContextBuilder:
                 for t in self._safe(self.catalog.genre_tracks, tag,
                                     90 if i == 0 else 60):
                     raw.append((t, "root"))
+
+        # 4c. The artists a human would file next to this one. A tag lane can
+        #     only fetch things wearing the same label, and the label is often
+        #     wrong about who belongs together: Billie Jean is tagged pop, and
+        #     the pop lane fetches Dua Lipa. Deezer's neighbours for Michael
+        #     Jackson are Stevie Wonder, Prince, Diana Ross and Whitney
+        #     Houston, which is the queue somebody would actually build.
+        #     A rotating handful each refill, so the whole neighbourhood gets
+        #     played over a long run instead of the same four names.
+        if not theme and anchor is not None:
+            neighbours = self._safe(kinstore.related, anchor) or []
+            if neighbours:
+                pick = neighbours[:8]
+                random.shuffle(pick)
+                for name in pick[:4]:
+                    for t in self._safe(self.catalog.artist_tracks, name, 6):
+                        raw.append((t, "kin"))
 
         # 5. Occasionally pull from something you liked, to widen it out — but
         #    only when nothing was actually asked for. One of five likes being
@@ -494,7 +515,13 @@ class ContextBuilder:
                 # and Hoobastank by track 25 with nothing looking wrong. The
                 # band that's on is exempt; so is anything we've no tags for.
                 own = tagstore.get(track)
-                if strict and roots and track.primary_artist() != anchor_artist:
+                # The kin lane is exempt: its whole point is that the label
+                # disagrees. Stevie Wonder is soul and Billie Jean is pop, and
+                # a name check drops him — which is the one call Deezer got
+                # right and the tags got wrong. The similarity floors above
+                # still apply, so it can't let nonsense through.
+                if (strict and roots and source != "kin"
+                        and track.primary_artist() != anchor_artist):
                     # No tags is not a free pass. Every guard here needs them,
                     # so one untagged upload gets in and all three go quiet at
                     # once — a Take Five run was faultless for nineteen tracks,

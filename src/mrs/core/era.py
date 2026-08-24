@@ -44,7 +44,9 @@ log = get("era")
 API = "https://musicbrainz.org/ws/2/artist"
 # They ask for a real one that identifies the app, and hand out 503s otherwise.
 UA = {"User-Agent": "MusicRequestServer/3.0 (personal LAN music player)"}
-PACE = 1.1             # their published limit is one a second
+PACE = 1.1
+BORN_TO_CAREER = 20   # roughly how long after birth a first record lands
+VERSION = 2           # v1 cached birth years for people, career years for bands             # their published limit is one a second
 MAX_ENTRIES = 3000
 
 
@@ -67,9 +69,12 @@ class EraStore:
         self._loaded = True
         try:
             raw = json.loads(self._file().read_text(encoding="utf-8"))
+            # v1 mixed birth years and formation years in one column, so the
+            # numbers can't be compared with the ones we write now.
+            rows = raw.get("years") if raw.get("v") == VERSION else {}
             with self._lock:
-                self._year = {k: int(v) for k, v in raw.items()
-                              if isinstance(v, (int, float))}
+                self._year = {k: int(v) for k, v in (rows or {}).items()
+                              if isinstance(v, int)}
             log.info("%d artist eras cached", len(self._year))
         except FileNotFoundError:
             pass
@@ -81,7 +86,8 @@ class EraStore:
             with self._lock:
                 items = dict(list(self._year.items())[-MAX_ENTRIES:])
             tmp = self._file().with_suffix(".tmp")
-            tmp.write_text(json.dumps(items), encoding="utf-8")
+            tmp.write_text(json.dumps({"v": VERSION, "years": items}),
+                           encoding="utf-8")
             tmp.replace(self._file())
         except Exception as exc:
             log.debug("couldn't save eras: %s", exc)
@@ -122,14 +128,26 @@ class EraStore:
         try:
             year = self._fetch(who)
         except Exception as exc:
-            # never let a lookup take a request down with it
+            # Never let a lookup take a request down with it — but don't drop
+            # it either. MusicBrainz hands out 503s freely, and one of them
+            # landing on the anchor turned the era check off for a whole run:
+            # nothing else asks for that artist, so nothing ever retried.
             log.debug("era lookup failed for %s: %s", who, exc)
+            self._enqueue(who)
             return None
         with self._lock:
             self._year[who] = year or 0
             self._queued.discard(who)
         self.save()
         return year
+
+    def _enqueue(self, who: str) -> None:
+        with self._lock:
+            if who in self._year or who in self._queued:
+                return
+            self._queued.add(who)
+        self._jobs.put(who)
+        self._start()
 
     def _start(self) -> None:
         with self._lock:
@@ -190,7 +208,16 @@ class EraStore:
         if int(rows[0].get("score") or 0) < 90:
             return None
         began = ((rows[0].get("life-span") or {}).get("begin") or "")[:4]
-        return int(began) if began.isdigit() else None
+        if not began.isdigit():
+            return None
+        # For a group that date is when they formed; for a person it's when
+        # they were born, and nobody releases a record at nought. Read raw,
+        # the two aren't comparable and the signal came out backwards:
+        # Michael Jackson (1958) sat 25 years off a-ha (1983) and got docked
+        # for it, while Nicki Minaj (1982) was 24 years away and got waved
+        # through. One of those belongs in a Billie Jean queue.
+        return int(began) + (BORN_TO_CAREER
+                             if rows[0].get("type") == "Person" else 0)
 
     def warm(self, tracks: list[Track]) -> None:
         for t in tracks[:40]:
@@ -203,10 +230,15 @@ era = EraStore()
 def gap(a: int | None, b: int | None) -> float:
     """0 to 1 on how far apart two artists are in time, 0 when we can't tell.
 
-    Nothing below twenty years counts at all — a band that formed in 1969 and
-    one that formed in 1974 are the same era and shouldn't be nudged apart.
+    Nothing under a dozen years counts at all — a band that formed in 1969
+    and one that formed in 1974 are the same era and shouldn't be nudged
+    apart. It used to take twenty, which had to cover the twenty-year offset
+    between a birth date and a formation date as well as any real distance,
+    so it never bit: Nicki Minaj was twenty-four years off Michael Jackson,
+    scored 0.1, and closed a Billie Jean queue. Both sides are career dates
+    now, so the slack isn't needed and the gap can mean what it says.
     """
     if not a or not b:
         return 0.0
     years = abs(a - b)
-    return min(1.0, max(0.0, (years - 20) / 40.0))
+    return min(1.0, max(0.0, (years - 12) / 28.0))
