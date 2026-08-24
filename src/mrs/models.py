@@ -21,7 +21,13 @@ _NONWORD = re.compile(r"[^a-z0-9]+")
 
 # Words that are never part of a real title.
 _JUNK = (r"karaoke|nightcore|8d|sped\s*up|slowed|bootleg|mashup|reverb|"
-         r"lyrics?|lyric video|visuali[sz]er|snippet|preview|teaser")
+         r"lyrics?|lyric video|visuali[sz]er|snippet|preview|teaser|"
+         # not songs at all — an hour of somebody else's records in a row.
+         # A Billie Jean queue turned up "Disco Megamix (130 BPM)" and
+         # "Abba Hits Megamix Non Stop" and nothing had a word to say.
+         # "non stop" spaced only: Nonstop is a Drake song and Non-Stop
+         # Erotic Cabaret is a Soft Cell record.
+         r"megamix|non stop|greatest hits|full album|mixtape|dj set")
 # Words that often are: Live Forever, Live and Let Die, Cover Me, Remix Culture.
 # These only mean "not the real release" when they sit where a descriptor sits.
 _TAGS = r"remix|live|acoustic|cover|instrumental|edit|version|mix"

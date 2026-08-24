@@ -13,6 +13,7 @@ from ..logging_setup import get
 from ..models import (Candidate, Track, is_channel_act, is_derivative,
                       norm_title)
 from .era import era, gap as era_gap
+from .kin import kin as kinstore
 from .tags import _flatten, tagstore
 from .taste import taste
 
@@ -50,6 +51,11 @@ PRIMARY_GENRE = 1.1
 # all of it. Tags can't see this at all — Jolene and Morgan Wallen are both
 # country and nothing else in the data disagrees.
 ERA_WEIGHT = 2.0
+# Deezer says these two acts belong together. Coarser than Last.fm's
+# track-level affinity but present for everybody, where affinity is usually
+# silent — a Dolly Parton request knows Loretta Lynn and Willie Nelson belong
+# without anyone having tagged the individual songs.
+KIN_WEIGHT = 1.4
 
 
 def _fit(sim: float) -> float:
@@ -226,9 +232,10 @@ class ContextBuilder:
         #     with nothing pulling back once the anchor lane ran dry.
         roots: list[str] = []
         if anchor is not None:
-            # One lookup, cached for good, and the whole era comparison is
-            # against this artist — without it there's nothing to compare to.
+            # One lookup each, cached for good, and both comparisons are
+            # against this artist — without them there's nothing to compare to.
             self._safe(era.prime, anchor)
+            self._safe(kinstore.prime, anchor)
         if not theme and anchor is not None:
             roots = tagstore.top_tags(anchor, 2)
             if not roots:
@@ -259,6 +266,7 @@ class ContextBuilder:
 
         tagstore.warm([t for t, _ in raw])     # next refill will know more
         era.warm([t for t, _ in raw])
+        kinstore.warm([t for t, _ in raw])
         out = self._rank(raw, current, exclude, limit, exclude_keys, focus=focus,
                          anchor=anchor, theme=theme, roots=roots,
                          artist_counts=artist_counts)
@@ -388,6 +396,7 @@ class ContextBuilder:
         cur_artist = current.primary_artist() if current else ""
         anchor_artist = anchor.primary_artist() if anchor else ""
         anchor_era = era.get(anchor) if anchor is not None else None
+        anchor_kin = kinstore.related(anchor) if anchor is not None else []
         seen_ids: set[str] = set()
         seen_keys: set[str] = set()
         # Seeded from what's already been on, not just what's in this pool.
@@ -511,6 +520,8 @@ class ContextBuilder:
                 # artists are known, and not at all under twenty years apart.
                 if anchor_era:
                     score -= ERA_WEIGHT * era_gap(anchor_era, era.get(track))
+                if kinstore.is_kin(anchor_kin, track):
+                    score += KIN_WEIGHT
 
             # Taste breaks ties, it doesn't choose. Liking a song is a reason
             # to prefer it over something equally fitting — not a reason to
