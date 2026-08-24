@@ -215,9 +215,16 @@ class TagStore:
             # to either carry real weight of its own, or be a refinement of
             # the broad one that's winning: classic country earns it against
             # country, "king of pop" at five percent does not.
+            #
+            # A fifth of the top tag, not a third. A third was enough to fix
+            # the first slot and left the second one landing on catch-alls
+            # with a perfectly good narrow tag just underneath — Blue Monday
+            # took electronic over synthpop at 29%, Teardrop took chillout
+            # over downtempo, Midnight City took electronic over electropop.
+            # Across twenty-six seeds those three are the only ones that move.
             refines = _flatten(dominant) in _flatten(tag) and tag != dominant
             specific = tag not in _CATCH_ALL and (
-                count >= top * 0.35 or (refines and count >= top * 0.15))
+                count >= top * 0.20 or (refines and count >= top * 0.15))
             ranked.append(((specific, count, len(tag.split())), tag))
         ranked.sort(reverse=True)
         out: list[str] = []

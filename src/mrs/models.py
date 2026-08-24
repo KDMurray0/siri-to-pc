@@ -27,7 +27,10 @@ _JUNK = (r"karaoke|nightcore|8d|sped\s*up|slowed|bootleg|mashup|reverb|"
          # "Abba Hits Megamix Non Stop" and nothing had a word to say.
          # "non stop" spaced only: Nonstop is a Drake song and Non-Stop
          # Erotic Cabaret is a Soft Cell record.
-         r"megamix|non stop|greatest hits|full album|mixtape|dj set")
+         # "Space Mix '98", "Summer Mix 2020" — a mix with a year on it is a
+         # DJ set. Remix is safe: the word boundary won't match inside it.
+         r"megamix|non stop|greatest hits|full album|mixtape|dj set|"
+         r"mix\s*['\u2019]?\s*\d{2,4}")
 # Words that often are: Live Forever, Live and Let Die, Cover Me, Remix Culture.
 # These only mean "not the real release" when they sit where a descriptor sits.
 _TAGS = r"remix|live|acoustic|cover|instrumental|edit|version|mix"

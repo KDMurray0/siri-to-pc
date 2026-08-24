@@ -14,7 +14,7 @@ from ..models import (Candidate, Track, is_channel_act, is_derivative,
                       norm_title)
 from .era import era, gap as era_gap
 from .kin import kin as kinstore
-from .tags import _flatten, tagstore
+from .tags import _CATCH_ALL, _flatten, tagstore
 from .taste import taste
 
 log = get("context")
@@ -449,6 +449,13 @@ class ContextBuilder:
         want = _theme_words(theme)
         # Either tag counts. A nu metal record that never picked up the
         # alternative metal tag still belongs in the lane it came from.
+        # A broad tag can find records but it can't vouch for them. Teardrop
+        # is trip-hop and electronic, and the second one let the gate below
+        # wave through LMFAO, Calvin Harris and Avicii — every one of them
+        # electronic, none of them trip-hop, and the last four tracks of the
+        # run. So the check only uses the narrow tags, unless narrow is all
+        # there isn't: Billie Jean is pop and dance and has nothing better.
+        gate = [r for r in (roots or []) if r not in _CATCH_ALL] or list(roots or [])
         root_words: set[str] = set()
         for r in (roots or []):
             root_words |= _theme_words(r)
@@ -532,7 +539,7 @@ class ContextBuilder:
                     # Either of its genres will do. Cool jazz on its own is a
                     # small tag, and insisting on it gave thirty tracks by
                     # four people; jazz piano lets the rest of the room in.
-                    if not own or not any(_carries(r, own) for r in roots):
+                    if not own or not any(_carries(r, own) for r in gate):
                         continue
                     # Equal footing goes too far the other way, though. Tarkus
                     # is progressive rock and classic rock, and letting the
@@ -540,7 +547,7 @@ class ContextBuilder:
                     # the Eagles, Survivor and Deep Purple — no Yes, no
                     # Genesis, no King Crimson. The first tag is the one that
                     # was asked for, so carrying it is worth something.
-                    if _carries(roots[0], own):
+                    if _carries(gate[0], own):
                         score += PRIMARY_GENRE
 
                 # Same genre, different half-century. Only bites once both
