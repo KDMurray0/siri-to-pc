@@ -17,7 +17,7 @@ import urllib.request
 
 from ..config import config
 from ..logging_setup import get
-from ..models import Track, is_channel_act, is_derivative
+from ..models import Track, _fold, is_channel_act, is_derivative
 from . import numbers
 
 log = get("catalog")
@@ -186,6 +186,14 @@ def to_track(row: dict, origin: str = "radio") -> Track:
 def _acceptable(t: Track, *, allow_variant: bool = False) -> bool:
     if not t.video_id or not t.title:
         return False
+    # A row with no artist on it is no use to anything downstream: there's
+    # nobody to look tags up for, so the genre can't be worked out, and every
+    # guard in the ranker is conditioned on knowing the genre. Asking for
+    # Vitamin C by Can found a nameless track called Vitamin C, and with the
+    # whole genre machinery switched off the queue spent thirty tracks in
+    # modern house.
+    if not (t.artist or "").strip():
+        return False
     floor = int(config.get("min_duration", 60) or 0)
     # duration 0 means "unknown" — let the downloader's filter catch it
     if floor and t.duration and t.duration < floor:
@@ -193,6 +201,43 @@ def _acceptable(t: Track, *, allow_variant: bool = False) -> bool:
     if not allow_variant and is_derivative(t.title):
         return False
     return True
+
+
+_WORDS = re.compile(r"[a-z0-9]+")
+
+
+def _named_in(query: str, tracks: list[Track]) -> list[Track]:
+    """Results by an artist the query actually names go first.
+
+    "Hyperballad Bjork" came back with covers by UA, by Whitley and by a Polish
+    jazz quartet: YouTube matched the title and paid no attention to the name.
+    Getting somebody else's cover when you named the band is the wrong answer
+    on its own, and it's worse than it looks, because everything downstream
+    works the genre out from the artist — that search sent a Bjork request into
+    thirty tracks of hard techno.
+
+    Half the artist's words have to be in the query, so "Take Five Dave
+    Brubeck" still matches the Dave Brubeck Quartet, and a stray "five" or
+    "the" matches nobody. Stable, so YouTube's own ranking survives inside
+    each group.
+    """
+    asked = set(_WORDS.findall(_fold(query.lower())))
+    if not asked:
+        return tracks
+
+    def rank(t: Track) -> tuple[int, float, int]:
+        words = set(_WORDS.findall(_fold((t.artist or "").lower()))) - {"the", "and"}
+        hit = words & asked
+        # Half the name has to be there to count as named at all.
+        if not words or not hit or len(hit) / len(words) < 0.5:
+            return (1, 0.0, 0)
+        # How much of the name matched, before how many words did. Counting
+        # words first loses one-word bands: asking for Los Angeles by X, the
+        # single letter scores one hit and Los Angeles De Charly scores two.
+        # As a proportion X is a perfect match and Charly is half of one.
+        return (0, -len(hit) / len(words), -len(hit))
+
+    return sorted(tracks, key=rank)
 
 
 def _prefer(tracks: list[Track]) -> list[Track]:
@@ -233,7 +278,7 @@ def search_songs(query: str, limit: int = 12, *, allow_variant: bool = False) ->
             if t.video_id not in have and _acceptable(t, allow_variant=allow_variant):
                 out.append(t)
 
-    return _store(key, _prefer(out)[:limit])
+    return _store(key, _named_in(query, _prefer(out))[:limit])
 
 
 def search_candidates(query: str, limit: int = 12) -> list[Track]:
