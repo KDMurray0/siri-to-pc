@@ -23,6 +23,8 @@ from .taste import taste
 
 log = get("queue")
 
+_PRUNE_EVERY = 30 * 60      # seconds
+
 
 @dataclass
 class WorkItem:
@@ -334,10 +336,20 @@ class QueueManager:
 
     def _maintain(self) -> None:
         """Keep the pool stocked and the ready buffer deep enough."""
+        next_prune = time.monotonic() + _PRUNE_EVERY
         while not self._stop.is_set():
             time.sleep(1.0)
             try:
                 self._track_progress()
+                # The cache was only ever pruned at startup, and this thing
+                # is meant to be left running — a few megabytes a track,
+                # playing all day, is about a gigabyte a day of downloads
+                # nobody deletes until the next reboot.
+                if time.monotonic() >= next_prune:
+                    next_prune = time.monotonic() + _PRUNE_EVERY
+                    gone = downloader.prune_cache(keep=set(self._meta))
+                    if gone:
+                        log.info("pruned %d cached files", gone)
                 if self._hold_radio:
                     if self.ready_ahead() <= 0 and not self._end_after_run:
                         # the run is done; whatever follows is not an artist

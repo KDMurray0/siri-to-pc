@@ -8,7 +8,8 @@ import secrets
 import threading
 from typing import Any
 
-from .paths import config_path, data_dir, migrate_legacy_data
+from .paths import (config_path, data_dir, migrate_legacy_data,
+                    write_atomic)
 
 _lock = threading.RLock()
 
@@ -125,10 +126,9 @@ class Config:
 
     def save(self) -> None:
         with _lock:
-            tmp = self._path.with_suffix(".json.tmp")
-            text = json.dumps(self._data, indent=2)
-            tmp.write_text(text, encoding="utf-8")   # no BOM
-            os.replace(tmp, self._path)
+            # no BOM, and atomically: this file holds the api key and every
+            # setting, and losing it to a torn write means a fresh setup
+            write_atomic(self._path, json.dumps(self._data, indent=2))
 
     # -- access --
     def __getitem__(self, key: str) -> Any:

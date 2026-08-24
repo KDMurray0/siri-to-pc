@@ -89,9 +89,19 @@ class Downloader:
             log.warning("pin failed: %s", exc)
             return None
 
-    def prune_cache(self, keep_mb: int = 2000) -> int:
-        """Drop the oldest cached files once the cache gets fat."""
-        files = sorted((f for f in cache_dir().glob("*") if f.is_file()),
+    def prune_cache(self, keep_mb: int = 2000, keep: set[str] | None = None) -> int:
+        """Drop the oldest cached files once the cache gets fat.
+
+        `keep` is whatever the queue still needs. This used to run once at
+        startup, when nothing was queued and oldest-first could never reach a
+        file that mattered. It runs while music is playing now, so it has to
+        be told what not to take: a downloaded track that hasn't been reached
+        yet is just an old file on disk.
+        """
+        spare = {os.path.normcase(os.path.abspath(p)) for p in (keep or ())}
+        files = sorted((f for f in cache_dir().glob("*")
+                        if f.is_file()
+                        and os.path.normcase(str(f.resolve())) not in spare),
                        key=lambda f: f.stat().st_mtime)
         total = sum(f.stat().st_size for f in files)
         limit = keep_mb * 1024 * 1024
