@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from ..config import config
 from ..events import Ev, bus
-from ..logging_setup import get
+from ..logging_setup import get, spawn
 from ..models import Activity, Candidate, Track
 from . import radio, spectrum
 from .downloader import downloader
@@ -56,6 +56,7 @@ class QueueManager:
         self._anchors: list[Track] = []
         # the last thing skipped, so a mis-hit can be taken back
         self._last_skipped: tuple[Track, float] | None = None
+        self._refilling = False
         self._theme = ""                         # genre/vibe asked for, if any
         self._end_after_run = False              # artist/album: stop, don't drift
         self._queue_stamp = None                 # so we only push real changes
@@ -405,14 +406,30 @@ class QueueManager:
                 need_ready = (self.minutes_ahead() < self.target_minutes()
                               and self.ready_ahead() < self.target_depth())
                 pool_low = len(self._pool) < int(config.get("queue_pool_min", 20))
-                if pool_low and self.mpv.get("playlist-count", 0):
-                    self._refill_pool()
+                if (pool_low and not self._refilling
+                        and self.mpv.get("playlist-count", 0)):
+                    # Off the loop, not in it. Working out what could play
+                    # next means eighty seconds of talking to four services
+                    # on a cold cache, and this loop is also what moves the
+                    # progress bar, starts the crossfade and publishes
+                    # status — all of which stopped dead for the duration.
+                    self._refilling = True
+                    spawn(self._refill_and_release, name="pool refill")
                 if need_ready:
                     self._wake.set()
                 if self.ready_ahead() < int(config.get("queue_min_ready", 3)):
                     self._wake.set()
             except Exception as exc:
                 log.debug("maintain: %s", exc)
+
+    def _refill_and_release(self) -> None:
+        try:
+            self._refill_pool()
+        finally:
+            self._refilling = False
+            # A worker that ran dry while this was in flight is sitting on
+            # the event, not polling the pool.
+            self._wake.set()
 
     def _refill_pool(self) -> None:
         ids, keys = self._exclusions()
