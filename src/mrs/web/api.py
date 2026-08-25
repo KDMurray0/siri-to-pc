@@ -161,6 +161,26 @@ async def events(request: Request, key: str = Query(default="")):
         "Connection": "keep-alive"})
 
 
+@app.get("/api/backup")
+def api_backup(_: bool = Auth):
+    """Copy the profile into a zip next to it. Not served over HTTP: it has
+    the api key in it, so it goes on disk where the Open folder button is."""
+    from ..core.backup import make_backup
+    try:
+        return make_backup()
+    except Exception as exc:
+        log.warning("backup failed: %s", exc)
+        return {"ok": False, "message": f"Backup failed: {exc}"}
+
+
+@app.get("/api/restore")
+def api_restore(path: str = "", _: bool = Auth):
+    from ..core.backup import restore
+    if not path:
+        return {"ok": False, "message": "Give it the path to a backup zip"}
+    return restore(path)
+
+
 @app.get("/api/unskip")
 def api_unskip(_: bool = Auth):
     """Bring back the last skipped track and unlearn the skip."""
