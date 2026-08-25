@@ -69,6 +69,11 @@ ERA_WEIGHT = 2.0
 # track-level affinity but present for everybody, where affinity is usually
 # silent — a Dolly Parton request knows Loretta Lynn and Willie Nelson belong
 # without anyone having tagged the individual songs.
+# Ask for two things and you should hear both. The pool is picked from by
+# score rather than in order, so being in it isn't enough — whichever seed
+# has been heard less gets a hand up until it catches back up.
+SHARE_WEIGHT = 0.7
+SHARE_CAP = 1.8
 KIN_WEIGHT = 1.4
 
 
@@ -183,6 +188,53 @@ def _matches(want: set[str], tags: dict) -> bool:
     return False
 
 
+def _as_anchors(anchor) -> list[Track]:
+    """One anchor, several, or none — always a list.
+
+    Asking for two things at once ("nirvana and foo fighters") means every
+    comparison that used to be against one record is now against a small set.
+    """
+    if anchor is None:
+        return []
+    if isinstance(anchor, Track):
+        return [anchor]
+    return [a for a in anchor if a is not None]
+
+
+def _closest(anchors: list[Track], track: Track) -> float | None:
+    """How much this sounds like the nearest of the things you asked for.
+
+    The best of them, not the average. Ask for Nirvana and Fela Kuti and the
+    average punishes a perfect Nirvana record for not being afrobeat, which
+    is not what you asked.
+    """
+    best = None
+    for a in anchors:
+        v = tagstore.similarity(a, track)
+        if v is not None and (best is None or v > best):
+            best = v
+    return best
+
+
+def _whose(anchors: list[Track], track: Track) -> int | None:
+    """Which of the things you asked for does this belong to?"""
+    best_i, best_v = None, 0.0
+    for i, a in enumerate(anchors):
+        v = tagstore.similarity(a, track)
+        if v is not None and v > best_v:
+            best_i, best_v = i, v
+    return best_i
+
+
+def _closest_affinity(anchors: list[Track], track: Track) -> float | None:
+    best = None
+    for a in anchors:
+        v = tagstore.affinity(a, track)
+        if v and (best is None or v > best):
+            best = v
+    return best
+
+
 class ContextBuilder:
     """Turns 'what's playing' into 'what might play next'."""
 
@@ -209,11 +261,16 @@ class ContextBuilder:
     def build(self, current: Track | None, exclude: set[str] | None = None,
               exclude_keys: set[str] | None = None,
               limit: int = 40, focus: float = 1.0,
-              anchor: Track | None = None, theme: str = "",
+              anchor=None, theme: str = "",
               artist_counts: dict[str, int] | None = None) -> list[Candidate]:
         exclude = exclude or set()
         exclude_keys = exclude_keys or set()
-        seeds = self._seeds(current, anchor)
+        anchors = _as_anchors(anchor)
+        # The first one is still "the" anchor wherever a single record is
+        # what's wanted — the seed of a radio, the name to skip in a
+        # neighbour list.
+        anchor = anchors[0] if anchors else None
+        seeds = self._seeds(current, anchors)
         raw: list[tuple[Track, str]] = []
 
         # 1. The current artist's own catalogue. Pull fewer of them when you
@@ -226,7 +283,7 @@ class ContextBuilder:
             # radio ends up playing an artist you never asked for because it
             # played them once. Unknown still gets the benefit of the doubt;
             # a measured bad fit doesn't.
-            here = tagstore.similarity(anchor, current) if anchor is not None else None
+            here = _closest(anchors, current) if anchors else None
             if focus >= 0.8 or here is None or here >= 0.45:
                 for t in self._safe(self.catalog.artist_tracks, current.artist, want):
                     raw.append((t, "artist"))
@@ -240,11 +297,17 @@ class ContextBuilder:
         #    offered things that sound like what was actually asked for.
         #    Re-ranking can only reorder what it's given, and by track 100
         #    everything on offer is whatever the last track dragged in.
-        if anchor is not None and anchor.video_id and float(config.get("anchor_pull", 0.35)):
-            here = tagstore.similarity(anchor, current)
+        if anchors and float(config.get("anchor_pull", 0.35)):
+            here = _closest(anchors, current)
             if here is None or here < 0.75:      # only once it's actually strayed
-                for t in self._safe(self.catalog.related, anchor.video_id, 12):
-                    raw.append((t, "anchor"))
+                # Every one of them, so asking for two things keeps hearing
+                # from both rather than whichever happened to be said first.
+                each = max(4, 12 // max(1, len(anchors)))
+                for a in anchors:
+                    if not a.video_id:
+                        continue
+                    for t in self._safe(self.catalog.related, a.video_id, each):
+                        raw.append((t, "anchor"))
 
         # 4. If a genre was asked for, keep drawing from it. Twenty-five
         #    tracks run out in an hour and a half; the radio should still be
@@ -263,17 +326,32 @@ class ContextBuilder:
         #     that's why a Fela Kuti run reached Depeche Mode by track 30,
         #     with nothing pulling back once the anchor lane ran dry.
         roots: list[str] = []
-        if anchor is not None:
-            # One lookup each, cached for good, and both comparisons are
-            # against this artist — without them there's nothing to compare to.
-            self._safe(era.prime, anchor)
-            self._safe(kinstore.prime, anchor)
-            self._safe(tagstore.prime_near, anchor)
-        if not theme and anchor is not None:
-            roots = tagstore.top_tags(anchor, 2)
-            if not roots:
-                tagstore.prime(anchor)      # worth one blocking call
-                roots = tagstore.top_tags(anchor, 2)
+        primaries: list[str] = []
+        for a in anchors:
+            # One lookup each, cached for good, and every comparison is
+            # against these — without them there's nothing to compare to.
+            self._safe(era.prime, a)
+            self._safe(kinstore.prime, a)
+            self._safe(tagstore.prime_near, a)
+        if not theme and anchors:
+            roots = []
+            # Two tags each when there's one, one each when there are more,
+            # so the lane budget doesn't multiply with the seeds.
+            each = 2 if len(anchors) == 1 else 1
+            for a in anchors:
+                got = tagstore.top_tags(a, each)
+                if not got:
+                    tagstore.prime(a)       # worth one blocking call
+                    got = tagstore.top_tags(a, each)
+                # Whatever each anchor calls itself first is a primary. With
+                # one seed that's the top tag; with two it's both of them,
+                # which is what stops the first one asked for collecting a
+                # point the second one can't.
+                if got and got[0] not in primaries:
+                    primaries.append(got[0])
+                for r in got:
+                    if r not in roots:
+                        roots.append(r)
             # Deep on purpose, and from both tags. Thirty gets eaten by track
             # sixteen and then a riot grrrl run has nothing left to pull on and
             # slides into pop-punk. One tag isn't enough either: everything
@@ -282,9 +360,14 @@ class ContextBuilder:
             # soft ones are all that's left. Its second tag is nu metal, which
             # is ninety more of the right thing. The lookups are cached, so
             # depth is nearly free.
-            for i, tag in enumerate(roots):
-                for t in self._safe(self.catalog.genre_tracks, tag,
-                                    90 if i == 0 else 60):
+            # One seed: its first tag is the deep seam and the second backs
+            # it up. Two seeds: an equal share each, because 90 against 60
+            # was the other half of why whichever got asked for first ran
+            # away with the queue.
+            depths = ([90, 60] if len(anchors) < 2
+                      else [max(40, 150 // len(roots))] * len(roots))
+            for tag, deep in zip(roots, depths + [60] * len(roots)):
+                for t in self._safe(self.catalog.genre_tracks, tag, deep):
                     raw.append((t, "root"))
 
         # 4c. The artists a human would file next to this one. A tag lane can
@@ -295,8 +378,12 @@ class ContextBuilder:
         #     Houston, which is the queue somebody would actually build.
         #     A rotating handful each refill, so the whole neighbourhood gets
         #     played over a long run instead of the same four names.
-        if not theme and anchor is not None:
-            neighbours = self._safe(kinstore.related, anchor) or []
+        if not theme and anchors:
+            neighbours = []
+            for a in anchors:
+                for n in (self._safe(kinstore.related, a) or []):
+                    if n not in neighbours:
+                        neighbours.append(n)
             if neighbours:
                 pick = neighbours[:8]
                 random.shuffle(pick)
@@ -313,10 +400,14 @@ class ContextBuilder:
         #     fetched Goo Goo Dolls, Hoobastank and Three Days Grace, and
         #     with nothing to fetch the right records there was nothing to
         #     rank. Asking for them by name costs six searches, cached.
-        if not theme and anchor is not None:
-            mine = anchor.primary_artist()
-            rows = sorted(tagstore.neighbours(anchor).items(),
-                          key=lambda kv: -kv[1])
+        if not theme and anchors:
+            mine = {a.primary_artist() for a in anchors}
+            merged: dict[str, float] = {}
+            for a in anchors:
+                for pair, match in tagstore.neighbours(a).items():
+                    if match > merged.get(pair, 0.0):
+                        merged[pair] = match
+            rows = sorted(merged.items(), key=lambda kv: -kv[1])
             picked = fresh = 0
             for pair, _match in rows:
                 # Six new records a refill, and keep walking past the ones
@@ -334,7 +425,7 @@ class ContextBuilder:
                 # it would use the whole allowance, and the artist lane has
                 # it covered anyway.
                 theirs = _strip_article(_fold(who))
-                if not name or not theirs or theirs == mine:
+                if not name or not theirs or theirs in mine:
                     continue
                 if pair not in self._resolved:
                     fresh += 1
@@ -350,7 +441,7 @@ class ContextBuilder:
         #    only when nothing was actually asked for. One of five likes being
         #    a piano piece shouldn't mean one refill in three of a metal queue
         #    arrives full of it.
-        if anchor is None and not theme and random.random() < 0.35:
+        if not anchors and not theme and random.random() < 0.35:
             liked = taste.liked_seed()
             if liked:
                 for t in self._safe(self.catalog.related, liked, 6):
@@ -360,7 +451,8 @@ class ContextBuilder:
         era.warm([t for t, _ in raw])
         kinstore.warm([t for t, _ in raw])
         out = self._rank(raw, current, exclude, limit, exclude_keys, focus=focus,
-                         anchor=anchor, theme=theme, roots=roots,
+                         anchor=anchors, theme=theme, roots=roots,
+                         primaries=primaries,
                          artist_counts=artist_counts)
 
         # The first pass ranks on whatever happens to be cached, which means
@@ -385,7 +477,7 @@ class ContextBuilder:
         # record is playing so a few seconds is affordable; a stalled lookup
         # is not.
         stop = time.monotonic() + 8.0
-        want_era = anchor is not None and era.get(anchor)
+        want_era = any(era.get(a) for a in anchors)
         for _ in range(3):
             looked = 0
             for c in out[:8]:
@@ -400,7 +492,8 @@ class ContextBuilder:
             if not looked:
                 break
             out = self._rank(raw, current, exclude, limit, exclude_keys,
-                             focus=focus, anchor=anchor, theme=theme, roots=roots,
+                             focus=focus, anchor=anchors, theme=theme, roots=roots,
+                             primaries=primaries,
                              artist_counts=artist_counts)
 
         # The genre-name test is strict on purpose, but some tags barely exist
@@ -428,8 +521,9 @@ class ContextBuilder:
             rungs.append(dict(strict=False))
             for kw in rungs:
                 wider = self._rank(raw, current, exclude, limit, exclude_keys,
-                                   focus=focus, anchor=anchor, theme=theme,
-                                   roots=roots, artist_counts=artist_counts,
+                                   focus=focus, anchor=anchors, theme=theme,
+                                   roots=roots, primaries=primaries,
+                                   artist_counts=artist_counts,
                                    **kw)
                 if len(wider) > len(out):
                     out = wider
@@ -443,8 +537,9 @@ class ContextBuilder:
         if len(out) < 4:
             # Last resort: allow songs heard a while ago rather than run dry.
             out += self._rank(raw, current, exclude, limit, exclude_keys,
-                              ignore_recency=True, focus=focus, anchor=anchor,
-                              theme=theme, roots=roots, artist_counts=artist_counts)
+                              ignore_recency=True, focus=focus, anchor=anchors,
+                              theme=theme, roots=roots, primaries=primaries,
+                              artist_counts=artist_counts)
             seen, merged = set(), []
             for c in out:
                 if c.track.video_id not in seen:
@@ -477,8 +572,7 @@ class ContextBuilder:
         return widened
 
     # -- internals -----------------------------------------------------
-    def _seeds(self, current: Track | None,
-               anchor: Track | None = None) -> list[str]:
+    def _seeds(self, current: Track | None, anchor=None) -> list[str]:
         """Tracks worth asking YouTube for a continuation from.
 
         History used to go in unfiltered, and that's how a hip-hop request came
@@ -490,8 +584,8 @@ class ContextBuilder:
         seeds: list[str] = []
         if current and current.video_id:
             seeds.append(current.video_id)
-        ref = anchor or current
-        if ref is None:
+        refs = _as_anchors(anchor) or ([current] if current else [])
+        if not refs:
             return seeds
         for row in taste.recent(12):
             vid = row.get("video_id")
@@ -499,7 +593,7 @@ class ContextBuilder:
                 continue
             past = Track(video_id=vid, title=row.get("title") or "",
                          artist=row.get("artist") or "")
-            if (tagstore.similarity(ref, past) or 0.0) < 0.70:
+            if (_closest(refs, past) or 0.0) < 0.70:
                 continue
             seeds.append(vid)
             if len(seeds) >= 3:
@@ -517,8 +611,9 @@ class ContextBuilder:
     def _rank(self, raw: list[tuple[Track, str]], current: Track | None,
               exclude: set[str], limit: int, exclude_keys: set[str],
               ignore_recency: bool = False, focus: float = 1.0,
-              anchor: Track | None = None, theme: str = "",
-              roots: list[str] | None = None, strict: bool = True,
+              anchor=None, theme: str = "",
+              roots: list[str] | None = None, primaries: list[str] | None = None,
+              strict: bool = True,
               wide_gate: bool = False,
               artist_counts: dict[str, int] | None = None) -> list[Candidate]:
         # Skipping late, again and again, means the run has gone stale rather
@@ -527,9 +622,15 @@ class ContextBuilder:
         slack = 1.0 - min(0.5, taste.fatigue() * 0.18)
         cohesion = float(config.get("artist_cohesion", 1.0)) * focus * slack
         cur_artist = current.primary_artist() if current else ""
-        anchor_artist = anchor.primary_artist() if anchor else ""
-        anchor_era = era.get(anchor) if anchor is not None else None
-        anchor_kin = kinstore.related(anchor) if anchor is not None else []
+        anchors = _as_anchors(anchor)
+        anchor = anchors[0] if anchors else None
+        anchor_artists = {a.primary_artist() for a in anchors if a.primary_artist()}
+        anchor_eras = [e for e in (era.get(a) for a in anchors) if e]
+        anchor_kin: list[str] = []
+        for a in anchors:
+            for n in kinstore.related(a):
+                if n not in anchor_kin:
+                    anchor_kin.append(n)
         seen_ids: set[str] = set()
         seen_keys: set[str] = set()
         # Seeded from what's already been on, not just what's in this pool.
@@ -552,6 +653,14 @@ class ContextBuilder:
         # Ask for one song and you get one song by that band, not their
         # discography. Artist and album requests want the opposite.
         stack_penalty = 0.0 if focus >= 0.8 else 1.6
+        # How the last few records split between the things that were asked
+        # for. Only means anything when more than one was.
+        share: dict[int, int] = {}
+        if len(anchors) > 1:
+            for t in run_now:
+                i = _whose(anchors, t)
+                if i is not None:
+                    share[i] = share.get(i, 0) + 1
         # count what this session already played, not just this pool — an
         # artist that got six tracks an hour ago has had its turn
         per_artist: dict[str, int] = dict(artist_counts or {})
@@ -578,10 +687,10 @@ class ContextBuilder:
             root_words |= _theme_words(r)
         searched = {_flatten(t) for t in ([theme] if theme else []) + list(roots or [])
                     if t}
-        pull = float(config.get("anchor_pull", 0.35)) if anchor is not None else 0.0
+        pull = float(config.get("anchor_pull", 0.35)) if anchors else 0.0
         drift = 0.0
         if pull:
-            here = tagstore.similarity(anchor, current)
+            here = _closest(anchors, current)
             drift = 0.0 if here is None else max(0.0, 1.0 - here)
         pull = min(0.8, pull * (0.5 + drift))
         out: list[Candidate] = []
@@ -610,9 +719,18 @@ class ContextBuilder:
             # blend in how much this sounds like the song that started it —
             # everything downstream then works off that instead.
             if pull:
-                back = tagstore.similarity(anchor, track)
+                back = _closest(anchors, track)
                 if back is not None:
-                    sim = back if sim is None else (1 - pull) * sim + pull * back
+                    if len(anchors) > 1:
+                        # Ask for two things and a record that nails either
+                        # one is a good answer. Averaging against whatever
+                        # happens to be playing buries the seed you didn't
+                        # hear first: Dolly Parton and Massive Attack came
+                        # back as fourteen country records, because the trip
+                        # hop was being marked against Jolene.
+                        sim = back if sim is None else max(sim, back)
+                    else:
+                        sim = back if sim is None else (1 - pull) * sim + pull * back
             if sim is None:
                 # no tags yet: trust the band on an artist request, stay wary
                 # on a song request until the cache catches up
@@ -632,8 +750,8 @@ class ContextBuilder:
             # Out Boy and Fall Out Boy scored well after the thing before it,
             # and thirty steps like that leave a metal request playing pop
             # punk. Against Chop Suey blink-182 is 0.09, and that settles it.
-            if anchor is not None and source != "theme":
-                far = tagstore.similarity(anchor, track)
+            if anchors and source != "theme":
+                far = _closest(anchors, track)
                 if far is not None and far < 0.18:
                     continue
                 # And it has to be the same genre by name, not merely close on
@@ -649,7 +767,7 @@ class ContextBuilder:
                 # right and the tags got wrong. The similarity floors above
                 # still apply, so it can't let nonsense through.
                 if (strict and roots and source not in ("kin", "near")
-                        and track.primary_artist() != anchor_artist):
+                        and track.primary_artist() not in anchor_artists):
                     # No tags is not a free pass. Every guard here needs them,
                     # so one untagged upload gets in and all three go quiet at
                     # once — a Take Five run was faultless for nineteen tracks,
@@ -668,13 +786,22 @@ class ContextBuilder:
                     # the Eagles, Survivor and Deep Purple — no Yes, no
                     # Genesis, no King Crimson. The first tag is the one that
                     # was asked for, so carrying it is worth something.
-                    if _carries(gate[0], own):
+                    # Any of them. With one seed that's still just its top
+                    # tag; with two, both count, so a doom record isn't
+                    # docked a point for not also being heavy metal.
+                    lead = primaries or gate[:1]
+                    if any(_carries(r, own) for r in lead):
                         score += PRIMARY_GENRE
 
                 # Same genre, different half-century. Only bites once both
                 # artists are known, and not at all under twenty years apart.
-                if anchor_era:
-                    score -= ERA_WEIGHT * era_gap(anchor_era, era.get(track))
+                if anchor_eras:
+                    # The nearest of them. Asking for Motorhead and Sleep
+                    # shouldn't dock a record for being far from one when
+                    # it sits right next to the other.
+                    theirs = era.get(track)
+                    score -= ERA_WEIGHT * min(era_gap(e, theirs)
+                                              for e in anchor_eras)
                 if kinstore.is_kin(anchor_kin, track):
                     vouched = True
                     score += KIN_WEIGHT
@@ -688,7 +815,18 @@ class ContextBuilder:
             # What people play alongside this, which is the only signal that
             # can tell Song 2 from The Universal — tags call those 0.86 alike
             # because tags describe Blur, not the song.
-            near = tagstore.affinity(anchor or current, track)
+            if len(anchors) > 1 and share:
+                # Whichever of them you've heard least of gets the nod. Not a
+                # quota — a nudge that grows the further behind it falls, so
+                # a seed with less to offer can't stall the queue.
+                mine_i = _whose(anchors, track)
+                if mine_i is not None:
+                    behind = max(share.values()) - share.get(mine_i, 0)
+                    if behind > 0:
+                        score += min(SHARE_CAP, SHARE_WEIGHT * behind)
+
+            near = _closest_affinity(anchors, track) if anchors \
+                else tagstore.affinity(current, track)
             if near:
                 vouched = True
                 score += 3.0 * near
