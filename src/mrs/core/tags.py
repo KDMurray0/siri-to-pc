@@ -222,11 +222,6 @@ class TagStore:
             self._near[sk] = found
             self._queued.discard("n:" + sk)
 
-    def top_tag(self, track: Track | None) -> str:
-        """The single best tag to fetch more records by, or "" if unknown."""
-        found = self.top_tags(track, 1)
-        return found[0] if found else ""
-
     def top_tags(self, track: Track | None, limit: int = 2) -> list[str]:
         """The tags worth fetching more records by, best first.
 
