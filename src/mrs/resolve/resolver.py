@@ -39,6 +39,9 @@ def _nothing(said: str) -> "Resolution":
     and reporting that as "I couldn't find it" is a lie that sends you off
     rewording a query that was fine.
     """
+    if catalog.offline():
+        return Resolution([], "I can't reach the internet. I'll keep playing "
+                              "what's already downloaded.", error="offline")
     wait = catalog.throttled()
     if wait:
         # This gets spoken back, so it reads as a sentence rather than a

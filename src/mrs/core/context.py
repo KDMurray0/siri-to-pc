@@ -53,6 +53,8 @@ SOURCE_WEIGHT = {
     # precise thing here — not a guess from a label, thirty tracks somebody's
     # listening history actually put together.
     "near": 3.6,
+    # Nothing to rank against when there's no network; it's this or silence.
+    "offline": 1.0,
 }
 # Last.fm has been asked and has never heard of them. Every real act has a
 # page, so what's left is AI piano and stock-library uploads.
@@ -265,6 +267,14 @@ class ContextBuilder:
               artist_counts: dict[str, int] | None = None) -> list[Candidate]:
         exclude = exclude or set()
         exclude_keys = exclude_keys or set()
+        # No route out? Don't spend eleven seconds finding that out again
+        # per refill. Play what's already on the disk instead of stopping at
+        # the end of the track, which is what used to happen.
+        if self.catalog.offline():
+            got = self._from_disk(exclude, exclude_keys, limit)
+            if got:
+                return got
+
         anchors = _as_anchors(anchor)
         # The first one is still "the" anchor wherever a single record is
         # what's wanted — the seed of a radio, the name to skip in a
@@ -546,6 +556,11 @@ class ContextBuilder:
                     seen.add(c.track.video_id)
                     merged.append(c)
             out = merged
+        if not out and self.catalog.offline():
+            # We only found out we were offline by failing, part way through
+            # this very call. Don't make the queue stop for one refill to
+            # learn what we now know.
+            return self._from_disk(exclude, exclude_keys, limit)
         return out[:limit]
 
     def _widen(self, current, exclude: set[str], exclude_keys: set[str],
@@ -599,6 +614,42 @@ class ContextBuilder:
             if len(seeds) >= 3:
                 break
         return seeds
+
+    def _from_disk(self, exclude: set[str], exclude_keys: set[str],
+                   limit: int) -> list[Candidate]:
+        """Records already downloaded, for when there's no network.
+
+        History is the only list of what's on the disk with names attached —
+        the cache is keyed by video id and the files carry no metadata we
+        keep. Anything still cached is playable; anything that has been
+        pruned isn't.
+        """
+        from .downloader import downloader
+        out: list[Candidate] = []
+        seen: set[str] = set()
+        for row in taste.recent(300):
+            vid = row.get("video_id") or ""
+            if not vid or vid in exclude or vid in seen:
+                continue
+            path = downloader.cached(vid)
+            if not path:
+                continue
+            track = Track(video_id=vid, title=row.get("title") or "",
+                          artist=row.get("artist") or "", path=path,
+                          origin="radio")
+            key = track.key()
+            if key and key in exclude_keys:
+                continue
+            seen.add(vid)
+            # Oldest first, so an offline stretch doesn't replay the last
+            # half hour back at you.
+            out.append(Candidate(track=track, score=1.0 + random.random(),
+                                 reason="offline"))
+            if len(out) >= limit:
+                break
+        if out:
+            log.info("offline — %d cached tracks to fall back on", len(out))
+        return out
 
     @staticmethod
     def _safe(fn, *args) -> list[Track]:

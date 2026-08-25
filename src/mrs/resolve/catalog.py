@@ -58,6 +58,43 @@ _FAIL_LIMIT = 8         # that many in the window means we're being throttled
 _QUIET_FOR = 90.0
 
 
+# "no" and "I can't hear you" are different answers and want different
+# handling: one is worth retrying in a minute, the other means stop asking
+# and play what's already on the disk.
+_DEAD_NET = ("unreachable", "getaddrinfo", "name or service not known",
+             "no such host", "temporary failure in name resolution",
+             "connection refused", "failed to establish", "winerror 10051",
+             "winerror 10065", "winerror 11001", "network is down")
+_offline_until = 0.0
+_offline_hits: list[float] = []
+
+
+def _unreachable(exc: Exception) -> bool:
+    return any(s in str(exc).lower() for s in _DEAD_NET)
+
+
+def offline() -> bool:
+    """No route to the internet, as far as we can tell."""
+    return time.time() < _offline_until
+
+
+def _note_reachability(exc: Exception | None) -> None:
+    global _offline_until
+    if exc is None:
+        _offline_hits.clear()
+        _offline_until = 0.0
+        return
+    if not _unreachable(exc):
+        return
+    now = time.time()
+    _offline_hits.append(now)
+    del _offline_hits[:-3]
+    if len(_offline_hits) >= 3 and now - _offline_hits[0] < 60:
+        if not offline():
+            log.warning("can't reach the internet — playing from the cache")
+        _offline_until = now + 60
+
+
 def _transient(exc: Exception) -> bool:
     """A "try again" failure rather than a "there's nothing there" one."""
     msg = str(exc).lower()
@@ -72,13 +109,17 @@ def _yt(what: str, fn, *args, **kwargs):
     now = time.time()
     if now < _quiet_until:
         return None
+    if offline():
+        return None                 # asking again just costs another timeout
     for attempt in range(_RETRIES + 1):
         try:
             gate.wait("youtube")
             out = fn(*args, **kwargs)
             _fails.clear()
+            _note_reachability(None)
             return out
         except Exception as exc:
+            _note_reachability(exc)
             if not _transient(exc) or attempt == _RETRIES:
                 _fails.append(time.time())
                 del _fails[:-_FAIL_LIMIT]
