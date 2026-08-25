@@ -11,6 +11,7 @@ import socket
 from .config import config
 from .core import cookies as cookie_mod
 from .core.downloader import downloader
+from .core.extras import scrobbler
 from .core.library import library
 from .events import bus
 from .logging_setup import get, spawn, setup
@@ -148,6 +149,9 @@ def startup() -> None:
         log.info("Groq enabled (%s)", config.get("groq_model"))
     else:
         log.info("Groq off — using the local parser")
+
+    # If they connected Last.fm at some point, borrow what it knows.
+    spawn(scrobbler.maybe_seed_taste, name="lastfm seed")
 
     if not downloader.have_cookies():
         log.warning("no cookies configured — YouTube will refuse downloads")

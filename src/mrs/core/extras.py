@@ -11,6 +11,7 @@ import urllib.request
 from datetime import datetime
 
 from ..config import config
+from .gate import gate
 from ..events import Ev, bus
 from ..logging_setup import get
 from ..models import Track
@@ -49,6 +50,55 @@ class Scrobbler:
         try:
             with urllib.request.urlopen(req, timeout=8) as r:
                 return json.loads(r.read().decode())
+        except Exception as exc:
+            log.debug("last.fm %s failed: %s", method, exc)
+            return None
+
+    def maybe_seed_taste(self) -> int:
+        """Give taste a head start from the account, the first time only.
+
+        Taste starts empty and takes weeks to learn anything. If somebody has
+        already told us their Last.fm, the answer is sitting there. Once, and
+        never again — a second run would keep re-adding artists the user has
+        since skipped away.
+        """
+        if not self.enabled() or config.get("lastfm_seeded"):
+            return 0
+        names = self.top_artists()
+        if not names:
+            return 0            # not marked done: try again next start
+        from .taste import taste
+        added = taste.seed_from(names)
+        config.set("lastfm_seeded", True)
+        taste.save()
+        log.info("seeded taste with %d artists from last.fm", added)
+        if added:
+            bus.publish(Ev.TOAST, f"Picked up {added} artists from Last.fm")
+        return added
+
+    def top_artists(self, limit: int = 50) -> list[str]:
+        """Who the user actually listens to, from their own account."""
+        who = config.get("lastfm_user") or ""
+        if not self.enabled() or not who:
+            return []
+        got = self._read("user.getTopArtists", {"user": who, "period": "12month",
+                                                "limit": str(limit)})
+        rows = ((got or {}).get("topartists") or {}).get("artist") or []
+        if isinstance(rows, dict):
+            rows = [rows]
+        return [r["name"] for r in rows if r.get("name")]
+
+    def _read(self, method: str, extra: dict):
+        """An unsigned read. Scrobbling is a write and needs the session
+        signature; asking what somebody listens to doesn't."""
+        params = {"method": method, "api_key": config.get("lastfm_api_key"),
+                  "format": "json", **extra}
+        url = LASTFM_API + "?" + urllib.parse.urlencode(params)
+        gate.wait("lastfm")
+        try:
+            with urllib.request.urlopen(
+                    urllib.request.Request(url, headers=UA), timeout=10) as r:
+                return json.loads(r.read().decode("utf-8", "replace"))
         except Exception as exc:
             log.debug("last.fm %s failed: %s", method, exc)
             return None

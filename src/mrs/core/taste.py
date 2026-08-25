@@ -95,6 +95,26 @@ class TasteEngine:
             pass
 
     # -- recording -----------------------------------------------------
+    def seed_from(self, artists: list[str]) -> int:
+        """Give the ranker a head start from somebody's listening history.
+
+        Taste is deliberately bounded to a tiebreaker, so this is a light
+        thumb on the scale and not a verdict — one play each, which is worth
+        0.1 and caps out at 0.4. Enough to break a tie between two records
+        that fit equally well; nowhere near enough to choose the queue.
+        """
+        added = 0
+        with self._lock:
+            for name in artists:
+                key = Track(artist=name, title="").primary_artist()
+                if not key or key in self._artist:
+                    continue
+                self._artist[key] = [1, 0]
+                added += 1
+            if added:
+                self._dirty = True
+        return added
+
     def unskip(self, track: Track) -> None:
         """Take back the last thing a skip taught us.
 
