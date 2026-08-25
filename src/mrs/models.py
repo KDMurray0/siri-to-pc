@@ -189,6 +189,9 @@ class Plan:
     spoken: str = ""
     source: str = "youtube"
     via: str = "grammar"      # grammar | llm — which parser decided
+    # "nirvana and foo fighters" is two artists; "thrash and black metal" is
+    # two genres. Empty means one thing, which is nearly always.
+    seeds: list[str] = field(default_factory=list)
 
 
 @dataclass

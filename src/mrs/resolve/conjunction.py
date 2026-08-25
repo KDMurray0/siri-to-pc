@@ -127,3 +127,38 @@ def split_seeds(text: str, *, carry: bool = True) -> list[str]:
             seen.add(k)
             out.append(p)
     return out or [raw]
+
+
+# Genres that aren't just a head noun, for telling "play some drum and bass"
+# from "play some nights". Not exhaustive and doesn't need to be: anything
+# missing falls through to a normal search, which is where it used to go.
+_GENRES = {
+    "drum and bass", "drum n bass", "dnb", "jungle", "grime", "garage",
+    "dubstep", "breakbeat", "trip hop", "trip-hop", "downtempo", "edm",
+    "afrobeat", "afrobeats", "highlife", "bossa nova", "samba", "salsa",
+    "cumbia", "reggaeton", "motown", "doo wop", "swing", "bebop", "bossa",
+    "opera", "baroque", "orchestral", "lo-fi", "lofi", "synthwave",
+    "vaporwave", "shoegaze", "hardcore", "britpop", "new wave", "post punk",
+    "post-punk", "grunge", "riot grrrl", "emo", "screamo", "gospel",
+    "bluegrass", "americana", "honky tonk", "rockabilly", "psychedelia",
+    "k-pop", "kpop", "j-pop", "jpop", "city pop", "chiptune", "drill",
+    "boom bap", "g funk", "trap", "phonk", "hyperpop", "math rock",
+    "prog", "progressive rock", "krautrock", "noise", "industrial",
+    "darkwave", "coldwave", "eurodance", "italo disco", "acid jazz",
+}
+
+
+def looks_like_genre(text: str) -> bool:
+    """Would "play some X" mean a kind of music, or a record called X?
+
+    "some drum and bass" is a genre; "some nights" is a fun. song and "some
+    might say" is Oasis. So it has to either end in a word genres hang off,
+    or be one of the names above.
+    """
+    low = _norm(text)
+    if not low:
+        return False
+    if low in _GENRES:
+        return True
+    words = low.split()
+    return bool(words) and words[-1] in _HEADS

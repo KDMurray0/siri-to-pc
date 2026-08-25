@@ -51,7 +51,9 @@ class QueueManager:
         self._claimed: set[str] = set()
         self._hold_radio = False                 # album/artist runs pure first
         self._request_kind = "song"              # what you last asked for
-        self._anchor: Track | None = None        # the song that started it off
+        # the records that started it off — usually one, more when the
+        # request named more than one thing
+        self._anchors: list[Track] = []
         self._theme = ""                         # genre/vibe asked for, if any
         self._end_after_run = False              # artist/album: stop, don't drift
         self._queue_stamp = None                 # so we only push real changes
@@ -95,7 +97,8 @@ class QueueManager:
     # -- public API ----------------------------------------------------
     def play_now(self, tracks: list[Track], alternates: list[str] | None = None,
                  *, shuffle: bool = False, hold_radio: bool = False,
-                 kind: str = "song", theme: str = "") -> None:
+                 kind: str = "song", theme: str = "",
+                 anchors: list[Track] | None = None) -> None:
         """Replace what's playing with these tracks."""
         import random
         tracks = [t for t in tracks if t.video_id or t.url]
@@ -109,7 +112,7 @@ class QueueManager:
             self._claimed.clear()
             self._hold_radio = hold_radio
             self._request_kind = kind
-            self._anchor = tracks[0]
+            self._anchors = [a for a in (anchors or []) if a] or [tracks[0]]
             # ask for grunge and the whole hour should be grunge, not just the
             # first 25 tracks before the radio wanders off somewhere else
             self._theme = (theme or "").strip()
@@ -398,7 +401,7 @@ class QueueManager:
         try:
             cands = self.context.build(self.current_track(), exclude=ids,
                                        exclude_keys=keys, focus=focus,
-                                       anchor=self._anchor, theme=self._theme,
+                                       anchor=self._anchors, theme=self._theme,
                                        artist_counts=self._recent_artists())
         except Exception as exc:
             log.warning("context build failed: %s", exc)

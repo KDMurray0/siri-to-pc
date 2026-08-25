@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
+from itertools import zip_longest
 
 from ..config import config
 from ..logging_setup import get
-from ..models import Plan, Track
+from ..models import Plan, Track, _fold, _strip_article
 from . import catalog
 
 log = get("resolve")
@@ -15,8 +17,11 @@ log = get("resolve")
 class Resolution:
     def __init__(self, tracks: list[Track], spoken: str, *,
                  hold_radio: bool = False, alternates: list[str] | None = None,
-                 error: str = "") -> None:
+                 error: str = "", anchors: list[Track] | None = None) -> None:
         self.tracks = tracks
+        # What the radio should steer by. One per thing that was asked for,
+        # so "nirvana and foo fighters" keeps hearing from both.
+        self.anchors = anchors or ([tracks[0]] if tracks else [])
         self.spoken = spoken
         self.hold_radio = hold_radio          # play these purely before radio
         self.alternates = alternates or []
@@ -41,6 +46,59 @@ def _nothing(said: str) -> "Resolution":
         return Resolution([], f"YouTube is throttling us. Try again in about "
                               f"{int(wait) + 1} seconds.", error="throttled")
     return Resolution([], said, error="no results")
+
+
+def _one_act(query: str) -> bool:
+    """Is the whole phrase somebody's name, rather than two things?
+
+    The splitter catches the shapes it knows — "X and the Y", a short list
+    of the usual suspects — and will happily cut a band name it has never
+    heard of in half. This is the check that stops it: if YouTube knows an
+    artist by that exact name, it's one act.
+    """
+    want = _strip_article(_fold(query.strip().lower()))
+    if not want:
+        return False
+    for row in catalog.search_artists(query, limit=3):
+        if _strip_article(_fold((row.get("name") or "").lower())) == want:
+            return True
+    return False
+
+
+def _several(plan: Plan, kind: str) -> "Resolution | None":
+    """Resolve a request that named more than one thing.
+
+    Each seed is resolved on its own and the results are dealt out in turn,
+    so the queue opens with one of each rather than all of the first.
+    Returns None to mean "treat it as one thing after all".
+    """
+    if _one_act(plan.query):
+        log.info("%r is one act, not %d", plan.query, len(plan.seeds))
+        return None
+    parts: list[Resolution] = []
+    for seed in plan.seeds[:4]:          # four is already an odd request
+        sub = replace(plan, query=seed, artist="", seeds=[])
+        got = resolve(sub)
+        if got and got.tracks:
+            parts.append(got)
+    if len(parts) < 2:
+        return None                      # only one of them was real
+
+    # A share each, then dealt out in turn.
+    each = max(3, int(config.get("queue_minutes", 30)) // (2 * len(parts)) + 3)
+    lanes = [p.tracks[:each] for p in parts]
+    dealt: list[Track] = []
+    seen: set[str] = set()
+    for row in zip_longest(*lanes):
+        for t in row:
+            if t is not None and t.video_id not in seen:
+                seen.add(t.video_id)
+                dealt.append(t)
+    names = [p.tracks[0].artist or s for p, s in zip(parts, plan.seeds)]
+    said = " and ".join(names[:2]) + ("…" if len(names) > 2 else "")
+    return Resolution(dealt, f"Playing {said}",
+                      hold_radio=any(p.hold_radio for p in parts),
+                      anchors=[p.tracks[0] for p in parts])
 
 
 def _first_minutes(tracks: list[Track], minutes: float) -> list[Track]:
@@ -71,6 +129,13 @@ def _artist_exact(query: str) -> str | None:
 def resolve(plan: Plan) -> Resolution:
     kind = plan.kind
     query = (plan.query or "").strip()
+
+    # Named more than one thing? Try it as several, and fall back to one if
+    # that turns out to be wrong.
+    if plan.seeds and kind in ("auto", "artist", "genre"):
+        several = _several(plan, kind)
+        if several is not None:
+            return several
     if not query:
         return Resolution([], "I didn't catch that", error="empty")
 

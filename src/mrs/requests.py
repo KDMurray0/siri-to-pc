@@ -94,7 +94,8 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
         elif plan.mode == "queue":
             player.queue.enqueue(res.tracks)
         else:
-            player.queue.play_now(res.tracks, res.alternates, shuffle=shuffle,
+            player.queue.play_now(res.tracks, res.alternates,
+                                  anchors=res.anchors, shuffle=shuffle,
                                   hold_radio=res.hold_radio, kind=plan.kind,
                                   theme=plan.query if plan.kind == "genre" else "")
 

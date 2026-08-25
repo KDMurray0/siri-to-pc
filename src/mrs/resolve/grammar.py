@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from ..models import Plan
+from .conjunction import looks_like_genre, split_seeds
 
 _WAKE = re.compile(
     r"^\s*(?:hey\s+)?(?:siri|computer|assistant)[,\s]+", re.I)
@@ -56,6 +57,10 @@ _GENRE_HINT = re.compile(
     r"^(?:some\s+|a bit of\s+)?(?P<g>[a-z0-9\s&'-]+?)\s*"
     r"(?:music|songs?|vibes?|tunes?|playlist|mix)$", re.I)
 _DECADE = re.compile(r"^\s*(\d0s|\d{4}s)\s*$", re.I)
+# "play some drum and bass", "play a bit of shoegaze". Without a trailing
+# noun to go on this needs the genre itself to be recognisable, or "play
+# some nights" becomes a request for the nights genre.
+_SOME = re.compile(r"^(?:some|any|a bit of|a little)\s+(?P<g>.{2,40})$", re.I)
 
 
 def clean(text: str) -> str:
@@ -89,6 +94,24 @@ def playlist_add(text: str) -> str | None:
     return m.group("name").strip() if m else None
 
 
+_FILLER = re.compile(r"^(?:some|any|a bit of|a little|a few)\s+", re.I)
+
+
+def _maybe_split(text: str) -> list[str]:
+    """Two things, or one thing with "and" in the middle? A proposal only —
+    the resolver checks whether the whole phrase is somebody first.
+
+    The filler comes off here and not off plan.query, because "Some Nights"
+    is a song and "Some Might Say" is a record — stripping it everywhere
+    would break both. This path already needs a conjunction to reach.
+    """
+    parts = split_seeds(text)
+    if len(parts) < 2:
+        return []
+    parts[0] = _FILLER.sub("", parts[0]).strip() or parts[0]
+    return parts
+
+
 def parse(text: str) -> Plan:
     """Best-effort structural read of a request."""
     raw = clean(text)
@@ -112,6 +135,7 @@ def parse(text: str) -> Plan:
     if m:
         plan.kind = "artist"
         plan.query = plan.artist = m.group("artist").strip()
+        plan.seeds = _maybe_split(plan.query)
         return plan
 
     m = _ALBUM.search(body)
@@ -140,9 +164,21 @@ def parse(text: str) -> Plan:
     if m:
         plan.kind = "genre"
         plan.query = m.group("g").strip()
+        plan.seeds = _maybe_split(plan.query)
         return plan
+
+    m = _SOME.match(body)
+    if m:
+        asked = m.group("g").strip()
+        parts = split_seeds(asked)
+        if all(looks_like_genre(p) for p in parts):
+            plan.kind = "genre"
+            plan.query = asked
+            plan.seeds = parts if len(parts) > 1 else []
+            return plan
 
     # No structure to go on: let the resolver decide song vs artist.
     plan.kind = "auto"
     plan.query = body
+    plan.seeds = _maybe_split(body)
     return plan
