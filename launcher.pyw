@@ -502,6 +502,23 @@ class Bridge:
         threading.Thread(target=sign_in_window, daemon=True, name="signin").start()
         return True
 
+    def open_external(self, url):
+        """Open a link in the user's actual browser.
+
+        window.open() inside the flyout spawns a bare WebView2 popup with no
+        address bar and no tabs, which shows for a moment and goes again —
+        the little window that disappears. The Chrome Web Store and a
+        Last.fm approval page both want a real browser.
+        """
+        import webbrowser
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            return False
+        try:
+            webbrowser.open(url)
+            return True
+        except Exception:
+            return False
+
 
 flyout: Flyout | None = None
 
@@ -522,12 +539,17 @@ def sign_in_window() -> None:
     win = webview.create_window("Sign in to YouTube", url=SIGNIN_URL,
                                 width=520, height=680, on_top=True)
 
-    def collect() -> None:
+    started = threading.Event()      # "loaded" fires twice on a redirect
+
+    def _gather() -> str:
+        """Cookies from each origin in turn. WebView2 only hands over the
+        ones belonging to the page currently loaded, so it has to visit all
+        three — which is what looked like YouTube opening by itself."""
         jars, seen = [], set()
         for url in COOKIE_STOPS:
             try:
                 win.load_url(url)
-                time.sleep(3.0)          # let the navigation settle
+                time.sleep(2.0)          # let the navigation settle
                 for jar in win.get_cookies() or []:
                     for name in (jar.keys() if hasattr(jar, "keys") else []):
                         morsel = jar[name]
@@ -538,19 +560,34 @@ def sign_in_window() -> None:
                         jars.append(jar)
             except Exception as exc:
                 log.debug("no cookies from %s: %s", url, exc)
-        text = ck.from_webview(jars)
-        found = [n for n in ck.AUTH_COOKIES if f"	{n}	" in text]
-        if found:
-            ck.save_master(text)
-            log.info("signed in — saved %d cookies (%s)",
-                     len(text.splitlines()) - 3, ", ".join(found))
-        else:
-            log.warning("sign-in window had no auth cookies — not saved")
+        return ck.from_webview(jars)
+
+    def collect() -> None:
+        saved = 0
         try:
-            win.destroy()
-        except Exception:
-            pass
-        _api("/api/cookies/find")
+            try:
+                win.hide()               # out of sight for the domain hop
+            except Exception:
+                pass
+            text = _gather()
+            found = [n for n in ck.AUTH_COOKIES if f"	{n}	" in text]
+            if found:
+                ck.save_master(text)
+                saved = max(0, len(text.splitlines()) - 3)
+                log.info("signed in — saved %d cookies (%s)",
+                         saved, ", ".join(found))
+            else:
+                log.warning("sign-in window had no auth cookies — not saved")
+        except Exception as exc:
+            log.warning("sign-in collect failed: %s", exc)
+        finally:
+            # Always closes, and always says what happened — vanishing with
+            # no word either way was most of what made this feel broken.
+            try:
+                win.destroy()
+            except Exception:
+                pass
+            _api(f"/api/cookies/signedin?saved={saved}")
 
     def on_loaded() -> None:
         # once Google hands us off to YouTube, the login is done
@@ -559,8 +596,15 @@ def sign_in_window() -> None:
         except Exception:
             return
         if "music.youtube.com" in url or "//www.youtube.com" in url:
-            win.events.loaded -= on_loaded
-            threading.Thread(target=collect, daemon=True, name="cookies-grab").start()
+            if started.is_set():
+                return
+            started.set()
+            try:
+                win.events.loaded -= on_loaded
+            except Exception:
+                pass
+            threading.Thread(target=collect, daemon=True,
+                             name="cookies-grab").start()
 
     win.events.loaded += on_loaded
 

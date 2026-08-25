@@ -630,6 +630,19 @@ def api_cookies_extension(_: bool = Auth):
     return {"status": "ok", **cookie_mod.extension_flow()}
 
 
+@app.get("/api/cookies/signedin")
+def api_cookies_signedin(saved: int = 0, _: bool = Auth):
+    """The sign-in window finished. Say so, rather than just vanishing."""
+    state = cookie_mod.find_now(close_browsers=False)
+    if saved and state.get("ok"):
+        bus.publish(Ev.TOAST, f"Signed in — {saved} cookies saved")
+    elif saved:
+        bus.publish(Ev.TOAST, f"Saved {saved} cookies, but they don't work yet")
+    else:
+        bus.publish(Ev.TOAST, "Sign-in finished without any YouTube cookies")
+    return {"status": "ok", **state, "saved": saved}
+
+
 @app.get("/api/cookies/import")
 def api_cookies_import(path: str = "", _: bool = Auth):
     """Import a cookies.txt the user points at (or the newest in Downloads)."""

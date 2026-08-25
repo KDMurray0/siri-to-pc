@@ -766,6 +766,16 @@ let state = { volume: 70, position: 0, duration: 0, trackKey: "", playing: false
 
 /* ── window bridge (pywebview) ─────────────────────────────────────── */
 const bridge = () => (window.pywebview && window.pywebview.api) || null;
+
+// In the desktop flyout, window.open makes a chrome-less WebView2 popup that
+// flashes up and vanishes. Hand those links to the real browser instead. On
+// a phone, or any normal browser, there's no bridge and window.open is
+// exactly right.
+function openExternal(url) {
+  const b = bridge();
+  if (b && b.open_external) { b.open_external(url); return; }
+  window.open(url, "_blank");
+}
 document.querySelectorAll(".topdrag,.drag").forEach(el => {
   el.addEventListener("mousedown", e => {
     if (e.button === 0) { const b = bridge(); if (b && b.begin_move) b.begin_move(); }
@@ -1568,7 +1578,7 @@ $("ckext").onclick = async () => {
   if (!r) return;
   toast(r.message || "");
   applyCookies(r);
-  if (r.extension_url) window.open(r.extension_url, "_blank");
+  if (r.extension_url) openExternal(r.extension_url);
 };
 $("pldl").onclick = () => {
   const on = !$("pldl").classList.contains("on");
@@ -1690,7 +1700,7 @@ $("alarmadd").onclick = async () => {
 
 $("cksignin").onclick = () => {
   const b = bridge();
-  if (b && b.sign_in) { b.sign_in(); toast("Sign in, then it saves your cookies"); }
+  if (b && b.sign_in) { b.sign_in(); toast("Sign in — the window closes itself when it's done"); }
   else toast("Open the desktop player to sign in");
 };
 
@@ -1707,7 +1717,7 @@ $("lfmauth").onclick = async () => {
   const k = $("lfmkey").value.trim(), sec = $("lfmsec").value.trim();
   const r = await api("/api/lastfm?step=begin" + (k ? "&api_key=" + encodeURIComponent(k) +
             "&secret=" + encodeURIComponent(sec) : ""));
-  if (r && r.auth_url) { window.open(r.auth_url, "_blank"); toast("Approve it, then press Finish"); }
+  if (r && r.auth_url) { openExternal(r.auth_url); toast("Approve it, then press Finish"); }
   else toast((r && r.message) || "Enter your Last.fm API key first");
 };
 $("lfmdone").onclick = async () => {
