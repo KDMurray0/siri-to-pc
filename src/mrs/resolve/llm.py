@@ -14,6 +14,7 @@ import urllib.request
 from ..config import config
 from ..logging_setup import get
 from ..models import Plan
+from .conjunction import split_seeds
 
 log = get("groq")
 
@@ -205,7 +206,16 @@ def parse(text: str) -> Plan | None:
              "genre": genre or title}.get(kind, "")
     if not query:
         return None
-    return Plan(kind=kind, query=query, artist=artist,
+    plan = Plan(kind=kind, query=query, artist=artist,
                 variant=_as_bool(data.get("variant")) is True,
                 shuffle=_as_bool(data.get("shuffle")),
                 via="llm", spoken=text)
+    # The model gives back one query, so "nirvana and foo fighters" arrives
+    # as a single artist and would be searched for as a band of that name.
+    # Same reading as the grammar path, and the resolver checks it the same
+    # way before believing it.
+    if kind in ("artist", "genre", "auto"):
+        parts = split_seeds(plan.query)
+        if len(parts) > 1:
+            plan.seeds = parts
+    return plan

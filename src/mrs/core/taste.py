@@ -95,6 +95,23 @@ class TasteEngine:
             pass
 
     # -- recording -----------------------------------------------------
+    def unskip(self, track: Track) -> None:
+        """Take back the last thing a skip taught us.
+
+        A mis-hit on the media key otherwise teaches the ranker something
+        false, permanently and invisibly — the counts only ever go up.
+        """
+        if not track:
+            return
+        vid, artist = track.video_id, track.primary_artist()
+        with self._lock:
+            if vid and vid in self._song and self._song[vid][1] > 0:
+                self._song[vid][1] -= 1
+            if artist and artist in self._artist and self._artist[artist][1] > 0:
+                self._artist[artist][1] -= 1
+            self._fatigue = max(0.0, self._fatigue - 0.5)
+            self._dirty = True
+
     def record(self, track: Track, position: float, duration: float) -> bool:
         """Log a finished/abandoned track. Returns True if it counted as played."""
         if not track or not duration:

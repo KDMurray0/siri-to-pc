@@ -196,6 +196,11 @@ class PlayerService:
                     length = self._watch.get("dur", 0)
                     if taste.record(track, played, length):
                         scrobbler.scrobble(track, played)
+                    else:
+                        # Didn't get far enough to count as played, so it was
+                        # skipped — remember it in case that was the media key
+                        # going off in a pocket.
+                        self.queue.note_skip(track, played)
                     catalog.set_preferences(taste.preferred_artists())
             self._watch = {"path": path, "pos": pos, "dur": dur}
             cur = self.queue.track_for(path)
@@ -474,12 +479,30 @@ class PlayerService:
             self._sleep_at = None
         if minutes and minutes > 0:
             self._sleep_at = time.time() + minutes * 60
-            self._sleep_timer = threading.Timer(minutes * 60,
-                                                lambda: self.mpv.set("pause", True))
+            self._sleep_timer = threading.Timer(minutes * 60, self._sleep_now)
             self._sleep_timer.daemon = True
             self._sleep_timer.start()
             return {"sleep_minutes": minutes, "message": f"Sleeping in {minutes} min"}
         return {"sleep_minutes": 0, "message": "Sleep timer off"}
+
+    def _sleep_now(self) -> None:
+        """Take it down gently rather than stopping mid-bar."""
+        vol = int(config.get("volume", 70))
+        secs = float(config.get("sleep_fade", 20) or 0)
+        try:
+            steps = max(4, int(secs * 2))
+            for i in range(steps if secs > 0 else 0):
+                if self._sleep_at is None:
+                    # cancelled while it was fading — put it back
+                    self.mpv.set("volume", vol)
+                    return
+                self.mpv.set("volume", int(vol * (1 - (i + 1) / steps)))
+                time.sleep(secs / steps)
+            self.mpv.set("pause", True)
+        finally:
+            # Never leave it silent for next time, whatever happened.
+            self.mpv.set("volume", vol)
+            self._sleep_at = None
 
     def sleep_remaining(self) -> int:
         if not self._sleep_at:

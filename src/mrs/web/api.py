@@ -161,6 +161,12 @@ async def events(request: Request, key: str = Query(default="")):
         "Connection": "keep-alive"})
 
 
+@app.get("/api/unskip")
+def api_unskip(_: bool = Auth):
+    """Bring back the last skipped track and unlearn the skip."""
+    return player.queue.unskip()
+
+
 @app.get("/api/health")
 def health(_: bool = Auth):
     """What the outside services are actually doing.

@@ -54,6 +54,8 @@ class QueueManager:
         # the records that started it off — usually one, more when the
         # request named more than one thing
         self._anchors: list[Track] = []
+        # the last thing skipped, so a mis-hit can be taken back
+        self._last_skipped: tuple[Track, float] | None = None
         self._theme = ""                         # genre/vibe asked for, if any
         self._end_after_run = False              # artist/album: stop, don't drift
         self._queue_stamp = None                 # so we only push real changes
@@ -208,6 +210,25 @@ class QueueManager:
         self._set_activity("idle")
         log.info("tuned to %s", track.title)
         self.publish_queue(force=True)
+
+    def note_skip(self, track: Track | None, position: float = 0.0) -> None:
+        if track and track.video_id:
+            self._last_skipped = (track, position)
+
+    def unskip(self) -> dict:
+        """Put the last skipped track back on, and unlearn the skip."""
+        got = self._last_skipped
+        if not got:
+            return {"ok": False, "message": "Nothing to bring back"}
+        track, _pos = got
+        self._last_skipped = None
+        taste.unskip(track)
+        # Straight to the front, ahead of whatever the skip promoted.
+        with self._lock:
+            self._work.appendleft(WorkItem(track, mode="next"))
+        self._wake.set()
+        return {"ok": True, "message": f"Back to {track.title}",
+                "title": track.title, "artist": track.artist}
 
     def _take_candidate(self) -> Candidate | None:
         now = time.monotonic()

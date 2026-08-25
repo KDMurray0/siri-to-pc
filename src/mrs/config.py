@@ -61,6 +61,7 @@ DEFAULTS: dict[str, Any] = {
     "queue_max": 30,
     "queue_min_ready": 3,     # downloaded tracks that must sit ahead
     "queue_pool_min": 20,     # candidate ideas kept in reserve
+    "sleep_fade": 20,         # seconds to fade out on the sleep timer
     "artist_run_limit": 3,    # max consecutive tracks by one artist
     "artist_gap": 4,          # prefer not to repeat an artist within this many
     "artist_gap_slip": 0.15,  # ...but let it through this often anyway
