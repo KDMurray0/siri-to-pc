@@ -23,6 +23,8 @@ hiddenimports = [
     'uvicorn.protocols.websockets.auto', 'uvicorn.lifespan', 'uvicorn.lifespan.on',
 ]
 hiddenimports += collect_submodules('mrs')
+# qrcode is imported lazily inside mrs.core.net, so PyInstaller can't see it
+hiddenimports += ['qrcode', 'qrcode.image.svg']
 
 # ytmusicapi ships locale/oauth JSON it loads at runtime.
 datas += collect_data_files('ytmusicapi')

@@ -25,7 +25,29 @@ from .taste import taste
 
 log = get("queue")
 
-_PRUNE_EVERY = 30 * 60      # seconds
+_PRUNE_EVERY = 30 * 60      # seconds — flushing the search cache
+_CHECK_EVERY = 60           # seconds — holding the download cache to its limit
+# Songs around the playing one that shuffle won't drop anything into.
+SHUFFLE_BUFFER = 3
+
+
+def _cached_first(tracks: list[Track]) -> list[Track]:
+    """Already-downloaded ones to the front, keeping the order they came in.
+
+    Shuffling a forty-track album and then waiting on a download for the one
+    that happened to land first is a wait for nothing when thirty of them are
+    already on disk. Called only after the list has been shuffled, so each
+    group is already in random order and this just moves the ready ones up —
+    still random, and it starts immediately.
+
+    Nothing is dropped: the rest follow, and by the time they're reached
+    they've had the whole first stretch to download.
+    """
+    have, missing = [], []
+    for t in tracks:
+        ready = t.video_id and downloader.cached(t.video_id)
+        (have if ready else missing).append(t)
+    return have + missing
 
 
 @dataclass
@@ -103,12 +125,12 @@ class QueueManager:
                  kind: str = "song", theme: str = "",
                  anchors: list[Track] | None = None) -> None:
         """Replace what's playing with these tracks."""
-        import random
         tracks = [t for t in tracks if t.video_id or t.url]
         if not tracks:
             return
         if shuffle or config.get("shuffle"):
             random.shuffle(tracks)
+            tracks = _cached_first(tracks)
         with self._lock:
             self._work.clear()
             self._pool.clear()
@@ -155,9 +177,71 @@ class QueueManager:
                 "message": "Stopped" if (killed or dropped) else "Nothing to stop"}
 
     def shuffle_upcoming(self) -> None:
-        """Reorder what's still to come, leaving the current track alone."""
-        self.mpv.command("playlist-shuffle", wait=False)
+        """Reorder what's still to come, and only that.
+
+        Not playlist-shuffle: that shuffles the entire list, played entries
+        included, so tracks you hadn't heard yet got dealt behind the playing
+        one and vanished into the history. Only the entries after the current
+        position move, one playlist-move at a time.
+        """
+        try:
+            pl = self.mpv.command("get_property", "playlist") or []
+            pos = self.mpv.get("playlist-pos", None)
+        except Exception:
+            return
+        if pos is None or pos < 0:
+            pos = -1
+        head = pos + 1
+        live = [e.get("filename") for e in pl[head:]]
+
+        # The ones still waiting to be downloaded, first — start a fifty-track
+        # playlist and only three are on disk yet, so shuffling just those
+        # looked like the button did nothing while the other forty-seven sat
+        # in their original order. This has to happen before the early return
+        # below, which is exactly the case that hits it.
+        with self._lock:
+            fixed = [w for w in self._work if w.mode != "append"]
+            rest = [w for w in self._work if w.mode == "append"]
+            if len(rest) > 1:
+                random.shuffle(rest)
+                self._work.clear()
+                self._work.extend(fixed + rest)
+
+        if len(live) < 2:
+            self.publish_queue()
+            return
+        want = live[:]
+        random.shuffle(want)
+        # Selection sort: put the right file in each slot in turn, tracking
+        # where everything has moved to as we go.
+        for slot, name in enumerate(want):
+            k = live.index(name, slot)
+            if k != slot:
+                self.mpv.command("playlist-move", head + k, head + slot,
+                                 wait=False)
+                live.insert(slot, live.pop(k))
         self.publish_queue()
+
+    def _scatter_new(self, path: str) -> None:
+        """With shuffle on, drop a freshly appended track somewhere random.
+
+        Never within the next few songs: those are already downloaded, already
+        on screen, and about to play. Landing a new arrival in the middle of
+        them is what makes playback jump.
+        """
+        try:
+            pl = self.mpv.command("get_property", "playlist") or []
+            pos = self.mpv.get("playlist-pos", None)
+        except Exception:
+            return
+        last = len(pl) - 1
+        if pos is None or last < 0:
+            return
+        floor = pos + 1 + SHUFFLE_BUFFER
+        if floor >= last:
+            return                      # not enough runway to move it into
+        self.mpv.command("playlist-move", last, random.randint(floor, last),
+                         wait=False)
 
     def release_hold(self) -> None:
         self._hold_radio = False
@@ -185,10 +269,12 @@ class QueueManager:
             return None
         if config.get("repeat", "off") != "off":
             return None          # repeating a set list: don't keep growing it
-        # Enough music queued, by time and by count.
+        # How much is queued is a question about time, not track count — an
+        # album of two-minute songs shouldn't run dry sooner than one of
+        # six-minute ones. The count is only a runaway guard.
         if self.minutes_ahead() >= self.target_minutes():
             return None
-        if self.ready_ahead() >= self.target_depth():
+        if self.ready_ahead() >= self.hard_cap():
             return None
         cand = self._take_candidate()
         if cand is None:
@@ -329,6 +415,10 @@ class QueueManager:
                 self.mpv.command("playlist-move", count, pos + 1, wait=False)
         else:
             self.mpv.command("loadfile", path, "append", wait=False)
+            if config.get("shuffle"):
+                # Shuffle on means the order shouldn't be arrival order. Deal
+                # it in somewhere random rather than always on the end.
+                self._scatter_new(path)
 
         self.publish_queue()
 
@@ -353,10 +443,16 @@ class QueueManager:
         return total / 60.0
 
     def target_depth(self) -> int:
-        """Song-count equivalent, still used as a hard ceiling."""
+        """Song-count equivalent. Advisory — how much to queue is decided by
+        target_minutes; this only keeps a run of 90-second tracks from
+        queueing forty of them."""
         base = int(config.get("queue_target", 12))
         cap = int(config.get("queue_max", 30))
         return max(1, min(cap, base + min(12, self._session_plays)))
+
+    def hard_cap(self) -> int:
+        """The runaway guard. Duration decides; this stops absurdity."""
+        return max(2, int(config.get("queue_max", 30)))
 
     def ready_ahead(self) -> int:
         pos = self.mpv.get("playlist-pos", None)
@@ -381,6 +477,7 @@ class QueueManager:
     def _maintain(self) -> None:
         """Keep the pool stocked and the ready buffer deep enough."""
         next_prune = time.monotonic() + _PRUNE_EVERY
+        next_check = time.monotonic() + _CHECK_EVERY
         while not self._stop.is_set():
             time.sleep(1.0)
             try:
@@ -389,11 +486,18 @@ class QueueManager:
                 # is meant to be left running — a few megabytes a track,
                 # playing all day, is about a gigabyte a day of downloads
                 # nobody deletes until the next reboot.
-                if time.monotonic() >= next_prune:
-                    next_prune = time.monotonic() + _PRUNE_EVERY
-                    gone = downloader.prune_cache(keep=set(self._meta))
+                #
+                # Checked every minute rather than every half hour: a limit
+                # that's only enforced twice an hour is a limit you watch
+                # yourself go over. prune_cache returns immediately when
+                # there's nothing to do, so this costs one stat sweep.
+                if time.monotonic() >= next_check:
+                    next_check = time.monotonic() + _CHECK_EVERY
+                    gone = downloader.prune_cache(keep=self.keep_paths())
                     if gone:
                         log.info("pruned %d cached files", gone)
+                if time.monotonic() >= next_prune:
+                    next_prune = time.monotonic() + _PRUNE_EVERY
                     catalog_cache.save_cache()
                 if self._hold_radio:
                     if self.ready_ahead() <= 0 and not self._end_after_run:
@@ -404,7 +508,7 @@ class QueueManager:
                             self._request_kind = "song"
                     continue
                 need_ready = (self.minutes_ahead() < self.target_minutes()
-                              and self.ready_ahead() < self.target_depth())
+                              and self.ready_ahead() < self.hard_cap())
                 pool_low = len(self._pool) < int(config.get("queue_pool_min", 20))
                 if (pool_low and not self._refilling
                         and self.mpv.get("playlist-count", 0)):
@@ -433,6 +537,21 @@ class QueueManager:
 
     def _refill_pool(self) -> None:
         ids, keys = self._exclusions()
+        # Cold pool: put something playable in it now rather than after a
+        # minute of network calls. Ranked candidates land on top of these.
+        if not self._pool:
+            try:
+                fast = self.context.quick(self.current_track(), exclude=ids,
+                                          exclude_keys=keys, limit=6)
+            except Exception as exc:
+                log.debug("quick prefill failed: %s", exc)
+                fast = []
+            if fast:
+                with self._lock:
+                    self._pool.extend(fast)
+                log.info("prefilled %d while the real build runs", len(fast))
+                self._wake.set()
+                ids, keys = self._exclusions()
         # Ask for a band and you get that band. Ask for a song and the radio
         # should be allowed to wander.
         focus = 1.0 if self._request_kind in ("artist", "album", "playlist") else 0.4
@@ -456,6 +575,11 @@ class QueueManager:
                 have.add(c.track.video_id)
                 keys.add(c.track.key())
         log.info("pool now %d candidates", len(self._pool))
+
+    def keep_paths(self) -> set[str]:
+        """Files the queue still needs, so pruning doesn't take them."""
+        with self._lock:
+            return set(self._meta)
 
     def _recent_artists(self, look_back: int = 30) -> dict[str, int]:
         """Who this session has been leaning on lately."""

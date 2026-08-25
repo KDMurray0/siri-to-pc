@@ -52,6 +52,11 @@ html,body{height:100%;overflow:hidden;background:var(--bg);
 .winbtn.on{opacity:1;color:var(--accent);background:color-mix(in srgb,var(--accent) 16%,transparent)}
 .winbtn svg{width:15px;height:15px;fill:currentColor;display:block}
 #pin{right:11px} #shrink{right:44px}
+/* Mini and keep-on-top are desktop-window features: both do nothing except
+   through the pywebview bridge. In a browser — on a phone especially — they
+   are dead buttons, so they stay hidden until the bridge proves it exists. */
+#pin,#shrink{display:none}
+body.desktop #pin,body.desktop #shrink{display:block}
 /* Sits opposite the window buttons and matches them, so it reads as chrome
    rather than as part of the song. Never in mini — there's no room. */
 .timeleft{position:absolute;top:9px;left:12px;z-index:5;height:28px;
@@ -113,9 +118,19 @@ body.busy .activity{display:flex}
 /* progress */
 .prog{margin-top:14px}
 .bar{height:5px;border-radius:3px;background:var(--line);position:relative;
-  cursor:pointer;overflow:hidden}
+  cursor:pointer;touch-action:none}
+/* the bar is 5px tall; this gives it a finger-sized target without
+   changing how it looks */
+.bar::before{content:"";position:absolute;left:0;right:0;top:-12px;bottom:-12px}
 .fill{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--accent);
   border-radius:3px;transition:width .25s linear}
+.seekdot{position:absolute;top:50%;left:0;width:13px;height:13px;
+  margin:-6.5px 0 0 -6.5px;border-radius:50%;background:var(--accent);
+  box-shadow:0 1px 5px rgba(0,0,0,.5);pointer-events:none;
+  transition:left .25s linear,transform .12s ease}
+/* while dragging, follow the finger exactly rather than easing after it */
+body.seeking .fill,body.seeking .seekdot{transition:none}
+body.seeking .seekdot{transform:scale(1.3)}
 .times{display:flex;justify-content:space-between;font-size:10.5px;color:var(--sub);
   margin-top:6px;font-variant-numeric:tabular-nums;letter-spacing:.02em}
 
@@ -307,7 +322,21 @@ body.reordering .q{transition:transform .12s ease}
 .achip{font-size:10.5px;padding:3px 9px}
 .plrow{display:flex;align-items:center;gap:8px;padding:8px 6px;border-radius:9px}
 .plrow:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}
-.plrow .pn{font-size:13px;font-weight:600;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.plrow .pn{font-size:13px;font-weight:600;flex:1;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;cursor:pointer}
+.plrow .pn:hover{color:var(--accent)}
+.plrow .pn em{display:block;font-style:normal;font-size:10.5px;font-weight:500;
+  color:var(--sub);margin-top:1px}
+/* the tracks inside a list, shown without starting it */
+.pltracks:empty{display:none}
+.pltracks{margin:0 0 8px 8px;border-left:2px solid var(--line);padding-left:8px}
+.pltrack{display:flex;align-items:center;gap:8px;padding:5px 4px;border-radius:7px}
+.pltrack:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}
+.pltrack .pli{font-size:10.5px;color:var(--sub);width:20px;text-align:right;
+  font-variant-numeric:tabular-nums}
+.pltrack .plt{flex:1;min-width:0;font-size:12.5px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.pltrack .plt em{display:block;font-style:normal;font-size:10.5px;color:var(--sub)}
 
 /* lyrics */
 .lyrics{padding:4px 2px;text-align:center}
@@ -513,6 +542,18 @@ body.mini .miniwave i{width:2px;border-radius:1px}
 .miniwave{transition:opacity .3s}
 body.paused .miniwave{opacity:.25}
 body.noviz .miniwave{display:none}
+/* the phone's own volume buttons own this, so don't offer a slider */
+body.sysvol #volslider, body.sysvol #minivol { opacity:.3; pointer-events:none; }
+/* Casting is easy to leave on and then forget, at which point the volume
+   slider "does nothing to the PC" — because it isn't meant to. Say so. */
+body.casting #volicon{color:var(--accent);opacity:1}
+/* Point a phone camera at it rather than typing a key by hand. */
+.qrbox:empty{display:none}
+.qrbox{padding:10px 0 4px;display:flex;justify-content:center}
+.qrbox svg{border-radius:8px}
+/* Autoplay refused: the page has to be touched before audio may start. */
+body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out infinite}
+@keyframes castpulse{0%,100%{opacity:1}50%{opacity:.35}}
 </style>
 </head>
 <body>
@@ -550,7 +591,8 @@ body.noviz .miniwave{display:none}
     </div>
 
     <div class="prog">
-      <div class="bar"><div class="fill" id="fill"></div></div>
+      <div class="bar"><div class="fill" id="fill"></div>
+        <div class="seekdot" id="seekdot"></div></div>
       <div class="times"><span id="cur">0:00</span><span id="dur">0:00</span></div>
     </div>
 
@@ -610,6 +652,17 @@ body.noviz .miniwave{display:none}
       <button class="pickx" id="devclose" aria-label="Close">✕</button></div>
     <div class="picker-list" id="devlist"></div>
   </div>
+
+  <!-- The sink when this browser is the chosen output. x-webkit-airplay is
+       what puts it in the iOS Control Centre picker; playsinline stops iOS
+       taking it fullscreen. -->
+  <audio id="castaudio" preload="auto" playsinline
+         x-webkit-airplay="allow" crossorigin="anonymous"></audio>
+  <audio id="castaudio2" preload="auto" playsinline
+         x-webkit-airplay="allow" crossorigin="anonymous"></audio>
+  <!-- The spoken track name. Its own element so it can play over the music
+       without disturbing the handover between the other two. -->
+  <audio id="castsay" preload="auto" playsinline></audio>
 
   <div class="picker" id="picker">
     <div class="picker-head">Add to playlist</div>
@@ -733,6 +786,25 @@ body.noviz .miniwave{display:none}
         <div class="srow"><span class="slabel">Start with Windows</span><div class="toggle" id="boot"></div></div>
         <div class="srow"><span class="slabel">Only my devices<em>Rejects other machines on the network</em></span>
           <div class="toggle" id="lockips"></div></div>
+
+        <div class="seclbl">Reaching this from a phone</div>
+        <div class="srow"><span class="slabel">Tailscale<em>Lets a phone off your wifi reach the player</em></span>
+          <select class="keyin" id="tsmode" style="width:118px">
+            <option value="auto">Use if present</option>
+            <option value="on">Required</option>
+            <option value="off">Off</option>
+          </select></div>
+        <div id="netaddrs"></div>
+        <div class="hint" id="nethint"></div>
+
+        <div class="seclbl">Downloaded music</div>
+        <div class="srow"><span class="slabel">Cache limit<em>Least-played goes first; favourites and likes stay</em></span>
+          <span style="display:flex;gap:6px;align-items:center">
+            <input class="keyin" id="cachemb" type="number" min="200" step="100"
+                   style="width:86px"><span class="sval">MB</span>
+          </span></div>
+        <div class="srow"><span class="slabel">On disk now<em id="cacheuse">checking…</em></span>
+          <button class="btn" id="cachetrim">Trim now</button></div>
         <div class="srow"><span class="slabel">Restart the player<em>Reloads mpv without quitting</em></span>
           <button class="btn" id="restart">Restart</button></div>
         <div class="srow"><span class="slabel">Where your data lives</span>
@@ -766,6 +838,15 @@ let state = { volume: 70, position: 0, duration: 0, trackKey: "", playing: false
 
 /* ── window bridge (pywebview) ─────────────────────────────────────── */
 const bridge = () => (window.pywebview && window.pywebview.api) || null;
+
+/* pywebview injects its api asynchronously, so this runs twice: once in case
+   it is already there, and again when it announces itself. */
+function markDesktop() {
+  if (bridge()) document.body.classList.add("desktop");
+}
+window.addEventListener("pywebviewready", markDesktop);
+document.addEventListener("DOMContentLoaded", markDesktop);
+markDesktop();
 
 // In the desktop flyout, window.open makes a chrome-less WebView2 popup that
 // flashes up and vanishes. Hand those links to the real browser instead. On
@@ -909,9 +990,27 @@ function setVol(v) {
   $("minivfill").style.height = pct + "%";
   $("volicon").innerHTML = volIcon(v);
 }
+/* iOS keeps audio element volume read-only — the hardware buttons are the
+   only control there, so we don't pretend otherwise. */
+const IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+            (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+/* The PC's volume and this phone's are separate things. When the phone is the
+   output, the slider moves the phone; mpv keeps whatever it was set to. */
+function pushVolume(v) {
+  if (typeof cast !== "undefined" && cast.on) {
+    if (IOS) return;                       // system volume owns it
+    try {
+      const vol = Math.max(0, Math.min(1, v / VOL_MAX));
+      castEls.forEach(el => { el.volume = vol; });   // both, or the handover jumps
+    } catch (e) {}
+    return;
+  }
+  api("/api/control/volume?value=" + v);
+}
 function sendVol() {
   const now = Date.now();
-  if (now - volSendT >= 110) { volSendT = now; api("/api/control/volume?value=" + state.volume); }
+  if (now - volSendT >= 110) { volSendT = now; pushVolume(state.volume); }
 }
 const volFromX = e => { const r = $("volslider").getBoundingClientRect();
   return Math.max(0, Math.min(VOL_MAX, Math.round((e.clientX - r.left) / r.width * VOL_MAX))); };
@@ -924,7 +1023,7 @@ window.addEventListener("mousemove", e => {
   if (vvolDrag) { setVol(volFromY(e)); sendVol(); }
 });
 window.addEventListener("mouseup", () => {
-  if (volDrag || vvolDrag) api("/api/control/volume?value=" + state.volume);
+  if (volDrag || vvolDrag) pushVolume(state.volume);
   volDrag = vvolDrag = false;
 });
 let wheelT;
@@ -932,7 +1031,7 @@ function wheelVol(e) {
   e.preventDefault();
   setVol(Math.max(0, Math.min(VOL_MAX, state.volume + (e.deltaY < 0 ? 4 : -4))));
   clearTimeout(wheelT);
-  wheelT = setTimeout(() => api("/api/control/volume?value=" + state.volume), 120);
+  wheelT = setTimeout(() => pushVolume(state.volume), 120);
 }
 ["volslider","volicon","minivol"].forEach(id => $(id).addEventListener("wheel", wheelVol, {passive:false}));
 
@@ -952,12 +1051,39 @@ let seekDrag = false;
 const bar = document.querySelector(".bar");
 const seekFrac = e => { const r = bar.getBoundingClientRect();
   return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)); };
-bar.addEventListener("mousedown", e => { seekDrag = true;
-  const p = seekFrac(e); $("fill").style.width = (p*100) + "%"; $("cur").textContent = fmt(p * state.duration); });
-window.addEventListener("mousemove", e => { if (seekDrag) {
-  const p = seekFrac(e); $("fill").style.width = (p*100) + "%"; $("cur").textContent = fmt(p * state.duration); } });
-window.addEventListener("mouseup", e => { if (seekDrag) { seekDrag = false;
-  if (state.duration) api("/api/seek?pos=" + Math.round(seekFrac(e) * state.duration)); } });
+
+/* One place that moves the bar, the knob and the time, so they can't
+   disagree with each other. */
+function paintSeek(frac, secs) {
+  const pct = Math.max(0, Math.min(100, (frac || 0) * 100));
+  $("fill").style.width = pct + "%";
+  $("seekdot").style.left = pct + "%";
+  $("cur").textContent = fmt(secs != null ? secs : (frac || 0) * state.duration);
+}
+
+/* Pointer events, not mouse events: these are the only ones a phone sends
+   for a drag, which is why scrubbing did nothing on the web app. Capture
+   keeps the drag alive when the finger leaves the 5px bar, which it always
+   does. */
+bar.addEventListener("pointerdown", e => {
+  if (!state.duration) return;
+  seekDrag = true;
+  document.body.classList.add("seeking");
+  try { bar.setPointerCapture(e.pointerId); } catch (err) {}
+  paintSeek(seekFrac(e));
+  e.preventDefault();
+});
+bar.addEventListener("pointermove", e => { if (seekDrag) paintSeek(seekFrac(e)); });
+function endSeek(e) {
+  if (!seekDrag) return;
+  seekDrag = false;
+  document.body.classList.remove("seeking");
+  if (state.duration) api("/api/seek?pos=" + Math.round(seekFrac(e) * state.duration));
+}
+bar.addEventListener("pointerup", endSeek);
+bar.addEventListener("pointercancel", () => {
+  seekDrag = false; document.body.classList.remove("seeking");
+});
 
 /* ── toast ─────────────────────────────────────────────────────────── */
 let toastT;
@@ -1404,14 +1530,22 @@ async function loadLists() {
   const box = $("panel-lists");
   box.innerHTML = '<div class="muted">Loading…</div>';
   const r = await api("/api/playlists");
-  const names = Object.keys((r && r.playlists) || {});
+  // /api/playlists returns a *list* of {name, count}. Object.keys() on an
+  // array hands back "0", "1", "2" — which is where the mystery playlist
+  // called 0 came from, and why the real names never showed up.
+  const rows = (r && r.playlists) || [];
   let html = `<div class="srow" style="border:0"><button class="btn primary" id="plnew">Save current song to a list</button></div>` +
-    `<div class="plimport"><input id="plspot" placeholder="Paste a Spotify playlist link" autocomplete="off" spellcheck="false">` +
+    `<div class="plimport"><input id="plspot" placeholder="Paste a Spotify or Apple Music link" autocomplete="off" spellcheck="false">` +
     `<button class="btn" id="plspotgo">Add</button></div>`;
-  html += names.length
-    ? names.map(n => `<div class="plrow"><span class="pn">${esc(n)}</span>` +
+  html += rows.length
+    ? rows.map(p => {
+        const n = p.name || "";
+        return `<div class="plrow"><span class="pn" data-open="${esc(n)}">${esc(n)}` +
+        `<em>${p.count || 0} song${p.count === 1 ? "" : "s"}</em></span>` +
         `<button class="qc" data-play="${esc(n)}" title="Play">▶</button>` +
-        `<button class="qc" data-del="${esc(n)}" title="Delete">✕</button></div>`).join("")
+        `<button class="qc" data-del="${esc(n)}" title="Delete">✕</button></div>` +
+        `<div class="pltracks" id="pl-${esc(n).replace(/[^a-zA-Z0-9]/g, "_")}"></div>`;
+      }).join("")
     : '<div class="muted">No lists yet.</div>';
   box.innerHTML = html;
   $("plnew").onclick = async () => {
@@ -1428,7 +1562,41 @@ async function loadLists() {
   };
 }
 $("panel-lists").addEventListener("click", async e => {
+  const open = e.target.closest("[data-open]");
   const play = e.target.closest("[data-play]"), del = e.target.closest("[data-del]");
+  if (open) {
+    // Look inside without starting it. Pressing the name again folds it back.
+    const name = open.dataset.open;
+    const box = $("pl-" + name.replace(/[^a-zA-Z0-9]/g, "_"));
+    if (!box) return;
+    if (box.innerHTML) { box.innerHTML = ""; return; }
+    box.innerHTML = '<div class="muted" style="padding:6px 2px">Loading…</div>';
+    const r = await api("/api/playlist/tracks?name=" + encodeURIComponent(name));
+    const ts = (r && r.tracks) || [];
+    box.innerHTML = ts.length
+      ? ts.map((t, i) => `<div class="pltrack"><span class="pli">${i + 1}</span>` +
+          `<span class="plt">${esc(t.title || "")}<em>${esc(t.artist || "")}</em></span>` +
+          `<button class="qc" data-plplay="${esc(name)}" data-idx="${i}" title="Play from here">▶</button>` +
+          `<button class="qc" data-plrm="${esc(name)}" data-vid="${esc(t.video_id || "")}" title="Remove">✕</button>` +
+          `</div>`).join("")
+      : '<div class="muted" style="padding:6px 2px">Empty.</div>';
+    return;
+  }
+  const from = e.target.closest("[data-plplay]");
+  if (from) {
+    const r = await api("/api/playlist/play?name=" + encodeURIComponent(from.dataset.plplay) +
+                        "&start=" + encodeURIComponent(from.dataset.idx));
+    toast(r && r.message);
+    return;
+  }
+  const rm = e.target.closest("[data-plrm]");
+  if (rm) {
+    const r = await api("/api/playlist/remove?name=" + encodeURIComponent(rm.dataset.plrm) +
+                        "&video_id=" + encodeURIComponent(rm.dataset.vid));
+    toast(r && r.message);
+    loadLists();
+    return;
+  }
   if (play) { const r = await api("/api/playlist/play?name=" + encodeURIComponent(play.dataset.play)); toast(r && r.message); }
   if (del) { const r = await api("/api/playlist/delete?name=" + encodeURIComponent(del.dataset.del)); toast(r && r.message); loadLists(); }
 });
@@ -1442,9 +1610,62 @@ document.querySelectorAll(".stab").forEach(tab => tab.onclick = () => {
   $("sheet").querySelector(".sheet-body").scrollTop = 0;
   // Only ask when the tab is actually on screen: it walks three caches and
   // stats the download folder.
-  if (tab.dataset.s === "system") loadHealth();
+  if (tab.dataset.s === "system") { loadHealth(); loadNetwork(); loadCache(); }
 });
 $("healthbtn").onclick = loadHealth;
+
+/* which addresses reach this player, and whether Tailscale is up */
+async function loadNetwork() {
+  const r = await api("/api/network");
+  if (!r) return;
+  const ts = r.tailscale || {};
+  $("netaddrs").innerHTML = (r.addresses || []).map(a =>
+    `<div class="srow"><span class="slabel">${esc(a.label)}` +
+    `<em>${esc(a.url.replace(/\?key=.*$/, ""))}</em></span>` +
+    `<span style="display:flex;gap:6px">` +
+    `<button class="btn netqr" data-k="${esc(a.kind)}">QR</button>` +
+    `<button class="btn netcopy" data-u="${esc(a.url)}">Copy</button></span></div>` +
+    `<div class="qrbox" id="qr-${esc(a.kind)}"></div>`).join("");
+  $("nethint").textContent = ts.ok
+    ? "Tailscale is up on " + ts.ip
+    : "Tailscale: " + (ts.detail || "unavailable");
+}
+$("netaddrs").addEventListener("click", async e => {
+  const q = e.target.closest(".netqr");
+  if (q) {
+    const box = $("qr-" + q.dataset.k);
+    if (box.innerHTML) { box.innerHTML = ""; return; }   // second press hides it
+    // The link carries the api key, so this is fetched with it and dropped
+    // straight into the page rather than pointed at by a public url.
+    const r = await fetch("/api/qr?kind=" + encodeURIComponent(q.dataset.k) +
+                          "&key=" + encodeURIComponent(KEY));
+    box.innerHTML = r.ok ? await r.text() : "";
+    return;
+  }
+  const b = e.target.closest(".netcopy");
+  if (!b) return;
+  // The link carries the key, so it works when pasted straight into a phone.
+  try { await navigator.clipboard.writeText(b.dataset.u); toast("Link copied"); }
+  catch (err) { toast("Couldn't copy — the link is " + b.dataset.u); }
+});
+async function loadCache(prune) {
+  const r = await api("/api/cache" + (prune ? "?prune=1" : ""));
+  if (!r) return;
+  $("cachemb").value = r.limit_mb;
+  $("cacheuse").textContent =
+    `${r.used_mb} MB across ${r.files} files (${r.percent}% of the limit)`;
+  if (prune) toast(r.removed ? `Removed ${r.removed} least-played` : "Nothing to trim");
+}
+$("cachetrim").onclick = () => loadCache(true);
+$("cachemb").onchange = async () => {
+  const v = Math.max(200, parseInt($("cachemb").value, 10) || 2000);
+  await api("/api/setting?key=cache_size_mb&value=" + v);
+  loadCache();
+};
+$("tsmode").onchange = async () => {
+  await api("/api/setting?key=tailscale&value=" + encodeURIComponent($("tsmode").value));
+  loadNetwork();
+};
 $("closeSettings").onclick = () => $("sheet").classList.remove("open");
 
 function buildChips(id, options, onPick) {
@@ -1518,13 +1739,270 @@ $("devlist").addEventListener("click", async e => {
   const row = e.target.closest(".picker-row[data-d]");
   if (!row) return;
   devpicker.classList.remove("show");
-  const r = await api("/api/audio/device?name=" + encodeURIComponent(row.dataset.d));
-  toast((r && r.message) || "Output changed");
+  const dev = row.dataset.d;
+  // iOS only starts audio from inside a user gesture, and this click is one.
+  if (dev === CAST_DEV) { castOn(); castPlay(castLive()); }
+  else castOff();
+  const r = await api("/api/audio/device?name=" + encodeURIComponent(dev) +
+                     "&client=" + encodeURIComponent(CLIENT_ID));
+  toast(dev === CAST_DEV && IOS
+        ? "Playing here — use the phone's volume buttons"
+        : ((r && r.message) || "Output changed"));
+  if (dev === CAST_DEV) castSync(lastStatus);
 });
 document.addEventListener("click", e => {
   if (devpicker.classList.contains("show") && !devpicker.contains(e.target) &&
       e.target.closest("#volicon") === null) devpicker.classList.remove("show");
 });
+
+/* ── this browser as the speaker ─────────────────────────────────
+   mpv keeps decoding and keeps the clock; both its engines are off the sound
+   card. We play the same file and follow its position.
+
+   Two <audio> elements, not one. iOS keeps a backgrounded tab alive only
+   while audio is actually playing, and swapping the src on a single element
+   leaves a gap while the next file loads — which is exactly when the phone
+   was going quiet and never coming back. The next track is loaded into the
+   idle element ahead of time, so a track change is a handover between two
+   already-playing elements and the audio session never lapses. */
+/* This tab's own name. sessionStorage, not localStorage: it survives a
+   reload but is per-tab, so two tabs open on the same machine don't both
+   answer to the same name and play the song twice over each other. */
+const CLIENT_ID = (() => {
+  const fresh = () => "c" + Math.random().toString(36).slice(2, 10);
+  try {
+    let v = sessionStorage.getItem("mrsClient");
+    if (!v) { v = fresh(); sessionStorage.setItem("mrsClient", v); }
+    return v;
+  } catch (e) { return fresh(); }
+})();
+
+const castEls = [$("castaudio"), $("castaudio2")];
+let castIx = 0;
+const castLive = () => castEls[castIx];
+const castIdle = () => castEls[1 - castIx];
+const CAST_DEV = "cast:browser";
+const cast = { on: false, vid: "", tries: 0, ready: "", blocked: false };
+let lastStatus = {};
+
+const castSrc = v => "/api/output/stream/" + encodeURIComponent(v) +
+                     "?key=" + encodeURIComponent(KEY);
+
+/* play() is refused without a gesture. Say so rather than sitting silent. */
+function castPlay(el) {
+  const p = el.play();
+  if (p && p.catch) p.catch(() => {
+    cast.blocked = true;
+    document.body.classList.add("castblocked");
+  });
+}
+function castUnblock() {
+  if (!cast.blocked) return;
+  cast.blocked = false;
+  document.body.classList.remove("castblocked");
+}
+
+function castOn() {
+  cast.on = true;
+  document.body.classList.add("casting");
+  // On iOS the slider controls nothing, so it stops pretending to.
+  document.body.classList.toggle("sysvol", IOS);
+  $("volicon").title = "Playing on this phone — volume is the phone's";
+  if (!IOS) setVol(Math.round((castLive().volume ?? 1) * VOL_MAX));
+  castHandlers();
+}
+
+function castOff() {
+  cast.on = false; cast.vid = ""; cast.tries = 0; cast.ready = "";
+  document.body.classList.remove("sysvol", "casting", "castblocked");
+  $("volicon").title = "Choose output device";
+  castEls.forEach(el => {
+    try { el.pause(); el.removeAttribute("src"); el.load(); } catch (e) {}
+  });
+}
+
+function castMeta(t) {
+  if (!("mediaSession" in navigator)) return;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: t.name || "", artist: t.artist || "", album: t.album || "",
+      artwork: t.art ? [{ src: t.art, sizes: "512x512" }] : []
+    });
+  } catch (e) {}
+}
+
+/* Registered once, not per track. Re-registering them during a change was
+   dropping the lock-screen buttons at the moment they were most wanted. */
+let handlersSet = false;
+function castHandlers() {
+  if (handlersSet || !("mediaSession" in navigator)) return;
+  handlersSet = true;
+  const set = (a, fn) => {
+    try { navigator.mediaSession.setActionHandler(a, fn); } catch (e) {}
+  };
+  set("play", () => { castUnblock(); api("/api/control/playpause"); });
+  set("pause", () => api("/api/control/playpause"));
+  set("nexttrack", () => api("/api/control/next"));
+  set("previoustrack", () => api("/api/control/previous"));
+  set("seekto", d => {
+    if (d && d.seekTime != null) api("/api/seek?pos=" + Math.round(d.seekTime));
+  });
+}
+
+/* Feeds the lock-screen scrubber. Without it iOS shows a dead progress bar. */
+function castPosition(d) {
+  const ms = ("mediaSession" in navigator) && navigator.mediaSession;
+  if (!ms || !ms.setPositionState) return;
+  const dur = (d.track || {}).duration || 0;
+  if (!dur) return;
+  try {
+    ms.setPositionState({
+      duration: dur, playbackRate: 1,
+      position: Math.min(dur, Math.max(0, d.position || 0))
+    });
+    ms.playbackState = d.state === "playing" ? "playing" : "paused";
+  } catch (e) {}
+}
+
+/* Get the track after this one into the idle element, and ask the server to
+   have its transcode ready. */
+function castPreload(d) {
+  const at = (lastQ || []).findIndex(x => x.current);
+  const next = at >= 0 ? (lastQ[at + 1] || {}).video_id : "";
+  if (!next || next === cast.ready || next === cast.vid) return;
+  cast.ready = next;
+  api("/api/output/prepare/" + encodeURIComponent(next));
+  const el = castIdle();
+  try { el.src = castSrc(next); el.load(); } catch (e) {}
+}
+
+function castSync(d) {
+  if (!cast.on || !d) return;
+  const t = d.track || {};
+  const vid = t.video_id || "";
+  if (!vid) { try { castLive().pause(); } catch (e) {} return; }
+
+  if (vid !== cast.vid) {
+    cast.vid = vid; cast.tries = 0;
+    const at = d.position || 0;
+    // Already sitting in the other element? Hand over to it rather than
+    // reloading, so there's no silent gap for iOS to suspend us in.
+    if (cast.ready === vid && castIdle().src) {
+      const from = castLive();
+      castIx = 1 - castIx;
+      cast.ready = "";
+      const el = castLive();
+      const place = () => { try { el.currentTime = at; } catch (e) {} };
+      if (el.readyState >= 1) place();
+      else el.addEventListener("loadedmetadata", place, { once: true });
+      castPlay(el);
+      try { from.pause(); } catch (e) {}
+    } else {
+      const el = castLive();
+      el.src = castSrc(vid);
+      el.addEventListener("loadedmetadata", () => {
+        try { el.currentTime = at; } catch (e) {}
+      }, { once: true });
+      el.load();
+    }
+    castMeta(t);
+  }
+
+  const el = castLive();
+  const playing = d.state === "playing";
+  if (playing && el.paused) castPlay(el);
+  else if (!playing && !el.paused) el.pause();
+
+  if (playing && el.readyState >= 2) {
+    const drift = Math.abs(el.currentTime - (d.position || 0));
+    if (drift > 2) { try { el.currentTime = d.position || 0; } catch (e) {} }
+  }
+  castPosition(d);
+  castPreload(d);
+}
+
+/* The PC picked an output. If it picked us, start playing; if it picked a
+   speaker, stop — without this the phone carries on until someone reloads it. */
+function applyOutput(d) {
+  if (!d) return;
+  // Casting names one browser. Every other open copy has to stop, or picking
+  // the phone while the page is also open on the PC plays out of both.
+  const mine = !!d.casting && d.client === CLIENT_ID;
+  if (mine === cast.on) return;
+  if (mine) {
+    castOn();
+    castSync(lastStatus);
+    toast("Now playing on this device");
+  } else {
+    castOff();
+    if (d.casting) toast("Moved to another device");
+    else toast("Moved to " + (d.label || "the computer"));
+  }
+}
+
+/* The PC has a track name to read out and we're the speaker, so we read it.
+   The music ducks underneath rather than pausing: mpv never stopped, so
+   pausing here would only have to be seeked back into line afterwards. */
+const castSay = $("castsay");
+let duckTimer = null;
+
+function applyAnnounce(d) {
+  if (!d || !cast.on || d.client !== CLIENT_ID) return;
+  const el = castLive();
+  const wasVol = el.volume;
+  try {
+    castSay.src = "/api/announce/" + encodeURIComponent(d.id) + ".mp3?key=" +
+                  encodeURIComponent(KEY);
+    castSay.load();
+    // iOS keeps volume read-only, so there the announcement simply plays over
+    // the top — still audible, just not ducked.
+    try { el.volume = Math.max(0, wasVol * 0.25); } catch (e) {}
+    const restore = () => {
+      clearTimeout(duckTimer);
+      try { el.volume = wasVol; } catch (e) {}
+    };
+    castSay.onended = restore;
+    castSay.onerror = restore;
+    // Belt and braces: if the clip never fires either event, don't leave the
+    // music quiet for the rest of the night.
+    clearTimeout(duckTimer);
+    duckTimer = setTimeout(restore, 15000);
+    castSay.play().catch(restore);
+  } catch (e) {
+    try { el.volume = wasVol; } catch (err) {}
+  }
+}
+
+/* Audio really started, so whatever refused it earlier no longer applies. */
+castEls.forEach(el => el.addEventListener("playing", castUnblock));
+
+/* A .webm still being transcoded answers 503. Retry instead of going silent. */
+castEls.forEach(el => el.addEventListener("error", () => {
+  if (!cast.on || !cast.vid || el !== castLive() || cast.tries >= 8) return;
+  cast.tries++;
+  const want = cast.vid;
+  setTimeout(() => {
+    if (!cast.on || cast.vid !== want) return;
+    el.src = castSrc(want);
+    el.load();
+  }, 2500);
+}));
+
+/* Selected on a previous visit: we're the output, but nothing can start
+   until this page has been touched once. */
+(async () => {
+  const r = await api("/api/audio/devices");
+  if (!r || r.current !== CAST_DEV || r.cast_client !== CLIENT_ID) return;
+  castOn();
+  const arm = () => {
+    if (!cast.on) return;
+    castUnblock();
+    castPlay(castLive());
+    castSync(lastStatus);
+  };
+  document.addEventListener("click", arm, { once: true });
+  document.addEventListener("touchend", arm, { once: true });
+})();
 
 const picker = $("picker");
 async function openPicker() {
@@ -1787,6 +2265,7 @@ async function loadSettings() {
   $("announce").classList.toggle("on", s.announce !== false);
   $("boot").classList.toggle("on", !!s.start_on_boot);
   $("lockips").classList.toggle("on", !!s.lock_ips);
+  if (s.tailscale) $("tsmode").value = s.tailscale;
   $("ckauto").classList.toggle("on", s.cookie_auto_refresh !== false);
   $("pldl").classList.toggle("on", !!s.playlist_download);
   markChips("crossfade", s.crossfade || 0);
@@ -1991,15 +2470,13 @@ function applyStatus(d) {
   state.position = d.position || 0;
   state.playing = d.state === "playing";
   if (!seekDrag) {
-    const pct = state.duration ? Math.min(100, state.position / state.duration * 100) : 0;
-    $("fill").style.width = pct + "%";
-    $("cur").textContent = fmt(state.position);
+    paintSeek(state.duration ? state.position / state.duration : 0, state.position);
   }
   $("dur").textContent = fmt(state.duration);
   $("play").innerHTML = state.playing ? ICON.pause : ICON.play;
   document.body.classList.toggle("paused", !state.playing);
 
-  if (!volDrag && !vvolDrag && d.volume != null) setVol(Math.round(d.volume));
+  if (!volDrag && !vvolDrag && d.volume != null && !cast.on) setVol(Math.round(d.volume));
   $("repeat").classList.toggle("on", d.repeat && d.repeat !== "off");
   $("repeat").dataset.mode = d.repeat || "off";
   $("repeat").title = { off: "Repeat off", all: "Repeating the queue",
@@ -2023,6 +2500,8 @@ function applyStatus(d) {
   }
   syncLyrics(state.position);
   if (d.activity) applyActivity(d.activity);
+  lastStatus = d;
+  castSync(d);
 }
 function applyActivity(a) {
   const busy = a.stage && !["idle", "playing"].includes(a.stage);
@@ -2041,6 +2520,8 @@ function connect() {
     let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
     switch (msg.type) {
       case "status": applyStatus(msg.data); break;
+      case "output": applyOutput(msg.data); break;
+      case "announce": applyAnnounce(msg.data); break;
       case "queue": renderQueue(msg.data); break;
       case "activity": applyActivity(msg.data || {}); break;
       case "toast": toast(msg.data); break;
@@ -2060,8 +2541,7 @@ function connect() {
 setInterval(() => {
   if (state.playing && !seekDrag && state.duration) {
     state.position = Math.min(state.duration, state.position + 0.25);
-    $("fill").style.width = (state.position / state.duration * 100) + "%";
-    $("cur").textContent = fmt(state.position);
+    paintSeek(state.position / state.duration, state.position);
     syncLyrics(state.position);
   }
 }, 250);

@@ -97,7 +97,11 @@ def _several(plan: Plan, kind: str) -> "Resolution | None":
             if t is not None and t.video_id not in seen:
                 seen.add(t.video_id)
                 dealt.append(t)
-    names = [p.tracks[0].artist or s for p, s in zip(parts, plan.seeds)]
+    # Name a genre request after the genres, not after whoever happened to
+    # come back first — "nu metal and rap rock" announcing itself as
+    # "Deftones and Olivia Rodrigo" is both wrong and unhelpful.
+    names = (list(plan.seeds) if kind == "genre"
+             else [p.tracks[0].artist or s for p, s in zip(parts, plan.seeds)])
     said = " and ".join(names[:2]) + ("…" if len(names) > 2 else "")
     return Resolution(dealt, f"Playing {said}",
                       hold_radio=any(p.hold_radio for p in parts),
@@ -144,9 +148,12 @@ def resolve(plan: Plan) -> Resolution:
 
     source = (plan.source or config.get("source") or "youtube").lower()
     if source in ("soundcloud", "bandcamp"):
-        fn = catalog.search_soundcloud if source == "soundcloud" else catalog.search_bandcamp
-        hits = fn(query, limit=5)
+        hits = _from_source(source, query)
         if not hits:
+            # Asked for one source and it has nothing — the others might.
+            other = _elsewhere(query, skip=(source,))
+            if other:
+                return other
             return _nothing(f"Nothing found on {source}")
         return Resolution(hits[:1], f"Playing {hits[0].title} from {source}")
 
@@ -163,6 +170,12 @@ def resolve(plan: Plan) -> Resolution:
             preferred = [t for t in hits if wanted in (t.artist or "").lower()]
             hits = preferred + [t for t in hits if t not in preferred]
         if not hits:
+            # Blocked, region-locked, taken down — YouTube having nothing
+            # isn't the same as the record not existing. Try the others
+            # before giving up.
+            other = _elsewhere(query, skip=("youtube",))
+            if other:
+                return other
             return _nothing(f"I couldn't find {query}")
         best = hits[0]
         return Resolution([best], f"Playing {best.title} by {best.artist}",
@@ -188,12 +201,67 @@ def resolve(plan: Plan) -> Resolution:
         return Resolution(tracks, f"Playing {who}", hold_radio=True)
 
     if kind == "genre":
+        # "nu metal and rap rock" is two genres, not one phrase. Searched
+        # whole it matches neither and lands on whatever shares the words —
+        # that request came back with A$AP Rocky's PUNK ROCK, which has the
+        # vocabulary and none of the meaning. Each genre gets its own search
+        # and they're dealt out in turn, so both are on from track one.
+        from .conjunction import split_seeds
+        parts = [g for g in split_seeds(query) if g.strip()]
+        if len(parts) > 1:
+            each = max(6, 30 // len(parts))
+            lanes = []
+            for g in parts:
+                got = _on_theme(g, catalog.genre_tracks(g, limit=each))
+                if got:
+                    lanes.append(got)
+            if lanes:
+                dealt: list[Track] = []
+                seen: set[str] = set()
+                for row in zip_longest(*lanes):
+                    for t in row:
+                        if t is not None and t.video_id not in seen:
+                            seen.add(t.video_id)
+                            dealt.append(t)
+                if dealt:
+                    said = " and ".join(parts[:2]) + ("…" if len(parts) > 2 else "")
+                    return Resolution(dealt, f"Playing {said}")
+
         tracks = _on_theme(query, catalog.genre_tracks(query, limit=25))
         if not tracks:
             return _nothing(f"I couldn't find anything for {query}")
         return Resolution(tracks, f"Playing some {query}")
 
     return Resolution([], f"I couldn't work out what {query} means", error="unknown")
+
+
+def _from_source(source: str, query: str, limit: int = 5) -> list[Track]:
+    fn = (catalog.search_soundcloud if source == "soundcloud"
+          else catalog.search_bandcamp)
+    try:
+        return fn(query, limit=limit) or []
+    except Exception as exc:
+        log.debug("%s search failed: %s", source, exc)
+        return []
+
+
+def _elsewhere(query: str, skip: tuple = ()) -> "Resolution | None":
+    """The same record on a source that isn't blocking it.
+
+    A song missing from YouTube is usually a takedown or a region lock rather
+    than a song that doesn't exist, and SoundCloud and Bandcamp don't share
+    YouTube's blocklist. Only reached when the first choice came back empty,
+    so it costs nothing on the normal path.
+    """
+    for alt in ("soundcloud", "bandcamp"):
+        if alt in skip:
+            continue
+        hits = _from_source(alt, query)
+        if hits:
+            log.info("%r wasn't on the usual source — found it on %s", query, alt)
+            return Resolution(hits[:1],
+                              f"Playing {hits[0].title} from {alt}")
+    return None
 
 
 def _on_theme(genre: str, tracks: list[Track]) -> list[Track]:
@@ -204,7 +272,7 @@ def _on_theme(genre: str, tracks: list[Track]) -> list[Track]:
     first. Unknowns are kept but demoted — with no Last.fm key nothing
     changes.
     """
-    from ..core.context import _matches, _theme_words
+    from ..core.context import _theme_words, matches_theme
     from ..core.tags import tagstore
 
     want = _theme_words(genre)
@@ -212,7 +280,10 @@ def _on_theme(genre: str, tracks: list[Track]) -> list[Track]:
         return tracks
 
     tagstore.warm(tracks)
-    deadline = time.monotonic() + 6.0
+    # Eight seconds, not six. Every track still unlooked-up when this expires
+    # counts as "unknown", and unknowns are what get through — so the deadline
+    # is directly how much drift a genre request tolerates.
+    deadline = time.monotonic() + 8.0
     while time.monotonic() < deadline:
         if all(tagstore.get(t) is not None for t in tracks):
             break
@@ -223,7 +294,7 @@ def _on_theme(genre: str, tracks: list[Track]) -> list[Track]:
         tags = tagstore.get(t)
         if not tags:
             unknown.append(t)
-        elif _matches(want, tags):
+        elif matches_theme(genre, tags):
             good.append(t)
         else:
             bad.append(f"{t.title} — {t.artist}")
@@ -236,7 +307,11 @@ def _on_theme(genre: str, tracks: list[Track]) -> list[Track]:
     # tracks, the ones we couldn't check are dropped rather than trusted.
     # Anti-Hero got into a grunge queue by being unverified, not by being
     # wrong-but-close.
-    if len(good) >= 8:
+    # Six confirmed is enough to fill the front of a queue on its own, and
+    # ask for two genres at once and each lane only gets half the results —
+    # at eight neither half ever cleared the bar, so the unverified rode
+    # along and a rap-rock request kept Olivia Rodrigo in second place.
+    if len(good) >= 6:
         if unknown:
             log.info("%s: also dropped %d unverified", genre, len(unknown))
         return good

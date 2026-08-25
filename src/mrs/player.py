@@ -37,6 +37,11 @@ def _song_on_air(track) -> str:
 
 CREATE_NO_WINDOW = 0x08000000
 
+# Not an mpv device. Selecting it drops mpv onto the null output — it keeps
+# decoding, so the clock and the queue carry on, but it lets go of the sound
+# card and the browser becomes the speaker.
+CAST_DEVICE = "cast:browser"
+
 
 class PlayerService:
     def __init__(self) -> None:
@@ -55,6 +60,9 @@ class PlayerService:
         self._start_at: float | None = None      # a "play in ten minutes" job
         self._ducking = False
         self._alarms: AlarmClock | None = None
+        self._announce_seq = 0
+        self._announce_files: dict[str, str] = {}
+        self._announce_lock = threading.Lock()
 
     # -- lifecycle -----------------------------------------------------
     def start(self) -> None:
@@ -69,7 +77,9 @@ class PlayerService:
             log.warning("crossfade engine unavailable: %s", exc)
         self.audio.apply_all()
         dev = config.get("audio_device", "auto")
-        if dev and dev != "auto":
+        if dev == CAST_DEVICE:
+            self._release_sound_card(True)  # a browser is the speaker
+        elif dev and dev != "auto":
             self.mpv.set("audio-device", dev)
         self.queue.start()
         catalog.set_preferences(taste.preferred_artists())
@@ -121,6 +131,13 @@ class PlayerService:
         self.audio.track_for = self.queue.track_for
         self.queue.mpv = self.mpv
         self.audio.apply_all()
+        # Fresh processes come up on the real sound card; if the phone is the
+        # output they have to be put back on null or the PC starts playing.
+        dev = config.get("audio_device", "auto")
+        if dev == CAST_DEVICE:
+            self._release_sound_card(True)
+        elif dev and dev != "auto":
+            self.mpv.set("audio-device", dev)
         bus.publish(Ev.TOAST, "Player restarted")
 
     # -- monitor loop --------------------------------------------------
@@ -283,12 +300,48 @@ class PlayerService:
             out.append({"name": name,
                         "label": d.get("description") or name,
                         "active": name == current})
-        return {"devices": out, "current": current}
+        # Not a device mpv can see — the browser asking is the speaker. mpv
+        # still decodes and still keeps the clock, it just gets muted.
+        out.append({"name": CAST_DEVICE, "label": "This phone or browser",
+                    "active": current == CAST_DEVICE, "cast": True})
+        return {"devices": out, "current": current,
+                "cast_client": config.get("cast_client", "")}
 
-    def set_audio_device(self, name: str) -> dict:
+    def set_audio_device(self, name: str, client: str = "") -> dict:
         name = (name or "auto").strip()
         config.set("audio_device", name)
+        # Which browser is the speaker. Without this every open copy of the
+        # player starts playing at once — pick the phone with the page also
+        # open on the PC and you get both, which is exactly what it sounded
+        # like. Only the tab that asked for it plays.
+        if name == CAST_DEVICE:
+            config.set("cast_client", (client or "").strip())
+        else:
+            config.set("cast_client", "")
+
+        if name == CAST_DEVICE:
+            try:
+                # Only when we're actually coming from a real output. Picking
+                # the phone twice used to record "null" as the way back, and
+                # then returning to a speaker restored null — PC silent, with
+                # the device list insisting it was on the headphones.
+                if self.current_ao() != "null":
+                    config.set("ao_before_cast", self.current_ao())
+                self._release_sound_card(True)
+            except Exception as exc:
+                return {"ok": False, "message": str(exc)}
+            config.set("audio_device_label", "This phone or browser")
+            self._announce_output(name, True, client=config.get("cast_client", ""))
+            log.info("audio output -> cast (PC released)")
+            return {"ok": True, "device": name, "cast": True,
+                    "message": "Playing on this phone — the PC is off the sound card"}
+
         try:
+            # Coming back from cast: hand mpv its output driver back first,
+            # or setting a device on the null ao does nothing.
+            if self.current_ao() == "null":
+                self._release_sound_card(False)
+            self.mpv.set("mute", False)
             self.mpv.set("audio-device", name)
         except Exception as exc:
             return {"ok": False, "message": str(exc)}
@@ -297,11 +350,64 @@ class PlayerService:
             if d.get("name") == name:
                 label = d.get("description") or name
         config.set("audio_device_label", "" if name == "auto" else label)
+        self._announce_output(name, False, label)
         if listener.running:
             listener.restart()      # the meter should follow the sound
         log.info("audio output -> %s", label)
         return {"ok": True, "device": name,
                 "message": f"Playing through {label if name != 'auto' else 'the system default'}"}
+
+    def _announce_output(self, name: str, casting: bool, label: str = "",
+                         client: str = "") -> None:
+        """Tell every open client where the sound is going.
+
+        Picking the phone from the PC has to reach the phone: it's the thing
+        that has to start playing, and it has no way of knowing otherwise
+        until someone reloads it.
+        """
+        bus.publish(Ev.OUTPUT, {
+            "device": name, "casting": casting, "client": client,
+            "label": label or config.get("audio_device_label", "")})
+
+    def _release_sound_card(self, release: bool) -> None:
+        """Put both mpv instances on (or off) the null output.
+
+        Both, not just the primary. The crossfade engine is a second mpv that
+        plays the incoming track out loud for the length of the overlap — so
+        casting to the phone while it faded still came out of the PC speakers
+        every time a song changed. Muting it isn't enough either: the point is
+        to let go of the device, not to play silence into it.
+        """
+        back = config.get("ao_before_cast", "") or "wasapi"
+        if back == "null":
+            back = "wasapi"       # never restore into silence
+        for m in (self.mpv, self.alt):
+            try:
+                m.set("ao", "null" if release else back)
+                m.set("mute", False)
+            except Exception as exc:
+                log.debug("ao switch failed on one engine: %s", exc)
+        # The Windows media overlay and the media keys belong to whatever is
+        # actually making the sound. While that's the phone, mpv answering
+        # them means two things fighting over one play/pause.
+        try:
+            self.mpv.set("media-controls", "no" if release else "yes")
+            self.mpv.set("input-media-keys", "no" if release else "yes")
+        except Exception as exc:
+            log.debug("media-controls switch failed: %s", exc)
+
+    def current_ao(self, alt: bool = False) -> str:
+        """mpv reports `ao` as a list of driver entries, empty when default."""
+        try:
+            cur = (self.alt if alt else self.mpv).get("ao", None)
+        except Exception:
+            return ""
+        if isinstance(cur, list) and cur:
+            return str(cur[0].get("name") or "")
+        return str(cur or "")
+
+    def casting(self) -> bool:
+        return config.get("audio_device", "auto") == CAST_DEVICE
 
     # -- status --------------------------------------------------------
     def status(self) -> dict:
@@ -559,12 +665,20 @@ class PlayerService:
             return {"ok": False, "message": "Nothing playing"}
         return playlists.add(name, track)
 
-    def playlist_play(self, name: str, shuffle: bool = False) -> dict:
+    def playlist_play(self, name: str, shuffle: bool = False,
+                      start: int = 0) -> dict:
         tracks = playlists.tracks(name)
         if not tracks:
             return {"ok": False, "message": f"{name} is empty"}
-        self.queue.play_now(tracks, shuffle=shuffle, hold_radio=True)
-        return {"ok": True, "message": f"Playing {name}"}
+        where = ""
+        if start:
+            start = max(0, min(int(start), len(tracks) - 1))
+            if start:
+                where = f" from {tracks[start].title}"
+                tracks = tracks[start:]
+        self.queue.play_now(tracks, shuffle=shuffle, hold_radio=True,
+                            kind="playlist")
+        return {"ok": True, "message": f"Playing {name}{where}"}
 
     # -- announce ------------------------------------------------------
     def announce(self, text: str) -> None:
@@ -572,13 +686,24 @@ class PlayerService:
             return
         threading.Thread(target=self._speak, args=(text,), daemon=True).start()
 
+    def announce_file(self, aid: str) -> str | None:
+        """Where a spoken clip lives, for the client that has to play it."""
+        with self._announce_lock:
+            return self._announce_files.get(aid)
+
     def _speak(self, text: str) -> None:
         try:
             import asyncio
             import tempfile
 
             import edge_tts
-            path = os.path.join(tempfile.gettempdir(), "mrs_tts.mp3")
+            # A fresh name per clip. One reused filename meant the phone
+            # played whatever its cache still had, which was the last song's
+            # name, and there was no way to tell the two apart.
+            with self._announce_lock:
+                self._announce_seq += 1
+                aid = str(self._announce_seq)
+            path = os.path.join(tempfile.gettempdir(), f"mrs_tts_{aid}.mp3")
 
             async def go():
                 tts = edge_tts.Communicate(text, config.get("tts_voice",
@@ -586,17 +711,47 @@ class PlayerService:
                 await tts.save(path)
 
             asyncio.run(go())
+
+            if self.casting():
+                # The phone is the speaker, so it does the talking too. mpv
+                # is on the null output; playing this locally would announce
+                # the song to an empty room.
+                self._offer_announcement(aid, path, text)
+                return
+
             self._ducking = True
             original = int(self.mpv.get("volume", config.get("volume", 70)))
             self.mpv.set("volume", max(8, int(original * 0.25)))
-            subprocess.run([shutil.which("mpv") or "mpv", "--no-video",
-                            "--really-quiet", path], timeout=30,
-                           creationflags=CREATE_NO_WINDOW)
+            # Out of the speaker the music is using, not whatever Windows
+            # calls default — picking a second sound card moved the songs and
+            # left the announcements behind on the first one.
+            cmd = [shutil.which("mpv") or "mpv", "--no-video", "--really-quiet"]
+            dev = config.get("audio_device", "auto")
+            if dev and dev not in ("auto", CAST_DEVICE):
+                cmd.append(f"--audio-device={dev}")
+            cmd.append(path)
+            subprocess.run(cmd, timeout=30, creationflags=CREATE_NO_WINDOW)
             self.mpv.set("volume", original)
         except Exception as exc:
             log.debug("announce failed: %s", exc)
         finally:
             self._ducking = False
+
+    def _offer_announcement(self, aid: str, path: str, text: str) -> None:
+        """Hand the clip to whichever browser is acting as the speaker."""
+        with self._announce_lock:
+            self._announce_files[aid] = path
+            # Keep a few so a client fetching a moment late still finds its
+            # clip, and bin the rest rather than filling temp all day.
+            for old in sorted(self._announce_files, key=int)[:-4]:
+                stale = self._announce_files.pop(old, None)
+                try:
+                    if stale:
+                        os.remove(stale)
+                except OSError:
+                    pass
+        bus.publish(Ev.ANNOUNCE, {"id": aid, "text": text,
+                                  "client": config.get("cast_client", "")})
 
     # -- alarms --------------------------------------------------------
     def _on_alarm(self, alarm: dict) -> None:

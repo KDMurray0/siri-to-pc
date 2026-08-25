@@ -230,6 +230,15 @@ class TasteEngine:
     def liked(self) -> list[dict]:
         return list(self._liked)
 
+    def liked_ids(self) -> set[str]:
+        return {t.get("video_id") for t in self._liked if t.get("video_id")}
+
+    def play_counts(self) -> dict[str, int]:
+        """video id -> times played through. What the cache keeps by."""
+        with self._lock:
+            return {vid: int(v[0]) for vid, v in self._song.items()
+                    if v and len(v) > 0 and v[0]}
+
     def liked_seed(self) -> str | None:
         with self._lock:
             if not self._liked:

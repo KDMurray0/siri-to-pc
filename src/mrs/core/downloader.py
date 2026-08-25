@@ -89,42 +89,86 @@ class Downloader:
             log.warning("pin failed: %s", exc)
             return None
 
-    def cache_stats(self) -> dict:
-        try:
-            files = [f for f in cache_dir().glob("*") if f.is_file()]
-            return {"files": len(files),
-                    "mb": round(sum(f.stat().st_size for f in files) / 1048576, 1)}
-        except Exception:
-            return {"files": 0, "mb": 0.0}
+    def prune_cache(self, keep_mb: int | None = None,
+                    keep: set[str] | None = None) -> int:
+        """Hold the cache under its size limit, dropping the least-played first.
 
-    def prune_cache(self, keep_mb: int = 2000, keep: set[str] | None = None) -> int:
-        """Drop the oldest cached files once the cache gets fat.
+        Oldest-first was throwing away the songs played every day: playing a
+        file doesn't touch its mtime, so a favourite downloaded in March looked
+        exactly as stale as something heard once and never again. Ranked by how
+        often it has actually been played through, with liked tracks weighted
+        up and recency only breaking ties.
 
-        `keep` is whatever the queue still needs. This used to run once at
-        startup, when nothing was queued and oldest-first could never reach a
-        file that mattered. It runs while music is playing now, so it has to
-        be told what not to take: a downloaded track that hasn't been reached
-        yet is just an old file on disk.
+        `keep` is whatever the queue still needs — a downloaded track that
+        hasn't been reached yet is otherwise just an old file on disk.
         """
+        if keep_mb is None:
+            keep_mb = int(config.get("cache_size_mb", 2000))
+        from .taste import taste
+        from . import cast
+
+        cast.prune()          # transcodes whose source already went
+
+        root = cache_dir()
+        # The limit is about disk used, so everything under here counts: the
+        # cast transcodes in the subfolder and the files the queue still needs
+        # included. Measuring only the prunable ones is how it sat at 105% —
+        # it was reporting the part it was allowed to delete, not the total.
+        every = [f for f in root.rglob("*") if f.is_file()]
+        total = sum(f.stat().st_size for f in every)
+        limit = max(0, keep_mb) * 1024 * 1024
+        if total <= limit:
+            return 0
+
         spare = {os.path.normcase(os.path.abspath(p)) for p in (keep or ())}
-        files = sorted((f for f in cache_dir().glob("*")
-                        if f.is_file()
-                        and os.path.normcase(str(f.resolve())) not in spare),
-                       key=lambda f: f.stat().st_mtime)
-        total = sum(f.stat().st_size for f in files)
-        limit = keep_mb * 1024 * 1024
+        plays, liked = taste.play_counts(), taste.liked_ids()
+        files = [f for f in every
+                 if f.parent == root
+                 and os.path.normcase(str(f.resolve())) not in spare]
+
+        def worth(f: Path) -> tuple:
+            vid = f.stem
+            # A like is worth about three plays: it says keep this even if the
+            # run of listens hasn't happened yet.
+            return (plays.get(vid, 0) + (3 if vid in liked else 0),
+                    f.stat().st_mtime)
+
+        files.sort(key=worth)          # least worth keeping goes first
         removed = 0
         for f in files:
             if total <= limit:
                 break
-            size = f.stat().st_size
+            size, vid = f.stat().st_size, f.stem
             try:
                 f.unlink()
-                total -= size
-                removed += 1
             except Exception:
-                pass
+                continue
+            total -= size
+            removed += 1
+            # Its transcode is dead weight the moment the source goes.
+            for t in cast.work_dir().glob(f"{vid}*.m4a"):
+                try:
+                    total -= t.stat().st_size
+                    t.unlink()
+                except Exception:
+                    pass
         return removed
+
+    def cache_size(self) -> int:
+        """Bytes on disk, transcodes and all. Cheap enough to poll."""
+        return sum(f.stat().st_size
+                   for f in cache_dir().rglob("*") if f.is_file())
+
+    def cache_stats(self) -> dict:
+        """Size on disk against the limit, for the settings panel."""
+        files = [f for f in cache_dir().rglob("*") if f.is_file()]
+        used = sum(f.stat().st_size for f in files)
+        limit = int(config.get("cache_size_mb", 2000))
+        return {"files": len(files), "used_mb": round(used / 1024 / 1024, 1),
+                "mb": round(used / 1024 / 1024, 1),   # health panel's name for it
+                "limit_mb": limit,
+                "percent": round(used / (limit * 1024 * 1024) * 100, 1)
+                           if limit else 0.0}
 
     # -- fetching ------------------------------------------------------
     def _run(self, args: list[str], on_progress=None, timeout: int | None = None) -> tuple[int, str]:

@@ -33,7 +33,16 @@ DEFAULTS: dict[str, Any] = {
     "theme": "default",
     "audio_device": "auto",
     "audio_device_label": "",
+    "cast_client": "",         # the one browser acting as the speaker
     "listen_loopback": True,   # meter reads the real output
+
+    # reaching this server from a phone. auto = use Tailscale if it's there
+    "tailscale": "auto",       # auto | on | off
+    "tailscale_exe": "",       # only if it's installed somewhere unusual
+
+    # how much downloaded music to keep. Least-played goes first, so the
+    # songs on repeat survive and the one-offs don't.
+    "cache_size_mb": 2000,
 
     # fetching
     "js_runtime": "node",

@@ -17,7 +17,7 @@ import urllib.request
 
 from ..config import config
 from ..logging_setup import get
-from ..models import Track, _fold, is_channel_act, is_derivative
+from ..models import Track, _fold, is_channel_act, is_derivative, norm_title
 from ..paths import data_dir, write_atomic
 from ..core.gate import gate
 from . import numbers
@@ -354,22 +354,48 @@ def _named_in(query: str, tracks: list[Track]) -> list[Track]:
     Brubeck" still matches the Dave Brubeck Quartet, and a stray "five" or
     "the" matches nobody. Stable, so YouTube's own ranking survives inside
     each group.
+
+    Title exactness is checked first, and it has to be: with a title-only
+    query nothing names an artist, every result lands in the same group and
+    YouTube's own order decides. That is how asking for Sweet Sacrifice got
+    "WJ & Sweet Sacrifice" — the query is a substring of it, so it looked
+    just as good. An exact title beats one that merely contains it.
     """
     asked = set(_WORDS.findall(_fold(query.lower())))
     if not asked:
         return tracks
+    want = norm_title(query)
 
-    def rank(t: Track) -> tuple[int, float, int]:
+    def title_tier(t: Track) -> int:
+        tn = norm_title(t.title or "")
+        if not tn:
+            return 3
+        if tn == want:
+            return 0
+        # The query usually carries the artist as well. Take the artist's own
+        # words back out before deciding the title didn't match.
+        awords = set(_WORDS.findall(_fold((t.artist or "").lower())))
+        rest = " ".join(w for w in _WORDS.findall(_fold(query.lower()))
+                        if w not in awords)
+        if rest and norm_title(rest) == tn:
+            return 0
+        if tn.startswith(want) or want.startswith(tn):
+            return 1
+        if want in tn:
+            return 2
+        return 3
+
+    def rank(t: Track) -> tuple[int, int, float, int]:
         words = set(_WORDS.findall(_fold((t.artist or "").lower()))) - {"the", "and"}
         hit = words & asked
         # Half the name has to be there to count as named at all.
         if not words or not hit or len(hit) / len(words) < 0.5:
-            return (1, 0.0, 0)
+            return (title_tier(t), 1, 0.0, 0)
         # How much of the name matched, before how many words did. Counting
         # words first loses one-word bands: asking for Los Angeles by X, the
         # single letter scores one hit and Los Angeles De Charly scores two.
         # As a proportion X is a perfect match and Charly is half of one.
-        return (0, -len(hit) / len(words), -len(hit))
+        return (title_tier(t), 0, -len(hit) / len(words), -len(hit))
 
     return sorted(tracks, key=rank)
 

@@ -15,9 +15,29 @@ from .events import Ev, bus
 from .logging_setup import get, spawn
 from .models import Track
 from .player import player
-from .resolve import numbers, parser, resolver, spotify
+from .resolve import applemusic, numbers, parser, resolver, spotify
 
 log = get("request")
+
+# Which request is the live one. Resolving can take tens of seconds — an LLM
+# call, several searches, then a download — and asking for something else
+# during that used to leave two of them racing, with whichever finished last
+# winning. Each new play request takes the next number; anything older checks
+# in before it touches the queue and drops out if it has been superseded.
+_gen = 0
+_gen_lock = threading.Lock()
+
+
+def _claim() -> int:
+    global _gen
+    with _gen_lock:
+        _gen += 1
+        return _gen
+
+
+def _still_wanted(mine: int) -> bool:
+    with _gen_lock:
+        return mine == _gen
 
 _COMMANDS = {
     "pause": "pause", "resume": "resume", "next": "next", "previous": "previous",
@@ -37,9 +57,11 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
         if cast or config.get("cast_all"):
             threading.Thread(target=caster.broadcast, args=(text,), daemon=True).start()
 
-        # A Spotify link is a playlist import, not a search.
+        # A streaming link is a playlist import, not a search.
         if spotify.is_spotify_url(text):
             return _import_spotify(text, announce=announce)
+        if applemusic.is_apple_url(text):
+            return _import_apple(text, announce=announce)
 
         # Your own playlists win over anything YouTube might suggest.
         hit = _match_playlist(text)
@@ -81,8 +103,19 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
                 return {"status": "played", "message": msg, "via": plan.via,
                         "source": "library"}
 
+        # From here on this is a real search. Take the ticket, and stop
+        # whatever the last one had in flight — the user has moved on, and a
+        # download for a song they no longer want is just bandwidth and a
+        # queue slot.
+        mine = _claim()
+        if plan.mode not in ("next", "queue"):
+            player.queue.cancel()
+
         player.queue._set_activity("finding", plan.query)
         res = resolver.resolve(plan)
+        if not _still_wanted(mine):
+            log.info("dropped %r — a newer request came in while it resolved", text)
+            return {"status": "superseded", "message": "", "via": plan.via}
         if not res:
             bus.publish(Ev.TOAST, res.spoken)
             player.queue._set_activity("idle")
@@ -316,48 +349,68 @@ def play_later(what: str, minutes: float, *, announce: bool = True) -> dict:
             "in_minutes": int(round(minutes)), "via": "timer"}
 
 
-def _import_spotify(url: str, *, announce: bool = True, play: bool = True) -> dict:
-    """Read a Spotify link and save it as a playlist, keeping its name.
+def _import_link(reader, service: str, url: str, *,
+                 announce: bool = True, play: bool = True) -> dict:
+    """Turn a streaming link into a playlist, keeping its name.
+
+    `reader` is whichever module knows how to read that service — it needs
+    track_names(url) and link_name(url). Everything after that is the same
+    for all of them: match the names, start playing the moment the first one
+    lands, and keep the finished list as a playlist.
 
     play=False just files it away — for when you're collecting playlists
     rather than asking for one right now.
     """
     from .core.playlists import playlists
 
-    player.queue._set_activity("finding", "Reading Spotify link")
-    bus.publish(Ev.TOAST, "Reading that Spotify link…")
+    player.queue._set_activity("finding", f"Reading {service} link")
+    bus.publish(Ev.TOAST, f"Reading that {service} link…")
     verb = "Playing" if play else "Saved"
 
     def work() -> None:
-        names = spotify.track_names(url)
+        names = reader.track_names(url)
         if not names:
             bus.publish(Ev.TOAST, "Couldn't read that link — is the playlist public?")
             player.queue._set_activity("idle")
             return
 
-        label = spotify.link_name(url) or "Spotify import"
+        label = reader.link_name(url) or f"{service} import"
         bus.publish(Ev.TOAST, f"{label}: {len(names)} tracks, matching them up…")
 
         def progress(i, total, title):
             player.queue._set_activity("finding", f"{i}/{total} {title}", i / total)
 
-        tracks = spotify.resolve_imported(names, on_progress=progress)
+        # Start on the first match instead of the last. The rest are appended
+        # as they turn up, so the downloader is working the whole time the
+        # remaining names are still being looked up.
+        started = [False]
+
+        def arrived(track, count):
+            if not play:
+                return
+            if not started[0]:
+                started[0] = True
+                player.queue.play_now([track], hold_radio=True, kind="playlist")
+                if announce:
+                    player.announce(f"{verb} {label}")
+            else:
+                player.queue.enqueue([track])
+
+        tracks = spotify.resolve_imported(names, on_progress=progress,
+                                          on_track=arrived)   # service-agnostic
         player.queue._set_activity("idle")
         if not tracks:
             bus.publish(Ev.TOAST, "None of those tracks could be found")
             return
 
-        # keep it, so the import isn't a one-off
-        playlists.create(label)
-        for t in tracks:
-            playlists.add(label, t)
+        # keep it, so the import isn't a one-off — one write, not one per track
+        playlists.add_many(label, tracks)
 
         msg = f"{verb} {label} — {len(tracks)} tracks"
         if play:
-            player.queue.play_now(tracks, hold_radio=True)
+            if not started[0]:          # nothing matched early enough to start
+                player.queue.play_now(tracks, hold_radio=True, kind="playlist")
             bus.publish(Ev.TOAST, msg + " (saved as a playlist)")
-            if announce:
-                player.announce(msg)
         else:
             bus.publish(Ev.TOAST, msg)
             bus.publish(Ev.SETTINGS, {"playlists": True})
@@ -368,16 +421,27 @@ def _import_spotify(url: str, *, announce: bool = True, play: bool = True) -> di
         player.queue._set_activity("idle")
         bus.publish(Ev.TOAST, "That import failed — see the log")
 
-    spawn(work, name="spotify import", on_error=unstick)
-    return {"status": "ok", "message": "Importing that Spotify link…",
-            "via": "spotify"}
+    spawn(work, name=f"{service.lower()} import", on_error=unstick)
+    return {"status": "ok", "message": f"Importing that {service} link…",
+            "via": service.lower()}
+
+
+def _import_spotify(url: str, *, announce: bool = True, play: bool = True) -> dict:
+    return _import_link(spotify, "Spotify", url, announce=announce, play=play)
+
+
+def _import_apple(url: str, *, announce: bool = True, play: bool = True) -> dict:
+    return _import_link(applemusic, "Apple Music", url,
+                        announce=announce, play=play)
 
 
 def add_spotify(url: str) -> dict:
-    """Save a Spotify link as a playlist without interrupting what's on."""
-    if not spotify.is_spotify_url(url):
-        return {"status": "error", "message": "That isn't a Spotify link"}
-    return _import_spotify(url, announce=False, play=False)
+    """Save a streaming link as a playlist without interrupting what's on."""
+    if spotify.is_spotify_url(url):
+        return _import_spotify(url, announce=False, play=False)
+    if applemusic.is_apple_url(url):
+        return _import_apple(url, announce=False, play=False)
+    return {"status": "error", "message": "That isn't a Spotify or Apple Music link"}
 
 
 def play_station(url: str, name: str = "", art: str = "") -> dict:

@@ -4,6 +4,9 @@ youtube_cookies.txt
 COOOOKIES.txt
 *cookies*.txt
 
+# ── Working notes, not part of the release ──
+ideas.md
+
 # ── Runtime state / user data ──
 src/player_state.json
 src/liked_songs.json

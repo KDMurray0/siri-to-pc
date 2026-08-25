@@ -53,6 +53,7 @@ import threading
 import time
 from ctypes import wintypes
 from urllib import request as urlrequest
+from urllib.parse import urlparse
 
 import webview
 from PIL import Image, ImageDraw
@@ -522,38 +523,57 @@ class Bridge:
 
 flyout: Flyout | None = None
 
-SIGNIN_URL = "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmusic.youtube.com%2F"
+# Straight to YouTube, not to a Google login form. You press "Sign in"
+# yourself, in your own time — the old flow drove the login itself and closed
+# the moment it thought it was finished, which was usually too early.
+SIGNIN_URL = "https://www.youtube.com/"
 # where the cookies we need actually live
 COOKIE_STOPS = ("https://music.youtube.com/", "https://www.youtube.com/",
                 "https://accounts.google.com/")
 
+SIGNIN_POLL = 3.0          # seconds between "are we signed in yet" checks
+SIGNIN_GIVE_UP = 15 * 60   # stop watching after this long
+
 
 def sign_in_window() -> None:
-    """A real Google login in our own WebView2, then take the cookies.
+    """Open YouTube and wait. No clock, no driving the form.
 
-    This is the whole reason the Chrome route was a dead end: we can't decrypt
-    someone else's cookie jar, but we can own the browser that made them.
+    We can't decrypt somebody else's cookie jar, but we can own the browser
+    that makes them — so this opens YouTube in our own WebView2 and simply
+    watches for the auth cookies to appear. Sign in whenever you like, take
+    as long as you like; the window closes itself once the cookies are real,
+    and if you close it first we take whatever is there on the way out.
     """
     from mrs.core import cookies as ck
 
     win = webview.create_window("Sign in to YouTube", url=SIGNIN_URL,
-                                width=520, height=680, on_top=True)
+                                width=980, height=760)
 
-    started = threading.Event()      # "loaded" fires twice on a redirect
+    done = threading.Event()
 
-    def _gather() -> str:
-        """Cookies from each origin in turn. WebView2 only hands over the
-        ones belonging to the page currently loaded, so it has to visit all
-        three — which is what looked like YouTube opening by itself."""
+    def _read_cookies() -> str:
+        """Whatever the window currently holds, without navigating anywhere.
+
+        Navigating to collect is what made this feel like YouTube was opening
+        by itself, so the watcher only reads the page you're already on. The
+        sweep across the other origins happens once, at the end.
+        """
+        try:
+            jars = list(win.get_cookies() or [])
+        except Exception:
+            return ""
+        return ck.from_webview(jars)
+
+    def _sweep() -> str:
+        """The full pass, once we know there's something worth collecting."""
         jars, seen = [], set()
         for url in COOKIE_STOPS:
             try:
                 win.load_url(url)
-                time.sleep(2.0)          # let the navigation settle
+                time.sleep(1.8)
                 for jar in win.get_cookies() or []:
                     for name in (jar.keys() if hasattr(jar, "keys") else []):
-                        morsel = jar[name]
-                        tag = (morsel.get("domain") or "", name)
+                        tag = ((jar[name].get("domain") or ""), name)
                         if tag in seen:
                             continue
                         seen.add(tag)
@@ -562,51 +582,53 @@ def sign_in_window() -> None:
                 log.debug("no cookies from %s: %s", url, exc)
         return ck.from_webview(jars)
 
-    def collect() -> None:
+    def finish(reason: str) -> None:
+        if done.is_set():
+            return
+        done.set()
         saved = 0
         try:
-            try:
-                win.hide()               # out of sight for the domain hop
-            except Exception:
-                pass
-            text = _gather()
+            text = _sweep()
             found = [n for n in ck.AUTH_COOKIES if f"	{n}	" in text]
             if found:
                 ck.save_master(text)
                 saved = max(0, len(text.splitlines()) - 3)
-                log.info("signed in — saved %d cookies (%s)",
-                         saved, ", ".join(found))
+                log.info("signed in — saved %d cookies (%s)", saved,
+                         ", ".join(found))
             else:
-                log.warning("sign-in window had no auth cookies — not saved")
+                log.warning("sign-in finished with no auth cookies (%s)", reason)
         except Exception as exc:
             log.warning("sign-in collect failed: %s", exc)
         finally:
-            # Always closes, and always says what happened — vanishing with
-            # no word either way was most of what made this feel broken.
             try:
                 win.destroy()
             except Exception:
                 pass
             _api(f"/api/cookies/signedin?saved={saved}")
 
-    def on_loaded() -> None:
-        # once Google hands us off to YouTube, the login is done
-        try:
-            url = win.get_current_url() or ""
-        except Exception:
-            return
-        if "music.youtube.com" in url or "//www.youtube.com" in url:
-            if started.is_set():
+    def watch() -> None:
+        """Poll until the auth cookies turn up. Nothing is timed but this."""
+        deadline = time.time() + SIGNIN_GIVE_UP
+        while not done.is_set() and time.time() < deadline:
+            time.sleep(SIGNIN_POLL)
+            if done.is_set():
                 return
-            started.set()
-            try:
-                win.events.loaded -= on_loaded
-            except Exception:
-                pass
-            threading.Thread(target=collect, daemon=True,
-                             name="cookies-grab").start()
+            text = _read_cookies()
+            if any(f"	{n}	" in text for n in ck.AUTH_COOKIES):
+                log.info("auth cookies appeared — collecting")
+                finish("signed in")
+                return
+        if not done.is_set():
+            log.info("sign-in window open %d minutes with no login — leaving it",
+                     SIGNIN_GIVE_UP // 60)
 
-    win.events.loaded += on_loaded
+    # Closing the window yourself counts as "done" — take what's there.
+    try:
+        win.events.closing += lambda: finish("window closed")
+    except Exception:
+        pass
+
+    threading.Thread(target=watch, daemon=True, name="cookies-watch").start()
 
 
 

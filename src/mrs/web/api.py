@@ -12,12 +12,13 @@ import shutil
 import time
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                StreamingResponse)
 from fastapi.templating import Jinja2Templates
 
 from ..config import config
+from ..core import cast as cast_mod
 from ..core import cookies as cookie_mod
 from ..core import radio as radio_mod
 from ..core.downloader import downloader
@@ -411,7 +412,7 @@ def api_spotify_add(url: str = "", _: bool = Auth):
 @app.get("/api/playlist/{op}")
 def api_playlist(op: str, name: str = "", shuffle: bool = False,
                  video_id: str = "", title: str = "", artist: str = "",
-                 art: str = "", _: bool = Auth):
+                 art: str = "", start: int = 0, _: bool = Auth):
     if op == "create":
         playlists.create(name)
         return {"status": "ok", "message": f"Created {name}"}
@@ -426,7 +427,7 @@ def api_playlist(op: str, name: str = "", shuffle: bool = False,
     if op == "delete":
         return {"status": "ok", **playlists.delete(name)}
     if op == "play":
-        return {"status": "ok", **player.playlist_play(name, shuffle)}
+        return {"status": "ok", **player.playlist_play(name, shuffle, start)}
     if op == "download":
         playlists.download_async(name)
         return {"status": "ok", "message": f"Saving {name} offline"}
@@ -470,6 +471,7 @@ _SETTABLE = {
     "cast_all": bool, "queue_minutes": int,
     "cookie_check_interval": int, "completion_ratio": float,
     "announce": bool, "tts_voice": str, "download_workers": int,
+    "tailscale": str, "tailscale_exe": str, "cache_size_mb": int,
 }
 
 
@@ -497,8 +499,91 @@ def api_audio_devices(_: bool = Auth):
 
 
 @app.get("/api/audio/device")
-def api_audio_device(name: str = "auto", _: bool = Auth):
-    return {"status": "ok", **player.set_audio_device(name)}
+def api_audio_device(name: str = "auto", client: str = "", _: bool = Auth):
+    return {"status": "ok", **player.set_audio_device(name, client=client)}
+
+
+# ── casting the audio to whichever browser is asking ─────────────────────
+@app.get("/api/output/stream/{video_id}")
+def api_output_stream(video_id: str, _: bool = Auth):
+    """The track mpv is playing, as bytes a phone will accept.
+
+    FileResponse handles Range itself, which is what gives the phone a
+    draggable timeline instead of a take-it-or-leave-it download.
+    """
+    path, state = cast_mod.playable(video_id)
+    if state == "missing":
+        raise HTTPException(404, "not downloaded")
+    if state != "ready":
+        path, state = cast_mod.convert(video_id)
+        if state != "ready" or not path:
+            # 503 rather than an error: the client retries, it isn't broken.
+            return JSONResponse({"status": "converting", "detail": state},
+                                status_code=503)
+    media = "audio/mp4" if path.suffix.lower() in (".m4a", ".mp4") else None
+    return FileResponse(path, media_type=media or "application/octet-stream",
+                        headers={"Accept-Ranges": "bytes",
+                                 "Cache-Control": "private, max-age=3600"})
+
+
+@app.get("/api/output/prepare/{video_id}")
+def api_output_prepare(video_id: str, _: bool = Auth):
+    """Warm the next track so the handover isn't audible."""
+    _, state = cast_mod.playable(video_id)
+    if state == "needs conversion":
+        cast_mod.warm(video_id)
+        state = "converting"
+    return {"status": "ok", "state": state}
+
+
+@app.get("/api/output/stats")
+def api_output_stats(_: bool = Auth):
+    return {"status": "ok", "casting": player.casting(),
+            "ao": player.current_ao(), "alt_ao": player.current_ao(alt=True),
+            "media_controls": player.mpv.get("media-controls", None),
+            **cast_mod.stats()}
+
+
+@app.get("/api/announce/{aid}.mp3")
+def api_announce(aid: str, _: bool = Auth):
+    """The spoken track name, for the browser acting as the speaker."""
+    path = player.announce_file(aid)
+    if not path or not Path(path).is_file():
+        raise HTTPException(404, "that clip has gone")
+    return FileResponse(path, media_type="audio/mpeg",
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/network")
+def api_network(_: bool = Auth):
+    """Which addresses reach this player, and whether Tailscale is up."""
+    from ..core import net
+    return {"status": "ok", **net.addresses()}
+
+
+@app.get("/api/qr")
+def api_qr(kind: str = "lan", _: bool = Auth):
+    """A scannable code for one of our own addresses.
+
+    Takes a kind, not a url: an endpoint that renders any string handed to it
+    is a QR generator for whoever finds it, and these carry the api key.
+    """
+    from ..core import net
+    rows = net.addresses()["addresses"]
+    row = next((r for r in rows if r["kind"] == kind), None)
+    if not row:
+        raise HTTPException(404, "no such address")
+    return Response(net.qr_svg(row["url"]), media_type="image/svg+xml",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/cache")
+def api_cache(prune: int = 0, _: bool = Auth):
+    """How much downloaded music is on disk, and optionally trim it now."""
+    removed = 0
+    if prune:
+        removed = downloader.prune_cache(keep=player.queue.keep_paths())
+    return {"status": "ok", "removed": removed, **downloader.cache_stats()}
 
 
 @app.get("/api/theme")

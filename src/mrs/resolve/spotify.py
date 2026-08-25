@@ -160,8 +160,13 @@ def track_names(url: str) -> list[Track]:
 
 
 def resolve_imported(tracks: list[Track], limit: int = 200,
-                     on_progress=None) -> list[Track]:
-    """Match imported names to playable tracks, paced so we don't get limited."""
+                     on_progress=None, on_track=None) -> list[Track]:
+    """Match imported names to playable tracks, paced so we don't get limited.
+
+    on_track fires the moment each one is matched. A hundred-track playlist
+    takes minutes to resolve end to end, and waiting for the last match before
+    starting the first download means staring at silence for all of it.
+    """
     from . import catalog
     out: list[Track] = []
     total = min(len(tracks), limit)
@@ -182,4 +187,9 @@ def resolve_imported(tracks: list[Track], limit: int = 200,
             best.origin = "playlist"
             best.art = best.art or t.art
             out.append(best)
+            if on_track:
+                try:
+                    on_track(best, len(out))
+                except Exception:
+                    pass
     return out

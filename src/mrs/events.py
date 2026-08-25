@@ -78,3 +78,5 @@ class Ev:
     COOKIES = "cookies"        # cookie health
     LEVEL = "level"            # audio level for the visualiser
     LIBRARY = "library"        # local library scan progress
+    OUTPUT = "output"          # which device the audio is going to
+    ANNOUNCE = "announce"      # spoken track name, for whoever is the speaker

@@ -124,9 +124,13 @@ class Playlists:
         with self._lock:
             folder = self.folder(name)
             (folder / "name.txt").write_text(name.strip(), encoding="utf-8")
-            if not self._index(name).exists():
+            fresh = not self._index(name).exists()
+            if fresh:
                 self._save(name, [])
-            log.info("created playlist %r at %s", name, folder)
+                # Only when it really is new. add() calls this for every
+                # track, so logging unconditionally meant one line per track
+                # on an import.
+                log.info("created playlist %r at %s", name, folder)
         return name
 
     def _save(self, name: str, rows: list[dict]) -> None:
@@ -142,12 +146,46 @@ class Playlists:
             key = norm_title(track.title, track.artist)
             if any(norm_title(r.get("title", ""), r.get("artist", "")) == key
                    for r in rows):
-                return {"ok": True, "message": f"Already in {name}"}
+                # Matched on title+artist, not video id — the same song
+                # re-uploaded under a different id is still the same song.
+                return {"ok": True, "duplicate": True,
+                        "message": f"{track.title} is already in {name}"}
             rows.append(track.to_dict())
             self._save(name, rows)
         if config.get("playlist_download"):
             self.download_async(name)
         return {"ok": True, "message": f"Added to {name}", "count": len(rows)}
+
+    def add_many(self, name: str, tracks: list) -> dict:
+        """Add a batch in one pass.
+
+        add() re-reads the whole index, rewrites it and republishes settings
+        once per track. For a fifty-track import that's fifty rewrites and
+        fifty events for one logical change, and it gets quadratically worse
+        the longer the playlist is.
+        """
+        good = [t for t in tracks if t and (t.video_id or t.url)]
+        if not good:
+            return {"ok": False, "message": "Nothing to add"}
+        with self._lock:
+            self.create(name)
+            rows = [t.to_dict() for t in self.tracks(name)]
+            seen = {norm_title(r.get("title", ""), r.get("artist", ""))
+                    for r in rows}
+            added = 0
+            for t in good:
+                key = norm_title(t.title, t.artist)
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append(t.to_dict())
+                added += 1
+            if added:
+                self._save(name, rows)
+        if added and config.get("playlist_download"):
+            self.download_async(name)
+        return {"ok": True, "message": f"Added {added} to {name}",
+                "count": len(rows), "added": added}
 
     def remove(self, name: str, video_id: str) -> dict:
         with self._lock:

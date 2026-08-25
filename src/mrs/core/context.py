@@ -190,6 +190,51 @@ def _matches(want: set[str], tags: dict) -> bool:
     return False
 
 
+def matches_theme(theme: str, tags: dict) -> bool:
+    """Does this track carry the genre as asked for, compound and all?
+
+    Splitting a two-word genre and accepting either half matches most of
+    Last.fm: "rap rock" becomes "rap" or "rock", which let a rap-rock request
+    through with Olivia Rodrigo on one side and Kanye West on the other, and
+    put A$AP Rocky's PUNK ROCKY at the top on the strength of the word alone.
+
+    So: either a strong tag contains the whole compound, or every word of it
+    turns up somewhere in the strong tags. Deliberately not _matches() — that
+    tests containment both ways, and "rock" sits inside "rap rock", which is
+    the very thing being ruled out here.
+    """
+    t = (theme or "").strip().lower()
+    if not t or not tags:
+        return False
+    top = max(tags.values()) or 1
+    if any(p in tag for tag in tags for p in _POISON_TAGS):
+        return False              # scripted tags; the whole set is worthless
+    # 70% of the top tag, not 40%. Measured on the case that prompted it:
+    # Limp Bizkit and Slipknot carry "nu metal" as their *leading* tag at
+    # 100%, while the two that kept gatecrashing a rap-rock request had
+    # "rap rock" third at 66% and 42% — genuinely tagged, but not what the
+    # record mainly is. A leading tag is a claim; a minor one is a mention.
+    strong = [tag.lower() for tag, count in tags.items()
+              if count >= top * 0.7
+              and not any(u in tag for u in _USELESS_TAGS)]
+    if not strong:
+        return False
+
+    flat = [_flatten(tag) for tag in strong]
+    if _flatten(t) and any(_flatten(t) in f for f in flat):
+        return True
+
+    # Two characters, not three. "nu metal" loses its "nu" at a threshold of
+    # three, collapses to "metal", and then anything tagged metal counts.
+    words = [w for w in re.split(r"[^a-z0-9]+", t) if len(w) >= 2]
+    if len(words) < 2:
+        # One direction only. The reverse lets a shorter tag match a longer
+        # genre — "metal" sitting inside "numetal" — which is the same hole.
+        w = _flatten(t)
+        return any(w in f for f in flat)
+    return all(any(_flatten(w) in f for f in flat) for w in words)
+
+
 def _as_anchors(anchor) -> list[Track]:
     """One anchor, several, or none — always a list.
 
@@ -614,6 +659,41 @@ class ContextBuilder:
             if len(seeds) >= 3:
                 break
         return seeds
+
+    def quick(self, current: Track | None, exclude: set[str] | None = None,
+              exclude_keys: set[str] | None = None,
+              limit: int = 6) -> list[Candidate]:
+        """Something playable within a second, while build() does it properly.
+
+        A cold build talks to four services and takes over a minute, and the
+        pool stays empty for all of it — which is why the queue looked like it
+        only started thinking halfway through the song. The current artist's
+        own catalogue is a single search: about two seconds cold and instant
+        once cached. Ranked candidates replace these as soon as the real build
+        lands.
+
+        Deliberately not the disk fallback. Everything cached on disk is
+        something already played, and the queue excludes its own history, so
+        that route can only ever return repeats.
+        """
+        exclude = exclude or set()
+        exclude_keys = exclude_keys or set()
+        if not (current and current.artist):
+            return []
+        out: list[Candidate] = []
+        have: set[str] = set()
+        for t in self._safe(self.catalog.artist_tracks, current.artist, limit * 3):
+            if not t.video_id or t.video_id in exclude or t.video_id in have:
+                continue
+            key = t.key()
+            if key and key in exclude_keys:
+                continue
+            have.add(t.video_id)
+            t.reason = "artist"
+            out.append(Candidate(track=t, score=1.0, reason="artist"))
+            if len(out) >= limit:
+                break
+        return out
 
     def _from_disk(self, exclude: set[str], exclude_keys: set[str],
                    limit: int) -> list[Candidate]:

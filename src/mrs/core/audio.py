@@ -108,7 +108,15 @@ class AudioEngine:
         self._suppress_persist = True
         try:
             # Stop the primary auto-advancing while we overlap the two.
-            self.mpv.set("keep-open", "yes")
+            #
+            # "always", not "yes". keep-open=yes only holds on the *last*
+            # playlist entry — mid-playlist it advances anyway, which meant
+            # the primary moved to track 2 on its own during the fade and the
+            # playlist-next below then landed on track 3. That's the song that
+            # kept getting skipped. keep-open-pause=no holds at the end
+            # without pausing, so the handoff doesn't leave a paused player.
+            self.mpv.set("keep-open", "always")
+            self.mpv.set("keep-open-pause", "no")
             self.alt.set("volume", 0)
             self.alt.command("loadfile", next_path, "replace", wait=False)
             self.alt.set("pause", False)
@@ -127,6 +135,7 @@ class AudioEngine:
             self.mpv.set("volume", 0)
             self.mpv.command("playlist-next", wait=False)
             time.sleep(0.12)
+            self.mpv.set("pause", False)     # in case it held at EOF
             self.mpv.command("seek", round(elapsed + 0.15, 2), "absolute", wait=False)
             self.mpv.set("volume", vol)
             self.alt.command("stop", wait=False)
@@ -140,6 +149,7 @@ class AudioEngine:
             # Never leave the user on a silent player.
             try:
                 self.mpv.set("keep-open", "no")
+                self.mpv.set("keep-open-pause", "yes")
                 self.mpv.set("volume", vol)
             except Exception:
                 pass
