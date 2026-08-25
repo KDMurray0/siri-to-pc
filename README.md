@@ -57,6 +57,17 @@ pip install pyinstaller
 pyinstaller --noconfirm MusicRequestServer.spec
 ```
 
+Then check the thing you actually built, which the test suite never sees:
+
+```
+dist\MusicRequestServer\MusicRequestServer.exe --selftest
+```
+
+It boots the server inside the bundle, renders the player, calls ten
+endpoints, loads every store and parses a spoken phrase — the failures that
+only exist frozen, like a hidden import PyInstaller didn't spot or a template
+it didn't collect. Non-zero exit if anything is wrong.
+
 **Run the `dist` folder, not `build`.** PyInstaller creates both:
 
 | Folder | What it is |
@@ -122,6 +133,9 @@ See `config.example.json` for the full list. `api_key` blank ⇒ auto-generated 
 | `auto_queue_batch` | How many related songs to append per refill (default 5). |
 | `auto_queue_threshold` | Refill when this many tracks remain (default 2 — two from the end). |
 | `history_size` | How many recent plays to remember and keep out of the queue, for smart-shuffle no-repeats (default 100). |
+| `artist_gap` / `artist_gap_slip` | Prefer not to repeat an artist within this many tracks (default 4), but let it through anyway this often (0.15) — a rule that never bends feels mechanical. |
+| `sleep_fade` | Seconds the sleep timer takes to fade out (default 20). It always puts the volume back afterwards. |
+| `lastfm_seeded` | Set once, after taste has been given a head start from your Last.fm top artists. Clear it to import again. |
 | `queue_liked_boost` / `queue_same_artist_boost` / `queue_playthrough` / `queue_skip_penalty` / `queue_song_play` / `queue_jitter` / `queue_liked_seed_prob` / `queue_context_songs` | Smart-shuffle weights. `queue_same_artist_boost` (default 3.0, higher than `liked_boost`) biases the endless queue toward the *same band* you're playing, more than just the same genre. |
 | `ytdl_raw_options` | Optional list of extra yt-dlp options as `"key=value"` strings (advanced). |
 | `allowed_ips` | List of allowed client IPs. Empty `[]` allows all (for testing) |
@@ -322,7 +336,36 @@ YouTube's own radio is one of the things it draws on, not the whole of it — on
 
 Everything is then scored against **the song you asked for**, not just the one that's playing — measuring only against what's on is how a metal request ends up playing pop-punk half an hour later, each step looking fine. On top of that a track has to name the right genre to get in, it loses points for coming from a different era (MusicBrainz start years, adjusted so a person's birthday and a band's formation date mean the same thing), and it gains them for being somebody the anchor's artist belongs next to.
 
-Every row in the queue tells you which of these picked it. Toggle the whole thing live from the music bar, or with:
+Every row in the queue tells you which of these picked it.
+
+### Asking for two things at once
+
+```
+play songs by nirvana and foo fighters
+play some thrash and black metal
+```
+
+Both get played, dealt out in turn, and the radio keeps steering by both — a
+record that sounds like either one is a good answer, so neither gets buried by
+whichever you happened to say first. If one of them has less to offer the
+queue leans to the other rather than stalling.
+
+Nobody says "thrash metal and black metal" out loud, so the noun said once at
+the end is carried back. Plenty of acts have "and" in the middle of their
+name, so before a split is believed the whole phrase is checked against real
+artists — Simon and Garfunkel, Florence and the Machine and Nick Cave and the
+Bad Seeds all stay in one piece, and so does drum and bass. An ampersand
+never splits anything: Earth, Wind & Fire is one band.
+
+### When the internet goes away
+
+Playback carries on from what's already downloaded rather than stopping at
+the end of the track, and a request tells you the truth ("I can't reach the
+internet") instead of claiming the song doesn't exist. It notices within
+about three failed calls and stops making them, so a refill costs nothing
+instead of eleven seconds of timeouts.
+
+Toggle the whole thing live from the music bar, or with:
 
 ```
 GET /api/autoqueue?key=SECRET            # toggle
@@ -418,16 +461,19 @@ itunes_request_server/
     player.py            Orchestrator: mpv + queue + audio + taste
     requests.py          One entry point for every request (Siri, UI, API, alarm)
     server.py            Boot sequence, port selection, uvicorn
+    selftest.py          --selftest: checks the frozen build, not the source
     core/
       mpv.py             Named-pipe IPC (overlapped I/O, watchdog)
       queue.py           Candidate pool -> download workers -> playlist
       context.py         What could play next, and how it's scored
+      gate.py            One queue per outside service, so nothing floods them
       tags.py            Last.fm: what a song sounds like, and what sits beside it
       kin.py             Deezer: which artists belong next to each other
       era.py             MusicBrainz: roughly when an artist's records come from
       tempo.py           BPM, for the crossfade
       radio.py           Live stations
       playlists.py       Saved playlists
+      backup.py          Copy the profile out, and put one back
       downloader.py      yt-dlp: retries, client fallback, cache, pinning
       taste.py           Play-throughs vs skips, likes, ranking
       audio.py           EQ, normalise, crossfade, level metering
@@ -437,6 +483,7 @@ itunes_request_server/
     resolve/
       parser.py          One parsing decision (grammar for controls, LLM otherwise)
       resolver.py        Turning a parsed plan into actual tracks
+      conjunction.py     Reading "and": two things, or one name with "and" in it
       grammar.py         Local phrase parsing
       numbers.py         Spoken numbers: "half an hour", "one point five hours"
       llm.py             Groq
