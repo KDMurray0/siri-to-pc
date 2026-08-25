@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import threading
@@ -60,12 +61,20 @@ class Playlists:
 
     def _inside(self, leaf: str) -> Path:
         """Belt and braces: whatever _safe_name let through, this is still
-        a child of the playlists directory or it doesn't happen at all."""
-        root = self.root().resolve()
-        p = (root / leaf).resolve()
-        if p == root or root not in p.parents:
+        a child of the playlists directory or it doesn't happen at all.
+
+        Worked out on the text, not the filesystem. resolve() asks Windows
+        where a path really goes, and under a packaged container it redirects
+        a child that exists into the app's private store while leaving the
+        parent alone — so the two came back on different roots and every
+        real playlist looked like an escape attempt. normpath collapses ".."
+        without asking anybody, which is all this check ever needed.
+        """
+        root = os.path.normcase(os.path.normpath(str(self.root())))
+        full = os.path.normcase(os.path.normpath(os.path.join(root, leaf)))
+        if full == root or not full.startswith(root + os.sep):
             raise ValueError(f"playlist name escapes its directory: {leaf!r}")
-        return p
+        return Path(self.root()) / leaf
 
     # -- reads ---------------------------------------------------------
     def names(self) -> list[str]:

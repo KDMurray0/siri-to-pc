@@ -691,6 +691,14 @@ def _after_start() -> None:
 
 def main() -> None:
     global flyout
+    # Check the build rather than the source. Nothing else in the test suite
+    # runs inside the frozen bundle, which is where the interesting failures
+    # live: a hidden import PyInstaller didn't spot, a template it didn't
+    # collect, a path that resolves differently once packed.
+    if "--selftest" in sys.argv:
+        from mrs.selftest import main as selftest
+        sys.exit(selftest())
+
     if _singleton() is None:
         sys.exit(0)
 
