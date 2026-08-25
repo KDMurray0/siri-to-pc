@@ -9,237 +9,92 @@ they stay here so they don't get suggested again.
 
 ---
 
-## Queue
+## Still to build
 
 ### 1. Say why a track scored what it did
 
-**What:** the queue already shows which lane picked each row. It can't show
-*why that row beat the others*. A debug view — score, and the terms that made
-it (lane weight, tag similarity, era gap, affinity, kinship, taste) — behind a
-setting.
+**What:** the queue shows which lane picked each row. It can't show *why that
+row beat the others*. A debug view — score, and the terms that made it (lane
+weight, tag similarity, era gap, affinity, kinship, taste, fair share) —
+behind a setting.
 
-**Evidence:** every queue problem this project has had was diagnosed by writing
-a throwaway harness outside the app: the funk-at-12% tag, the era signal
-running backwards, `electronic` vouching for Avicii, the affinity list never
-being fetched. Each took a separate script to see. The app has all those
+**Evidence:** every queue problem this project has had was diagnosed by
+writing a throwaway harness outside the app: the funk-at-12% tag, the era
+signal running backwards, `electronic` vouching for Avicii, the affinity list
+never being fetched, PRIMARY_GENRE handing a free point to whichever seed was
+named first. Each took a separate script to see. The app has all those
 numbers at the moment it ranks and throws them away.
 
-**Cost:** small. `_rank` already computes every term; keep them in a dict on the
-Candidate behind a config flag, expose on `/api/queue`, render on hover.
+**Cost:** small. `_rank` already computes every term; keep them in a dict on
+the Candidate behind a config flag, expose on `/api/queue`, render on hover.
 
-**Risk:** the dict costs memory per candidate on a 300-candidate pool. Only
-build it when the flag is on.
+**Risk:** a dict per candidate on a 300-candidate pool. Only build it when the
+flag is on.
 
 ---
 
 ### 2. "Not this, here"
 
-**What:** a per-queue dismissal, distinct from a skip. Skipping says "not now";
-this says "this doesn't belong in *this* queue" and drops the artist from the
-current run without touching long-term taste.
+**What:** a per-queue dismissal, distinct from a skip. Skipping says "not
+now"; this says "this doesn't belong in *this* queue" and drops the artist
+from the current run without touching long-term taste.
 
 **Evidence:** the ranker can be wrong in a way no signal catches. A Pyramid
-Song queue kept reaching for Nickelback because Nickelback genuinely is tagged
-alternative rock, is the right era, and has no negative signal against it. It
-took two code changes to fix, and there will always be another one. One click
-would have fixed that night's listening instantly.
+Song queue kept reaching for Nickelback because Nickelback genuinely is
+tagged alternative rock, is the right era, and has nothing against it. That
+took two code changes to fix and there will always be another one. One click
+would have fixed that evening's listening immediately.
 
-**Cost:** small. A per-anchor exclusion set in `Queue`, cleared when the anchor
-changes. Plumb a button through `/api/queue/{op}`.
+**Cost:** small. A per-anchor exclusion set in the queue, cleared when the
+anchor changes, and a button through `/api/queue/{op}`.
 
-**Watch out for:** it must not leak into `taste.py`. Disliking a band in a
-Radiohead queue is not disliking the band.
-
----
-
-### 3. Space the same artist out — *done*
-
-**What:** a minimum gap between two tracks by one artist, that bends
-occasionally rather than being mechanical about it.
-
-**Evidence:** the old rule only caught a *run* — all of the last three tracks
-being one act — so portishead, tricky, portishead sailed straight through.
-`artist_gap` (4) prefers somebody who hasn't been on for a few records, and
-`artist_gap_slip` (0.15) lets it through anyway about one time in seven,
-because sometimes the right next record really is the same band. The hard run
-cap sits underneath and doesn't bend.
-
-**Correction worth keeping:** the adjacency I first cited as evidence (Glen
-Campbell at 3 and 4, Portishead at 2 and 3) was an artefact of the test
-harness, which takes `pool[0]` directly and never calls `_take_candidate`.
-The real app was already avoiding back-to-back repeats. Check which code path
-a log actually came from before believing it.
-
-**Also fixed here:** shuffle mode never shuffled. `random.shuffle(usable[:12])`
-shuffles a copy, so it played in exactly the same order as normal.
+**Watch out for:** it must not leak into taste. Disliking a band in a
+Radiohead queue is not disliking the band. The undo-skip work already built
+the withdrawal half of this.
 
 ---
 
-### 4. Seed from more than one song
+## Built
 
-**What:** "play something like Aphex Twin and Boards of Canada". The anchor is
-a single Track everywhere; make it a small list and average the comparisons.
+Kept here with what actually shipped, because the reasoning is worth more
+than the checkbox.
 
-**Evidence:** `_run_fit` already scores against the last ten records, so the
-machinery for comparing against a set exists. The anchor is the only thing
-still stuck at one.
-
-**Cost:** medium. `anchor` is threaded through `build`, `_rank`, `era`, `kin`
-and `prime_near`. Worth doing as one change, not incrementally.
-
----
-
-## Backend
-
-### 5. A diagnostics page — *endpoint done, page not*
-
-**What:** one screen showing what the external services are doing — cache
-sizes (tags, eras, kin, catalog), how many lookups are queued, circuit-breaker
-state on the YouTube client, recent failure counts and the last error per
-service.
-
-**Evidence:** three separate bugs this session were invisible from inside the
-app and only showed up because a test harness printed the intermediate value:
-MusicBrainz 503ing on the anchor and silently disabling the era check for a
-whole run; Deezer returning a 140-fan stub for Michael Jackson; the affinity
-cache never being populated for the anchor. All three were "a service quietly
-returned nothing", which is exactly the failure a status page catches.
-
-**Cost:** small-to-medium. The stores already hold the numbers; it's mostly a
-read-only endpoint and a template.
-
-**Done so far:** `/api/health` returns all of it — per-store counts, queued
-lookups, whether each worker is alive, the circuit breaker, cache size on
-disk, queue depth. What's left is somewhere to *look* at it: a block in the
-settings sheet, refreshed off the existing SSE stream.
-
----
-
-### 6. Play from the cache when the network is down
-
-**What:** if YouTube is unreachable, fall back to the already-downloaded files
-rather than stopping.
-
-**Evidence:** downloads are cached to disk already, and `library.py` indexes
-local files, so both halves exist. Right now a network blip during a refill
-means the queue starves and playback stops at the end of the track.
-
-**Cost:** medium. Needs a real "are we offline" signal rather than guessing
-from one failure — the circuit breaker in `catalog._yt` is the natural place.
-
----
-
-### 7. Use the listening history the user already has
-
-**What:** `extras.py` scrobbles to Last.fm. It could also *read* — the user's
-own top artists and loved tracks — and seed `taste.py` on first run.
-
-**Evidence:** taste starts empty and takes weeks to learn anything, and the
-credentials for the read are already configured and working.
-
-**Cost:** small. `user.getTopArtists` and `user.getLovedTracks`, once, into the
-existing taste store.
-
-**Watch out for:** taste is deliberately bounded to ±1 as a tiebreaker. Import
-should respect that and not create a huge prior.
-
----
-
-### 8. Retire the 30-minute catalog cache in favour of one that persists
-
-**What:** `catalog._cache` is in-memory, 400 entries, 30 minutes. Searches for
-the same artist repeat across restarts.
-
-**Evidence:** the related-artists and played-alongside lanes both search by
-name, and those names are stable for a given anchor. Everything else with this
-access pattern (tags, eras, kin) is already on disk and it works well.
-
-**Cost:** small, and mostly copying the pattern out of `kin.py`.
-
-**Watch out for:** search results genuinely do change, unlike an artist's
-birth year. Needs a real expiry, not "forever".
-
----
-
-## Player
-
-### 9. Fade the sleep timer out
-
-**What:** the sleep timer stops. It could take the last thirty seconds down
-gently instead.
-
-**Evidence:** `audio.py` already does crossfade and volume ramps, so the
-mechanism is there.
-
-**Cost:** small.
-
----
-
-### 10. Undo a skip
-
-**What:** the last skipped track goes back to the front, and the skip is
-withdrawn from `taste.py`.
-
-**Evidence:** skips feed the ranker with a penalty. A mis-hit on the media key
-teaches it something false, and there's currently no way to take it back.
-
-**Cost:** small.
-
----
-
-### 11. Back the profile up
-
-**What:** one button that writes config, playlists, play stats and the three
-caches to a zip, and one that reads it back.
-
-**Evidence:** a playlist called ".." resolved to the data directory and the
-delete endpoint rmtree'd it — the api key, the cookies, weeks of play stats
-and every cache, from one call. That's fixed, but the amount of state now
-sitting in one folder with no copy of it anywhere is the actual lesson. The
-tag, era and kin caches alone are thousands of lookups that took days of
-listening to accumulate.
-
-**Cost:** small. It's one directory and everything in it is already json.
-
-**Watch out for:** config.json holds the api key and the Last.fm session. An
-export is a credential file — say so, and don't put it in Downloads by
-default.
-
----
-
-### 12. A global budget on outside calls
-
-**What:** one place that counts calls per service per minute and makes the
-lanes back off when they're over, rather than each store pacing itself on its
-own.
-
-**Evidence:** a cold refill makes roughly thirty network calls across four
-services, and each one paces itself in isolation — Last.fm at 5/sec,
-MusicBrainz at 1/sec, Deezer at 3/sec, YouTube behind a circuit breaker. They
-have no idea about each other, so the actual burst when a new song starts is
-whatever they all happen to do at once. It has been fine so far, but the only
-reason we know is that the breaker hasn't opened much.
-
-**Cost:** medium. The pacing logic is duplicated in four stores already;
-pulling it into one limiter would remove that duplication as well.
-
----
-
-### 13. Self-test in the shipped build
-
-**What:** `MusicRequestServer.exe --selftest` — boot the app, hit the health
-endpoint, check every store loads and every worker starts, print a verdict,
-exit.
-
-**Evidence:** the test suite lives outside the repo and runs against source.
-Nothing checks the *frozen* build beyond it launching, and PyInstaller
-problems are exactly the kind that only show up frozen — a missing hidden
-import, a template not collected, a data file in the wrong place.
-
-**Cost:** small. The boot check in the test suite already does this; it needs
-an argv flag and somewhere to print.
-
----
+- **3. Space the same artist out.** `artist_gap` (4) prefers somebody who
+  hasn't been on for a few records; `artist_gap_slip` (0.15) lets it through
+  anyway about one time in seven. The hard run cap sits underneath and
+  doesn't bend. *The adjacency I first cited as evidence was a harness
+  artefact — `longrun.py` takes `pool[0]` and never calls `_take_candidate`.
+  Check which code path a log came from before believing it.* Also fixed:
+  shuffle mode never shuffled, because `random.shuffle(usable[:12])` shuffles
+  a copy.
+- **4. Seed from more than one thing.** "nirvana and foo fighters", "some
+  thrash and black metal". The noun said once at the end is carried back; an
+  ampersand never splits; the whole phrase is checked against real artists
+  before a split is believed. Every comparison takes the *nearest* anchor,
+  not the average. Needed three separate fixes to stop the first-named seed
+  running away with the queue — the similarity blend, PRIMARY_GENRE, and the
+  genre lane depths — plus a fair-share term, because the pool is picked from
+  by score and being present in it isn't enough. Measured 6/6 on Dolly Parton
+  + Massive Attack.
+- **5. Diagnostics.** `/api/health` plus a readout under Settings → System.
+- **6. Play from the cache when the network is down.** Measured first: a
+  refill spent 11.6s failing and returned nothing, so playback stopped at the
+  end of the track and requests claimed the song didn't exist. No route out
+  is now told apart from being told no.
+- **7. Seed taste from Last.fm.** Once, on the first start after connecting,
+  bounded to the tiebreaker taste is meant to be.
+- **8. Search answers that outlive the process.** A week on disk instead of
+  half an hour in memory.
+- **9. Fade the sleep timer.**
+- **10. Undo a skip.** Withdraws the song count, the artist count and the
+  fatigue bump.
+- **11. Back the profile up.** *Two bugs of my own, both found by
+  round-tripping it rather than reading it.*
+- **12. One queue per outside service.** The pacing moved from the background
+  workers down to the calls, because the blocking lookups skipped it
+  entirely — which is why MusicBrainz kept 503ing.
+- **13. `--selftest` in the shipped build.** Found a real regression on its
+  first run.
 
 ## Tried, didn't work — don't re-suggest
 
