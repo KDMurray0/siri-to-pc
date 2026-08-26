@@ -2,6 +2,44 @@
 
 A local network music playback server that streams from YouTube Music through HTTP API, Siri voice commands, Shortcuts, and a web interface. No local music library required — every request is resolved by searching YouTube Music with `ytmusicapi` and played by `mpv`.
 
+<p align="center">
+  <img src="docs/screenshots/player.png" alt="The player: artwork, queue and a single box you type anything into" width="300">
+  <img src="docs/screenshots/guest-capsule.png" alt="A guest link on a phone, choosing between playing here and the computer's speakers" width="300">
+</p>
+
+Ask for a song, an artist, an album or a vibe and it works out what comes next
+— on the left. Hand somebody a link and they get their own queue on their own
+phone, without touching yours — on the right.
+
+<details>
+<summary>More of it</summary>
+
+<p align="center">
+  <img src="docs/screenshots/lyrics.png" alt="Time-synced lyrics" width="270">
+  <img src="docs/screenshots/settings-sound.png" alt="Sound settings" width="270">
+  <img src="docs/screenshots/settings-queue.png" alt="Queue and radio settings" width="270">
+</p>
+</details>
+
+## Playing somewhere else
+
+The whole player runs in a browser, so anything with one is a speaker.
+
+- **Your own phone.** The capsule at the top of the output picker moves the
+  sound between this computer and the device you're holding. The song and the
+  position come with you; it doesn't start again.
+- **Somebody else's phone.** Make them a link in **Settings → Sharing**. A
+  *phone-only* link plays on their device and nowhere else; a *full* link can
+  also drive the computer's speakers. Either way they get their own queue,
+  their own history and their own radio — they never see yours, and nothing
+  they play reaches your Recently Played or your Last.fm.
+- **Take it back.** Every link is named and revocable, one at a time or all at
+  once. The list shows who's listening, to what, and how much they've asked
+  for.
+
+Links are signed passes rather than the key itself, they expire, and three
+wrong guesses from one address earns a 24-hour ban.
+
 ## Quick Start
 
 ### Option 1 — download the release (no Python needed)

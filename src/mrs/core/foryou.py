@@ -11,7 +11,7 @@ import random
 
 from ..logging_setup import get
 from ..models import Track
-from .taste import taste
+from .taste import taste as _mine
 
 log = get("foryou")
 
@@ -19,7 +19,7 @@ WANT = 24              # tracks to hand back
 PER_SEED = 6
 
 
-def _seed_tracks(catalog) -> list[Track]:
+def _seed_tracks(catalog, taste) -> list[Track]:
     """A spread of starting points: liked songs first, then what you request."""
     seeds: list[Track] = []
     liked = list(taste.liked())
@@ -44,11 +44,15 @@ def _seed_tracks(catalog) -> list[Track]:
     return seeds[:6]
 
 
-def build(catalog, limit: int = WANT) -> list[Track]:
-    """A queue that looks like your listening, not like one song."""
+def build(catalog, limit: int = WANT, taste=None) -> list[Track]:
+    """`taste` is whose. A guest brings a neutral one and gets nothing back,
+    which is correct: "something I'd like" is a statement about a history
+    they don't have here, and answering it from the owner's would be handing
+    a stranger the owner's listening."""
+    taste = taste if taste is not None else _mine
     from .tags import tagstore
 
-    seeds = _seed_tracks(catalog)
+    seeds = _seed_tracks(catalog, taste)
     if not seeds:
         return []
 

@@ -34,6 +34,50 @@ DEFAULTS: dict[str, Any] = {
     "audio_device": "auto",
     "audio_device_label": "",
     "cast_client": "",         # the one browser acting as the speaker
+
+    # Security. The key belongs in the X-Music-Key header; URLs that can't
+    # carry one (audio elements, EventSource, links you send people) get a
+    # signed token instead. Turn allow_key_in_url off once nothing you use
+    # still puts the raw key in a query string.
+    "allow_key_in_url": True,
+    # Encrypt the connection with a self-signed certificate. The browser
+    # objects once and you accept it; after that nobody on the path can read
+    # the key or what you're listening to. Worth having on before this is
+    # reachable from the internet.
+    "https": False,
+    # The player page opens without a key on the home network, as it always
+    # has. Off means even your own wifi needs a link with one.
+    "lan_open": True,
+    # While this is on, a full-access guest asking for something on the PC
+    # speakers is refused. Anyone playing on their own phone is unaffected —
+    # the point is to protect the room you're in, and headphones aren't in it.
+    "block_full_guests": False,
+    # Party mode: no radio, and every request joins the back of the queue
+    # however it was phrased. Nobody's "play this next" jumps the line.
+    "party_mode": False,
+
+    # A name that follows your home address about. A residential IP is public
+    # but not permanent, and every link handed out dies quietly when it moves.
+    "ddns_provider": "dynu",   # dynu | duckdns | noip | afraid
+    "ddns_hostname": "",
+    "ddns_user": "",
+    "ddns_password": "",       # never leaves this machine; hidden from the UI
+    # The master limiter: downloads in flight across everybody, and how many
+    # requests one guest may make an hour before they're asked to slow down.
+    "max_downloads": 4,
+    "guest_requests_hour": 40,
+    # How far ahead to build a queue for somebody playing on their own phone.
+    # Deliberately much shorter than the speakers' half-hour: every track is
+    # fetched, transcoded and then pushed over the network to a device that
+    # may walk out of the door, and thirty minutes of that is a gigabyte
+    # nobody hears. Applies only while they're playing *here* — a phone being
+    # used as a remote for the PC is on the PC's queue and unaffected.
+    "cast_queue_minutes": 10,
+    # A guest whose browser has stopped saying hello. Pause at the first,
+    # let the session go at the second — nothing closes a tab politely, so
+    # this is the only signal there is.
+    "guest_quiet_pause": 45,       # seconds of silence before pausing them
+    "guest_quiet_close": 900,      # ...and before the session is let go
     "listen_loopback": True,   # meter reads the real output
 
     # reaching this server from a phone. auto = use Tailscale if it's there
@@ -122,20 +166,82 @@ class Config:
         with _lock:
             if not self._path.exists():
                 migrate_legacy_data()
-            raw = {}
+            raw, unreadable = {}, False
             if self._path.exists():
                 try:
                     # utf-8-sig: tolerate a BOM written by PowerShell
                     raw = json.loads(self._path.read_text(encoding="utf-8-sig") or "{}")
                 except Exception as exc:  # keep running on a corrupt file
                     print(f"[config] unreadable ({exc}); using defaults")
-                    raw = {}
+                    unreadable = True
+                    self._keep_wreckage()
             merged = dict(DEFAULTS)
             merged.update({k: v for k, v in raw.items() if v is not None})
+
+            # The key is this server's identity, not a setting. Every pass is
+            # signed with it, so minting a new one silently revokes every link
+            # ever handed out and locks the owner out of their own player —
+            # which is precisely what one unlucky read did. Recover it from
+            # the shadow copy before ever generating a replacement.
+            fresh_key = False
             if not merged.get("api_key") or "CHANGE" in str(merged["api_key"]).upper():
-                merged["api_key"] = secrets.token_urlsafe(24)
+                fresh_key = True
+                saved = self._shadow_key()
+                if saved:
+                    print("[config] recovered the api key from its shadow copy")
+                    merged["api_key"] = saved
+                elif unreadable:
+                    # No shadow and an unreadable file: a new key is the only
+                    # way to run, but say so, because everything breaks.
+                    print("[config] NO KEY RECOVERABLE — issuing a new one; "
+                          "old links and passes will stop working")
+                    merged["api_key"] = secrets.token_urlsafe(24)
+                else:
+                    merged["api_key"] = secrets.token_urlsafe(24)
             self._data = merged
-            self.save()
+            # Only write when loading actually changed something — a new key,
+            # a missing default, or a file that wasn't there. Saving on every
+            # load means any second process that so much as *reads* the config
+            # stamps its own copy over the running app's, which is how the
+            # key and the port kept diverging between the two.
+            added = [k for k in DEFAULTS if k not in raw]
+            if fresh_key or added or not self._path.exists():
+                self.save()
+            self._write_shadow()
+
+    def _shadow_path(self):
+        return self._path.with_name("api_key.txt")
+
+    def _shadow_key(self) -> str:
+        """The key, kept separately so a bad config read can't lose it."""
+        try:
+            got = self._shadow_path().read_text(encoding="utf-8-sig").strip()
+            return got if got and "CHANGE" not in got.upper() else ""
+        except Exception:
+            return ""
+
+    def _write_shadow(self) -> None:
+        key = str(self._data.get("api_key") or "")
+        if not key or self._shadow_key() == key:
+            return
+        try:
+            self._shadow_path().write_text(key, encoding="utf-8")
+        except Exception as exc:
+            print(f"[config] couldn't shadow the api key: {exc}")
+
+    def _keep_wreckage(self) -> None:
+        """Move a corrupt config aside instead of writing over it.
+
+        Whatever was in there is the only copy of settings built up over
+        months; overwriting it with defaults is the one thing you can't undo.
+        """
+        try:
+            import time as _t
+            spoiled = self._path.with_name(f"config.corrupt.{int(_t.time())}.json")
+            self._path.replace(spoiled)
+            print(f"[config] kept the unreadable file at {spoiled.name}")
+        except Exception:
+            pass
 
     def save(self) -> None:
         with _lock:
@@ -168,9 +274,11 @@ class Config:
 
     def public(self) -> dict[str, Any]:
         """Everything except secrets — safe to hand to the UI."""
-        hidden = {"api_key", "groq_api_key", "lastfm_secret", "lastfm_session"}
+        hidden = {"api_key", "groq_api_key", "lastfm_secret", "lastfm_session",
+                  "ddns_password"}
         out = {k: v for k, v in self._data.items() if k not in hidden}
         out["groq_set"] = bool(self._data.get("groq_api_key"))
+        out["ddns_set"] = bool(self._data.get("ddns_password"))
         out["lastfm_set"] = bool(self._data.get("lastfm_session"))
         return out
 

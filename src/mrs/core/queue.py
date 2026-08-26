@@ -19,9 +19,10 @@ from ..events import Ev, bus
 from ..logging_setup import get, spawn
 from ..models import Activity, Candidate, Track
 from . import radio, spectrum
-from .downloader import downloader
+from .downloader import downloader, lanes
+from .sink import MpvSink
 from ..resolve import catalog as catalog_cache
-from .taste import taste
+from .taste import taste as _default_taste
 
 log = get("queue")
 
@@ -29,6 +30,51 @@ _PRUNE_EVERY = 30 * 60      # seconds — flushing the search cache
 _CHECK_EVERY = 60           # seconds — holding the download cache to its limit
 # Songs around the playing one that shuffle won't drop anything into.
 SHUFFLE_BUFFER = 3
+
+# Every file any queue has ever named, so any queue can name it.
+#
+# _meta is per-queue, which is right for ownership and wrong for naming: the
+# downloader collapses concurrent fetches of the same id, tracks move between
+# the shared player and a session on a handoff, and a queue can be handed a
+# file it never fetched. Every one of those showed up in the list as
+# "bTE8texJH7g.webm", because the only fallback was the filename.
+_KNOWN: dict[str, Track] = {}
+_KNOWN_LOCK = threading.Lock()
+_KNOWN_MAX = 4000
+
+
+def remember(path: str, track: Track) -> None:
+    if not path or not track:
+        return
+    with _KNOWN_LOCK:
+        _KNOWN[path] = track
+        if len(_KNOWN) > _KNOWN_MAX:
+            for old in list(_KNOWN)[:len(_KNOWN) - _KNOWN_MAX]:
+                _KNOWN.pop(old, None)
+
+
+def recall(path: str) -> Track | None:
+    with _KNOWN_LOCK:
+        return _KNOWN.get(path)
+
+
+def _vid_from(path: str) -> str:
+    """The video id a cache file is named after, if it is one."""
+    stem = path.replace("/", "\\").rsplit("\\", 1)[-1].rsplit(".", 1)[0]
+    return stem if 8 <= len(stem) <= 24 and "%" not in stem else ""
+
+
+def _label(path: str) -> str:
+    """Something a person would accept when we genuinely don't know.
+
+    A row saying "Loading…" is honest and disappears on the next publish. A
+    row saying "bTE8texJH7g.webm" is a bug report.
+    """
+    if not path:
+        return "Loading…"
+    if path.startswith("http"):
+        return "Live stream"
+    return "Loading…"
 
 
 def _cached_first(tracks: list[Track]) -> list[Track]:
@@ -59,9 +105,27 @@ class WorkItem:
 
 
 class QueueManager:
-    def __init__(self, mpv, context_builder) -> None:
-        self.mpv = mpv
+    def __init__(self, sink, context_builder, taste=None, session_id: str = "",
+                 workers: int = 0, cap: int = 0, max_minutes: float = 0) -> None:
+        # Whatever is going to play these — mpv for the owner, a plain list
+        # for a guest's browser. The engine above it doesn't care which.
+        self.sink = sink
         self.context = context_builder
+        # Handed in so a guest is scored by, and teaches, a neutral store.
+        self.taste = taste if taste is not None else _default_taste
+        # Stamped onto every event this queue publishes, so the stream can be
+        # filtered per listener instead of shouting everything at everybody.
+        self.session_id = session_id
+        self._worker_count = workers
+        self._cap = cap                     # 0 = the owner's, uncapped
+        # Somebody else's player. Their queue must not be steered by the
+        # owner's toggles: the owner turning shuffle on was scattering every
+        # guest's running order, and the owner setting repeat starved every
+        # guest's queue outright, because a repeating set list stops growing.
+        self._solo = bool(session_id)
+        # A hard ceiling on how far ahead to build, in minutes. 0 = none.
+        self._max_minutes = float(max_minutes or 0)
+        self._request_times: deque[float] = deque(maxlen=200)
         self._work: deque[WorkItem] = deque()
         self._pool: list[Candidate] = []
         self._meta: dict[str, Track] = {}        # file path -> Track
@@ -87,10 +151,14 @@ class QueueManager:
         self._workers: list[threading.Thread] = []
         self._activity = Activity()
         self._last_pos = -1
+        # The last running order we saw, kept off the sink so a crash can't
+        # take it away. See snapshot() and restore_order().
+        self._last_order: list[str] = []
+        self._last_index = 0
 
     # -- lifecycle -----------------------------------------------------
     def start(self) -> None:
-        n = max(1, int(config.get("download_workers", 2)))
+        n = self._worker_count or max(1, int(config.get("download_workers", 2)))
         for i in range(n):
             t = threading.Thread(target=self._worker, args=(i,), daemon=True,
                                  name=f"dl-{i}")
@@ -113,7 +181,8 @@ class QueueManager:
         if mark == self._activity_mark:
             return
         self._activity_mark = mark
-        bus.publish(Ev.ACTIVITY, self._activity.to_dict())
+        bus.publish(Ev.ACTIVITY, dict(self._activity.to_dict(),
+                                      session=self.session_id))
 
     @property
     def activity(self) -> Activity:
@@ -128,7 +197,13 @@ class QueueManager:
         tracks = [t for t in tracks if t.video_id or t.url]
         if not tracks:
             return
-        if shuffle or config.get("shuffle"):
+        if config.get("party_mode") and self.sink.count():
+            # In party mode nobody replaces what's on — not even by asking
+            # for it outright. It goes on the end like everyone else's, and
+            # the owner is still free to drag it wherever they like.
+            self.enqueue(tracks)
+            return
+        if shuffle or self._pref_shuffle():
             random.shuffle(tracks)
             tracks = _cached_first(tracks)
         with self._lock:
@@ -156,6 +231,9 @@ class QueueManager:
         self._wake.set()
 
     def play_next(self, track: Track) -> None:
+        if config.get("party_mode"):
+            self.enqueue([track])       # no queue-jumping while the party's on
+            return
         with self._lock:
             self._work.appendleft(WorkItem(track, mode="next"))
         self._wake.set()
@@ -171,7 +249,8 @@ class QueueManager:
         with self._lock:
             dropped = len(self._work)
             self._work.clear()
-        killed = downloader.cancel_all()
+        # Only this queue's. Everybody else is still listening to theirs.
+        killed = downloader.cancel_all(self.session_id)
         self._set_activity("idle")
         return {"ok": True, "cancelled": killed, "dropped": dropped,
                 "message": "Stopped" if (killed or dropped) else "Nothing to stop"}
@@ -185,8 +264,8 @@ class QueueManager:
         position move, one playlist-move at a time.
         """
         try:
-            pl = self.mpv.command("get_property", "playlist") or []
-            pos = self.mpv.get("playlist-pos", None)
+            pl = self.sink.playlist()
+            pos = self.sink.pos()
         except Exception:
             return
         if pos is None or pos < 0:
@@ -217,8 +296,7 @@ class QueueManager:
         for slot, name in enumerate(want):
             k = live.index(name, slot)
             if k != slot:
-                self.mpv.command("playlist-move", head + k, head + slot,
-                                 wait=False)
+                self.sink.move(head + k, head + slot)
                 live.insert(slot, live.pop(k))
         self.publish_queue()
 
@@ -230,8 +308,8 @@ class QueueManager:
         them is what makes playback jump.
         """
         try:
-            pl = self.mpv.command("get_property", "playlist") or []
-            pos = self.mpv.get("playlist-pos", None)
+            pl = self.sink.playlist()
+            pos = self.sink.pos()
         except Exception:
             return
         last = len(pl) - 1
@@ -240,8 +318,7 @@ class QueueManager:
         floor = pos + 1 + SHUFFLE_BUFFER
         if floor >= last:
             return                      # not enough runway to move it into
-        self.mpv.command("playlist-move", last, random.randint(floor, last),
-                         wait=False)
+        self.sink.move(last, random.randint(floor, last))
 
     def release_hold(self) -> None:
         self._hold_radio = False
@@ -249,6 +326,9 @@ class QueueManager:
 
     # -- worker --------------------------------------------------------
     def _worker(self, idx: int) -> None:
+        # Everything this thread downloads belongs to this queue, so a stop
+        # only stops its own.
+        downloader.claim_lane(self.session_id)
         while not self._stop.is_set():
             item = self._take_work()
             if item is None:
@@ -267,7 +347,12 @@ class QueueManager:
                 return self._work.popleft()
         if self._hold_radio:
             return None
-        if config.get("repeat", "off") != "off":
+        if config.get("party_mode"):
+            # Nothing but what people actually asked for. The radio filling
+            # gaps is the right behaviour on an ordinary evening and exactly
+            # wrong when six people are queueing things.
+            return None
+        if self._pref_repeat() != "off":
             return None          # repeating a set list: don't keep growing it
         # How much is queued is a question about time, not track count — an
         # album of two-minute songs shouldn't run dry sooner than one of
@@ -276,11 +361,49 @@ class QueueManager:
             return None
         if self.ready_ahead() >= self.hard_cap():
             return None
+        if self._cap and self.sink.count() >= self._cap:
+            return None          # a guest gets a full queue, not a boundless one
         cand = self._take_candidate()
         if cand is None:
             return None
         cand.track.reason = cand.reason      # so the queue can say why
         return WorkItem(cand.track, mode="append")
+
+    def adopt(self, track: Track) -> bool:
+        """Play a track this machine already has, without touching the workers.
+
+        A handoff between the speakers and a phone is moving a file that is by
+        definition already on disk — it was coming out of something a second
+        ago. Sending it back round resolve-then-download made changing rooms
+        take as long as asking for the song from scratch, which is most of why
+        switching output felt broken rather than slow.
+
+        Returns False when the file isn't here after all, so the caller can
+        fall back to the ordinary path.
+        """
+        path = track.path or (downloader.cached(track.video_id)
+                              if track.video_id else "")
+        if not path:
+            return False
+        track.path = path
+        with self._lock:
+            self._work.clear()
+            self._meta[path] = track
+            self._anchors = [track]
+            self._request_kind = "song"
+            self._hold_radio = False
+            self._end_after_run = False
+            if track.key():
+                self._claimed.add(track.key())
+        remember(path, track)
+        self.sink.clear()
+        self.sink.load(path, "replace")
+        self.sink.set_paused(False)
+        self._set_activity("playing", f"{track.title} — {track.artist}")
+        self.publish_queue(force=True)
+        self._wake.set()          # and start building what comes after it
+        log.info("adopted %s — %s", track.title, track.artist)
+        return True
 
     def _play_station(self, track: Track) -> None:
         """Put a live station on. No queue, no radio afterwards — it's on
@@ -291,9 +414,14 @@ class QueueManager:
             self._hold_radio = True
             self._end_after_run = True
             self._meta[track.url] = track
-        self.mpv.command("loadfile", track.url, "replace", wait=False)
-        self.mpv.set("pause", False)
-        radio.now_playing.start(self.mpv, track.title)
+        remember(track.url, track)
+        self.sink.load(track.url, "replace")
+        self.sink.set_paused(False)
+        # Station metadata is polled out of mpv, so it only exists on the
+        # speaker sink. A browser session plays the stream and simply doesn't
+        # get the "what's on right now" line — better than pretending.
+        if getattr(self.sink, "mpv", None):
+            radio.now_playing.start(self.sink.mpv, track.title)
         self._set_activity("idle")
         log.info("tuned to %s", track.title)
         self.publish_queue(force=True)
@@ -309,7 +437,7 @@ class QueueManager:
             return {"ok": False, "message": "Nothing to bring back"}
         track, _pos = got
         self._last_skipped = None
-        taste.unskip(track)
+        self.taste.unskip(track)
         # Straight to the front, ahead of whatever the skip promoted.
         with self._lock:
             self._work.appendleft(WorkItem(track, mode="next"))
@@ -327,7 +455,7 @@ class QueueManager:
             # Highest score wins, but skip anything that would extend an
             # artist run past the cap — unless that's all we have.
             usable.sort(key=lambda c: c.score, reverse=True)
-            if config.get("shuffle"):
+            if self._pref_shuffle():
                 # shuffle mode: pick from the good ones rather than the best
                 # one. usable[:12] is a copy, so shuffling that shuffled
                 # nothing and shuffle mode played the same order as normal.
@@ -377,12 +505,23 @@ class QueueManager:
             self._play_station(track)
             return
 
-        path = downloader.fetch_with_fallbacks(track, item.alternates,
-                                               on_progress=progress)
+        # The owner's lane drains first; a guest waits behind it rather than
+        # racing it. Released in the finally so a failed fetch can't wedge
+        # everybody else out.
+        mine = not self.session_id
+        lanes.enter(mine)
+        try:
+            path = downloader.fetch_with_fallbacks(track, item.alternates,
+                                                   on_progress=progress)
+        finally:
+            lanes.leave(mine)
         if not path:
             if item.mode == "now":
                 # The headline track died; promote the next thing we have.
-                bus.publish(Ev.TOAST, f"Couldn't get {track.title}")
+                msg = f"Couldn't get {track.title}"
+                bus.publish(Ev.TOAST,
+                            {"text": msg, "session": self.session_id}
+                            if self.session_id else msg)
                 self._set_activity("idle")
                 nxt = None
                 with self._lock:
@@ -399,23 +538,26 @@ class QueueManager:
             self._meta[path] = track
             if track.key():
                 self._claimed.add(track.key())
-        taste.mark_queued(track)
+        # And in the registry every queue reads, so a handoff or a collapsed
+        # concurrent fetch can still put a name on it.
+        remember(path, track)
+        self.taste.mark_queued(track)
 
         if item.mode == "now":
             self._set_activity("loading", track.title)
-            self.mpv.command("playlist-clear", wait=False)
-            self.mpv.command("loadfile", path, "replace", wait=False)
-            self.mpv.set("pause", False)
+            self.sink.clear()
+            self.sink.load(path, "replace")
+            self.sink.set_paused(False)
             self._set_activity("playing", f"{track.title} — {track.artist}")
         elif item.mode == "next":
-            pos = self.mpv.get("playlist-pos", 0) or 0
-            count = self.mpv.get("playlist-count", 0) or 0
-            self.mpv.command("loadfile", path, "append", wait=False)
+            pos = self.sink.pos() or 0
+            count = self.sink.count()
+            self.sink.load(path, "append")
             if count > pos + 1:
-                self.mpv.command("playlist-move", count, pos + 1, wait=False)
+                self.sink.move(count, pos + 1)
         else:
-            self.mpv.command("loadfile", path, "append", wait=False)
-            if config.get("shuffle"):
+            self.sink.load(path, "append")
+            if self._pref_shuffle():
                 # Shuffle on means the order shouldn't be arrival order. Deal
                 # it in somewhere random rather than always on the end.
                 self._scatter_new(path)
@@ -427,13 +569,21 @@ class QueueManager:
         base = float(config.get("queue_minutes", 30))
         cap = float(config.get("queue_minutes_max", 60))
         # grows a little the longer you listen
-        return min(cap, base + min(20.0, self._session_plays * 1.5))
+        want = min(cap, base + min(20.0, self._session_plays * 1.5))
+        # Somebody playing on their own phone gets a much shorter buffer.
+        # Every track ahead of them is fetched, transcoded and pushed over
+        # the network to a device that may leave the building; half an hour
+        # of that is a gigabyte nobody hears. Doesn't apply to a phone being
+        # used as a remote — that's the PC's queue, which has none of the cost.
+        if self._max_minutes:
+            want = min(want, self._max_minutes)
+        return want
 
     def minutes_ahead(self) -> float:
         """How much music is actually queued up, in minutes."""
         try:
-            pl = self.mpv.command("get_property", "playlist") or []
-            pos = self.mpv.get("playlist-pos", 0) or 0
+            pl = self.sink.playlist()
+            pos = self.sink.pos() or 0
         except Exception:
             return 0.0
         total = 0.0
@@ -455,8 +605,8 @@ class QueueManager:
         return max(2, int(config.get("queue_max", 30)))
 
     def ready_ahead(self) -> int:
-        pos = self.mpv.get("playlist-pos", None)
-        count = self.mpv.get("playlist-count", 0) or 0
+        pos = self.sink.pos()
+        count = self.sink.count()
         if pos is None or pos < 0:
             return max(0, count)
         return max(0, count - pos - 1)
@@ -464,7 +614,7 @@ class QueueManager:
     def _tail_artists(self, n: int) -> list[str]:
         """Primary artists of the last n ready tracks, newest last."""
         try:
-            pl = self.mpv.command("get_property", "playlist") or []
+            pl = self.sink.playlist()
         except Exception:
             return []
         artists = []
@@ -491,9 +641,17 @@ class QueueManager:
                 # that's only enforced twice an hour is a limit you watch
                 # yourself go over. prune_cache returns immediately when
                 # there's nothing to do, so this costs one stat sweep.
-                if time.monotonic() >= next_check:
+                if time.monotonic() >= next_check and not self.session_id:
                     next_check = time.monotonic() + _CHECK_EVERY
-                    gone = downloader.prune_cache(keep=self.keep_paths())
+                    from .session import sessions
+                    sessions.reap()
+                    # Everyone's pins, not just this queue's — a guest's
+                    # next track is as untouchable as the owner's.
+                    keep = self.keep_paths()
+                    if not self.session_id:
+                        from .session import sessions
+                        keep |= sessions.keep_paths()
+                    gone = downloader.prune_cache(keep=keep)
                     if gone:
                         log.info("pruned %d cached files", gone)
                 if time.monotonic() >= next_prune:
@@ -511,7 +669,7 @@ class QueueManager:
                               and self.ready_ahead() < self.hard_cap())
                 pool_low = len(self._pool) < int(config.get("queue_pool_min", 20))
                 if (pool_low and not self._refilling
-                        and self.mpv.get("playlist-count", 0)):
+                        and self.sink.count()):
                     # Off the loop, not in it. Working out what could play
                     # next means eighty seconds of talking to four services
                     # on a cold cache, and this loop is also what moves the
@@ -576,6 +734,28 @@ class QueueManager:
                 keys.add(c.track.key())
         log.info("pool now %d candidates", len(self._pool))
 
+    def note_request(self) -> None:
+        self._request_times.append(time.time())
+
+    def recent_requests(self) -> int:
+        """How hard this listener has been asking, over the last hour."""
+        cutoff = time.time() - 3600
+        return sum(1 for t in self._request_times if t > cutoff)
+
+    def _pref_shuffle(self) -> bool:
+        """Shuffle is the owner's switch and lives on the owner's player."""
+        return False if self._solo else bool(config.get("shuffle"))
+
+    def _pref_repeat(self) -> str:
+        return "off" if self._solo else str(config.get("repeat", "off"))
+
+    def oldest_request(self) -> float:
+        """When the hour's allowance started running, so a refusal can say
+        how long the wait is rather than just "no"."""
+        cutoff = time.time() - 3600
+        recent = [t for t in self._request_times if t > cutoff]
+        return recent[0] if recent else time.time()
+
     def keep_paths(self) -> set[str]:
         """Files the queue still needs, so pruning doesn't take them."""
         with self._lock:
@@ -584,7 +764,7 @@ class QueueManager:
     def _recent_artists(self, look_back: int = 30) -> dict[str, int]:
         """Who this session has been leaning on lately."""
         counts: dict[str, int] = {}
-        for row in taste.recent(limit=look_back):
+        for row in self.taste.recent(limit=look_back):
             # same normalisation the ranker uses, or the tally never matches
             a = Track(title="", artist=row.get("artist") or "").primary_artist()
             if a:
@@ -594,7 +774,7 @@ class QueueManager:
 
     def _exclusions(self) -> tuple[set[str], set[str]]:
         """(video ids, normalized names) that must not come back."""
-        ids = set(taste.history_ids())
+        ids = set(self.taste.history_ids())
         with self._lock:
             ids |= {t.video_id for t in self._meta.values() if t.video_id}
             ids |= {c.track.video_id for c in self._pool}
@@ -605,7 +785,7 @@ class QueueManager:
 
     # -- playback tracking ---------------------------------------------
     def _track_progress(self) -> None:
-        pos = self.mpv.get("playlist-pos", None)
+        pos = self.sink.pos()
         if pos is None:
             return
         if self._last_pos >= 0 and pos > self._last_pos:
@@ -613,7 +793,7 @@ class QueueManager:
         self._last_pos = pos
 
     def current_track(self) -> Track | None:
-        path = self.mpv.get("path", "")
+        path = self.sink.path()
         return self._meta.get(path) if path else None
 
     def track_for(self, path: str) -> Track | None:
@@ -622,24 +802,97 @@ class QueueManager:
     # -- queue view + edits ---------------------------------------------
     def snapshot(self) -> list[dict]:
         try:
-            pl = self.mpv.command("get_property", "playlist") or []
+            pl = self.sink.playlist()
         except Exception:
             return []
         out = []
         for i, entry in enumerate(pl):
             path = entry.get("filename", "")
-            tr = self._meta.get(path)
+            # Mine first, then anyone's. Falling straight through to the
+            # filename is what put "bTE8texJH7g.webm" in the list.
+            tr = self._meta.get(path) or recall(path)
             out.append({
                 "index": i,
                 "current": bool(entry.get("current")),
-                "title": tr.title if tr else path.rsplit("\\", 1)[-1],
+                "title": (tr.title if tr and tr.title else "") or _label(path),
                 "artist": tr.artist if tr else "",
                 "art": tr.art if tr else "",
-                "video_id": tr.video_id if tr else "",
+                "video_id": tr.video_id if tr else _vid_from(path),
                 "origin": tr.origin if tr else "",
                 "reason": tr.reason if tr else "",
             })
+        # Keep the running order somewhere the sink can't take it with it.
+        # A crashed mpv comes back as a fresh process with an empty playlist,
+        # and this is the only copy of what was in the old one. Free: the
+        # monitor already reads the playlist once a second to publish it.
+        if pl:
+            with self._lock:
+                self._last_order = [r["path"] for r in
+                                    ({"path": e.get("filename", "")} for e in pl)
+                                    if r["path"]]
+                here = next((i for i, e in enumerate(pl) if e.get("current")), None)
+                if here is not None:
+                    self._last_index = here
         return out
+
+    def restore_order(self, *, resume: str = "", drop: str = "") -> dict:
+        """Put a crashed player's running order back.
+
+        A fresh mpv starts with an empty playlist, so everything queued went
+        with the process — and the refill loop wouldn't rebuild it, because it
+        only tops up a queue that already has something in it. One bad file
+        therefore didn't just stop a song, it ended the evening.
+
+        `drop` leaves a file out: the one that has now taken the player down
+        twice. `resume` is where to pick up.
+        """
+        import os
+
+        with self._lock:
+            paths = [p for p in self._last_order if p and p != drop]
+            idx = self._last_index
+        # Anything pruned out from under us while it was down.
+        paths = [p for p in paths if p.startswith("http") or os.path.isfile(p)]
+        if not paths:
+            return {"restored": 0, "resumed": ""}
+        if resume and resume in paths:
+            idx = paths.index(resume)
+        idx = max(0, min(idx, len(paths) - 1))
+
+        self.sink.clear()
+        for i, p in enumerate(paths):
+            self.sink.load(p, "replace" if i == 0 else "append")
+        self.sink.jump(idx)
+        self.sink.set_paused(False)
+        self.publish_queue(force=True)
+        tr = self._meta.get(paths[idx]) or recall(paths[idx])
+        log.info("put %d tracks back after the player restarted", len(paths))
+        return {"restored": len(paths),
+                "resumed": f"{tr.title} — {tr.artist}" if tr else ""}
+
+    def forget_file(self, path: str) -> None:
+        """Bin a file that keeps killing the player.
+
+        Almost always a truncated or malformed download rather than anything
+        wrong with the song, so the file goes and the track stays askable —
+        request it again and it fetches cleanly.
+        """
+        import os
+
+        if not path or path.startswith("http"):
+            return
+        with self._lock:
+            tr = self._meta.pop(path, None)
+            if tr and tr.key():
+                self._claimed.discard(tr.key())
+            self._last_order = [p for p in self._last_order if p != path]
+        with _KNOWN_LOCK:
+            _KNOWN.pop(path, None)
+        try:
+            os.remove(path)
+            log.warning("deleted %s — it stopped the player twice", path)
+        except OSError as exc:
+            log.debug("couldn't delete %s: %s", path, exc)
 
     def publish_queue(self, *, force: bool = False) -> None:
         """Send the queue out, but only when it's actually different.
@@ -653,7 +906,8 @@ class QueueManager:
         if not force and stamp == self._queue_stamp:
             return
         self._queue_stamp = stamp
-        bus.publish(Ev.QUEUE, snap)
+        bus.publish(Ev.QUEUE, {"rows": snap, "session": self.session_id}
+                    if self.session_id else snap)
 
     def move(self, frm: int, to: int) -> bool:
         """Put the track at `frm` at position `to`.
@@ -665,8 +919,7 @@ class QueueManager:
         if frm == to:
             return True
         self._undo.append(("move", to, frm))
-        self.mpv.command("playlist-move", frm, to + 1 if to > frm else to,
-                         wait=False)
+        self.sink.move(frm, to + 1 if to > frm else to)
         self.publish_queue()
         return True
 
@@ -674,13 +927,13 @@ class QueueManager:
         snap = self.snapshot()
         if 0 <= index < len(snap):
             self._undo.append(("remove", index, snap[index]))
-        self.mpv.command("playlist-remove", int(index), wait=False)
+        self.sink.remove(int(index))
         self.publish_queue()
         return True
 
     def jump(self, index: int) -> bool:
-        self.mpv.set("playlist-pos", int(index))
-        self.mpv.set("pause", False)
+        self.sink.jump(int(index))
+        self.sink.set_paused(False)
         self.publish_queue()
         return True
 
@@ -690,7 +943,7 @@ class QueueManager:
             return "Nothing to undo"
         op = self._undo.pop()
         if op[0] == "move":
-            self.mpv.command("playlist-move", int(op[1]), int(op[2]), wait=False)
+            self.sink.move(int(op[1]), int(op[2]))
             self.publish_queue()
             return "Move undone"
         if op[0] == "remove":

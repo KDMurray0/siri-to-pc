@@ -293,4 +293,74 @@ class TasteEngine:
         return max(-1.0, min(1.0, s))
 
 
+class NeutralTaste:
+    """A taste store for somebody who isn't you.
+
+    Reads flat and swallows writes. A guest's queue still gets context, tags,
+    era and everything else that describes *music* — what it doesn't get is
+    your listening history pushing its scores around, and what you don't get
+    is their evening rewriting your radio for a fortnight afterwards.
+
+    Same surface as TasteEngine, so nothing above it knows which one it holds.
+    """
+
+    def score(self, track) -> float:
+        return 0.0
+
+    def recent(self, limit: int = 40) -> list:
+        return []
+
+    def history_ids(self) -> list:
+        return []
+
+    def liked_seed(self):
+        return None
+
+    def liked(self) -> list:
+        return []
+
+    def liked_ids(self) -> set:
+        return set()
+
+    def play_counts(self) -> dict:
+        return {}
+
+    def top_artists(self, limit: int = 8) -> list:
+        return []
+
+    def preferred_artists(self) -> list:
+        return []
+
+    def is_liked(self, video_id: str) -> bool:
+        return False
+
+    def recently_used(self, track) -> bool:
+        return False
+
+    def fatigue(self) -> float:
+        return 0.0
+
+    # -- everything that would write --
+    def record(self, *a, **k) -> bool:
+        return False
+
+    def mark_queued(self, *a, **k) -> None:
+        pass
+
+    def unskip(self, *a, **k) -> None:
+        pass
+
+    def toggle_like(self, *a, **k) -> bool:
+        return False
+
+    def seed_from(self, *a, **k) -> int:
+        return 0
+
+    def save(self, *a, **k) -> None:
+        pass
+
+    def save_soon(self, *a, **k) -> None:
+        pass
+
+
 taste = TasteEngine()

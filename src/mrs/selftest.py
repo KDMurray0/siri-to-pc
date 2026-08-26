@@ -102,18 +102,36 @@ def run() -> int:
         from .web.api import app
         key = config.get("api_key") or ""
         bad = []
+        head = {"X-Music-Key": key} if key else {}
         with TestClient(app) as c:
-            page = c.get("/player")
+            # The page needs a credential now — it embeds one, so serving it
+            # to anyone who asks handed out the key.
+            page = c.get("/player", headers=head)
             if page.status_code != 200 or "const WHY" not in page.text:
                 bad.append("/player")
+            # TestClient reports a non-private host, so this is the
+            # "from the internet" case: no credential, no page.
+            if key and config.get("lan_open") and                     c.get("/player").status_code not in (200, 403):
+                bad.append("/player status")
             for path in ("/api/ping", "/api/status", "/api/settings",
                          "/api/health", "/api/history", "/api/liked",
                          "/api/playlists", "/api/theme", "/api/audio"):
-                if c.get(f"{path}?key={key}").status_code != 200:
+                if c.get(path, headers=head).status_code != 200:
                     bad.append(path)
+            # A shared link must be able to listen and nothing more.
+            if key:
+                from .web.security import issue, forget_pass
+                minted = issue(key, name="selftest", hours=1, scope="full")
+                tok = minted["token"]
+                if c.get(f"/api/status?token={tok}").status_code != 200:
+                    bad.append("token can't listen")
+                if c.get(f"/api/setting?key=volume&value=70&token={tok}"
+                         ).status_code != 403:
+                    bad.append("token reached a settings write")
+                forget_pass(minted["id"])
         if bad:
             raise AssertionError("failed: " + ", ".join(bad))
-        return "10 routes"
+        return "10 routes + guest scope"
 
     @add("yt-dlp and mpv are on PATH")
     def _():

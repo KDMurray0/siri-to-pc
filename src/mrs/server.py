@@ -56,7 +56,15 @@ def pick_port(preferred: int) -> int:
     on the same port silently swallows every request the player makes and the
     window just shows a bare 404.
     """
-    if _port_free(preferred) or _is_ours(preferred):
+    if _is_ours(preferred):
+        # Another copy of us is already answering here. Starting anyway means
+        # two servers sharing one set of mpv pipes, each killing the other's
+        # player as a "stray" — which looks exactly like mpv crashing in a
+        # loop and has cost hours to diagnose more than once.
+        raise SystemExit(
+            f"Music Request Server is already running on port {preferred}. "
+            "Close the other copy (check the system tray) and try again.")
+    if _port_free(preferred):
         return preferred
     for candidate in range(preferred + 1, preferred + 21):
         if _port_free(candidate):
@@ -162,6 +170,11 @@ def startup() -> None:
 
     downloader.prune_cache()
     player.start()
+    # Guests get their own watchdog rather than riding on the owner's queue
+    # loop: "pause them when they drop off the network" needs seconds, not
+    # the minute that loop runs on.
+    from .core.session import sessions
+    sessions.watch()
     log.info("server ready")
 
 
@@ -171,15 +184,28 @@ def run() -> None:
     from .web.api import app
 
     startup()
+    from .core import ddns
+    ddns.start()
     port = pick_port(int(config.get("port", 5000)))
     runtime["port"] = port
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     bus.bind_loop(loop)
 
+    ssl_args = {}
+    if config.get("https"):
+        from .web.security import ensure_cert
+        got = ensure_cert()
+        if got:
+            ssl_args = {"ssl_certfile": got[0], "ssl_keyfile": got[1]}
+            log.info("serving over https (self-signed — the browser will ask once)")
+        else:
+            log.warning("https asked for but no certificate — serving http")
+
     cfg = uvicorn.Config(app, host=config.get("host", "0.0.0.0"),
                          port=port,
-                         log_config=None, access_log=False, loop="asyncio")
+                         log_config=None, access_log=False, loop="asyncio",
+                         **ssl_args)
     server = uvicorn.Server(cfg)
     try:
         loop.run_until_complete(server.serve())
