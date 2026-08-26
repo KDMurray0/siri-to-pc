@@ -31,13 +31,94 @@ class DownloadError(Exception):
     pass
 
 
+# How long a guest defers to the owner before going ahead regardless. Short
+# on purpose: the owner still wins every contested slot, and six seconds a
+# track is long enough to feel like the thing is broken rather than busy.
+GUEST_YIELD = 2.5
+
+
+class Lanes:
+    """Who gets to use the network, and in what order.
+
+    Two rules, and the first one is absolute: while the owner has anything to
+    fetch, a guest's fetch does not start. Not "usually" — a friend queueing
+    forty tracks cannot make your next song wait, because their work simply
+    isn't eligible while yours exists.
+
+    Between guests it's first come, first served under a shared ceiling, so
+    one person hitting a script can't spend the whole machine's bandwidth.
+    """
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._owner = 0            # owner fetches running or waiting
+        self._running = 0          # everything running, guests included
+
+    def _ceiling(self) -> int:
+        return max(1, int(config.get("max_downloads", 4)))
+
+    def enter(self, owner: bool) -> None:
+        """Owner first, but never *never* for a guest.
+
+        The obvious rule — a guest waits while the owner has anything pending
+        — starves them completely, because the owner's queue refills itself
+        continuously and is therefore almost never idle. So a guest yields for
+        a few seconds and then goes anyway: the owner still wins every
+        contested slot in practice, and a guest's song arrives a little later
+        instead of never.
+        """
+        deadline = time.monotonic() + GUEST_YIELD
+        with self._cond:
+            if owner:
+                self._owner += 1
+            while True:
+                room = self._running < self._ceiling()
+                yielded = owner or self._owner == 0 or time.monotonic() >= deadline
+                if room and yielded:
+                    self._running += 1
+                    return
+                self._cond.wait(timeout=0.25)
+
+    def leave(self, owner: bool) -> None:
+        with self._cond:
+            self._running = max(0, self._running - 1)
+            if owner:
+                self._owner = max(0, self._owner - 1)
+            self._cond.notify_all()
+
+    def busy(self) -> dict:
+        with self._cond:
+            return {"running": self._running, "owner_waiting": self._owner,
+                    "ceiling": self._ceiling()}
+
+
+lanes = Lanes()
+
+
+# Which queue a download thread is fetching for. Thread-local because the
+# fetch runs on that queue's own worker — there is nothing to thread through
+# five call sites, and getting it wrong is how one person's stop button came
+# to kill everybody's downloads.
+_lane_of = threading.local()
+
+
 class Downloader:
     def __init__(self) -> None:
         self.exe = shutil.which("yt-dlp")
         self._lock = threading.Lock()
         self._inflight: dict[str, threading.Event] = {}
-        self._procs: set = set()          # running yt-dlp processes, for cancel
+        # running yt-dlp processes -> whose queue asked for them
+        self._procs: dict = {}
         self._cancelled = False
+
+    @staticmethod
+    def claim_lane(tag: str) -> None:
+        """Say whose downloads this thread is doing. "" is the owner's."""
+        _lane_of.tag = tag or ""
+
+    @staticmethod
+    def _lane() -> str:
+        return getattr(_lane_of, "tag", "")
 
     # -- options -------------------------------------------------------
     def auth_args(self, client: str | None = None) -> list[str]:
@@ -178,7 +259,7 @@ class Downloader:
                                 encoding="utf-8", errors="replace",
                                 creationflags=CREATE_NO_WINDOW, bufsize=1)
         with self._lock:
-            self._procs.add(proc)
+            self._procs[proc] = self._lane()
         out_lines: list[str] = []
         deadline = time.time() + timeout
         try:
@@ -201,19 +282,32 @@ class Downloader:
             except Exception:
                 pass
             return 1, "".join(out_lines) + f"\n{exc}"
+        finally:
+            # Finished processes used to stay in the list forever, so the
+            # cancel count was the number of downloads since boot.
+            with self._lock:
+                self._procs.pop(proc, None)
         return proc.returncode, "".join(out_lines[-40:])
 
-    def cancel_all(self) -> int:
-        """Stop every running fetch (the X next to the progress bar)."""
+    def cancel_all(self, lane: str | None = None) -> int:
+        """Stop running fetches (the X next to the progress bar).
+
+        `lane` is whose. Without it this killed every yt-dlp in the house, so
+        one guest pressing stop — or simply asking for another song, which
+        cancels first — took out the owner's download and everybody else's.
+        None still means all of them, which is what shutdown wants.
+        """
         with self._lock:
-            procs = list(self._procs)
+            procs = [p for p, tag in self._procs.items()
+                     if lane is None or tag == lane]
         for proc in procs:
             try:
                 proc.kill()
             except Exception:
                 pass
         if procs:
-            log.info("cancelled %d download(s)", len(procs))
+            log.info("cancelled %d download(s)%s", len(procs),
+                     "" if lane is None else f" for {lane or 'the player'}")
         return len(procs)
 
     def fetch(self, track: Track, *, on_progress=None) -> str | None:

@@ -24,20 +24,36 @@ log = get("request")
 # during that used to leave two of them racing, with whichever finished last
 # winning. Each new play request takes the next number; anything older checks
 # in before it touches the queue and drops out if it has been superseded.
-_gen = 0
+#
+# Per room, not one number for the whole house. Shared, a guest asking for a
+# song silently binned whatever the owner was half way through resolving,
+# and the owner did the same back — "a newer request came in" from somebody
+# in another building.
+_gen: dict[str, int] = {}
 _gen_lock = threading.Lock()
 
 
-def _claim() -> int:
-    global _gen
+def _claim(room: str = "") -> int:
     with _gen_lock:
-        _gen += 1
-        return _gen
+        _gen[room] = _gen.get(room, 0) + 1
+        return _gen[room]
 
 
-def _still_wanted(mine: int) -> bool:
+def _still_wanted(mine: int, room: str = "") -> bool:
     with _gen_lock:
-        return mine == _gen
+        return mine == _gen.get(room, 0)
+
+def say_to(room: str, msg: str) -> None:
+    """A toast for one listener, or for everyone when room is "".
+
+    Unstamped toasts go to the owner's page and nowhere else, so every "not
+    found", every "playing that" and every error a guest caused was being
+    read by the wrong person — and the guest got a page that said nothing.
+    """
+    if not msg:
+        return
+    bus.publish(Ev.TOAST, {"text": msg, "session": room} if room else msg)
+
 
 _COMMANDS = {
     "pause": "pause", "resume": "resume", "next": "next", "previous": "previous",
@@ -47,11 +63,29 @@ _COMMANDS = {
 
 
 def handle_request(text: str, *, mode: str = "play", source: str | None = None,
-                   announce: bool = True, cast: bool = False) -> dict:
-    """The one entry point. Never raises."""
+                   announce: bool = True, cast: bool = False,
+                   queue=None) -> dict:
+    """The one entry point. Never raises.
+
+    `queue` is whose queue this lands in — the shared player by default, or a
+    guest's own when they're playing on their own device. Everything else
+    about resolving the request is identical; only the destination differs.
+    """
+    queue = queue if queue is not None else player.queue
+    guest = queue is not player.queue
+    # Whose room the announcement belongs in. A guest is not in yours, so
+    # theirs goes to their phone and never near the speakers here — saying
+    # nothing at all was the wrong half of that rule.
+    room = getattr(queue, "session_id", "") if guest else ""
+    if guest:
+        queue.note_request()
     text = (text or "").strip()
     if not text:
         return {"status": "error", "message": "Nothing to play"}
+
+    def say(msg: str) -> None:
+        if announce and msg:
+            player.announce(msg, room)
 
     try:
         if cast or config.get("cast_all"):
@@ -59,35 +93,40 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
 
         # A streaming link is a playlist import, not a search.
         if spotify.is_spotify_url(text):
-            return _import_spotify(text, announce=announce)
+            return _import_spotify(text, announce=announce, queue=queue, room=room)
         if applemusic.is_apple_url(text):
-            return _import_apple(text, announce=announce)
+            return _import_apple(text, announce=announce, queue=queue, room=room)
 
-        # Your own playlists win over anything YouTube might suggest.
-        hit = _match_playlist(text)
-        if hit:
-            res = player.playlist_play(hit, shuffle="shuffle" in text.lower())
-            if announce and res.get("ok"):
-                player.announce(res["message"])
-            return {"status": "played" if res.get("ok") else "error",
-                    "message": res.get("message", ""), "via": "playlist"}
+        # Your own playlists win over anything YouTube might suggest. Yours,
+        # though — a guest naming one would have played it out of the front
+        # room, because playlist_play only ever knew the shared queue.
+        if not guest:
+            hit = _match_playlist(text)
+            if hit:
+                res = player.playlist_play(hit, shuffle="shuffle" in text.lower())
+                if res.get("ok"):
+                    say(res["message"])
+                return {"status": "played" if res.get("ok") else "error",
+                        "message": res.get("message", ""), "via": "playlist"}
 
-        # "for twenty minutes" / "in half an hour" — strip the timing off and
-        # deal with whatever's left as an ordinary request
-        timed = _timing(text)
-        if timed:
-            return timed
+            # "for twenty minutes" / "in half an hour" — strip the timing off
+            # and deal with whatever's left as an ordinary request. Also
+            # yours: these set the sleep timer, and a guest doesn't get to
+            # decide when the house stops playing.
+            timed = _timing(text)
+            if timed:
+                return timed
 
         # "play something I'd like" — build off your taste, not one seed song
         if _FOR_YOU.search(text):
-            return play_for_you(announce=announce)
+            return play_for_you(announce=announce, queue=queue, room=room)
 
         plan = parser.parse(text, mode=mode)
         if source:
             plan.source = source
 
         if plan.kind == "command":
-            return _run_command(plan)
+            return _run_command(plan, queue=queue if guest else None)
 
         if plan.kind == "none":
             return {"status": "error", "message": "I didn't catch that"}
@@ -96,10 +135,9 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
         if plan.kind in ("song", "auto") and library.count():
             local = library.find_exact(plan.query, plan.artist)
             if local:
-                player.queue.play_now([local])
+                queue.play_now([local])
                 msg = f"Playing {local.title} from your library"
-                if announce:
-                    player.announce(msg)
+                say(msg)
                 return {"status": "played", "message": msg, "via": plan.via,
                         "source": "library"}
 
@@ -107,33 +145,32 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
         # whatever the last one had in flight — the user has moved on, and a
         # download for a song they no longer want is just bandwidth and a
         # queue slot.
-        mine = _claim()
+        mine = _claim(room)
         if plan.mode not in ("next", "queue"):
-            player.queue.cancel()
+            queue.cancel()
 
-        player.queue._set_activity("finding", plan.query)
+        queue._set_activity("finding", plan.query)
         res = resolver.resolve(plan)
-        if not _still_wanted(mine):
+        if not _still_wanted(mine, room):
             log.info("dropped %r — a newer request came in while it resolved", text)
             return {"status": "superseded", "message": "", "via": plan.via}
         if not res:
-            bus.publish(Ev.TOAST, res.spoken)
-            player.queue._set_activity("idle")
+            say_to(room, res.spoken)
+            queue._set_activity("idle")
             return {"status": "not_found", "message": res.spoken, "via": plan.via}
 
         shuffle = bool(plan.shuffle) if plan.shuffle is not None else False
         if plan.mode == "next":
-            player.queue.play_next(res.tracks[0])
+            queue.play_next(res.tracks[0])
         elif plan.mode == "queue":
-            player.queue.enqueue(res.tracks)
+            queue.enqueue(res.tracks)
         else:
-            player.queue.play_now(res.tracks, res.alternates,
+            queue.play_now(res.tracks, res.alternates,
                                   anchors=res.anchors, shuffle=shuffle,
                                   hold_radio=res.hold_radio, kind=plan.kind,
                                   theme=plan.query if plan.kind == "genre" else "")
 
-        if announce:
-            player.announce(res.spoken)
+        say(res.spoken)
         log.info("%s -> %s (%s, %d tracks)", text, res.spoken, plan.via,
                  len(res.tracks))
         return {"status": "played", "message": res.spoken, "via": plan.via,
@@ -166,8 +203,15 @@ def _match_playlist(text: str) -> str | None:
     return None
 
 
-def _run_command(plan) -> dict:
+def _run_command(plan, queue=None) -> dict:
+    """"Skip this", "pause", "louder". `queue` means a guest said it.
+
+    A guest's "skip" has to move their own list. Sent to player.control it
+    skipped the owner's song instead, from a phone in another building.
+    """
     cmd = (plan.command or "").lower()
+    if queue is not None:
+        return _guest_command(cmd, plan, queue)
     if cmd == "more_like_this":
         return {"status": "ok", **player.queue_similar()}
     if cmd == "save":
@@ -190,6 +234,28 @@ def _run_command(plan) -> dict:
             "via": plan.via}
 
 
+def _guest_command(cmd: str, plan, queue) -> dict:
+    """The handful of commands that mean anything without an mpv."""
+    sink = queue.sink
+    if cmd in ("next", "previous", "pause", "resume", "shuffle"):
+        if cmd == "next":
+            sink.advance()
+        elif cmd == "previous":
+            sink.jump(max(0, (sink.pos() or 0) - 1))
+        elif cmd == "shuffle":
+            queue.shuffle_upcoming()
+        else:
+            sink.set_paused(cmd == "pause")
+        queue.publish_queue(force=True)
+        return {"status": "ok", "message": "OK", "via": plan.via}
+    if cmd == "more_like_this":
+        return {"status": "ok", "message": "Already doing that", "via": plan.via}
+    # Volume is the phone's own, liking writes to a library a guest hasn't
+    # got, and saving is the owner's. Say so rather than failing quietly.
+    return {"status": "error", "via": plan.via,
+            "message": "That one's the computer's to do"}
+
+
 _FOR_YOU = re.compile(
     r"\b(?:something|anything|music|songs?|stuff)\s+i(?:'?d)?\s+"
     r"(?:would\s+)?(?:like|enjoy|love)\b"
@@ -197,24 +263,30 @@ _FOR_YOU = re.compile(
     r"|\b(?:surprise|shuffle)\s+me\b", re.I)
 
 
-def play_for_you(*, announce: bool = True) -> dict:
+def play_for_you(*, announce: bool = True, queue=None, room: str = "") -> dict:
     """A queue drawn from what you actually ask for."""
+    queue = queue if queue is not None else player.queue
     from .core import foryou
     from .resolve import catalog
 
-    player.queue._set_activity("finding", "Picking something you'd like")
-    tracks = foryou.build(catalog)
-    player.queue._set_activity("idle")
+    queue._set_activity("finding", "Picking something you'd like")
+    # Whoever's queue this is, scored by whoever's taste that queue holds.
+    # Built off the global store, a guest's "play something I'd like" was
+    # answered out of the owner's listening history — the one thing a shared
+    # link is not supposed to reach.
+    tracks = foryou.build(catalog, taste=getattr(queue, "taste", None))
+    queue._set_activity("idle")
     if not tracks:
-        msg = "Play a few things first and I'll learn what you like"
-        bus.publish(Ev.TOAST, msg)
+        msg = ("Ask for a song, an artist or a vibe — I don't know your taste yet"
+               if room else "Play a few things first and I'll learn what you like")
+        say_to(room, msg)
         return {"status": "not_found", "message": msg, "via": "foryou"}
 
-    player.queue.play_now(tracks, hold_radio=True, kind="foryou")
+    queue.play_now(tracks, hold_radio=True, kind="foryou")
     msg = f"Playing {len(tracks)} songs you'd like"
     if announce:
-        player.announce("Here's something you'd like")
-    bus.publish(Ev.TOAST, msg)
+        player.announce("Here's something you'd like", room)
+    say_to(room, msg)
     log.info("for-you: %d tracks", len(tracks))
     return {"status": "played", "message": msg, "via": "foryou",
             "kind": "foryou", "tracks": len(tracks)}
@@ -350,7 +422,8 @@ def play_later(what: str, minutes: float, *, announce: bool = True) -> dict:
 
 
 def _import_link(reader, service: str, url: str, *,
-                 announce: bool = True, play: bool = True) -> dict:
+                 announce: bool = True, play: bool = True, queue=None,
+                 room: str = "") -> dict:
     """Turn a streaming link into a playlist, keeping its name.
 
     `reader` is whichever module knows how to read that service — it needs
@@ -361,24 +434,25 @@ def _import_link(reader, service: str, url: str, *,
     play=False just files it away — for when you're collecting playlists
     rather than asking for one right now.
     """
+    queue = queue if queue is not None else player.queue
     from .core.playlists import playlists
 
-    player.queue._set_activity("finding", f"Reading {service} link")
-    bus.publish(Ev.TOAST, f"Reading that {service} link…")
+    queue._set_activity("finding", f"Reading {service} link")
+    say_to(room, f"Reading that {service} link…")
     verb = "Playing" if play else "Saved"
 
     def work() -> None:
         names = reader.track_names(url)
         if not names:
-            bus.publish(Ev.TOAST, "Couldn't read that link — is the playlist public?")
-            player.queue._set_activity("idle")
+            say_to(room, "Couldn't read that link — is the playlist public?")
+            queue._set_activity("idle")
             return
 
         label = reader.link_name(url) or f"{service} import"
-        bus.publish(Ev.TOAST, f"{label}: {len(names)} tracks, matching them up…")
+        say_to(room, f"{label}: {len(names)} tracks, matching them up…")
 
         def progress(i, total, title):
-            player.queue._set_activity("finding", f"{i}/{total} {title}", i / total)
+            queue._set_activity("finding", f"{i}/{total} {title}", i / total)
 
         # Start on the first match instead of the last. The rest are appended
         # as they turn up, so the downloader is working the whole time the
@@ -390,49 +464,56 @@ def _import_link(reader, service: str, url: str, *,
                 return
             if not started[0]:
                 started[0] = True
-                player.queue.play_now([track], hold_radio=True, kind="playlist")
+                queue.play_now([track], hold_radio=True, kind="playlist")
                 if announce:
-                    player.announce(f"{verb} {label}")
+                    player.announce(f"{verb} {label}", room)
             else:
-                player.queue.enqueue([track])
+                queue.enqueue([track])
 
         tracks = spotify.resolve_imported(names, on_progress=progress,
                                           on_track=arrived)   # service-agnostic
-        player.queue._set_activity("idle")
+        queue._set_activity("idle")
         if not tracks:
-            bus.publish(Ev.TOAST, "None of those tracks could be found")
+            say_to(room, "None of those tracks could be found")
             return
 
-        # keep it, so the import isn't a one-off — one write, not one per track
-        playlists.add_many(label, tracks)
+        # keep it, so the import isn't a one-off — one write, not one per track.
+        # Not a guest's, though: playlists are the owner's library, and a
+        # stranger's Spotify link has no business filing itself in there.
+        if not room:
+            playlists.add_many(label, tracks)
 
         msg = f"{verb} {label} — {len(tracks)} tracks"
         if play:
             if not started[0]:          # nothing matched early enough to start
-                player.queue.play_now(tracks, hold_radio=True, kind="playlist")
-            bus.publish(Ev.TOAST, msg + " (saved as a playlist)")
+                queue.play_now(tracks, hold_radio=True, kind="playlist")
+            say_to(room, msg + ("" if room else " (saved as a playlist)"))
         else:
-            bus.publish(Ev.TOAST, msg)
-            bus.publish(Ev.SETTINGS, {"playlists": True})
+            say_to(room, msg)
+            if not room:
+                bus.publish(Ev.SETTINGS, {"playlists": True})
 
     def unstick(_exc):
         # Whatever went wrong, the spinner has to come back down — the line
         # that lowers it sits three statements past the one that threw.
-        player.queue._set_activity("idle")
-        bus.publish(Ev.TOAST, "That import failed — see the log")
+        queue._set_activity("idle")
+        say_to(room, "That import failed — see the log")
 
     spawn(work, name=f"{service.lower()} import", on_error=unstick)
     return {"status": "ok", "message": f"Importing that {service} link…",
             "via": service.lower()}
 
 
-def _import_spotify(url: str, *, announce: bool = True, play: bool = True) -> dict:
-    return _import_link(spotify, "Spotify", url, announce=announce, play=play)
+def _import_spotify(url: str, *, announce: bool = True, play: bool = True,
+                    queue=None, room: str = "") -> dict:
+    return _import_link(spotify, "Spotify", url, announce=announce, play=play,
+                        queue=queue, room=room)
 
 
-def _import_apple(url: str, *, announce: bool = True, play: bool = True) -> dict:
+def _import_apple(url: str, *, announce: bool = True, play: bool = True,
+                  queue=None, room: str = "") -> dict:
     return _import_link(applemusic, "Apple Music", url,
-                        announce=announce, play=play)
+                        announce=announce, play=play, queue=queue, room=room)
 
 
 def add_spotify(url: str) -> dict:
@@ -444,32 +525,39 @@ def add_spotify(url: str) -> dict:
     return {"status": "error", "message": "That isn't a Spotify or Apple Music link"}
 
 
-def play_station(url: str, name: str = "", art: str = "") -> dict:
+def play_station(url: str, name: str = "", art: str = "", queue=None) -> dict:
     """Tune a live station picked from the search results."""
+    queue = queue if queue is not None else player.queue
     if not url:
         return {"status": "error", "message": "No station"}
     track = Track(title=name or "Radio", artist="Radio", art=art, url=url,
                   source="radio", origin="request", reason="asked")
-    player.queue.play_now([track], kind="radio")
+    queue.play_now([track], kind="radio")
     msg = f"Tuned to {track.title}"
-    bus.publish(Ev.TOAST, msg)
+    say_to(getattr(queue, "session_id", ""), msg)
     log.info("%s", msg)
     return {"status": "played", "message": msg, "via": "radio"}
 
 
 def play_video(video_id: str, *, title: str = "", artist: str = "", art: str = "",
-               mode: str = "play") -> dict:
+               mode: str = "play", queue=None) -> dict:
     """Play one exact track chosen from the search dropdown."""
+    queue = queue if queue is not None else player.queue
+    room = getattr(queue, "session_id", "") if queue is not player.queue else ""
+    if room:
+        # Counted the same as a typed request — this is the path most people
+        # actually use, and it was going on nobody's tab.
+        queue.note_request()
     track = Track(video_id=video_id, title=title, artist=artist, art=art,
                   origin="request")
     if mode == "next":
-        player.queue.play_next(track)
+        queue.play_next(track)
         msg = f"Playing {title} next"
     elif mode == "queue":
-        player.queue.enqueue([track])
+        queue.enqueue([track])
         msg = f"Added {title}"
     else:
-        player.queue.play_now([track])
+        queue.play_now([track])
         msg = f"Playing {title}" + (f" by {artist}" if artist else "")
-        player.announce(msg)
+        player.announce(msg, room)
     return {"status": "played", "message": msg}

@@ -17,7 +17,7 @@ from ..models import (Candidate, Track, is_channel_act, is_derivative,
 from .era import era, gap as era_gap
 from .kin import kin as kinstore
 from .tags import _CATCH_ALL, _flatten, tagstore
-from .taste import taste
+from .taste import taste as _default_taste
 
 log = get("context")
 
@@ -77,6 +77,37 @@ ERA_WEIGHT = 2.0
 SHARE_WEIGHT = 0.7
 SHARE_CAP = 1.8
 KIN_WEIGHT = 1.4
+
+
+# Words that mean "the same act, plus company" rather than "a different act
+# wearing their name". Everything else bolted onto a band's name is somebody
+# else: The Black Bon Jovi, Nirvana UK, Oasis Tribute.
+_TOGETHER = {"&", "and", "feat", "feat.", "featuring", "with", "vs", "x", "+",
+             "duet", "presents"}
+
+
+def _impostor(name: str, real: str) -> bool:
+    """Is `name` somebody trading on `real`'s name without being them?
+
+    Both arrive already folded and article-stripped by primary_artist(). The
+    test is on whole words, not characters — "Journey" must not knock out
+    "Journeyman", and "Ash" must not knock out "Ashanti".
+    """
+    if not name or not real or name == real:
+        return False
+    mine, theirs = name.split(), real.split()
+    n = len(theirs)
+    if len(mine) <= n:
+        return False
+    for i in range(len(mine) - n + 1):
+        if mine[i:i + n] != theirs:
+            continue
+        # Their name is in there. Is the rest a credit, or a costume?
+        rest = mine[:i] + mine[i + n:]
+        if rest and rest[0] in _TOGETHER:
+            return False        # "Bob Marley & The Wailers" is Bob Marley
+        return True
+    return False
 
 
 def _fit(sim: float) -> float:
@@ -285,7 +316,12 @@ def _closest_affinity(anchors: list[Track], track: Track) -> float | None:
 class ContextBuilder:
     """Turns 'what's playing' into 'what might play next'."""
 
-    def __init__(self, catalog) -> None:
+    def __init__(self, catalog, taste=None) -> None:
+        # Handed in rather than imported, so a guest's queue can be scored by
+        # a neutral store instead of the owner's listening history. That bleed
+        # is invisible until you look for it: blocking guest *writes* isn't
+        # enough when the scorer is still reading your taste.
+        self.taste = taste if taste is not None else _default_taste
         self.catalog = catalog
         # "artist|title" -> the record, or None if we looked and it wasn't
         # there. The played-alongside lane walks the same thirty names over
@@ -497,7 +533,7 @@ class ContextBuilder:
         #    a piano piece shouldn't mean one refill in three of a metal queue
         #    arrives full of it.
         if not anchors and not theme and random.random() < 0.35:
-            liked = taste.liked_seed()
+            liked = self.taste.liked_seed()
             if liked:
                 for t in self._safe(self.catalog.related, liked, 6):
                     raw.append((t, "liked"))
@@ -612,12 +648,12 @@ class ContextBuilder:
                have: set[str], focus: float = 1.0) -> list[Candidate]:
         """Pull in neighbouring artists and your own favourites."""
         raw: list[tuple[Track, str]] = []
-        for artist in taste.top_artists(4):
+        for artist in self.taste.top_artists(4):
             name = artist.get("artist")
             if name and (not current or name != current.primary_artist()):
                 for t in self._safe(self.catalog.artist_tracks, name, 8):
                     raw.append((t, "radio"))
-        liked = taste.liked_seed()
+        liked = self.taste.liked_seed()
         if liked:
             for t in self._safe(self.catalog.related, liked, 10):
                 raw.append((t, "liked"))
@@ -647,7 +683,7 @@ class ContextBuilder:
         refs = _as_anchors(anchor) or ([current] if current else [])
         if not refs:
             return seeds
-        for row in taste.recent(12):
+        for row in self.taste.recent(12):
             vid = row.get("video_id")
             if not vid or vid in seeds:
                 continue
@@ -707,7 +743,7 @@ class ContextBuilder:
         from .downloader import downloader
         out: list[Candidate] = []
         seen: set[str] = set()
-        for row in taste.recent(300):
+        for row in self.taste.recent(300):
             vid = row.get("video_id") or ""
             if not vid or vid in exclude or vid in seen:
                 continue
@@ -750,7 +786,7 @@ class ContextBuilder:
         # Skipping late, again and again, means the run has gone stale rather
         # than any one song being wrong. Loosen the grip a little when that
         # happens — at worst it halves.
-        slack = 1.0 - min(0.5, taste.fatigue() * 0.18)
+        slack = 1.0 - min(0.5, self.taste.fatigue() * 0.18)
         cohesion = float(config.get("artist_cohesion", 1.0)) * focus * slack
         cur_artist = current.primary_artist() if current else ""
         anchors = _as_anchors(anchor)
@@ -769,14 +805,14 @@ class ContextBuilder:
         # through, so a Marvin Gaye request played Ain't No Mountain High
         # Enough again four tracks later, by Diana Ross.
         seen_titles: set[str] = {norm_title(r.get("title") or "")
-                                 for r in taste.recent(60)}
+                                 for r in self.taste.recent(60)}
         seen_titles.discard("")
         # The last few records, newest first, for the run-fit tests below.
         # What's on hasn't been recorded yet, so it goes on the front itself.
         recent_run = [Track(video_id=r.get("video_id") or "",
                             title=r.get("title") or "",
                             artist=r.get("artist") or "")
-                      for r in taste.recent(RUN_LOOK_BACK)]
+                      for r in self.taste.recent(RUN_LOOK_BACK)]
         run_now = ([current] if current else []) + [
             t for t in recent_run
             if not current or t.video_id != current.video_id]
@@ -835,7 +871,7 @@ class ContextBuilder:
                 continue
             if is_derivative(track.title):
                 continue                      # keep the queue on real releases
-            if not ignore_recency and taste.recently_used(track):
+            if not ignore_recency and self.taste.recently_used(track):
                 continue
 
             score = SOURCE_WEIGHT.get(source, 1.0)
@@ -940,7 +976,7 @@ class ContextBuilder:
             # Taste breaks ties, it doesn't choose. Liking a song is a reason
             # to prefer it over something equally fitting — not a reason to
             # play it in a queue it has no business in. A dislike still bites.
-            ts = taste.score(track)
+            ts = self.taste.score(track)
             score += (TASTE_WEIGHT * ts * fit) if ts > 0 else (TASTE_WEIGHT * ts)
 
             # What people play alongside this, which is the only signal that
@@ -1048,6 +1084,13 @@ class ContextBuilder:
             score += random.random() * 0.8
 
             if is_channel_act(track.artist, track.title):
+                continue
+            # An act whose name is somebody else's with words bolted on.
+            # "The Black Bon Jovi" landed straight after Bon Jovi, and every
+            # test here passed it: the names aren't equal, so the dedupe was
+            # happy, and the tags matched because it plays the same music.
+            if any(_impostor(track.primary_artist(), real)
+                   for real in ([cur_artist] if cur_artist else []) + list(anchor_artists)):
                 continue
             # Nobody names their band after the genre they're filed under.
             # Searching trip-hop returned "Trip Hop 08" by "Trip Hop", and

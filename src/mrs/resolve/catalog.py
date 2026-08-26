@@ -446,23 +446,58 @@ def search_candidates(query: str, limit: int = 12) -> list[Track]:
     return search_songs(query, limit=limit, allow_variant=True)
 
 
+def _artist_page(artist: str) -> str:
+    """The browseId of the artist actually named, or "".
+
+    The top artist hit for a name is not always that artist. Asking for Bon
+    Jovi returned an act called The Black Bon Jovi, and because nothing here
+    checked the name against what came back, its whole catalogue was loaded
+    and the queue treated every track on it as same-artist. An entire evening
+    of the wrong band, off one unchecked index.
+    """
+    want = Track(title="", artist=artist).primary_artist()
+    if not want:
+        return ""
+    rows = _yt(f"artist {artist!r}", lambda: client().search(
+        artist, filter="artists", limit=5)) or []
+    named = [(r, Track(title="", artist=r.get("artist") or r.get("title") or "")
+              .primary_artist()) for r in rows if r.get("browseId")]
+    for r, name in named:
+        if name == want:
+            return r["browseId"]
+    # Second pass with the punctuation gone, so AC/DC, Ke$ha and P!nk still
+    # find their own pages. Deliberately not a substring test — that is
+    # exactly what would let "The Black Bon Jovi" back in.
+    squash = lambda s: re.sub(r"[^a-z0-9]+", "", s)
+    for r, name in named:
+        if squash(name) == squash(want):
+            return r["browseId"]
+    if rows:
+        log.info("no artist page for %r — top hit was %r", artist,
+                 rows[0].get("artist") or rows[0].get("title"))
+    return ""
+
+
 def artist_tracks(artist: str, limit: int = 20) -> list[Track]:
     key = f"artist:{artist}:{limit}"
     hit = _cached(key)
     if hit is not None:
         return hit
+    want = Track(title="", artist=artist).primary_artist()
     tracks: list[Track] = []
-    found = _yt(f"artist {artist!r}", lambda: client().search(
-        artist, filter="artists", limit=1))
-    if found:
+    browse = _artist_page(artist)
+    if browse:
         info = _yt(f"artist page {artist!r}",
-                   lambda: client().get_artist(found[0]["browseId"]))
+                   lambda: client().get_artist(browse))
         songs = ((info or {}).get("songs") or {}).get("results") or []
-        tracks = [to_track(r, "request") for r in songs]
+        # Checked again on the way out: an artist page carries features and
+        # "fans might also like" rows, and one of those on the front of the
+        # list is how a request drifts to somebody else within two songs.
+        tracks = [t for t in (to_track(r, "request") for r in songs)
+                  if not want or t.primary_artist() == want]
     if len(tracks) < limit:
         # Searching the band name also finds songs *called* that — asking for
         # Blur turned up "Blur" by Bella Kay and the queue called it same-artist.
-        want = Track(title="", artist=artist).primary_artist()
         tracks += [t for t in search_songs(artist, limit=limit)
                    if not want or t.primary_artist() == want]
     seen, out = set(), []

@@ -17,6 +17,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                StreamingResponse)
 from fastapi.templating import Jinja2Templates
 
+from .. import __version__
 from ..config import config
 from ..core import cast as cast_mod
 from ..core import cookies as cookie_mod
@@ -27,9 +28,11 @@ from ..core.library import library
 from ..core.playlists import playlists
 from ..core.taste import taste
 from ..events import Ev, bus
+from . import security as sec
+from .security import bans, same_key
 from ..logging_setup import get, log_path, spawn
 from ..paths import resource_dir
-from ..player import player
+from ..player import CAST_DEVICE, player
 from ..requests import (add_spotify, handle_request, play_for_you,
                         play_station, play_video)
 from ..resolve import catalog, llm, lyrics as lyrics_mod, spotify
@@ -43,26 +46,128 @@ templates = Jinja2Templates(directory=str(Path(resource_dir()) / "web" / "templa
 _start = time.time()
 
 
+# ── the front door ────────────────────────────────────────────────────
+
+@app.middleware("http")
+async def _door(request: Request, call_next):
+    """Turn away known-bad addresses before any route runs, and make sure
+    nothing this serves can leak a key onward through a Referer header."""
+    ip = (request.client.host if request.client else "") or ""
+    if bans.blocked(ip):
+        return JSONResponse({"detail": "Blocked"}, status_code=403)
+    resp = await call_next(request)
+    # A page fetched with ?key= or ?token= in its URL would otherwise hand
+    # that URL to every third-party it links to.
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "SAMEORIGIN"
+    return resp
+
+
 # ── auth ──────────────────────────────────────────────────────────────
 
 def _client_ip(request: Request) -> str:
     return (request.client.host if request.client else "") or ""
 
 
-def require_key(request: Request, key: str = Query(default="")) -> bool:
-    supplied = key or request.headers.get("X-API-Key", "")
+def _refuse(ip: str) -> None:
+    """Say no, slowly, and count it against the address.
+
+    The pause is deliberate. Three guesses is already the limit, but a
+    request that costs half a second is a thousand times more expensive to
+    grind through than one that costs nothing, and it makes a scanner look
+    elsewhere long before it reaches the ban.
+    """
+    banned = bans.wrong_key(ip)
+    time.sleep(0.5)
+    raise HTTPException(status_code=403,
+                        detail="Blocked" if banned else "Not authorised")
+
+
+def require_key(request: Request, key: str = Query(default=""),
+                token: str = Query(default="")) -> bool:
     expected = config.get("api_key") or ""
-    if expected and supplied != expected:
-        raise HTTPException(status_code=403, detail="Not authorised")
+    if not expected:
+        return True                      # no key set: nothing to check
+    ip = _client_ip(request)
+
+    # Where the key belongs. A header stays out of browser history, out of
+    # access logs and out of Referer, which a query string does not.
+    header = (request.headers.get("X-Music-Key")
+              or request.headers.get("X-API-Key") or "")
+    if header and same_key(header, expected):
+        bans.good_key(ip)
+        return _check_ip_lock(ip)
+    if header:
+        row = sec.read_token(expected, header)
+        if row:
+            bans.good_key(ip)
+            request.state.pass_row = row
+            return _check_ip_lock(ip)
+
+    # <audio>.src and EventSource take a URL and nothing else, and a link you
+    # send someone is a URL by definition. Those carry a signed token that
+    # expires instead of the key itself.
+    for candidate in (token, key):
+        row = sec.read_token(expected, candidate) if candidate else None
+        if row:
+            bans.good_key(ip)
+            request.state.pass_row = row      # scope is checked per-route
+            return _check_ip_lock(ip)
+
+    # The raw key in a URL still works until it's switched off, so an iOS
+    # Shortcut built against the old scheme doesn't break on upgrade.
+    if key and config.get("allow_key_in_url", True) and same_key(key, expected):
+        bans.good_key(ip)
+        return _check_ip_lock(ip)
+
+    _refuse(ip)
+    return False                          # unreachable; _refuse raises
+
+
+def is_owner(request: Request, key: str = "") -> bool:
+    """Did this arrive with the actual key, rather than a token?"""
+    expected = config.get("api_key") or ""
+    if not expected:
+        return True
+    header = (request.headers.get("X-Music-Key")
+              or request.headers.get("X-API-Key") or "")
+    if header and same_key(header, expected):
+        return True
+    if key and config.get("allow_key_in_url", True) and same_key(key, expected):
+        return True
+    # The owner's own pass, for their phone. Deliberately as powerful as the
+    # key — it exists because the key can't safely travel in a link.
+    row = getattr(request.state, "pass_row", None)
+    return bool(row and row.get("owner"))
+
+
+def require_admin(request: Request, key: str = Query(default=""),
+                  token: str = Query(default="")) -> bool:
+    """For anything that changes the machine rather than the music.
+
+    A token is deliberately not enough here. Tokens go into links you hand
+    out and into URLs that end up in someone's history — whoever holds one
+    should be able to listen, not rewrite the settings, read a backup with
+    the key in it, or mint themselves a fresh token when theirs expires.
+    """
+    require_key(request, key, token)          # bans + 403 for anything invalid
+    if not is_owner(request, key):
+        raise HTTPException(status_code=403,
+                            detail="That needs the key, not a shared link")
+    return True
+
+
+def _check_ip_lock(ip: str) -> bool:
     if config.get("lock_ips"):
         allowed = config.get("allowed_ips") or []
-        ip = _client_ip(request)
         if allowed and ip not in allowed and not ip.startswith("127."):
             raise HTTPException(status_code=403, detail="IP not allowed")
     return True
 
 
 Auth = Depends(require_key)
+Owner = Depends(require_admin)
 
 
 # ── pages ─────────────────────────────────────────────────────────────
@@ -94,24 +199,74 @@ async def siri(request: Request, key: str = Query(default="")):
     if not text:
         form = await request.form()
         text = (form.get("input") or "").strip()
+    room = _session_for(request)
+    _guard_rate(room, request)
+    if not room:
+        _guard_shared(request)
+    target = room.queue if room else None
     # Resolution + download happen on a worker; Siri gets an answer immediately.
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, lambda: handle_request(text))
+    result = await loop.run_in_executor(
+        None, lambda: handle_request(text, queue=target))
     return JSONResponse(result)
 
 
 @app.get("/remote", response_class=HTMLResponse)
-async def remote_page(request: Request, key: str = Query(default="")):
+async def remote_page(request: Request, key: str = Query(default=""),
+                      token: str = Query(default="")):
     """Full remote for a phone: controls, search, queue, playlists."""
-    require_key(request, key)
-    return templates.TemplateResponse(request, "remote.html",
-                                      {"api_key": config.get("api_key", "")})
+    return _serve_page(request, "remote.html", key, token)
 
 
 @app.get("/player", response_class=HTMLResponse)
-async def player_page(request: Request):
-    return templates.TemplateResponse(request, "player.html",
-                                      {"api_key": config.get("api_key", "")})
+async def player_page(request: Request, key: str = Query(default=""),
+                      token: str = Query(default="")):
+    """The player, and the credential it gets to keep.
+
+    This used to be unauthenticated *and* embed the key, which meant anyone
+    who could load the page owned the server — every other check here was
+    decoration. Now it needs a key or a token, and it hands back whichever
+    one arrived: turn up with the key and the page can do everything, turn up
+    on a shared link and it can listen and nothing else.
+    """
+    return _serve_page(request, "player.html", key, token)
+
+
+def _serve_page(request: Request, name: str, key: str, token: str):
+    """A page, and the credential it gets to keep.
+
+    On the home network this behaves as it always did: open the address and
+    it loads. From anywhere else it needs a key or a token, because the page
+    embeds a credential and serving it to whoever asks handed the server away.
+
+    What it embeds depends on how you arrived. The key, and the page can do
+    everything; a shared link's token, and it can listen and nothing else.
+    """
+    ip = _client_ip(request)
+    from .security import _is_local
+
+    # Someone who arrived holding a credential is judged on it, wherever they
+    # are. Without this, a guest on a phone-only link who happens to be in the
+    # house gets handed the master key by the open-LAN rule — including one
+    # whose link you revoked an hour ago.
+    offered = (token or key
+               or request.headers.get("X-Music-Key")
+               or request.headers.get("X-API-Key") or "")
+    home = _is_local(ip) and config.get("lan_open", True) and not offered
+
+    if not home:
+        require_key(request, key, token)
+    owner = home or is_owner(request, key)
+    creds = config.get("api_key", "") if owner else (token or key)
+    # Who this is, decided here rather than a round trip later. The page used
+    # to load neutral and ask, which left a window where its own requests went
+    # out saying the wrong thing about where they should play — and left the
+    # capsule showing whatever the markup happened to say.
+    row = getattr(request.state, "pass_row", None) or {}
+    return templates.TemplateResponse(request, name, {
+        "api_key": creds,
+        "is_guest": "0" if owner else "1",
+        "scope": "owner" if owner else (row.get("scope") or "full")})
 
 
 # ── health + events ───────────────────────────────────────────────────
@@ -119,7 +274,8 @@ async def player_page(request: Request):
 @app.get("/api/ping")
 async def ping():
     return {"status": "ok", "uptime": round(time.time() - _start, 1),
-            "app": "music-request-server", "version": 2}
+            "app": "music-request-server", "version": 2,
+            "release": __version__}
 
 
 def _sse(evt: dict) -> str:
@@ -138,20 +294,72 @@ def _sse(evt: dict) -> str:
     return "data: " + body + NEWLINE + NEWLINE
 
 
+def _mine(evt: dict, session: str) -> bool:
+    """Is this event for the listener on the other end of this stream?
+
+    Events carry the session that produced them. Anything unstamped is the
+    shared player or genuinely global — a library scan, a toast — and goes to
+    everyone. Without this a guest would receive the owner's now-playing and
+    the owner would receive theirs.
+    """
+    data = evt.get("data")
+    stamped = data.get("session", "") if isinstance(data, dict) else ""
+    return stamped == session
+
+
 @app.get("/api/events")
-async def events(request: Request, key: str = Query(default="")):
-    require_key(request, key)
+async def events(request: Request, key: str = Query(default=""),
+                 token: str = Query(default=""), here: str = Query(default="1")):
+    require_key(request, key, token)
+    row = getattr(request.state, "pass_row", None)
+    # The player fetches itself a pass so <audio> and EventSource have
+    # something to put in a URL. That pass is the owner's own page, not a
+    # guest — treating it as one filtered every status event out of the
+    # stream, and the page sat there looking broken with nothing playing.
+    #
+    # `here` is the capsule: a guest listening on their own phone wants their
+    # session, and a guest who has switched to the computer's speakers wants
+    # the shared player, because that is now what they're controlling. An
+    # EventSource can't send a header, so this one thing rides in the url and
+    # the page reconnects when the capsule moves.
+    solo = bool(row) and not (row.get("internal") or row.get("owner")) \
+        and (here == "1" or row.get("scope") == "phone")
+    mine = row.get("id", "") if solo else ""
     queue = bus.subscribe()
 
     async def stream():
         try:
             yield _sse({"type": "hello"})
+            # Whoever just connected needs the picture as it is, not only the
+            # next change to it. Without this a client that arrives after the
+            # state settles waits for something to happen before it learns
+            # there is anything playing — which for a browser session means
+            # it never starts, because nothing will happen until it does.
+            from ..core.session import sessions
+            try:
+                room = sessions.find(mine) if mine else None
+                first = room.status() if room else player.status()
+                yield _sse({"type": "status", "data": first})
+            except Exception as exc:
+                log.debug("couldn't send the opening status: %s", exc)
             while True:
                 if await request.is_disconnected():
                     break
+                # An open stream is the connection. Nothing else a browser
+                # does is reliable — it never says goodbye, and a phone that
+                # walks out of range simply stops. This is what lets a
+                # dropped guest be paused rather than played to an empty room.
+                #
+                # Looked up each time rather than held: the session may not
+                # exist yet when the page first connects.
+                if mine:
+                    live = sessions.find(mine)
+                    if live:
+                        live.touch()
                 try:
                     evt = await asyncio.wait_for(queue.get(), timeout=15)
-                    yield _sse(evt)
+                    if _mine(evt, mine):
+                        yield _sse(evt)
                 except asyncio.TimeoutError:
                     yield ": keepalive" + NEWLINE + NEWLINE
         finally:
@@ -163,7 +371,7 @@ async def events(request: Request, key: str = Query(default="")):
 
 
 @app.get("/api/backup")
-def api_backup(_: bool = Auth):
+def api_backup(_: bool = Owner):
     """Copy the profile into a zip next to it. Not served over HTTP: it has
     the api key in it, so it goes on disk where the Open folder button is."""
     from ..core.backup import make_backup
@@ -175,7 +383,7 @@ def api_backup(_: bool = Auth):
 
 
 @app.get("/api/restore")
-def api_restore(path: str = "", _: bool = Auth):
+def api_restore(path: str = "", _: bool = Owner):
     from ..core.backup import restore
     if not path:
         return {"ok": False, "message": "Give it the path to a backup zip"}
@@ -229,36 +437,194 @@ def health(_: bool = Auth):
 
 
 @app.get("/api/status")
-def status(_: bool = Auth):
+def status(request: Request, _: bool = Auth):
+    room = _session_for(request)
+    if room:
+        return {"status": "ok", **room.status(), "queue": room.queue.snapshot()}
     return {"status": "ok", **player.status(), "queue": player.queue.snapshot()}
 
 
 # ── playback ──────────────────────────────────────────────────────────
 
 @app.get("/api/play")
-def api_play(q: str = "", song: str = "", artist: str = "", mode: str = "play",
+def api_play(request: Request, q: str = "", song: str = "", artist: str = "", mode: str = "play",
              source: str = "", cast: bool = False, _: bool = Auth):
     text = (q or song or "").strip()
     if artist and text:
         text = f"{text} by {artist}"
     elif artist:
         text = artist
-    return handle_request(text, mode=mode, source=source or None, cast=cast)
+    room = _session_for(request)
+    _guard_rate(room, request)
+    if not room:
+        _guard_shared(request)
+    return handle_request(text, mode=mode, source=source or None, cast=cast,
+                          queue=room.queue if room else None)
 
 
 @app.get("/api/play/video/{video_id}")
-def api_play_video(video_id: str, title: str = "", artist: str = "", art: str = "",
+def api_play_video(request: Request, video_id: str, title: str = "", artist: str = "", art: str = "",
                    mode: str = "play", _: bool = Auth):
-    return play_video(video_id, title=title, artist=artist, art=art, mode=mode)
+    room = _session_for(request)
+    _guard_rate(room, request)
+    if not room:
+        _guard_shared(request)
+    return play_video(video_id, title=title, artist=artist, art=art, mode=mode,
+                      queue=room.queue if room else None)
 
 
 @app.get("/api/control/{action}")
-def api_control(action: str, value: int | None = None, _: bool = Auth):
-    return {"status": "ok", **player.control(action, value)}
+def api_control(request: Request, action: str, value: int | None = None,
+                _: bool = Auth):
+    room = _session_for(request)
+    if not room:
+        return {"status": "ok", **player.control(action, value)}
+    # A browser session has no mpv to command: the phone is the transport, so
+    # these only move the queue and the client follows.
+    q, sink = room.queue, room.sink
+    if action in ("next", "skip"):
+        sink.advance()
+        room.rewound()          # the clock belonged to the track that just went
+    elif action == "previous":
+        pos = sink.pos() or 0
+        sink.jump(max(0, pos - 1))
+        room.rewound()
+    elif action in ("playpause", "pause", "resume"):
+        sink.set_paused(action == "pause" or
+                        (action == "playpause" and not sink.paused))
+    elif action == "shuffle":
+        q.shuffle_upcoming()
+    q.publish_queue(force=True)
+    return {"status": "ok", **room.status()}
+
+
+@app.get("/api/session/ended")
+def api_session_ended(request: Request, _: bool = Auth):
+    """The phone finished a track and wants the next one.
+
+    The client owns the clock — this is the only thing that advances a
+    browser session, which is what makes it survive the phone sleeping.
+    """
+    room = _session_for(request)
+    if not room:
+        return {"status": "ok", "shared": True}
+    room.plays += 1
+    sec.note_use(room.id, plays=1)
+    room.sink.advance()
+    room.rewound()
+    room.queue.publish_queue(force=True)
+    return {"status": "ok", **room.status()}
+
+
+@app.get("/api/session/progress")
+def api_session_progress(request: Request, pos: float = 0.0, _: bool = Auth):
+    """Where the phone has got to, so the owner's guest list can say.
+
+    The browser is the clock here — there is no mpv to ask — so this is the
+    only place the number ever comes from.
+    """
+    room = _session_for(request)
+    if room:
+        moved = room.mark_position(pos)
+        room.touch()
+        if moved:
+            sec.note_use(room.id, seconds=moved)
+    return {"status": "ok"}
+
+
+@app.get("/api/session/here")
+def api_session_here(request: Request, on: int = 1, at: float = 0.0,
+                     carry: int = 1, _: bool = Auth):
+    """The capsule moved. Carry the song across, and park what's left behind.
+
+    Switching output used to change only where the *next* request went: the
+    song you were listening to stayed where it was, so moving rooms meant
+    searching for it again. This takes the track and the position with you.
+
+    Looked up by pass rather than through _session_for, which answers with
+    the shared player once "play here" is off — and pausing that would have
+    stopped the music in the owner's front room.
+    """
+    from ..core.session import sessions
+    row = getattr(request.state, "pass_row", None)
+    if not row or row.get("internal") or row.get("owner"):
+        return {"status": "ok", "shared": True}
+    room = sessions.find(row["id"])
+    moved = ""
+    if carry:
+        moved = _carry_over(room, bool(on), at)
+    if room:
+        room.sink.set_paused(not on)
+        room.touch()
+    return {"status": "ok", "session": room.id if room else "",
+            "moved": moved, "paused": room.sink.paused if room else None}
+
+
+def _carry_over(room, to_phone: bool, at: float) -> str:
+    """Move what's playing between a guest's session and the speakers.
+
+    Only the track and where they'd got to. Deliberately not the whole
+    queue: a guest stepping onto the speakers should not wipe out the room's
+    running order, and coming back off them should not drag it away.
+    """
+    try:
+        if to_phone:
+            track = player.queue.current_track()
+            if not track or not room:
+                return ""
+            # adopt, not play_now: the file is already here, and going back
+            # round the download path is the whole of "switching is slow".
+            if not room.queue.adopt(track):
+                room.queue.play_now([track])
+            room.mark_position(max(0.0, at))
+            player.control("pause")
+            return f"{track.title} — {track.artist}"
+        if not room:
+            return ""
+        track = room.current()
+        if not track:
+            return ""
+        if not player.queue.adopt(track):
+            player.queue.play_now([track])
+        # mpv has the clock on this side, so it gets seeked once it's loaded.
+        spawn(lambda: _seek_when_ready(track, at), name="handoff seek")
+        return f"{track.title} — {track.artist}"
+    except Exception as exc:
+        log.warning("handoff failed: %s", exc)
+        return ""
+
+
+def _seek_when_ready(track, at: float, tries: int = 40) -> None:
+    """mpv can't be told a position for a file it hasn't opened yet."""
+    if at <= 1:
+        return
+    for _ in range(tries):
+        time.sleep(0.25)
+        cur = player.queue.current_track()
+        if cur and cur.video_id == track.video_id:
+            try:
+                player.seek(at)
+            except Exception as exc:
+                log.debug("handoff seek: %s", exc)
+            return
+
+
+@app.get("/api/sessions")
+def api_sessions(close: str = "", _: bool = Owner):
+    """Who's listening, to what, and how hard they're asking."""
+    from ..core.session import sessions
+    if close:
+        sessions.close(close)
+    sessions.reap()
+    return {"status": "ok", "sessions": sessions.listing()}
 
 
 @app.get("/api/seek")
-def api_seek(pos: float, _: bool = Auth):
+def api_seek(request: Request, pos: float, _: bool = Auth):
+    room = _session_for(request)
+    if room:
+        room.mark_position(pos)                # the phone does the seeking
+        return {"status": "ok", "position": room.position}
     return {"status": "ok", **player.seek(pos)}
 
 
@@ -271,32 +637,51 @@ def api_restart(_: bool = Auth):
 # ── queue ─────────────────────────────────────────────────────────────
 
 @app.get("/api/queue/{op}")
-def api_queue(op: str, index: int = 0, to: int = 0,
+def api_queue(request: Request, op: str, index: int = 0, to: int = 0,
               frm: int = Query(default=-1, alias="from"), _: bool = Auth):
+    """Reorder, remove, jump. Whosever queue is on the other end of this.
+
+    These used to say player.queue outright, so a guest dragging a track in
+    their own list reordered the owner's — from a phone that couldn't see it.
+    """
+    room = _session_for(request)
+    q = room.queue if room else player.queue
     if op == "move":
-        return {"status": "ok",
-                "ok": player.queue.move(frm if frm >= 0 else index, to)}
+        return {"status": "ok", "ok": q.move(frm if frm >= 0 else index, to)}
     if op == "remove":
-        return {"status": "ok", "ok": player.queue.remove(index)}
+        return {"status": "ok", "ok": q.remove(index)}
     if op == "jump":
-        return {"status": "ok", "ok": player.queue.jump(index)}
+        ok = q.jump(index)
+        if room:
+            room.rewound()
+        return {"status": "ok", "ok": ok}
     if op == "undo":
-        return {"status": "ok", "message": player.queue.undo()}
+        return {"status": "ok", "message": q.undo()}
     if op == "stats":
-        return {"status": "ok", **player.queue.stats()}
+        return {"status": "ok", **q.stats()}
     raise HTTPException(404, "unknown queue operation")
 
 
 @app.get("/api/cancel")
-def api_cancel(_: bool = Auth):
+def api_cancel(request: Request, _: bool = Auth):
     """The X beside the progress bar."""
-    return {"status": "ok", **player.queue.cancel()}
+    room = _session_for(request)
+    return {"status": "ok", **(room.queue if room else player.queue).cancel()}
 
 
 @app.get("/api/radio")
-def api_radio(count: int = 8, _: bool = Auth):
-    player.queue.release_hold()
-    return {"status": "ok", **player.queue_similar(count)}
+def api_radio(request: Request, count: int = 8, _: bool = Auth):
+    """More like this one — into whichever queue asked."""
+    room = _session_for(request)
+    q = room.queue if room else player.queue
+    q.release_hold()
+    track = q.current_track()
+    if not track:
+        return {"status": "ok", "ok": False, "message": "Nothing playing"}
+    similar = catalog.related(track.video_id, limit=count)
+    q.enqueue(similar)
+    return {"status": "ok", "ok": True, "added": len(similar),
+            "message": f"Queued {len(similar)} more like this"}
 
 
 # ── search / metadata ─────────────────────────────────────────────────
@@ -329,13 +714,22 @@ def api_search(q: str, limit: int = 12, _: bool = Auth):
 
 
 @app.get("/api/play/artist")
-def api_play_artist(name: str, _: bool = Auth):
-    return handle_request(f"songs by {name}")
+def api_play_artist(request: Request, name: str, _: bool = Auth):
+    room = _session_for(request)
+    _guard_rate(room, request)
+    if not room:
+        _guard_shared(request)
+    return handle_request(f"songs by {name}", queue=room.queue if room else None)
 
 
 @app.get("/api/play/album")
-def api_play_album(name: str, artist: str = "", _: bool = Auth):
-    return handle_request(f"play the {name} album" + (f" by {artist}" if artist else ""))
+def api_play_album(request: Request, name: str, artist: str = "", _: bool = Auth):
+    room = _session_for(request)
+    _guard_rate(room, request)
+    if not room:
+        _guard_shared(request)
+    return handle_request(f"play the {name} album" + (f" by {artist}" if artist else ""),
+                          queue=room.queue if room else None)
 
 
 @app.get("/api/lyrics")
@@ -348,14 +742,36 @@ def api_lyrics(_: bool = Auth):
 
 
 @app.get("/api/history")
-def api_history(_: bool = Auth):
+def api_history(request: Request, _: bool = Auth):
+    """What's been played here. Yours, and only yours.
+
+    A shared link gets an empty list rather than a 403: the tab is hidden for
+    them anyway, and this is a history of the owner's evenings, not a
+    permission to argue about. Nothing a guest plays reaches it either — a
+    session records into a neutral store that swallows writes.
+    """
+    if not _owner_view(request):
+        return {"status": "ok", "history": [], "top_artists": [], "mine": False}
     return {"status": "ok", "history": taste.recent(),
-            "top_artists": taste.top_artists()}
+            "top_artists": taste.top_artists(), "mine": True}
 
 
 @app.get("/api/liked")
-def api_liked(_: bool = Auth):
+def api_liked(request: Request, _: bool = Auth):
+    if not _owner_view(request):
+        return {"status": "ok", "liked": []}
     return {"status": "ok", "liked": taste.liked()}
+
+
+def _owner_view(request: Request) -> bool:
+    """Is this the owner's own listening, or somebody holding a link?
+
+    A full-access guest on the computer's speakers is still a guest: they're
+    driving the owner's player, which is theirs to drive, but the history and
+    the preferences behind it are not theirs to read.
+    """
+    row = getattr(request.state, "pass_row", None)
+    return not row or bool(row.get("internal") or row.get("owner"))
 
 
 # ── playlists ─────────────────────────────────────────────────────────
@@ -368,15 +784,23 @@ def api_playlists(_: bool = Auth):
 
 
 @app.get("/api/station")
-def api_station(url: str = "", name: str = "", art: str = "", _: bool = Auth):
+def api_station(request: Request, url: str = "", name: str = "", art: str = "", _: bool = Auth):
     """Tune a live radio station."""
-    return play_station(url, name, art)
+    room = _session_for(request)
+    _guard_rate(room, request)
+    if not room:
+        _guard_shared(request)
+    return play_station(url, name, art, queue=room.queue if room else None)
 
 
 @app.get("/api/foryou")
-def api_foryou(_: bool = Auth):
+def api_foryou(request: Request, _: bool = Auth):
     """A queue built from what you actually ask for."""
-    return play_for_you(announce=False)
+    room = _session_for(request)
+    _guard_rate(room, request)
+    if not room:
+        _guard_shared(request)
+    return play_for_you(announce=False, queue=room.queue if room else None)
 
 
 @app.get("/api/spectrum")
@@ -439,9 +863,27 @@ def api_playlist(op: str, name: str = "", shuffle: bool = False,
 
 # ── settings ──────────────────────────────────────────────────────────
 
+# What a guest's page legitimately needs to render itself. Everything else —
+# library paths, allowed addresses, which browser holds the cookies, where
+# Tailscale used to live — is the owner's business and none of theirs.
+#
+# Deliberately not crossfade, volume, repeat or shuffle: those are the
+# owner's playback preferences, they belong to the owner's player, and a
+# guest's session neither reads nor obeys them. Sending them only invited a
+# guest's page to display settings that don't apply to it.
+_GUEST_SETTINGS = ("theme", "show_visualiser", "eq_presets",
+                   "party_mode", "block_full_guests")
+
+
 @app.get("/api/settings")
-def api_settings(_: bool = Auth):
-    return {"status": "ok", **player.settings(),
+def api_settings(request: Request, _: bool = Auth):
+    full = player.settings()
+    if not is_owner(request):
+        # A shared link shouldn't be handed the whole configuration just
+        # because the page it loads happens to read from here.
+        return {"status": "ok", "guest": True,
+                **{k: full[k] for k in _GUEST_SETTINGS if k in full}}
+    return {"status": "ok", **full, "release": __version__,
             "groq": llm.status(), "cookies": dict(cookie_mod.state),
             "spotdl": spotify.available()}
 
@@ -472,11 +914,16 @@ _SETTABLE = {
     "cookie_check_interval": int, "completion_ratio": float,
     "announce": bool, "tts_voice": str, "download_workers": int,
     "tailscale": str, "tailscale_exe": str, "cache_size_mb": int,
+    "allow_key_in_url": bool, "https": bool, "port": int,
+    "block_full_guests": bool, "lan_open": bool, "party_mode": bool,
+    "ddns_provider": str, "ddns_hostname": str, "ddns_user": str,
+    "max_downloads": int, "guest_requests_hour": int,
+    "cast_queue_minutes": int, "guest_quiet_pause": int, "guest_quiet_close": int,
 }
 
 
 @app.get("/api/setting")
-def api_setting(key: str, value: str = "", _: bool = Auth):
+def api_setting(key: str, value: str = "", _: bool = Owner):
     caster_type = _SETTABLE.get(key)
     if caster_type is None:
         raise HTTPException(400, f"{key} isn't settable from here")
@@ -498,9 +945,92 @@ def api_audio_devices(_: bool = Auth):
     return {"status": "ok", **player.audio_devices()}
 
 
+def _session_for(request: Request):
+    """The queue this caller is acting on.
+
+    Owner, or a guest with "play here" off: the shared player. A guest
+    playing on their own device: their own session, created the first time
+    they ask for anything.
+    """
+    from ..core.session import sessions
+    row = getattr(request.state, "pass_row", None)
+    if not row or row.get("internal") or row.get("owner"):
+        return None                       # the owner's, i.e. the shared one
+    here = request.headers.get("X-Play-Here", "") == "1"
+    if row.get("scope") == "phone" or here:
+        return sessions.for_pass(row["id"], row.get("name", ""),
+                                 row.get("scope", "full"))
+    return None
+
+
+def _guard_rate(room, request: Request | None = None) -> None:
+    """One guest can't spend everyone's evening, and it goes on their tab.
+
+    Counted per pass rather than per address, because the pass is the person
+    — moving to mobile data shouldn't reset anybody's allowance. Charged
+    whether it played here or out of the computer's speakers: what the owner
+    wants to know is what a link has been used for, not where it came out.
+    """
+    if room:
+        cap = int(config.get("guest_requests_hour", 40))
+        if cap and room.queue.recent_requests() >= cap:
+            left = 60 - int((time.time() - room.queue.oldest_request()) / 60)
+            raise HTTPException(
+                429, f"That's {cap} songs in an hour — try again in "
+                     f"{max(1, left)} minutes")
+    row = getattr(request.state, "pass_row", None) if request is not None else None
+    if row and not (row.get("internal") or row.get("owner")):
+        sec.note_use(row["id"], requests=1, ip=_client_ip(request))
+
+
+def _guard_shared(request: Request) -> None:
+    """The owner's toggle: while it's on, full guests keep off the speakers.
+
+    Only applies to the shared player. Someone listening on their own phone
+    is not in the room this protects, so they are never refused.
+    """
+    row = getattr(request.state, "pass_row", None)
+    if not row or not config.get("block_full_guests"):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="The speakers are in use — switch on \"Play on this device\" "
+               "to listen on your own phone")
+
+
+def _pass_scope(request: Request) -> str:
+    """"" for the owner, otherwise the scope of the pass that got them in."""
+    row = getattr(request.state, "pass_row", None)
+    return (row or {}).get("scope", "") if row else ""
+
+
 @app.get("/api/audio/device")
-def api_audio_device(name: str = "auto", client: str = "", _: bool = Auth):
+def api_audio_device(request: Request, name: str = "auto", client: str = "",
+                     _: bool = Auth):
+    """Which PC speaker the shared player uses.
+
+    A phone-scoped guest has no business here — refused outright rather than
+    merely hidden, because a hidden control is only hidden until somebody
+    types the url in themselves.
+    """
+    if _pass_scope(request) == "phone" and name != CAST_DEVICE:
+        raise HTTPException(403, "That link plays on your own device only")
     return {"status": "ok", **player.set_audio_device(name, client=client)}
+
+
+@app.get("/api/whoami")
+def api_whoami(request: Request, _: bool = Auth):
+    """What this client may do, so the page can shape itself to it."""
+    row = getattr(request.state, "pass_row", None)
+    if row and (row.get("internal") or row.get("owner")):
+        row = None                        # the owner's own page
+    owner = not row
+    return {"status": "ok", "owner": owner,
+            "scope": "owner" if owner else row.get("scope", "full"),
+            "name": "" if owner else row.get("name", ""),
+            "pass_id": "" if owner else row.get("id", ""),
+            "expires": 0 if owner else row.get("expires", 0),
+            "block_full_guests": bool(config.get("block_full_guests"))}
 
 
 # ── casting the audio to whichever browser is asking ─────────────────────
@@ -513,7 +1043,11 @@ def api_output_stream(video_id: str, _: bool = Auth):
     """
     path, state = cast_mod.playable(video_id)
     if state == "missing":
-        raise HTTPException(404, "not downloaded")
+        # Not "no such track" — almost always "the download hasn't finished".
+        # A 404 tells the player to give up; a 503 tells it to come back, and
+        # coming back is right, because it will be here shortly.
+        return JSONResponse({"status": "not ready", "detail": "still fetching"},
+                            status_code=503, headers={"Retry-After": "3"})
     if state != "ready":
         path, state = cast_mod.convert(video_id)
         if state != "ready" or not path:
@@ -554,22 +1088,175 @@ def api_announce(aid: str, _: bool = Auth):
                         headers={"Cache-Control": "no-store"})
 
 
-@app.get("/api/network")
-def api_network(_: bool = Auth):
-    """Which addresses reach this player, and whether Tailscale is up."""
+@app.get("/api/token")
+def api_token(hours: int = 12, _: bool = Owner):
+    """The player's own pass, for the URLs a header can't reach.
+
+    Not a shared link — this is the page fetching something to put in
+    <audio>.src and EventSource so the key itself never rides in a URL.
+    """
+    key = config.get("api_key") or ""
+    got = sec.issue(key, name="this player", hours=max(1, hours), scope="full",
+                    internal=True)
+    return {"status": "ok", "token": got.get("token", ""),
+            "expires_in": int(hours) * 3600}
+
+
+@app.get("/api/passes")
+def api_passes(_: bool = Owner):
+    """Every link you've handed out, and who has it."""
+    sec.tidy_passes()
+    return {"status": "ok", "passes": sec.list_passes()}
+
+
+@app.get("/api/passes/new")
+def api_pass_new(name: str = "", hours: float = 24, scope: str = "full",
+                 kind: str = "wan", _: bool = Owner):
+    """Mint a named link for somebody.
+
+    hours=0 makes it permanent. scope "phone" means they can play it on
+    their own phone and nowhere else — handy when you'd rather a guest
+    couldn't take over the speakers in your front room.
+    """
     from ..core import net
-    return {"status": "ok", **net.addresses()}
+    key = config.get("api_key") or ""
+    if not key:
+        return {"status": "error", "message": "Set an API key first"}
+    got = sec.issue(key, name=name, hours=hours, scope=scope)
+    rows = net.addresses(got["token"])["addresses"]
+    row = next((r for r in rows if r["kind"] == kind), rows[-1])
+    return {"status": "ok", "url": row["url"], "kind": row["kind"], **got}
+
+
+@app.get("/api/passes/revoke")
+def api_pass_revoke(id: str = "", restore: int = 0, forget: int = 0,
+                    _: bool = Owner):
+    """Ban a link by name, or let it back in."""
+    if not id:
+        return {"status": "error", "message": "Which one?"}
+    if forget:
+        ok = sec.forget_pass(id)
+    elif restore:
+        ok = sec.restore_pass(id)
+    else:
+        ok = sec.revoke(id)
+    return {"status": "ok" if ok else "error", "passes": sec.list_passes()}
+
+
+@app.get("/api/lockdown")
+def api_lockdown(port: int = 1, _: bool = Owner):
+    """Everything you handed out, taken back, in one press.
+
+    Bans every pass, ends the sessions playing on them, and moves to a new
+    port. Deliberately one call: doing it link by link while somebody is
+    already inside is the wrong shape for the moment you'd want this.
+
+    Your own pass goes too — it's a link like any other, and the whole point
+    is that nothing you've shared survives. A new one is minted next time the
+    settings page asks for an address.
+    """
+    from ..core.session import sessions
+    killed = 0
+    for row in sec.list_passes():
+        if not row["revoked"]:
+            sec.revoke(row["id"])
+            killed += 1
+    killed += sec.revoke_owner_pass()
+    ended = sum(1 for r in sessions.listing() if sessions.close(r["id"]))
+    moved = 0
+    if port:
+        from .security import random_port
+        moved = random_port()
+        config.set("port", moved)
+    log.warning("lockdown: %d links revoked, %d sessions ended, port -> %s",
+                killed, ended, moved or "unchanged")
+    return {"status": "ok", "revoked": killed, "ended": ended, "port": moved,
+            "message": (f"{killed} link{'s' if killed != 1 else ''} revoked"
+                        + (f", {ended} session{'s' if ended != 1 else ''} ended"
+                           if ended else "")
+                        + (f" — port {moved} after a restart" if moved else ""))}
+
+
+@app.get("/api/port/shuffle")
+def api_port_shuffle(to: int = 0, _: bool = Owner):
+    """Move to a port nothing scans by habit. Takes effect on restart.
+
+    Takes an explicit port too, so a wrong turn can be undone — a shuffled
+    port that a forward rule no longer matches is otherwise a puzzle rather
+    than a setting.
+    """
+    from .security import random_port
+    port = int(to) if 1024 < int(to) < 65536 else random_port()
+    config.set("port", port)
+    return {"status": "ok", "port": port,
+            "message": f"Port {port} after a restart — update your forward rule"}
+
+
+@app.get("/api/blocked")
+def api_blocked(forgive: str = "", clear: int = 0, _: bool = Owner):
+    """Who's been shut out, and letting them back in."""
+    if clear:
+        return {"status": "ok", "forgiven": bans.forgive(), "blocked": []}
+    if forgive:
+        return {"status": "ok", "forgiven": bans.forgive(forgive),
+                "blocked": bans.listing()}
+    return {"status": "ok", "blocked": bans.listing()}
+
+
+@app.get("/api/ddns")
+def api_ddns(hostname: str = "", user: str = "", secret: str = "",
+             provider: str = "", now: int = 0, _: bool = Owner):
+    """Set up, or kick, the thing that keeps a hostname pointed here.
+
+    The password is written straight to config and never read back — the UI
+    only ever learns whether one is set.
+    """
+    from ..core import ddns
+    if provider:
+        config.set("ddns_provider", provider if provider in ddns.PROVIDERS else "dynu")
+    if hostname:
+        config.set("ddns_hostname", hostname.strip())
+    if user:
+        config.set("ddns_user", user.strip())
+    if secret:
+        config.set("ddns_password", secret)
+    if hostname or user or secret or now:
+        got = ddns.update(force=True)
+        if ddns.configured():
+            ddns.start()
+        return {"status": "ok", **got}
+    return {"status": "ok", **ddns.status()}
+
+
+@app.get("/api/network")
+def api_network(pass_id: str = "", check: int = 0, _: bool = Owner):
+    """Which addresses reach this player.
+
+    Pass an id and every address comes back carrying that pass, which is
+    what makes a copied link work for the person you send it to.
+    """
+    from ..core import net
+    key = config.get("api_key") or ""
+    # No particular person asked for: these are the owner's own addresses, so
+    # they carry the owner's pass and work on a phone as well as here.
+    token = (sec.reissue_token(key, pass_id) if pass_id else sec.owner_pass(key))
+    out = net.addresses(token)
+    if check:
+        out["port_open"] = net.port_open(net.live_port())
+    return {"status": "ok", **out}
 
 
 @app.get("/api/qr")
-def api_qr(kind: str = "lan", _: bool = Auth):
+def api_qr(kind: str = "lan", pass_id: str = "", _: bool = Auth):
     """A scannable code for one of our own addresses.
 
     Takes a kind, not a url: an endpoint that renders any string handed to it
     is a QR generator for whoever finds it, and these carry the api key.
     """
     from ..core import net
-    rows = net.addresses()["addresses"]
+    key = config.get("api_key") or ""
+    token = (sec.reissue_token(key, pass_id) if pass_id else sec.owner_pass(key))
+    rows = net.addresses(token)["addresses"]
     row = next((r for r in rows if r["kind"] == kind), None)
     if not row:
         raise HTTPException(404, "no such address")
@@ -578,7 +1265,7 @@ def api_qr(kind: str = "lan", _: bool = Auth):
 
 
 @app.get("/api/cache")
-def api_cache(prune: int = 0, _: bool = Auth):
+def api_cache(prune: int = 0, _: bool = Owner):
     """How much downloaded music is on disk, and optionally trim it now."""
     removed = 0
     if prune:
@@ -620,13 +1307,13 @@ def api_source(value: str = "youtube", _: bool = Auth):
 
 
 @app.get("/api/lockips")
-def api_lockips(enabled: int = 0, _: bool = Auth):
+def api_lockips(enabled: int = 0, _: bool = Owner):
     config.set("lock_ips", bool(enabled))
     return {"status": "ok", "lock_ips": config.get("lock_ips")}
 
 
 @app.get("/api/groqkey")
-def api_groqkey(value: str = "", _: bool = Auth):
+def api_groqkey(value: str = "", _: bool = Owner):
     config.update({"groq_api_key": value.strip(), "use_groq": bool(value.strip())})
     working = llm.ensure_model() if value.strip() else False
     return {"status": "ok", "groq": llm.available(), "working": working,
@@ -658,7 +1345,7 @@ def api_groqmodel(value: str = "", _: bool = Auth):
 
 
 @app.get("/api/boot")
-def api_boot(enabled: int = 0, _: bool = Auth):
+def api_boot(enabled: int = 0, _: bool = Owner):
     ok = _set_run_at_boot(bool(enabled))
     config.set("start_on_boot", bool(enabled))
     return {"status": "ok", "start_on_boot": bool(enabled), "applied": ok}
@@ -774,7 +1461,7 @@ def api_library_scan(_: bool = Auth):
 
 
 @app.get("/api/library/paths")
-def api_library_paths(add: str = "", remove: str = "", _: bool = Auth):
+def api_library_paths(add: str = "", remove: str = "", _: bool = Owner):
     paths = list(config.get("library_paths") or [])
     if add and add not in paths:
         paths.append(add)

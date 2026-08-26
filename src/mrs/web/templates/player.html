@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Music Request</title>
 <style>
 /* ── palette ───────────────────────────────────────────────────────────
@@ -542,15 +542,139 @@ body.mini .miniwave i{width:2px;border-radius:1px}
 .miniwave{transition:opacity .3s}
 body.paused .miniwave{opacity:.25}
 body.noviz .miniwave{display:none}
-/* the phone's own volume buttons own this, so don't offer a slider */
-body.sysvol #volslider, body.sysvol #minivol { opacity:.3; pointer-events:none; }
+/* The phone's own volume buttons own this. It used to be dimmed and left on
+   screen, which is worse than either option: a slider you can see, can drag
+   and which changes nothing. iOS keeps audio element volume read-only, so
+   there is no version of this control that works — so it goes. */
+body.sysvol #volslider, body.sysvol #minivol { display:none; }
+body.sysvol .vol { flex:0 0 auto; }
 /* Casting is easy to leave on and then forget, at which point the volume
    slider "does nothing to the PC" — because it isn't meant to. Say so. */
 body.casting #volicon{color:var(--accent);opacity:1}
+/* Playing here is a mode, so it sits above the device list rather than in it. */
+.playhere{display:flex;flex-direction:column;gap:7px;padding:11px 13px;
+  border-bottom:1px solid var(--line)}
+/* One control showing both choices and which is live, rather than a switch
+   you have to already know the meaning of. */
+.seg{display:flex;background:var(--line);border-radius:999px;padding:3px;gap:3px}
+.seg-b{flex:1;border:0;cursor:pointer;font:inherit;font-size:12.5px;font-weight:600;
+  padding:7px 10px;border-radius:999px;background:none;color:var(--sub);
+  transition:background .16s,color .16s}
+.seg-b.on{background:var(--accent);color:var(--accent-ink,#fff);
+  box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.seg-b:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ph-note{font-size:10.5px;color:var(--sub);text-align:center}
+/* A phone can't choose a PC speaker, so it isn't offered the half that would
+   do nothing. */
+body.nopc .seg-b#segpc{display:none}
+/* Which speaker the computer uses is the computer's business. A phone
+   showing that list is offering to change a room it isn't standing in. */
+body.nodevices .devpick .picker-head,body.nodevices #devlist{display:none}
+body.nopc .seg{background:none;padding:0}
+body.nopc .seg-b#segphone{background:none;color:var(--sub);box-shadow:none;
+  cursor:default;font-size:11px}
+/* A phone-only link can't reach the speakers, so it isn't shown a list of them. */
+body.nodevices .playhere{border-bottom:0}
+/* A shared link has no business in here. The server refuses these endpoints
+   anyway; hiding the door as well is so nobody is invited to rattle it. */
+body.guest .owneronly,body.guest .navgear{display:none}
+/* Playing on your own device: the volume is the phone's hardware buttons,
+   and liking, saving and playlists all write to the owner's library — which
+   a guest hasn't got. Hidden rather than shown doing nothing. */
+body.casting.guest #volslider,
+body.casting.guest #minivol,
+body.guest #like,
+body.guest #download,
+body.guest #addlist,
+body.guest .navtab[data-panel="lists"]{display:none}
+/* Recently played is the owner's listening history. A guest on their own
+   phone has no business reading it, and nothing they play goes into it —
+   so the tab goes rather than sitting there empty. It comes back when they
+   switch to the computer's speakers, because then they *are* looking at
+   what that player has been doing. */
+body.guest.casting .navtab[data-panel="recent"]{display:none}
+/* The speaker icon stays — it opens the here-or-computer capsule — but with
+   the slider gone it shouldn't sit in a gap where a slider used to be. */
+body.casting.guest .vol{flex:0 0 auto}
 /* Point a phone camera at it rather than typing a key by hand. */
+/* Making a link: its own block, because four controls crammed onto one
+   settings row left nothing readable. */
+.mk{display:grid;grid-template-columns:1fr;gap:7px;padding:11px 0 13px}
+.mk-name{width:100%}
+.mk-opts{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.mk-opts select{width:100%}
+.mk-go{width:100%;padding:8px 0}
+/* What you just made, with the two things you actually want next to it. */
+.reach:empty{display:none}
+.reach{border-radius:9px;padding:11px 13px;margin:2px 0 10px;font-size:11.5px;
+  line-height:1.5;border:1px solid var(--line)}
+.reach.good{border-color:var(--accent)}
+.reach.bad{border-color:#b8543f}
+.reach b{display:block;font-size:12.5px;margin-bottom:4px}
+.reach ol{margin:6px 0 0;padding-left:1.1rem;color:var(--sub)}
+.reach li{margin:2px 0}
+.reach code{background:var(--line);padding:1px 4px;border-radius:3px}
+.madebox:empty{display:none}
+.madebox{border:1px solid var(--accent);border-radius:10px;padding:12px 13px;
+  margin-bottom:10px;display:flex;flex-direction:column;gap:9px}
+.made-top{font-size:12.5px;font-weight:600}
+.made-top em{font-style:normal;font-weight:400;color:var(--sub);font-size:10.5px;
+  display:block;margin-top:2px}
+.made-url{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;
+  color:var(--sub);word-break:break-all;line-height:1.45}
+.made-acts{display:flex;gap:7px}
+.made-acts .btn{flex:1}
+.sessrow{display:grid;grid-template-columns:1fr auto auto;gap:2px 10px;
+  align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
+.sessrow:last-child{border-bottom:0}
+.sessname{font-size:13px;font-weight:600;display:flex;flex-direction:column;gap:1px}
+.sessname em{font-style:normal;font-weight:400;font-size:10.5px;color:var(--sub)}
+.sessrow.live .sessname::before{content:"";width:6px;height:6px;border-radius:50%;
+  background:var(--accent);display:inline-block;margin-right:6px;vertical-align:middle}
+.sessmeta{font-size:10.5px;color:var(--sub);font-variant-numeric:tabular-nums}
+.sessmeta.warm{color:#d69a3c}
+.sessmeta.hot{color:#d9614e;font-weight:600}
+.passrow{display:grid; grid-template-columns:1fr auto; gap:2px 10px;
+  align-items:center; padding:9px 0; border-bottom:1px solid var(--line)}
+.passrow:last-child{border-bottom:0}
+.passname{font-size:13px; font-weight:600}
+/* The one control in here you'd want in a hurry, so it's at the top and it
+   looks like what it does. */
+.panic{border:1px solid color-mix(in srgb,#d9614e 45%,transparent);
+  background:color-mix(in srgb,#d9614e 9%,transparent);
+  border-radius:11px;padding:12px 13px;margin:2px 0 16px;
+  display:flex;flex-direction:column;gap:7px}
+.panic .hint{margin:0}
+.btn.danger{background:#c2412f;border-color:#c2412f;color:#fff;font-weight:600;
+  width:100%;padding:9px 0}
+.btn.danger:hover{background:#d24c39;border-color:#d24c39}
+.btn.danger.arm{background:#8e2c1e;border-color:#8e2c1e}
+.passmeta{grid-column:1; font-size:10.5px; color:var(--sub)}
+.passmeta b{color:var(--accent)}
+/* What the link has done sits under what the link is, so the two don't
+   compete for the same line. */
+.passmeta b.tally{display:block;color:var(--sub);font-weight:500;opacity:.85;
+  font-variant-numeric:tabular-nums;margin-top:1px}
+.passacts{grid-column:2; grid-row:1 / span 2; display:flex; gap:5px; align-items:center}
+.passrow.dead .passname,.passrow.dead .passmeta{opacity:.45}
+.passrow .qrbox{grid-column:1 / -1}
+/* iOS zooms the whole page into any input whose text is smaller than 16px,
+   and there is no way to decline other than not being smaller. Locking the
+   viewport would stop it too, at the cost of pinch-zoom everywhere, which is
+   a worse trade. So: 16px in the field, scaled back down visually. */
+input,select,textarea{font-size:16px}
+.searchbar input,#q,.keyin{font-size:16px}
+@media (pointer:fine){
+  /* A mouse can't trigger the zoom, so the desktop keeps the tighter look. */
+  input,select,textarea,.searchbar input,#q,.keyin{font-size:12.5px}
+}
 .qrbox:empty{display:none}
 .qrbox{padding:10px 0 4px;display:flex;justify-content:center}
 .qrbox svg{border-radius:8px}
+/* Mid-handover. The capsule has already moved — this says the sound is on
+   its way rather than leaving a second of apparent nothing. */
+body.switching .seg{opacity:.65}
+body.switching .seg-b{cursor:progress}
 /* Autoplay refused: the page has to be touched before audio may start. */
 body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out infinite}
 @keyframes castpulse{0%,100%{opacity:1}50%{opacity:.35}}
@@ -648,6 +772,19 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   </div>
 
   <div class="picker devpick" id="devpicker">
+    <div class="playhere" id="playhere">
+      <!-- Which half is lit is decided by the server, not by whichever one
+           happened to be written first. Hardcoding "Phone" here meant the
+           desktop app opened saying it was playing on a phone while the
+           sound came out of the speakers, every single time. -->
+      <div class="seg" id="phseg" role="tablist" aria-label="Where to play">
+        <button class="seg-b{% if is_guest == '1' %} on{% endif %}" id="segphone"
+                role="tab" aria-selected="{{ 'true' if is_guest == '1' else 'false' }}">Phone</button>
+        <button class="seg-b{% if is_guest != '1' %} on{% endif %}" id="segpc"
+                role="tab" aria-selected="{{ 'false' if is_guest == '1' else 'true' }}">PC Speaker</button>
+      </div>
+      <div class="ph-note" id="ph-note">Your own queue, out of this device</div>
+    </div>
     <div class="picker-head">Play through
       <button class="pickx" id="devclose" aria-label="Close">✕</button></div>
     <div class="picker-list" id="devlist"></div>
@@ -685,6 +822,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
       <button class="stab" data-s="queue">Queue</button>
       <button class="stab" data-s="access">Access</button>
       <button class="stab" data-s="extras">Extras</button>
+      <button class="stab" data-s="sharing">Sharing</button>
       <button class="stab" data-s="system">System</button>
     </div>
     <div class="sheet-body">
@@ -782,20 +920,86 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
           </span></div>
       </section>
 
+      <section class="spane" data-s="sharing">
+        <div class="panic">
+          <button class="btn danger" id="lockdown">Revoke all &amp; shuffle port</button>
+          <div class="hint">Kills every link you've handed out, ends the sessions playing on
+            them, and moves the server to a new random port. Your own devices need the new
+            address and a fresh link; nothing you've shared will work again. Your music,
+            playlists and settings are untouched.</div>
+        </div>
+        <div class="seclbl">Getting to this player yourself</div>
+        <div id="netaddrs"></div>
+        <div class="hint" id="nethint"></div>
+        <div class="srow"><span class="slabel">Can the outside world reach it?<em>Asks something outside your network to try the door</em></span>
+          <button class="btn" id="portcheck">Check</button></div>
+        <div class="reach" id="reachbox"></div>
+
+        <div class="seclbl">A name that follows you</div>
+        <div class="hint">Your home address is public but not permanent — it moves on a
+          reconnect, and every link you've handed out dies with it. A hostname survives that.</div>
+        <div class="mk">
+          <select class="keyin" id="ddnsprov">
+            <option value="dynu">Dynu</option>
+            <option value="duckdns">Duck DNS</option>
+            <option value="noip">No-IP</option>
+            <option value="afraid">FreeDNS</option>
+          </select>
+          <input class="keyin" id="ddnshost" placeholder="yourname.freeddns.org" autocomplete="off">
+          <div class="mk-opts">
+            <input class="keyin" id="ddnsuser" placeholder="Username" autocomplete="off">
+            <input class="keyin" id="ddnspass" type="password" placeholder="Password">
+          </div>
+          <button class="btn mk-go" id="ddnssave">Point it here</button>
+        </div>
+        <div class="reach" id="ddnsbox"></div>
+
+        <div class="seclbl">Links for other people</div>
+        <div class="mk">
+          <input class="keyin mk-name" id="passname" placeholder="Their name" autocomplete="off">
+          <div class="mk-opts">
+            <select class="keyin" id="passscope">
+              <option value="phone">Their phone only</option>
+              <option value="full">Any speaker</option>
+            </select>
+            <select class="keyin" id="passhours">
+              <option value="24">For 24 hours</option>
+              <option value="168">For a week</option>
+              <option value="0">Permanent</option>
+            </select>
+          </div>
+          <button class="btn mk-go" id="passmake">Create link</button>
+        </div>
+        <div class="madebox" id="madebox"></div>
+        <div id="passlist"></div>
+
+        <div class="seclbl">While people are round</div>
+        <div class="srow"><span class="slabel">Party mode<em>Requests queue up in order — no radio, and nobody skips the line</em></span>
+          <div class="toggle" id="partymode"></div></div>
+        <div class="srow"><span class="slabel">Keep guests off the speakers<em>They can still play on their own phones</em></span>
+          <div class="toggle" id="blockguests"></div></div>
+
+        <div class="seclbl">Listening now</div>
+        <div id="whoslistening"></div>
+      </section>
+
       <section class="spane" data-s="system">
+        <div class="srow"><span class="slabel">Version</span><span class="sval" id="release">—</span></div>
         <div class="srow"><span class="slabel">Start with Windows</span><div class="toggle" id="boot"></div></div>
         <div class="srow"><span class="slabel">Only my devices<em>Rejects other machines on the network</em></span>
           <div class="toggle" id="lockips"></div></div>
 
-        <div class="seclbl">Reaching this from a phone</div>
-        <div class="srow"><span class="slabel">Tailscale<em>Lets a phone off your wifi reach the player</em></span>
-          <select class="keyin" id="tsmode" style="width:118px">
-            <option value="auto">Use if present</option>
-            <option value="on">Required</option>
-            <option value="off">Off</option>
-          </select></div>
-        <div id="netaddrs"></div>
-        <div class="hint" id="nethint"></div>
+
+
+        <div class="seclbl">Security</div>
+        <div class="srow"><span class="slabel">Encrypt the connection<em>Self-signed, so the browser asks once. Needs a restart</em></span>
+          <div class="toggle" id="usehttps"></div></div>
+        <div class="srow"><span class="slabel">Allow the key in a link<em>Turn off once nothing you use puts it in a URL</em></span>
+          <div class="toggle" id="keyinurl"></div></div>
+        <div class="srow"><span class="slabel">Move to an unusual port<em>Takes you out of the drive-by scanning</em></span>
+          <button class="btn" id="portshuffle">Shuffle</button></div>
+        <div class="srow"><span class="slabel">Shut out<em id="blockedwho">nobody</em></span>
+          <button class="btn" id="unblockall">Let them back</button></div>
 
         <div class="seclbl">Downloaded music</div>
         <div class="srow"><span class="slabel">Cache limit<em>Least-played goes first; favourites and likes stay</em></span>
@@ -823,9 +1027,75 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 
 <script>
 const KEY = "{{ api_key }}";
+/* Who this page is, before it asks anything.
+ *
+ * It used to load neutral and find out from /api/whoami, which left a window
+ * where its own opening requests went out saying the wrong thing about where
+ * they should play — the status fetch raced loadWhoami and could come back
+ * describing the shared player on a page that was about to become a phone.
+ * The server already knows; it says so in the html. */
+const GUEST = "{{ is_guest }}" === "1";
+const SCOPE = "{{ scope }}";
 const $ = id => document.getElementById(id);
-const api = (path) => fetch(path + (path.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(KEY))
-  .then(r => r.ok ? r.json() : null).catch(() => null);
+/* Every ordinary call sends the key as a header, where it stays out of
+   browser history, access logs and Referer. */
+/* Every call says which queue it means. "Play here" on and the server routes
+   it to this listener's own session; off and it's the shared player. */
+const api = (path) => fetch(path, { headers: {
+    "X-Music-Key": KEY,
+    "X-Play-Here": (typeof cast !== "undefined" && cast.on) ? "1" : "0",
+  } }).then(r => r.ok ? r.json() : null).catch(() => null);
+
+/* A refusal the user should hear about, rather than a request that silently
+   does nothing. 429 is the rate limiter; 403 is a link that's been revoked or
+   is being kept off the speakers. */
+async function apiSay(path, quiet) {
+  const r = await apiTry(path);
+  if (r.ok) return r.body;
+  const said = (r.body && r.body.detail) || "";
+  if (r.status === 429) {
+    toast(said || "You've asked for a lot of songs — give it a little while");
+  } else if (r.status === 403) {
+    toast(said || "That link can't do this any more");
+  } else if (!quiet) {
+    toast("That didn't go through");
+  }
+  return null;
+}
+
+/* Same headers, but the caller wants to know *why* it failed. */
+async function apiTry(path) {
+  try {
+    const r = await fetch(path, { headers: {
+      "X-Music-Key": KEY,
+      "X-Play-Here": (typeof cast !== "undefined" && cast.on) ? "1" : "0",
+    } });
+    const body = await r.json().catch(() => ({}));
+    return { ok: r.ok, status: r.status, body };
+  } catch (e) { return { ok: false, status: 0, body: {} }; }
+}
+
+/* The exceptions: <audio>.src and EventSource take a URL and nothing else,
+   so they get a signed token that expires instead of the key itself. */
+let URL_TOKEN = "";
+async function refreshToken() {
+  // A guest already holds a pass — that is what KEY is for them — and a pass
+  // is the thing that's safe in a URL. Only the owner has to fetch one,
+  // because their KEY is the master key and must never appear in an address.
+  // Minting is owner-only, so a guest asking would 403 and wait forever.
+  if (typeof ME !== "undefined" && ME && !ME.owner) {
+    URL_TOKEN = KEY;
+    return URL_TOKEN;
+  }
+  const r = await api("/api/token?hours=12");
+  URL_TOKEN = (r && r.token) || "";
+  return URL_TOKEN;
+}
+/* Only ever the token. Falling back to the key would put it in an <audio>
+   src and an EventSource url — the two places this whole scheme exists to
+   keep it out of — and it did, on the first track of every session, because
+   the first sync can beat the token fetch. */
+const urlAuth = () => "key=" + encodeURIComponent(URL_TOKEN);
 const esc = s => (s || "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const fmt = s => { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s/60) + ":" + String(s%60).padStart(2,"0"); };
 
@@ -1106,7 +1376,8 @@ $("q").addEventListener("keydown", e => {
   if (e.key === "Enter") {
     const v = $("q").value.trim(); if (!v) return;
     closeSearch();
-    api("/api/play?q=" + encodeURIComponent(v)).then(r => toast(r && r.message));
+    apiSay("/api/play?q=" + encodeURIComponent(v), true)
+      .then(r => { if (r) toast(r.message); });
   } else if (e.key === "Escape") { closeSearch(); }
 });
 function closeSearch() {
@@ -1236,14 +1507,14 @@ $("results").addEventListener("mousedown", async e => {
   } else if (act === "playlist") {
     r = await api("/api/playlist/play?name=" + encodeURIComponent(row.dataset.n));
   } else if (act === "artist") {
-    r = await api("/api/play/artist?name=" + encodeURIComponent(row.dataset.n));
+    r = await apiSay("/api/play/artist?name=" + encodeURIComponent(row.dataset.n), true);
   } else if (act === "album") {
     r = await api("/api/play/album?name=" + encodeURIComponent(row.dataset.n) +
                   "&artist=" + encodeURIComponent(row.dataset.ar || ""));
   } else if (act === "spotify") {
-    r = await api("/api/play?q=" + encodeURIComponent(q));
+    r = await apiSay("/api/play?q=" + encodeURIComponent(q), true);
   } else {
-    r = await api("/api/play/video/" + encodeURIComponent(row.dataset.v) +
+    r = await apiSay("/api/play/video/" + encodeURIComponent(row.dataset.v) +
       "?title=" + encodeURIComponent(row.dataset.t || "") +
       "&artist=" + encodeURIComponent(row.dataset.ar || "") +
       "&art=" + encodeURIComponent(row.dataset.img || ""));
@@ -1254,7 +1525,8 @@ $("results").addEventListener("mousedown", async e => {
 const withQuery = (mode) => {
   const v = $("q").value.trim(); if (!v) return;
   $("q").value = ""; $("qactions").classList.remove("show"); hideResults();
-  api("/api/play?q=" + encodeURIComponent(v) + "&mode=" + mode).then(r => toast(r && r.message));
+  apiSay("/api/play?q=" + encodeURIComponent(v) + "&mode=" + mode, true)
+    .then(r => { if (r) toast(r.message); });
 };
 $("addnext").onclick = () => withQuery("next");
 $("addqueue").onclick = () => withQuery("queue");
@@ -1262,18 +1534,26 @@ $("radio").onclick = () => api("/api/radio").then(r => toast(r && r.message));
 
 /* ── panels ────────────────────────────────────────────────────────── */
 let activePanel = "queue";
-document.querySelectorAll(".navtab[data-panel]").forEach(tab => tab.onclick = () => {
-  const wasActive = activePanel === tab.dataset.panel;
-  activePanel = tab.dataset.panel;
+function showPanel(name, toggleExpand) {
+  const tab = document.querySelector('.navtab[data-panel="' + name + '"]');
+  if (!tab) return;
+  const wasActive = activePanel === name;
+  activePanel = name;
   document.querySelectorAll(".navtab[data-panel]").forEach(x => x.classList.toggle("on", x === tab));
   document.querySelectorAll(".panel").forEach(p => p.classList.remove("open"));
   $("panel-" + activePanel).classList.add("open");
   // Tapping the active tab again expands the panel — dblclick never fired
   // reliably inside WebView2.
-  document.body.classList.toggle("expand", wasActive ? !document.body.classList.contains("expand") : activePanel === "lyrics");
+  if (toggleExpand) {
+    document.body.classList.toggle("expand",
+      wasActive ? !document.body.classList.contains("expand") : activePanel === "lyrics");
+  }
   if (activePanel === "lyrics") loadLyrics(true);
   if (activePanel === "recent") loadRecent();
   if (activePanel === "lists") loadLists();
+}
+document.querySelectorAll(".navtab[data-panel]").forEach(tab => tab.onclick = () => {
+  showPanel(tab.dataset.panel, true);
 });
 
 /* ── queue ─────────────────────────────────────────────────────────── */
@@ -1399,6 +1679,12 @@ function enableDrag(box, rowSel, onDrop) {
 }
 
 function renderQueue(rows) {
+  // A guest's queue arrives wrapped — {rows, session} — because the stream
+  // has to know whose it is to route it. Unwrapped it read as an object with
+  // no .length, so the list said "nothing queued" while songs downloaded
+  // behind it, and only a reload (which asks /api/status, a plain array)
+  // ever showed them.
+  if (rows && !Array.isArray(rows)) rows = rows.rows || [];
   lastQ = rows || [];
   showUpNext();
   // a download finishing mid-drag would otherwise rebuild the list out from
@@ -1517,7 +1803,8 @@ async function loadRecent() {
 }
 $("panel-recent").addEventListener("click", e => {
   const chip = e.target.closest(".achip");
-  if (chip) { api("/api/play?q=" + encodeURIComponent(chip.dataset.a)).then(r => toast(r && r.message)); return; }
+  if (chip) { apiSay("/api/play?q=" + encodeURIComponent(chip.dataset.a), true)
+      .then(r => { if (r) toast(r.message); }); return; }
   const row = e.target.closest(".rrow");
   if (row) {
     api("/api/play/video/" + encodeURIComponent(row.dataset.v) +
@@ -1602,7 +1889,11 @@ $("panel-lists").addEventListener("click", async e => {
 });
 
 /* ── settings ──────────────────────────────────────────────────────── */
-$("openSettings").onclick = () => { $("sheet").classList.add("open"); loadSettings(); };
+$("openSettings").onclick = () => {
+  if (!ME.owner) { toast("Settings are the owner's"); return; }
+  $("sheet").classList.add("open");
+  loadSettings();
+};
 document.querySelectorAll(".stab").forEach(tab => tab.onclick = () => {
   document.querySelectorAll(".stab").forEach(t => t.classList.toggle("on", t === tab));
   document.querySelectorAll(".spane").forEach(p =>
@@ -1610,15 +1901,42 @@ document.querySelectorAll(".stab").forEach(tab => tab.onclick = () => {
   $("sheet").querySelector(".sheet-body").scrollTop = 0;
   // Only ask when the tab is actually on screen: it walks three caches and
   // stats the download folder.
-  if (tab.dataset.s === "system") { loadHealth(); loadNetwork(); loadCache(); }
+  if (tab.dataset.s === "system") {
+    loadHealth(); loadCache(); loadBlocked();
+  }
+  if (tab.dataset.s === "sharing") {
+    loadNetwork(); loadPasses(); loadDdns();
+    if (ME.owner) watchSharing();
+  }
 });
+
+/* Who's listening and what their link has done, while you're looking at it.
+   A list of live sessions that only refreshes when you reopen the tab is a
+   list you can't trust. Stops when the tab or the sheet goes away — this
+   walks every session and rewrites the pass file's tallies. */
+let sharingTimer = null;
+function watchSharing() {
+  clearInterval(sharingTimer);
+  const tick = () => {
+    const open = $("sheet").classList.contains("open") &&
+                 document.querySelector('.spane[data-s="sharing"]').classList.contains("open");
+    if (!open) { clearInterval(sharingTimer); sharingTimer = null; return; }
+    loadSessions();
+    // Not while a QR is on screen — redrawing the list would take it away
+    // mid-scan.
+    if (!$("passlist").querySelector(".qrbox:not(:empty)")) loadPasses();
+  };
+  tick();
+  sharingTimer = setInterval(tick, 8000);
+}
 $("healthbtn").onclick = loadHealth;
 
 /* which addresses reach this player, and whether Tailscale is up */
+let SHARE_PASS = "";        // whose link the addresses currently carry
+
 async function loadNetwork() {
-  const r = await api("/api/network");
+  const r = await api("/api/network" + (SHARE_PASS ? "?pass_id=" + SHARE_PASS : ""));
   if (!r) return;
-  const ts = r.tailscale || {};
   $("netaddrs").innerHTML = (r.addresses || []).map(a =>
     `<div class="srow"><span class="slabel">${esc(a.label)}` +
     `<em>${esc(a.url.replace(/\?key=.*$/, ""))}</em></span>` +
@@ -1626,10 +1944,44 @@ async function loadNetwork() {
     `<button class="btn netqr" data-k="${esc(a.kind)}">QR</button>` +
     `<button class="btn netcopy" data-u="${esc(a.url)}">Copy</button></span></div>` +
     `<div class="qrbox" id="qr-${esc(a.kind)}"></div>`).join("");
-  $("nethint").textContent = ts.ok
-    ? "Tailscale is up on " + ts.ip
-    : "Tailscale: " + (ts.detail || "unavailable");
+  const wan = (r.addresses || []).find(a => a.kind === "wan");
+  if (r.port_moved) {
+    $("reachbox").className = "reach bad";
+    $("reachbox").innerHTML =
+      `<b>Running on port ${r.port}, not ${r.configured_port}.</b> ` +
+      `Something else had the configured port when this started, so it moved. ` +
+      `A forward rule aimed at ${r.configured_port} points at nothing — ` +
+      `forward ${r.port} instead, or restart with the other port free.`;
+  }
+  $("nethint").textContent =
+    (r.https ? "Encrypted (https). " : "Not encrypted — turn https on before using this over the internet. ") +
+    (wan ? `Forward port ${r.port} to this machine for the first one to work.`
+         : "Couldn't work out your public address.");
 }
+/* navigator.clipboard only exists in a secure context, so on plain http
+   over the LAN it is simply absent — which is why copying did nothing at
+   all. Fall back to the old execCommand path, which still works there. */
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) {}
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;top:-1000px;opacity:0";
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) { return false; }
+}
+
 $("netaddrs").addEventListener("click", async e => {
   const q = e.target.closest(".netqr");
   if (q) {
@@ -1638,15 +1990,15 @@ $("netaddrs").addEventListener("click", async e => {
     // The link carries the api key, so this is fetched with it and dropped
     // straight into the page rather than pointed at by a public url.
     const r = await fetch("/api/qr?kind=" + encodeURIComponent(q.dataset.k) +
-                          "&key=" + encodeURIComponent(KEY));
+                          (SHARE_PASS ? "&pass_id=" + SHARE_PASS : ""),
+                          { headers: { "X-Music-Key": KEY } });
     box.innerHTML = r.ok ? await r.text() : "";
     return;
   }
   const b = e.target.closest(".netcopy");
   if (!b) return;
   // The link carries the key, so it works when pasted straight into a phone.
-  try { await navigator.clipboard.writeText(b.dataset.u); toast("Link copied"); }
-  catch (err) { toast("Couldn't copy — the link is " + b.dataset.u); }
+  toast(await copyText(b.dataset.u) ? "Link copied" : "Couldn't copy that");
 });
 async function loadCache(prune) {
   const r = await api("/api/cache" + (prune ? "?prune=1" : ""));
@@ -1662,10 +2014,7 @@ $("cachemb").onchange = async () => {
   await api("/api/setting?key=cache_size_mb&value=" + v);
   loadCache();
 };
-$("tsmode").onchange = async () => {
-  await api("/api/setting?key=tailscale&value=" + encodeURIComponent($("tsmode").value));
-  loadNetwork();
-};
+
 $("closeSettings").onclick = () => $("sheet").classList.remove("open");
 
 function buildChips(id, options, onPick) {
@@ -1700,6 +2049,287 @@ const toggleRow = (id, path) => {
 toggleRow("announce", "/api/announce");
 toggleRow("boot", "/api/boot");
 toggleRow("lockips", "/api/lockips");
+/* These two are plain settings rather than their own endpoints. */
+const settingRow = (id, key) => {
+  $(id).onclick = async () => {
+    const on = !$(id).classList.contains("on");
+    $(id).classList.toggle("on", on);
+    const r = await api("/api/setting?key=" + key + "&value=" + (on ? 1 : 0));
+    if (!r) { $(id).classList.toggle("on", !on); toast("That needs the key"); }
+    else if (key === "https") toast("Restart the player for that to take effect");
+  };
+};
+settingRow("usehttps", "https");
+settingRow("blockguests", "block_full_guests");
+settingRow("partymode", "party_mode");
+settingRow("keyinurl", "allow_key_in_url");
+async function loadDdns() {
+  const r = await api("/api/ddns");
+  if (!r) return;
+  const box = $("ddnsbox");
+  if (r.hostname) $("ddnshost").value = r.hostname;
+  if (r.provider) $("ddnsprov").value = r.provider;
+  if (!r.configured) { box.className = "reach"; box.innerHTML = ""; return; }
+  box.className = "reach " + (r.ok ? "good" : r.ok === false ? "bad" : "");
+  box.innerHTML = `<b>${esc(r.hostname)}</b>` +
+    (r.ok ? `Pointing at ${esc(r.last || "here")} — ${esc(r.detail)}`
+          : `Not updating: ${esc(r.detail)}`) +
+    (r.minutes_ago != null ? ` · checked ${r.minutes_ago}m ago` : "");
+}
+
+$("ddnssave").onclick = async () => {
+  const host = ($("ddnshost").value || "").trim();
+  if (!host) { toast("Needs the hostname you registered"); return; }
+  const q = "/api/ddns?hostname=" + encodeURIComponent(host) +
+            "&provider=" + encodeURIComponent($("ddnsprov").value) +
+            "&user=" + encodeURIComponent(($("ddnsuser").value || "").trim()) +
+            "&secret=" + encodeURIComponent($("ddnspass").value || "");
+  $("ddnsbox").className = "reach";
+  $("ddnsbox").innerHTML = "Telling them where you are…";
+  const r = await api(q);
+  $("ddnspass").value = "";
+  if (!r) { toast("That didn't go through"); return; }
+  await loadDdns();
+  await loadNetwork();
+  toast(r.ok ? "Hostname updated" : (r.detail || "Couldn't update it"));
+};
+
+$("portcheck").onclick = async () => {
+  const box = $("reachbox");
+  box.className = "reach";
+  box.innerHTML = "Asking…";
+  const r = await api("/api/network?check=1");
+  if (!r) { box.innerHTML = "Couldn't check just now."; return; }
+  const port = r.port, open = r.port_open;
+  if (open === true) {
+    box.className = "reach good";
+    box.innerHTML = `<b>Reachable.</b> Port ${port} is open from outside — ` +
+      `links you hand out will work anywhere.`;
+    return;
+  }
+  box.className = "reach bad";
+  box.innerHTML = `<b>Not reachable from outside.</b>` +
+    (open === null ? " Couldn't get a definite answer, but nothing answered on port " + port + "." : "") +
+    ` Your router isn't sending port <code>${port}</code> to this computer yet.` +
+    `<ol>` +
+    `<li>Open your router's admin page and find <em>Port forwarding</em>.</li>` +
+    `<li>Forward external port <code>${port}</code> to <code>${r.addresses.find(a => a.kind === "lan").host}</code> port <code>${port}</code>, TCP.</li>` +
+    `<li>Come back and press Check again.</li>` +
+    `</ol>` +
+    `<div style="margin-top:6px;color:var(--sub)">Two things that catch people out: ` +
+    `testing the public link from inside your own house often fails even when it's set up ` +
+    `correctly, so try it on mobile data — and don't press Shuffle after forwarding, ` +
+    `because the rule points at whichever port you forwarded.</div>`;
+};
+
+$("portshuffle").onclick = async () => {
+  const r = await api("/api/port/shuffle");
+  toast((r && r.message) || "Couldn't change the port");
+  loadNetwork();
+};
+$("unblockall").onclick = async () => {
+  const r = await api("/api/blocked?clear=1");
+  toast(r ? `Let ${r.forgiven} back in` : "That needs the key");
+  loadBlocked();
+};
+/* ── who's actually listening right now ──────────────────────────────── */
+async function loadSessions() {
+  const r = await api("/api/sessions");
+  const rows = (r && r.sessions) || [];
+  if (!rows.length) {
+    $("whoslistening").innerHTML = `<div class="hint">Nobody else is listening.</div>`;
+    return;
+  }
+  $("whoslistening").innerHTML = rows.map(s => {
+    const heat = s.requests_hour >= 30 ? "hot" : s.requests_hour >= 12 ? "warm" : "";
+    const at = s.duration ? " " + fmt(s.position) + "/" + fmt(s.duration) : "";
+    return `<div class="sessrow${s.active ? " live" : ""}">` +
+      `<span class="sessname">${esc(s.name)}` +
+      `<em>${s.playing ? esc(s.playing) + at
+                       : (s.active ? "picking something" : "idle " + s.idle_minutes + "m")}</em></span>` +
+      `<span class="sessmeta ${heat}">${s.ahead} to come · ${s.requests_hour}/h` +
+      ` · ${s.plays} played · ${s.listened_minutes}m</span>` +
+      `<button class="pickx sesskick" data-i="${esc(s.id)}" title="End this session">✕</button>` +
+      `</div>`;
+  }).join("");
+}
+$("whoslistening").addEventListener("click", async e => {
+  const b = e.target.closest(".sesskick");
+  if (!b) return;
+  await api("/api/sessions?close=" + encodeURIComponent(b.dataset.i));
+  toast("Session ended");
+  loadSessions();
+});
+
+/* Two presses, because it can't be undone and one press is how it happens
+   by accident. The second one is a different word, not the same button
+   again — "are you sure" that you answer by repeating yourself is barely a
+   question. */
+let armed = null;
+$("lockdown").onclick = async () => {
+  const b = $("lockdown");
+  if (!b.classList.contains("arm")) {
+    b.classList.add("arm");
+    b.textContent = "Press again to revoke everything";
+    clearTimeout(armed);
+    armed = setTimeout(() => {
+      b.classList.remove("arm");
+      b.textContent = "Revoke all & shuffle port";
+    }, 6000);
+    return;
+  }
+  clearTimeout(armed);
+  b.classList.remove("arm");
+  b.textContent = "Revoking…";
+  const r = await api("/api/lockdown");
+  b.textContent = "Revoke all & shuffle port";
+  toast((r && r.message) || "That needs the key");
+  SHARE_PASS = "";
+  loadPasses(); loadSessions(); loadNetwork();
+};
+
+/* ── who has a link, and taking it back ─────────────────────────────── */
+const PASS_SCOPE = { full: "any speaker", phone: "their phone" };
+
+function passLife(p) {
+  if (!p.expires) return "permanent";
+  if (p.expired) return "expired";
+  const h = p.hours_left;
+  return h < 1 ? Math.round(h * 60) + "m left"
+       : h < 48 ? Math.round(h) + "h left"
+       : Math.round(h / 24) + "d left";
+}
+function passSeen(p) {
+  if (!p.last_seen) return "never used";
+  const mins = (Date.now() / 1000 - p.last_seen) / 60;
+  return mins < 2 ? "listening now"
+       : mins < 90 ? Math.round(mins) + "m ago"
+       : mins < 2880 ? Math.round(mins / 60) + "h ago"
+       : Math.round(mins / 1440) + "d ago";
+}
+
+/* What a link has actually done, in the order you'd ask it: did they use it,
+   how much did they ask for, how long did they listen. A link that has never
+   been opened says so rather than showing three zeroes. */
+function passTally(p) {
+  const s = p.stats || {};
+  if (!s.requests && !s.plays && !s.minutes) return "";
+  const bits = [];
+  if (s.requests) bits.push(s.requests + (s.requests === 1 ? " request" : " requests"));
+  if (s.plays) bits.push(s.plays + " played");
+  if (s.minutes >= 1) bits.push(Math.round(s.minutes) + "m listened");
+  return bits.join(" · ");
+}
+
+async function loadPasses() {
+  const r = await api("/api/passes");
+  const rows = (r && r.passes) || [];
+  if (!rows.length) {
+    $("passlist").innerHTML =
+      `<div class="hint">Nobody has a link yet.</div>`;
+    return;
+  }
+  $("passlist").innerHTML = rows.map(p => {
+    const dead = p.revoked || p.expired;
+    const tally = passTally(p);
+    return `<div class="passrow${dead ? " dead" : ""}">` +
+      `<span class="passname">${esc(p.name)}</span>` +
+      `<span class="passmeta">${esc(PASS_SCOPE[p.scope] || p.scope)}` +
+      ` · ${esc(passLife(p))} · ${esc(passSeen(p))}` +
+      (p.revoked ? " · <b>banned</b>" : "") +
+      (tally ? `<b class="tally">${esc(tally)}</b>` : "") + `</span>` +
+      `<span class="passacts">` +
+      (dead
+        ? (p.revoked ? `<button class="btn passundo" data-i="${esc(p.id)}">Unban</button>` : "")
+        : `<button class="btn passcopy" data-i="${esc(p.id)}">Copy</button>` +
+          `<button class="btn passqr" data-i="${esc(p.id)}">QR</button>`) +
+      `<button class="pickx passkill" data-i="${esc(p.id)}" ` +
+      `title="${p.revoked ? "Forget this one" : "Ban this link"}">✕</button>` +
+      `</span><div class="qrbox" id="pq-${esc(p.id)}"></div></div>`;
+  }).join("");
+}
+
+$("passmake").onclick = async () => {
+  const name = ($("passname").value || "").trim();
+  if (!name) { toast("Give it a name so you can take it back later"); return; }
+  const scope = $("passscope").value, hours = $("passhours").value;
+  const r = await api("/api/passes/new?name=" + encodeURIComponent(name) +
+                      "&hours=" + encodeURIComponent(hours) +
+                      "&scope=" + encodeURIComponent(scope) + "&kind=wan");
+  if (!r || r.status !== "ok") { toast((r && r.message) || "Couldn't make that"); return; }
+  $("passname").value = "";
+  await loadPasses();
+  showMade(r, name, scope, hours);
+};
+
+/* The link, and the two things you'd want to do with it, without hunting for
+   the row it just created. */
+function showMade(r, name, scope, hours) {
+  const life = hours === "0" ? "permanent"
+             : hours === "168" ? "a week" : "24 hours";
+  const where = scope === "phone" ? "their phone only" : "any speaker";
+  $("madebox").innerHTML =
+    `<div class="made-top">Link for ${esc(name)}<em>${where} · ${life}</em></div>` +
+    `<div class="made-url">${esc(r.url)}</div>` +
+    `<div class="made-acts">` +
+    `<button class="btn" id="madecopy">Copy</button>` +
+    `<button class="btn" id="madeqr">QR</button>` +
+    `<button class="btn" id="madedone">Done</button></div>` +
+    `<div class="qrbox" id="madeqrbox"></div>`;
+  $("madecopy").onclick = async () =>
+    toast(await copyText(r.url) ? "Link copied" : "Couldn't copy that");
+  $("madeqr").onclick = async () => {
+    const box = $("madeqrbox");
+    if (box.innerHTML) { box.innerHTML = ""; return; }
+    const res = await fetch("/api/qr?kind=wan&pass_id=" + encodeURIComponent(r.id),
+                            { headers: { "X-Music-Key": KEY } });
+    box.innerHTML = res.ok ? await res.text() : "";
+  };
+  $("madedone").onclick = () => { $("madebox").innerHTML = ""; };
+}
+
+$("passlist").addEventListener("click", async e => {
+  const btn = e.target.closest("[data-i]");
+  if (!btn) return;
+  const id = btn.dataset.i;
+  if (btn.classList.contains("passcopy")) {
+    const r = await api("/api/network?pass_id=" + encodeURIComponent(id));
+    const row = ((r && r.addresses) || []).find(a => a.kind === "wan") ||
+                ((r && r.addresses) || [])[0];
+    toast(row && await copyText(row.url) ? "Link copied" : "Couldn't copy that");
+    return;
+  }
+  if (btn.classList.contains("passqr")) {
+    const box = $("pq-" + id);
+    if (box.innerHTML) { box.innerHTML = ""; return; }
+    const res = await fetch("/api/qr?kind=wan&pass_id=" + encodeURIComponent(id),
+                            { headers: { "X-Music-Key": KEY } });
+    box.innerHTML = res.ok ? await res.text() : "";
+    return;
+  }
+  if (btn.classList.contains("passundo")) {
+    await api("/api/passes/revoke?restore=1&id=" + encodeURIComponent(id));
+    loadPasses(); return;
+  }
+  if (btn.classList.contains("passkill")) {
+    // First press bans, second forgets — so a banned link can be cleared away
+    // without a second control that only ever applies to half the rows.
+    const row = ((await api("/api/passes")) || {}).passes || [];
+    const me = row.find(p => p.id === id);
+    await api("/api/passes/revoke?id=" + encodeURIComponent(id) +
+              (me && me.revoked ? "&forget=1" : ""));
+    toast(me && me.revoked ? "Forgotten" : "That link stops working now");
+    loadPasses();
+  }
+});
+
+async function loadBlocked() {
+  const r = await api("/api/blocked");
+  const rows = (r && r.blocked) || [];
+  $("blockedwho").textContent = rows.length
+    ? rows.map(b => `${b.ip} (${Math.round(b.minutes_left / 60)}h left)`).join(", ")
+    : "nobody";
+}
 $("viz").onclick = () => {
   const on = !$("viz").classList.contains("on");
   $("viz").classList.toggle("on", on);
@@ -1740,20 +2370,117 @@ $("devlist").addEventListener("click", async e => {
   if (!row) return;
   devpicker.classList.remove("show");
   const dev = row.dataset.d;
-  // iOS only starts audio from inside a user gesture, and this click is one.
-  if (dev === CAST_DEV) { castOn(); castPlay(castLive()); }
-  else castOff();
+  castOff();                       // choosing a speaker means not playing here
   const r = await api("/api/audio/device?name=" + encodeURIComponent(dev) +
-                     "&client=" + encodeURIComponent(CLIENT_ID));
-  toast(dev === CAST_DEV && IOS
-        ? "Playing here — use the phone's volume buttons"
-        : ((r && r.message) || "Output changed"));
-  if (dev === CAST_DEV) castSync(lastStatus);
+                      "&client=" + encodeURIComponent(CLIENT_ID));
+  toast((r && r.message) || "Output changed");
 });
+
+/* The toggle is a real user gesture, which is the only moment iOS will let
+   audio start — so playback is kicked off from inside the handler itself. */
+function segShow(here) {
+  $("segphone").classList.toggle("on", here);
+  $("segphone").setAttribute("aria-selected", here ? "true" : "false");
+  $("segpc").classList.toggle("on", !here);
+  $("segpc").setAttribute("aria-selected", here ? "false" : "true");
+}
+
+/* Moving the sound between here and the computer, mid-song.
+ *
+ * Two things had to change. The capsule now moves the moment it's pressed
+ * rather than after three round trips, because a control that looks dead for
+ * a second gets pressed again; and the song comes with you. It used to change
+ * only where the *next* request went, so switching rooms meant searching for
+ * what you were already listening to. */
+let switching = false;
+async function choosePlace(here) {
+  if (ME.scope === "phone" && !here) return;     // that half isn't theirs
+  if (here === cast.on || switching) return;
+  switching = true;
+  const want = here;
+  // Where we'd got to, read before anything stops — this is what gets
+  // carried across, and a moment later it's gone.
+  const at = Math.round(want ? (state.position || 0)
+                             : (castLive().currentTime || 0));
+  segShow(want);
+  document.body.classList.add("switching");
+  try {
+    if (want) {
+      castOn();
+      castPlay(castLive());          // inside the gesture, or iOS refuses
+    } else {
+      castOff();
+    }
+    const dev = want ? CAST_DEV : "auto";
+    const jobs = [api("/api/audio/device?name=" + encodeURIComponent(dev) +
+                      "&client=" + encodeURIComponent(CLIENT_ID))];
+    // A guest's two players are genuinely separate, so the track has to be
+    // handed over explicitly. The owner's is one mpv either way — it keeps
+    // the file and the clock, and asking would only fight it.
+    if (!ME.owner) jobs.push(api("/api/session/here?on=" + (want ? 1 : 0) +
+                                 "&at=" + at));
+    const [devres, handoff] = await Promise.all(jobs);
+    if (!ME.owner) {
+      // The queue this page watches has just changed: their own session on
+      // the phone, the shared player on the computer's speakers.
+      connect();
+      const d = await api("/api/status");
+      if (d) { lastStatus = d; applyStatus(d); renderQueue(d.queue); }
+    } else if (want) {
+      castSync(lastStatus);
+    }
+    const moved = handoff && handoff.moved;
+    toast(moved ? (want ? "Playing here — " : "Moved to the computer — ") + moved
+                : (want ? (IOS ? "Playing here — use the phone's volume buttons"
+                               : ((devres && devres.message) || "Playing here"))
+                        : "Back to the computer"));
+  } finally {
+    document.body.classList.remove("switching");
+    switching = false;
+  }
+}
+
+$("segphone").onclick = () => choosePlace(true);
+$("segpc").onclick = () => choosePlace(false);
 document.addEventListener("click", e => {
   if (devpicker.classList.contains("show") && !devpicker.contains(e.target) &&
       e.target.closest("#volicon") === null) devpicker.classList.remove("show");
 });
+
+/* ── what this visitor is allowed to do ──────────────────────────────── */
+let ME = { owner: !GUEST, scope: SCOPE, name: "", pass_id: "" };
+
+async function loadWhoami() {
+  const r = await api("/api/whoami");
+  if (!r) return ME;
+  ME = r;
+  document.body.classList.toggle("guest", !r.owner);
+  // Belt and braces: if the sheet is somehow open when we learn we're a
+  // guest, shut it rather than leaving the owner's controls on screen.
+  if (!r.owner) $("sheet").classList.remove("open");
+  document.body.classList.toggle("phoneonly", r.scope === "phone");
+  // Two different things, which I had wrongly merged into one:
+  //
+  //   the capsule  — here or the computer. Anyone with full access needs it,
+  //                  including on a phone; that choice is the whole point of
+  //                  a full link. Only a phone-only pass loses it.
+  //   the device list — *which* PC speaker. That is the computer's own
+  //                  business and stays in the desktop app.
+  const canSwitch = r.scope !== "phone";
+  document.body.classList.toggle("nopc", !canSwitch);
+  document.body.classList.toggle("nodevices", !bridge());
+  if (!canSwitch) {
+    segShow(true);
+    $("ph-note").textContent = "This link plays here and nowhere else";
+  } else if (!bridge()) {
+    $("ph-note").textContent = "Here, or out of the computer's speakers";
+  }
+  // Somebody who opened a link is on the device they want it to come out of.
+  // cast.on was already true before the first request went out; this applies
+  // the rest of the mode — the classes, the hidden controls, the handlers.
+  if (!r.owner) castOn();
+  return ME;
+}
 
 /* ── this browser as the speaker ─────────────────────────────────
    mpv keeps decoding and keeps the clock; both its engines are off the sound
@@ -1782,11 +2509,39 @@ let castIx = 0;
 const castLive = () => castEls[castIx];
 const castIdle = () => castEls[1 - castIx];
 const CAST_DEV = "cast:browser";
-const cast = { on: false, vid: "", tries: 0, ready: "", blocked: false };
+/* A shared link is on the device it was opened on: that is what the link
+   is for. Set here rather than after /api/whoami comes back, so the very
+   first request this page makes already says so. */
+const cast = { on: GUEST, vid: "", tries: 0, ready: "", blocked: false };
 let lastStatus = {};
 
+/* Who holds the clock.
+ *
+ * The owner casting: mpv is still decoding, still counting, still driving
+ * crossfade. This page follows its position, and correcting drift against it
+ * is right.
+ *
+ * A guest: there is no mpv. The server keeps a list and an index and nothing
+ * else — its `position` is an echo of what this page last told it, seconds
+ * old, and zero for the first twenty. Following that meant every status tick
+ * seeked the audio back to the start, so the song restarted every few seconds
+ * and never got far enough in to be audible. The browser is the clock here;
+ * the server is told, and never asked. */
+const clockMine = () => cast.on && !!ME && !ME.owner;
+
+/* How far into the song we actually are — this element when we're the clock,
+ * the server's number when mpv is. Everything on screen reads from here so
+ * the seek bar, the lock screen and the drift check can't disagree. */
+function nowAt(d) {
+  if (clockMine()) {
+    const el = castLive();
+    return (el && !isNaN(el.currentTime)) ? el.currentTime : 0;
+  }
+  return (d && d.position) || 0;
+}
+
 const castSrc = v => "/api/output/stream/" + encodeURIComponent(v) +
-                     "?key=" + encodeURIComponent(KEY);
+                     "?" + urlAuth();
 
 /* play() is refused without a gesture. Say so rather than sitting silent. */
 function castPlay(el) {
@@ -1804,7 +2559,12 @@ function castUnblock() {
 
 function castOn() {
   cast.on = true;
+  segShow(true);
   document.body.classList.add("casting");
+  // Playing here means the Recent tab is showing somebody else's evening.
+  // If that's the tab they were on, move them off it rather than leaving a
+  // hidden panel open.
+  if (!ME.owner && activePanel === "recent") showPanel("queue");
   // On iOS the slider controls nothing, so it stops pretending to.
   document.body.classList.toggle("sysvol", IOS);
   $("volicon").title = "Playing on this phone — volume is the phone's";
@@ -1814,6 +2574,7 @@ function castOn() {
 
 function castOff() {
   cast.on = false; cast.vid = ""; cast.tries = 0; cast.ready = "";
+  if (ME.scope !== "phone") segShow(false);
   document.body.classList.remove("sysvol", "casting", "castblocked");
   $("volicon").title = "Choose output device";
   castEls.forEach(el => {
@@ -1821,12 +2582,28 @@ function castOff() {
   });
 }
 
+/* What the lock screen shows.
+ *
+ * Artwork has to be offered at several sizes with a type: Android picks the
+ * one that fits its notification and ignores an entry it can't size, and iOS
+ * wants one big enough for the full-screen player. One 512 entry with no
+ * type got a blank square on both. The art is a YouTube thumbnail url that
+ * takes a size suffix, so the sizes are real rather than claimed. */
+function artSet(url) {
+  if (!url) return [];
+  const at = n => url.replace(/=w\d+-h\d+/, "=w" + n + "-h" + n);
+  return [96, 192, 256, 384, 512].map(n => ({
+    src: at(n), sizes: n + "x" + n, type: "image/jpeg"
+  }));
+}
+
 function castMeta(t) {
   if (!("mediaSession" in navigator)) return;
   try {
     navigator.mediaSession.metadata = new MediaMetadata({
-      title: t.name || "", artist: t.artist || "", album: t.album || "",
-      artwork: t.art ? [{ src: t.art, sizes: "512x512" }] : []
+      title: t.name || "Music Request Server",
+      artist: t.artist || "", album: t.album || "",
+      artwork: artSet(t.art)
     });
   } catch (e) {}
 }
@@ -1838,29 +2615,76 @@ function castHandlers() {
   if (handlersSet || !("mediaSession" in navigator)) return;
   handlersSet = true;
   const set = (a, fn) => {
+    // Not every action exists in every browser, and setting an unknown one
+    // throws — which used to abandon the whole list at the first miss, so
+    // the ones after it were never registered at all.
     try { navigator.mediaSession.setActionHandler(a, fn); } catch (e) {}
   };
-  set("play", () => { castUnblock(); api("/api/control/playpause"); });
-  set("pause", () => api("/api/control/playpause"));
+  /* When this page is the speaker, the element in front of us is the truth.
+     Driving these purely through the server meant a lock-screen play took a
+     network round trip before any sound came out, and on a phone that has
+     just woken up that is most of a second of nothing. Move the audio first,
+     tell the server after. */
+  const local = () => clockMine() || (cast.on && ME.owner);
+  set("play", () => {
+    castUnblock();
+    if (local()) { castPlay(castLive()); reportProgress(); }
+    api("/api/control/playpause");
+  });
+  set("pause", () => {
+    if (local()) { try { castLive().pause(); } catch (e) {} reportProgress(); }
+    api("/api/control/playpause");
+  });
+  set("stop", () => {
+    if (local()) { try { castLive().pause(); } catch (e) {} }
+    api("/api/control/pause");
+  });
   set("nexttrack", () => api("/api/control/next"));
   set("previoustrack", () => api("/api/control/previous"));
+  const jump = by => {
+    const el = castLive();
+    if (clockMine() && el && !isNaN(el.currentTime)) {
+      const to = Math.max(0, el.currentTime + by);
+      try { el.currentTime = to; } catch (e) {}
+      api("/api/seek?pos=" + Math.round(to));
+      return;
+    }
+    api("/api/seek?pos=" + Math.max(0, Math.round((state.position || 0) + by)));
+  };
+  set("seekforward", d => jump((d && d.seekOffset) || 10));
+  set("seekbackward", d => jump(-((d && d.seekOffset) || 10)));
   set("seekto", d => {
-    if (d && d.seekTime != null) api("/api/seek?pos=" + Math.round(d.seekTime));
+    if (!d || d.seekTime == null) return;
+    if (clockMine()) {
+      // The scrubber on a lock screen is this element's, and only this
+      // element can honour it — the server holds a list, not a clock.
+      try { castLive().currentTime = d.seekTime; } catch (e) {}
+      api("/api/session/progress?pos=" + Math.round(d.seekTime));
+      return;
+    }
+    api("/api/seek?pos=" + Math.round(d.seekTime));
   });
 }
 
 /* Feeds the lock-screen scrubber. Without it iOS shows a dead progress bar. */
 function castPosition(d) {
   const ms = ("mediaSession" in navigator) && navigator.mediaSession;
-  if (!ms || !ms.setPositionState) return;
-  const dur = (d.track || {}).duration || 0;
-  if (!dur) return;
+  if (!ms) return;
+  const el = castLive();
+  // The element's own duration when we're the clock: the server rounds, and
+  // a scrubber that disagrees with the audio by a second jumps as you let go.
+  let dur = (d.track || {}).duration || 0;
+  if (clockMine() && el && isFinite(el.duration) && el.duration > 0) dur = el.duration;
   try {
-    ms.setPositionState({
-      duration: dur, playbackRate: 1,
-      position: Math.min(dur, Math.max(0, d.position || 0))
-    });
+    // Set before the position, so a browser that reads them together doesn't
+    // see "playing" against a stale time.
     ms.playbackState = d.state === "playing" ? "playing" : "paused";
+    if (dur && ms.setPositionState) {
+      ms.setPositionState({
+        duration: dur, playbackRate: 1,
+        position: Math.min(dur, Math.max(0, nowAt(d)))
+      });
+    }
   } catch (e) {}
 }
 
@@ -1878,13 +2702,28 @@ function castPreload(d) {
 
 function castSync(d) {
   if (!cast.on || !d) return;
+  if (!URL_TOKEN) {
+    // No pass yet, so there is no url we're willing to build. Fetch one and
+    // let the next status tick do the work — a second's wait beats putting
+    // the key in the address bar.
+    refreshToken().then(() => castSync(lastStatus));
+    return;
+  }
   const t = d.track || {};
   const vid = t.video_id || "";
   if (!vid) { try { castLive().pause(); } catch (e) {} return; }
 
+  // Nothing was playing here a moment ago — this is a page that just loaded,
+  // or one coming back off the computer's speakers. Then the server's
+  // position is worth having: it is stamped to this exact track, so it's
+  // where we left off rather than a stale number.
+  const resuming = !cast.vid;
   if (vid !== cast.vid) {
     cast.vid = vid; cast.tries = 0;
-    const at = d.position || 0;
+    // Otherwise a new track starts at the start. Only when mpv is the clock
+    // is there a running position worth chasing — a guest's server-side one
+    // is an echo of what this page last said, seconds old.
+    const at = (clockMine() && !resuming) ? 0 : (d.position || 0);
     // Already sitting in the other element? Hand over to it rather than
     // reloading, so there's no silent gap for iOS to suspend us in.
     if (cast.ready === vid && castIdle().src) {
@@ -1913,7 +2752,10 @@ function castSync(d) {
   if (playing && el.paused) castPlay(el);
   else if (!playing && !el.paused) el.pause();
 
-  if (playing && el.readyState >= 2) {
+  // Only chase mpv's clock. Chasing our own echo is what produced the loop:
+  // status says 0, we're four seconds in, "drift" says seek back to 0, and
+  // round it goes for the length of the evening.
+  if (playing && el.readyState >= 2 && !clockMine()) {
     const drift = Math.abs(el.currentTime - (d.position || 0));
     if (drift > 2) { try { el.currentTime = d.position || 0; } catch (e) {} }
   }
@@ -1947,12 +2789,16 @@ const castSay = $("castsay");
 let duckTimer = null;
 
 function applyAnnounce(d) {
-  if (!d || !cast.on || d.client !== CLIENT_ID) return;
+  if (!d || !cast.on) return;
+  // A stamped clip is a guest's own — the stream only sends it to them, so
+  // there is nothing further to check. An unstamped one is the owner's, and
+  // names the single tab that's acting as the speaker.
+  if (!d.session && d.client !== CLIENT_ID) return;
   const el = castLive();
   const wasVol = el.volume;
   try {
-    castSay.src = "/api/announce/" + encodeURIComponent(d.id) + ".mp3?key=" +
-                  encodeURIComponent(KEY);
+    castSay.src = "/api/announce/" + encodeURIComponent(d.id) + ".mp3?" +
+                  urlAuth();
     castSay.load();
     // iOS keeps volume read-only, so there the announcement simply plays over
     // the top — still audible, just not ducked.
@@ -1976,24 +2822,74 @@ function applyAnnounce(d) {
 /* Audio really started, so whatever refused it earlier no longer applies. */
 castEls.forEach(el => el.addEventListener("playing", castUnblock));
 
+/* The phone finishing a track is what moves a session on — the server holds
+   the queue and the index, never the position. Survives the phone sleeping,
+   which a server-side timer would not. */
+castEls.forEach(el => el.addEventListener("ended", async () => {
+  if (!cast.on || el !== castLive() || ME.owner) return;
+  const r = await api("/api/session/ended");
+  if (r) { lastStatus = r; castSync(r); }
+}));
+
+/* Where we've got to. This is the only clock the server has for a browser
+   session, so it also decides what the owner's list says a guest is playing
+   and how much they've listened to. Every five seconds, not twenty: a
+   reconnect used to resume up to twenty seconds behind. */
+function reportProgress() {
+  if (!cast.on || ME.owner) return;
+  const el = castLive();
+  api("/api/session/progress?pos=" + Math.round(el.currentTime || 0));
+}
+setInterval(() => {
+  if (!cast.on || ME.owner || castLive().paused) return;
+  reportProgress();
+}, 5000);
+castEls.forEach(el => el.addEventListener("pause", () => {
+  if (el === castLive()) reportProgress();
+}));
+
 /* A .webm still being transcoded answers 503. Retry instead of going silent. */
+/* A track that hasn't finished downloading answers 503. Retrying every two
+   and a half seconds turns that into four seconds of silence on a loop —
+   back off instead, and say what's happening rather than looking broken. */
 castEls.forEach(el => el.addEventListener("error", () => {
-  if (!cast.on || !cast.vid || el !== castLive() || cast.tries >= 8) return;
+  if (!cast.on || !cast.vid || el !== castLive()) return;
+  if (cast.tries >= 10) { toast("That track isn't ready yet"); return; }
   cast.tries++;
   const want = cast.vid;
+  const wait = Math.min(2000 * cast.tries, 12000);   // 2s, 4s, 6s … 12s
+  document.body.classList.add("waiting");
   setTimeout(() => {
     if (!cast.on || cast.vid !== want) return;
     el.src = castSrc(want);
     el.load();
-  }, 2500);
+  }, wait);
+}));
+castEls.forEach(el => el.addEventListener("playing", () => {
+  cast.tries = 0;
+  document.body.classList.remove("waiting");
 }));
 
-/* Selected on a previous visit: we're the output, but nothing can start
-   until this page has been touched once. */
+/* Make the capsule agree with where the sound is actually coming from.
+ *
+ * The owner's page never reconciled these at all: nothing called segShow on
+ * load, so it showed whatever the markup said — which was "Phone", on a
+ * desktop app playing out of its own speakers. Now the server's answer wins,
+ * every time the page opens. */
 (async () => {
   const r = await api("/api/audio/devices");
-  if (!r || r.current !== CAST_DEV || r.cast_client !== CLIENT_ID) return;
-  castOn();
+  if (!r) return;
+  const mine = r.current === CAST_DEV && r.cast_client === CLIENT_ID;
+  if (ME.owner) {
+    // The owner has one player, so "playing here" is a fact about the whole
+    // machine and the server is the only thing that knows it.
+    if (mine && !cast.on) castOn();
+    else if (!mine && cast.on) castOff();
+    else segShow(cast.on);
+  }
+  if (!mine) return;
+  // Selected on a previous visit: we're the output, but nothing can start
+  // until this page has been touched once.
   const arm = () => {
     if (!cast.on) return;
     castUnblock();
@@ -2254,6 +3150,7 @@ $("libadd").onclick = async () => {
 async function loadSettings() {
   const s = await api("/api/settings");
   if (!s) return;
+  if (s.release) $("release").textContent = s.release;
   if (s.eq_presets && !$("eq").options.length)
     s.eq_presets.forEach(p => { const o = document.createElement("option"); o.value = o.textContent = p; $("eq").appendChild(o); });
   if (s.eq) $("eq").value = s.eq;
@@ -2265,7 +3162,11 @@ async function loadSettings() {
   $("announce").classList.toggle("on", s.announce !== false);
   $("boot").classList.toggle("on", !!s.start_on_boot);
   $("lockips").classList.toggle("on", !!s.lock_ips);
-  if (s.tailscale) $("tsmode").value = s.tailscale;
+  $("usehttps").classList.toggle("on", !!s.https);
+  $("blockguests").classList.toggle("on", !!s.block_full_guests);
+  $("partymode").classList.toggle("on", !!s.party_mode);
+  document.body.classList.toggle("party", !!s.party_mode);
+  $("keyinurl").classList.toggle("on", s.allow_key_in_url !== false);
   $("ckauto").classList.toggle("on", s.cookie_auto_refresh !== false);
   $("pldl").classList.toggle("on", !!s.playlist_download);
   markChips("crossfade", s.crossfade || 0);
@@ -2467,7 +3368,10 @@ function applyStatus(d) {
   $("artist").textContent = t.artist || "";
   setArt(t.art || "");
   state.duration = t.duration || 0;
-  state.position = d.position || 0;
+  // When this page is the speaker, the seek bar reads the audio element, not
+  // the server's echo of it — otherwise the bar snapped back to zero on
+  // every tick, which is what "it keeps restarting" looked like on screen.
+  state.position = nowAt(d);
   state.playing = d.state === "playing";
   if (!seekDrag) {
     paintSeek(state.duration ? state.position / state.duration : 0, state.position);
@@ -2515,7 +3419,12 @@ function applyActivity(a) {
 let es = null;
 function connect() {
   if (es) es.close();
-  es = new EventSource("/api/events?key=" + encodeURIComponent(KEY));
+  if (!URL_TOKEN) { refreshToken().then(connect); return; }
+  // `here` says which queue this page is watching. Same choice the capsule
+  // makes, and the same one the X-Play-Here header carries on everything
+  // else — an EventSource can't send a header, so it goes in the url.
+  es = new EventSource("/api/events?" + urlAuth() +
+                       "&here=" + (cast.on ? "1" : "0"));
   es.onmessage = ev => {
     let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
     switch (msg.type) {
@@ -2524,7 +3433,11 @@ function connect() {
       case "announce": applyAnnounce(msg.data); break;
       case "queue": renderQueue(msg.data); break;
       case "activity": applyActivity(msg.data || {}); break;
-      case "toast": toast(msg.data); break;
+      // A toast meant for one listener arrives wrapped, the same way their
+      // queue does. Everyone else's is still a plain string.
+      case "toast":
+        toast(typeof msg.data === "string" ? msg.data : (msg.data || {}).text);
+        break;
       case "level":
         if (!msg.data) break;
         if (msg.data.live && msg.data.bands) { live = msg.data.bands; lv.m = msg.data.m; }
@@ -2566,7 +3479,11 @@ document.addEventListener("keydown", e => {
 setTheme(localStorage.getItem("theme") || "default", false);
 buildSwatches();
 setVol(70);
-connect();
+/* Get the token before the stream opens, so the key never rides in the SSE
+   URL even on the very first connection. Reconnects reuse it, and it's
+   refreshed hourly — well inside its twelve-hour life. */
+loadWhoami().then(refreshToken).then(connect).catch(connect);
+setInterval(refreshToken, 60 * 60 * 1000);
 api("/api/settings").then(s => { if (s && s.theme) setTheme(s.theme, false); });
 api("/api/status").then(d => { if (d) { applyStatus(d); renderQueue(d.queue); } });
 </script>

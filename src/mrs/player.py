@@ -18,6 +18,7 @@ from .core.listen import listener
 from .core.playlists import playlists
 from .core.mpv import MpvClient, PIPE_ALT, PIPE_MAIN, kill_stray_mpv
 from .core.queue import QueueManager
+from .core.sink import MpvSink
 from .core import radio
 from .core.taste import taste
 from .events import Ev, bus
@@ -42,13 +43,17 @@ CREATE_NO_WINDOW = 0x08000000
 # card and the browser becomes the speaker.
 CAST_DEVICE = "cast:browser"
 
+# How close together two crashes on one file have to be before we
+# stop believing it's a coincidence and bin the file.
+CRASH_WINDOW = 900.0
+
 
 class PlayerService:
     def __init__(self) -> None:
         self.mpv = MpvClient(PIPE_MAIN, primary=True)
         self.alt = MpvClient(PIPE_ALT, primary=False)
         self.audio = AudioEngine(self.mpv, self.alt)
-        self.queue = QueueManager(self.mpv, ContextBuilder(catalog))
+        self.queue = QueueManager(MpvSink(self.mpv), ContextBuilder(catalog))
         self.audio.track_for = self.queue.track_for
         self._stop = threading.Event()
         self._restarting = threading.Lock()
@@ -63,11 +68,18 @@ class PlayerService:
         self._announce_seq = 0
         self._announce_files: dict[str, str] = {}
         self._announce_lock = threading.Lock()
+        # How many times each file has taken the player down, and when it
+        # last did. Two in quick succession is the file, not bad luck.
+        self._crashes: dict[str, tuple[int, float]] = {}
 
     # -- lifecycle -----------------------------------------------------
     def start(self) -> None:
+        # Longer than it looks like it needs. A force-killed mpv releases its
+        # named pipe at the kernel's convenience, not ours, and spawning into
+        # a pipe name that is still held is how a run starts by connecting to
+        # a corpse.
         kill_stray_mpv()
-        time.sleep(0.4)
+        time.sleep(1.2)
         vol = int(config.get("volume", 70))
         # gapless=yes so albums run together properly
         self.mpv.spawn(vol, extra_args=["--gapless-audio=yes"])
@@ -78,8 +90,17 @@ class PlayerService:
         self.audio.apply_all()
         dev = config.get("audio_device", "auto")
         if dev == CAST_DEVICE:
-            self._release_sound_card(True)  # a browser is the speaker
-        elif dev and dev != "auto":
+            # Booting straight back into "the phone is the speaker" sounds
+            # right and is wrong: the tab that claimed it is identified by a
+            # per-tab name that cannot survive the browser closing, so nothing
+            # can claim the sound and the machine comes up silent with the
+            # speakers deliberately let go. Start on the speakers; the phone
+            # takes it back with one tap, which is the cheaper mistake.
+            log.info("last output was a browser — starting on the speakers")
+            config.set("audio_device", "auto")
+            config.set("cast_client", "")
+            dev = "auto"
+        if dev and dev != "auto":
             self.mpv.set("audio-device", dev)
         self.queue.start()
         catalog.set_preferences(taste.preferred_artists())
@@ -129,7 +150,7 @@ class PlayerService:
         self.audio.mpv = self.mpv
         self.audio.alt = self.alt
         self.audio.track_for = self.queue.track_for
-        self.queue.mpv = self.mpv
+        self.queue.sink = MpvSink(self.mpv)     # fresh process, fresh sink
         self.audio.apply_all()
         # Fresh processes come up on the real sound card; if the phone is the
         # output they have to be put back on null or the PC starts playing.
@@ -174,6 +195,10 @@ class PlayerService:
             return
         if not self._restarting.acquire(blocking=False):
             return
+        # What it was in the middle of when it went. Read before the restart,
+        # because a fresh mpv knows nothing about any of it.
+        was = self._watch.get("path") or ""
+        at = float(self._watch.get("pos") or 0)
         try:
             log.warning("mpv died — restarting (attempt %d)", self._revives + 1)
             self.restart()
@@ -184,9 +209,9 @@ class PlayerService:
         if self.mpv.alive():
             if self._revives:
                 log.info("mpv is back after %d attempts", self._revives + 1)
-                bus.publish(Ev.TOAST, "Player recovered")
             self._revives = 0
             self._revive_at = 0.0
+            self._resume_after_crash(was, at)
             return
         # Still down. Back off, and stop shouting about it — one toast when
         # it first goes, not one a second while it's gone.
@@ -197,6 +222,75 @@ class PlayerService:
             bus.publish(Ev.TOAST, "The player won't start — check the log")
         log.warning("mpv still down after %d attempts, waiting %.0fs",
                     self._revives, wait)
+
+    def _resume_after_crash(self, path: str, at: float) -> None:
+        """Carry on where it stopped, and give the song that stopped it a
+        second chance before blaming it.
+
+        A restart used to mean a fresh mpv with an empty playlist and nothing
+        to put in it: the file that killed it was gone, the queue behind it
+        was gone, and the refill loop stayed quiet because it only tops up a
+        queue that already has something in it. The evening simply ended.
+
+        Once is bad luck — a decode that tripped over, a device that went away
+        mid-track. Twice on the same file is the file, so it gets dropped and
+        deleted rather than taking the player down for a third time.
+        """
+        try:
+            deaths = 0
+            if path:
+                had, when = self._crashes.get(path, (0, 0.0))
+                # Two strikes, but only if they're close together. A file that
+                # tripped over once this morning and once tonight is not a bad
+                # file — it's two unrelated bits of bad luck, and deleting it
+                # for that would be wrong.
+                if time.monotonic() - when > CRASH_WINDOW:
+                    had = 0
+                deaths = had + 1
+                self._crashes[path] = (deaths, time.monotonic())
+                # Only the last few matter; this shouldn't grow all evening.
+                if len(self._crashes) > 40:
+                    self._crashes.pop(next(iter(self._crashes)), None)
+
+            give_up = deaths >= 2
+            got = self.queue.restore_order(resume="" if give_up else path,
+                                           drop=path if give_up else "")
+            if give_up:
+                track = self.queue.track_for(path)
+                name = f"{track.title} — {track.artist}" if track else "That track"
+                self.queue.forget_file(path)
+                self._crashes.pop(path, None)
+                log.warning("skipping %s after two player crashes", name)
+                bus.publish(Ev.TOAST, f"Skipping {name} — it keeps stopping the player")
+            elif got["restored"]:
+                # Back to roughly where it was. A couple of seconds early on
+                # purpose: landing exactly on the frame that just crashed is
+                # asking for the same crash.
+                back = max(0.0, at - 3.0)
+                if back > 1:
+                    self._seek_soon(back)
+                log.info("resumed %s at %.0fs", got["resumed"] or path, back)
+                if self._revives or deaths:
+                    bus.publish(Ev.TOAST, f"Player recovered — {got['resumed']}"
+                                if got["resumed"] else "Player recovered")
+            else:
+                bus.publish(Ev.TOAST, "Player recovered")
+        except Exception as exc:
+            log.warning("couldn't resume after the crash: %s", exc)
+
+    def _seek_soon(self, at: float, tries: int = 30) -> None:
+        """mpv won't take a position for a file it hasn't opened yet."""
+        def go() -> None:
+            for _ in range(tries):
+                time.sleep(0.2)
+                try:
+                    if (self.mpv.get("time-pos", None)) is not None:
+                        self.mpv.command("seek", float(at), "absolute+exact",
+                                         wait=False)
+                        return
+                except Exception:
+                    pass
+        threading.Thread(target=go, daemon=True, name="resume seek").start()
 
     def _watch_track(self) -> None:
         props = self.mpv.get_many(["path", "time-pos", "duration", "pause"])
@@ -300,11 +394,11 @@ class PlayerService:
             out.append({"name": name,
                         "label": d.get("description") or name,
                         "active": name == current})
-        # Not a device mpv can see — the browser asking is the speaker. mpv
-        # still decodes and still keeps the clock, it just gets muted.
-        out.append({"name": CAST_DEVICE, "label": "This phone or browser",
-                    "active": current == CAST_DEVICE, "cast": True})
-        return {"devices": out, "current": current,
+        # The browser is deliberately not offered here any more. Playing on
+        # your own device is a mode — it decides which queue you're in — and a
+        # mode buried in a device list is how somebody ends up wondering why
+        # the volume slider stopped doing anything. It's a toggle in the UI.
+        return {"devices": out, "current": current, "casting": self.casting(),
                 "cast_client": config.get("cast_client", "")}
 
     def set_audio_device(self, name: str, client: str = "") -> dict:
@@ -381,12 +475,34 @@ class PlayerService:
         back = config.get("ao_before_cast", "") or "wasapi"
         if back == "null":
             back = "wasapi"       # never restore into silence
+        want = "null" if release else back
         for m in (self.mpv, self.alt):
             try:
-                m.set("ao", "null" if release else back)
+                m.set("ao", want)
                 m.set("mute", False)
             except Exception as exc:
                 log.debug("ao switch failed on one engine: %s", exc)
+        # Check it took, and make the current file actually come out of it.
+        #
+        # Changing `ao` reinitialises mpv's audio chain, and on the file
+        # that's already open that reinit doesn't always happen by itself —
+        # which is why coming back from the phone left the PC silent until
+        # you searched for something new. A zero-distance exact seek forces
+        # the chain to be rebuilt without moving the song.
+        if not release:
+            got = self.current_ao()
+            if got and got != want:
+                try:
+                    self.mpv.set("ao", want)
+                except Exception as exc:
+                    log.debug("second ao attempt: %s", exc)
+            try:
+                at = self.mpv.get("time-pos", None)
+                if at is not None:
+                    self.mpv.command("seek", float(at), "absolute+exact",
+                                     wait=False)
+            except Exception as exc:
+                log.debug("audio chain nudge: %s", exc)
         # The Windows media overlay and the media keys belong to whatever is
         # actually making the sound. While that's the phone, mpv answering
         # them means two things fighting over one play/pause.
@@ -681,17 +797,24 @@ class PlayerService:
         return {"ok": True, "message": f"Playing {name}{where}"}
 
     # -- announce ------------------------------------------------------
-    def announce(self, text: str) -> None:
+    def announce(self, text: str, session: str = "") -> None:
+        """Say what's coming. `session` sends it to one guest instead.
+
+        A guest listening on their own phone is in their own room, so the
+        clip goes to them and nowhere near the speakers here — which is why
+        their requests used to arrive silently while the owner's were read out.
+        """
         if not text or not config.get("announce", True):
             return
-        threading.Thread(target=self._speak, args=(text,), daemon=True).start()
+        threading.Thread(target=self._speak, args=(text, session), daemon=True,
+                         name="announce").start()
 
     def announce_file(self, aid: str) -> str | None:
         """Where a spoken clip lives, for the client that has to play it."""
         with self._announce_lock:
             return self._announce_files.get(aid)
 
-    def _speak(self, text: str) -> None:
+    def _speak(self, text: str, session: str = "") -> None:
         try:
             import asyncio
             import tempfile
@@ -712,11 +835,12 @@ class PlayerService:
 
             asyncio.run(go())
 
-            if self.casting():
+            if session or self.casting():
                 # The phone is the speaker, so it does the talking too. mpv
                 # is on the null output; playing this locally would announce
-                # the song to an empty room.
-                self._offer_announcement(aid, path, text)
+                # the song to an empty room. Same for a guest, except the
+                # room is theirs and mpv was never involved.
+                self._offer_announcement(aid, path, text, session)
                 return
 
             self._ducking = True
@@ -737,21 +861,26 @@ class PlayerService:
         finally:
             self._ducking = False
 
-    def _offer_announcement(self, aid: str, path: str, text: str) -> None:
+    def _offer_announcement(self, aid: str, path: str, text: str,
+                            session: str = "") -> None:
         """Hand the clip to whichever browser is acting as the speaker."""
         with self._announce_lock:
             self._announce_files[aid] = path
             # Keep a few so a client fetching a moment late still finds its
-            # clip, and bin the rest rather than filling temp all day.
-            for old in sorted(self._announce_files, key=int)[:-4]:
+            # clip, and bin the rest rather than filling temp all day. Wider
+            # than it was: several guests can each be owed one at once.
+            for old in sorted(self._announce_files, key=int)[:-12]:
                 stale = self._announce_files.pop(old, None)
                 try:
                     if stale:
                         os.remove(stale)
                 except OSError:
                     pass
-        bus.publish(Ev.ANNOUNCE, {"id": aid, "text": text,
-                                  "client": config.get("cast_client", "")})
+        evt = {"id": aid, "text": text,
+               "client": config.get("cast_client", "")}
+        if session:
+            evt["session"] = session      # so the stream hands it to them only
+        bus.publish(Ev.ANNOUNCE, evt)
 
     # -- alarms --------------------------------------------------------
     def _on_alarm(self, alarm: dict) -> None:

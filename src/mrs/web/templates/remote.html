@@ -460,6 +460,9 @@ $("newplgo").onclick = async () => {
 const GRIP = "<i></i><i></i><i></i><i></i><i></i><i></i>";
 let lastRows = [];
 function renderQueue(rows) {
+  // A guest's queue arrives wrapped — {rows, session} — so the stream knows
+  // whose it is. Unwrapped it has no .length and the list stays empty.
+  if (rows && !Array.isArray(rows)) rows = rows.rows || [];
   lastRows = rows || lastRows;
   // don't rebuild the list while a row is being dragged
   if (dragging()) return;
@@ -569,7 +572,8 @@ function connect() {
     let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
     if (m.type === "status") apply(m.data);
     else if (m.type === "queue") renderQueue(m.data);
-    else if (m.type === "toast") toast(m.data);
+    else if (m.type === "toast")
+      toast(typeof m.data === "string" ? m.data : (m.data || {}).text);
   };
   es.onerror = () => { es.close(); setTimeout(connect, 3000); };
 }

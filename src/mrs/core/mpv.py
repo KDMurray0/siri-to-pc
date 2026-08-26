@@ -94,9 +94,19 @@ def _write(handle, payload: bytes) -> None:
         _K32.CloseHandle(ev)
 
 
-def kill_stray_mpv() -> bool:
-    """Kill mpv instances belonging to THIS instance (matched by pipe name)."""
-    marker = f"mpvsocket{_SUFFIX}" if _SUFFIX else "mpvsocket"
+def kill_stray_mpv(pipe: str = "") -> bool:
+    """Kill mpv instances belonging to THIS instance (matched by pipe name).
+
+    `pipe` narrows it to one engine. Without that the marker matches both
+    mpvsocket and mpvsocket2, so retrying the crossfade engine would take the
+    main player down with it.
+    """
+    if pipe:
+        name = pipe.rsplit("\\", 1)[-1]
+        # mpvsocket must not match mpvsocket2, so anchor on a non-digit.
+        marker = name + ("" if name[-1:].isdigit() else "(?![0-9])")
+    else:
+        marker = f"mpvsocket{_SUFFIX}" if _SUFFIX else "mpvsocket"
     ps = ("Get-CimInstance Win32_Process -Filter \"Name='mpv.exe'\" | "
           f"Where-Object {{ $_.CommandLine -match '{marker}' }} | "
           "ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
@@ -149,19 +159,37 @@ class MpvClient:
         else:
             args += ["--no-config", "--media-controls=no"]
         args += (extra_args or [])
-        self.proc = subprocess.Popen(args, stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE,
-                                     creationflags=CREATE_NO_WINDOW)
-        log.info("mpv launched (pid=%s, %s)", self.proc.pid, self.pipe_name)
-
         handle = None
-        for _ in range(24):
-            time.sleep(0.4)
-            try:
-                handle = _open_pipe(self.pipe_name)
+        # Up to three goes, because the thing that beats us to the pipe is
+        # almost always an mpv orphaned by a previous run that was killed
+        # rather than closed. Windows won't let two processes own one pipe
+        # name: ours exits immediately, we connect to *theirs*, and the first
+        # thing that tidies up strays takes it away again — which reads in the
+        # log as mpv crashing in a loop and has cost hours more than once.
+        for attempt in range(3):
+            if attempt:
+                kill_stray_mpv(self.pipe_name)
+                time.sleep(1.2)
+            self.proc = subprocess.Popen(args, stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE,
+                                         creationflags=CREATE_NO_WINDOW)
+            log.info("mpv launched (pid=%s, %s)", self.proc.pid, self.pipe_name)
+            for _ in range(24):
+                time.sleep(0.4)
+                if self.proc.poll() is not None:
+                    # Ours is already gone. Whatever is answering on that pipe
+                    # isn't the process we started, so don't talk to it.
+                    log.warning("mpv exited on startup — %s was already taken",
+                                self.pipe_name)
+                    handle = None
+                    break
+                try:
+                    handle = _open_pipe(self.pipe_name)
+                    break
+                except Exception:
+                    handle = None
+            if handle:
                 break
-            except Exception:
-                handle = None
         if not handle:
             raise RuntimeError(f"mpv IPC pipe {self.pipe_name} never appeared")
 
