@@ -90,8 +90,17 @@ class PlayerService:
         self.audio.apply_all()
         dev = config.get("audio_device", "auto")
         if dev == CAST_DEVICE:
-            self._release_sound_card(True)  # a browser is the speaker
-        elif dev and dev != "auto":
+            # Booting straight back into "the phone is the speaker" sounds
+            # right and is wrong: the tab that claimed it is identified by a
+            # per-tab name that cannot survive the browser closing, so nothing
+            # can claim the sound and the machine comes up silent with the
+            # speakers deliberately let go. Start on the speakers; the phone
+            # takes it back with one tap, which is the cheaper mistake.
+            log.info("last output was a browser — starting on the speakers")
+            config.set("audio_device", "auto")
+            config.set("cast_client", "")
+            dev = "auto"
+        if dev and dev != "auto":
             self.mpv.set("audio-device", dev)
         self.queue.start()
         catalog.set_preferences(taste.preferred_artists())

@@ -256,9 +256,17 @@ def _serve_page(request: Request, name: str, key: str, token: str):
 
     if not home:
         require_key(request, key, token)
-    creds = (config.get("api_key", "")
-             if (home or is_owner(request, key)) else (token or key))
-    return templates.TemplateResponse(request, name, {"api_key": creds})
+    owner = home or is_owner(request, key)
+    creds = config.get("api_key", "") if owner else (token or key)
+    # Who this is, decided here rather than a round trip later. The page used
+    # to load neutral and ask, which left a window where its own requests went
+    # out saying the wrong thing about where they should play — and left the
+    # capsule showing whatever the markup happened to say.
+    row = getattr(request.state, "pass_row", None) or {}
+    return templates.TemplateResponse(request, name, {
+        "api_key": creds,
+        "is_guest": "0" if owner else "1",
+        "scope": "owner" if owner else (row.get("scope") or "full")})
 
 
 # ── health + events ───────────────────────────────────────────────────

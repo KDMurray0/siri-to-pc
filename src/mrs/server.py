@@ -23,7 +23,9 @@ log = get("server")
 
 
 # The port we actually ended up on, which may not be the configured one.
-runtime = {"port": None}
+# `wanted_port` is set only when those differ, so the Sharing tab can say the
+# links it's showing don't match the port the router forwards.
+runtime = {"port": None, "wanted_port": None}
 
 
 def _port_free(port: int) -> bool:
@@ -64,12 +66,27 @@ def pick_port(preferred: int) -> int:
         raise SystemExit(
             f"Music Request Server is already running on port {preferred}. "
             "Close the other copy (check the system tray) and try again.")
-    if _port_free(preferred):
-        return preferred
+    # Wait for it rather than stepping aside at the first refusal. Almost
+    # every time this port is busy it's our own previous process still letting
+    # go of it, or the socket sitting in TIME_WAIT for a few seconds — and
+    # moving means every link you've handed out, and the forward rule on the
+    # router, now point at a port nothing is listening on. That reads as a
+    # firewall problem and isn't one, so it's worth eight seconds to avoid.
+    import time as _time
+    for attempt in range(16):
+        if _port_free(preferred):
+            if attempt:
+                log.info("port %s came free after %.1fs", preferred, attempt * 0.5)
+            return preferred
+        _time.sleep(0.5)
+
     for candidate in range(preferred + 1, preferred + 21):
         if _port_free(candidate):
-            log.warning("port %s is held by another server — using %s instead",
-                        preferred, candidate)
+            log.warning("port %s is still held by something else — serving on "
+                        "%s. Links and your router's forward rule both name "
+                        "%s, so they will not reach this until it's free.",
+                        preferred, candidate, preferred)
+            runtime["wanted_port"] = preferred
             return candidate
     return preferred
 

@@ -773,9 +773,15 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 
   <div class="picker devpick" id="devpicker">
     <div class="playhere" id="playhere">
+      <!-- Which half is lit is decided by the server, not by whichever one
+           happened to be written first. Hardcoding "Phone" here meant the
+           desktop app opened saying it was playing on a phone while the
+           sound came out of the speakers, every single time. -->
       <div class="seg" id="phseg" role="tablist" aria-label="Where to play">
-        <button class="seg-b on" id="segphone" role="tab" aria-selected="true">Phone</button>
-        <button class="seg-b" id="segpc" role="tab" aria-selected="false">PC Speaker</button>
+        <button class="seg-b{% if is_guest == '1' %} on{% endif %}" id="segphone"
+                role="tab" aria-selected="{{ 'true' if is_guest == '1' else 'false' }}">Phone</button>
+        <button class="seg-b{% if is_guest != '1' %} on{% endif %}" id="segpc"
+                role="tab" aria-selected="{{ 'false' if is_guest == '1' else 'true' }}">PC Speaker</button>
       </div>
       <div class="ph-note" id="ph-note">Your own queue, out of this device</div>
     </div>
@@ -1021,6 +1027,15 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 
 <script>
 const KEY = "{{ api_key }}";
+/* Who this page is, before it asks anything.
+ *
+ * It used to load neutral and find out from /api/whoami, which left a window
+ * where its own opening requests went out saying the wrong thing about where
+ * they should play — the status fetch raced loadWhoami and could come back
+ * describing the shared player on a page that was about to become a phone.
+ * The server already knows; it says so in the html. */
+const GUEST = "{{ is_guest }}" === "1";
+const SCOPE = "{{ scope }}";
 const $ = id => document.getElementById(id);
 /* Every ordinary call sends the key as a header, where it stays out of
    browser history, access logs and Referer. */
@@ -2433,7 +2448,7 @@ document.addEventListener("click", e => {
 });
 
 /* ── what this visitor is allowed to do ──────────────────────────────── */
-let ME = { owner: true, scope: "owner", name: "", pass_id: "" };
+let ME = { owner: !GUEST, scope: SCOPE, name: "", pass_id: "" };
 
 async function loadWhoami() {
   const r = await api("/api/whoami");
@@ -2461,10 +2476,9 @@ async function loadWhoami() {
     $("ph-note").textContent = "Here, or out of the computer's speakers";
   }
   // Somebody who opened a link is on the device they want it to come out of.
-  // Starting with this off while the capsule *showed* Phone meant every
-  // request went to the shared player — the computer played it — and the
-  // PC Speaker half did nothing, because it thought it was already there.
-  if (!r.owner && !cast.on) castOn();
+  // cast.on was already true before the first request went out; this applies
+  // the rest of the mode — the classes, the hidden controls, the handlers.
+  if (!r.owner) castOn();
   return ME;
 }
 
@@ -2495,7 +2509,10 @@ let castIx = 0;
 const castLive = () => castEls[castIx];
 const castIdle = () => castEls[1 - castIx];
 const CAST_DEV = "cast:browser";
-const cast = { on: false, vid: "", tries: 0, ready: "", blocked: false };
+/* A shared link is on the device it was opened on: that is what the link
+   is for. Set here rather than after /api/whoami comes back, so the very
+   first request this page makes already says so. */
+const cast = { on: GUEST, vid: "", tries: 0, ready: "", blocked: false };
 let lastStatus = {};
 
 /* Who holds the clock.
@@ -2853,12 +2870,26 @@ castEls.forEach(el => el.addEventListener("playing", () => {
   document.body.classList.remove("waiting");
 }));
 
-/* Selected on a previous visit: we're the output, but nothing can start
-   until this page has been touched once. */
+/* Make the capsule agree with where the sound is actually coming from.
+ *
+ * The owner's page never reconciled these at all: nothing called segShow on
+ * load, so it showed whatever the markup said — which was "Phone", on a
+ * desktop app playing out of its own speakers. Now the server's answer wins,
+ * every time the page opens. */
 (async () => {
   const r = await api("/api/audio/devices");
-  if (!r || r.current !== CAST_DEV || r.cast_client !== CLIENT_ID) return;
-  castOn();
+  if (!r) return;
+  const mine = r.current === CAST_DEV && r.cast_client === CLIENT_ID;
+  if (ME.owner) {
+    // The owner has one player, so "playing here" is a fact about the whole
+    // machine and the server is the only thing that knows it.
+    if (mine && !cast.on) castOn();
+    else if (!mine && cast.on) castOff();
+    else segShow(cast.on);
+  }
+  if (!mine) return;
+  // Selected on a previous visit: we're the output, but nothing can start
+  // until this page has been touched once.
   const arm = () => {
     if (!cast.on) return;
     castUnblock();
