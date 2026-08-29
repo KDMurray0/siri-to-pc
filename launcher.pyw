@@ -819,6 +819,11 @@ def main() -> None:
         from mrs.selftest import main as selftest
         sys.exit(selftest())
 
+    # The access rules on their own, for when that's the bit you changed.
+    if "--check" in sys.argv:
+        from mrs.checks import main as checks
+        sys.exit(checks())
+
     if _singleton() is None:
         sys.exit(0)
 

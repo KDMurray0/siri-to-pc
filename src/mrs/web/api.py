@@ -187,13 +187,13 @@ async def index(request: Request, key: str = Query(default=""),
     what's on it is the credential their link exists to avoid handing over.
     """
     import socket
-    from .security import _is_local
+    from .security import is_home
 
     ip = _client_ip(request)
     offered = (token or key
                or request.headers.get("X-Music-Key")
                or request.headers.get("X-API-Key") or "")
-    home = _is_local(ip) and config.get("lan_open", True) and not offered
+    home = is_home(ip) and config.get("lan_open", True) and not offered
     if not home:
         require_key(request, key, token)
         if not is_owner(request, key):
@@ -270,7 +270,7 @@ def _serve_page(request: Request, name: str, key: str, token: str):
     everything; a shared link's token, and it can listen and nothing else.
     """
     ip = _client_ip(request)
-    from .security import _is_local
+    from .security import is_home
 
     # Someone who arrived holding a credential is judged on it, wherever they
     # are. Without this, a guest on a phone-only link who happens to be in the
@@ -279,17 +279,23 @@ def _serve_page(request: Request, name: str, key: str, token: str):
     offered = (token or key
                or request.headers.get("X-Music-Key")
                or request.headers.get("X-API-Key") or "")
-    home = _is_local(ip) and config.get("lan_open", True) and not offered
+    home = is_home(ip) and config.get("lan_open", True) and not offered
 
     if not home:
         require_key(request, key, token)
     owner = home or is_owner(request, key)
+    row = getattr(request.state, "pass_row", None) or {}
     creds = config.get("api_key", "") if owner else (token or key)
+    if not creds and row.get("id"):
+        # Authenticated by header rather than by query string, so there's no
+        # credential in the url to hand on. Rebuild the one that got them in —
+        # otherwise the page loads and then can't call anything, which is a
+        # stranger failure to debug than being turned away.
+        creds = sec.reissue_token(config.get("api_key", ""), row["id"])
     # Who this is, decided here rather than a round trip later. The page used
     # to load neutral and ask, which left a window where its own requests went
     # out saying the wrong thing about where they should play — and left the
     # capsule showing whatever the markup happened to say.
-    row = getattr(request.state, "pass_row", None) or {}
     return templates.TemplateResponse(request, name, {
         "api_key": creds,
         "is_guest": "0" if owner else "1",

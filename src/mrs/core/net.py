@@ -98,6 +98,28 @@ def port_open(port: int, timeout: float = 4.0) -> bool | None:
     ip = wan_ip()
     if not ip:
         return None
+
+    # Ask ourselves first, over the public address. Most home routers loop
+    # that back through the forward rule (hairpin NAT), so if we get our own
+    # ping signature the rule is live — decided in a few milliseconds, by us,
+    # with nobody else involved and nobody to rate-limit us. Only if that
+    # fails do we need somebody outside to try the door.
+    try:
+        url = f"{scheme()}://{ip}:{int(port)}/api/ping"
+        req = urllib.request.Request(url, headers={"User-Agent": "mrs"})
+        ctx = None
+        if scheme() == "https":
+            import ssl
+            ctx = ssl._create_unverified_context()   # our own self-signed cert
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+            if b"music-request-server" in r.read(200):
+                log.debug("port %s answered on %s — the forward rule is live",
+                          port, ip)
+                return True
+    except Exception as exc:
+        # Not a no: plenty of routers simply don't hairpin.
+        log.debug("no loopback via %s: %s", ip, exc)
+
     try:
         req = urllib.request.Request(
             f"https://ports.yougetsignal.com/check-port.php?remoteAddress={ip}"

@@ -91,8 +91,10 @@ class TasteEngine:
         try:
             state_file("liked_songs.json").write_text(
                 json.dumps(self._liked[-500:]), encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as exc:
+            # Silence here loses everything you've ever liked, and the only
+            # sign is that the list is short next time you look.
+            log.warning("couldn't save your liked songs: %s", exc)
 
     # -- recording -----------------------------------------------------
     def seed_from(self, artists: list[str]) -> int:

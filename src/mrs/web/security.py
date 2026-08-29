@@ -507,6 +507,28 @@ def _own_wan() -> str:
         return ""
 
 
+def is_home(ip: str) -> bool:
+    """Is this address actually inside the house?
+
+    Deliberately not _is_local. That one answers "should this be exempt from
+    banning" and says yes to our own public address, which is right for bans
+    and wrong for anything else: a connection arriving *from* the WAN address
+    — a router looping a forwarded port back on itself, say — is not in the
+    house, and the open-LAN rule hands out the master key.
+
+    Two different questions had one answer, and the answer was the generous
+    one. This is the strict one: loopback and genuinely private ranges only.
+    """
+    if not ip:
+        return False        # unknown is not "trusted", unlike for bans
+    if ip.startswith("172."):
+        try:
+            return 16 <= int(ip.split(".")[1]) <= 31
+        except (IndexError, ValueError):
+            return False
+    return ip.lower().startswith(_PRIVATE)
+
+
 def _is_local(ip: str) -> bool:
     """Home network addresses are never banned.
 

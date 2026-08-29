@@ -278,8 +278,12 @@ class Sessions:
         for r in rooms:
             try:
                 out |= r.queue.keep_paths()
-            except Exception:
-                pass
+            except Exception as exc:
+                # This is the list of files the cleaner must not delete. A
+                # miss here doesn't fail loudly, it deletes somebody's next
+                # track while they're listening to the one before it.
+                log.warning("couldn't ask %s what it still needs: %s",
+                            r.name, exc)
         return out
 
     def reap(self) -> int:

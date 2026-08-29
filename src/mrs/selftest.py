@@ -133,6 +133,58 @@ def run() -> int:
             raise AssertionError("failed: " + ", ".join(bad))
         return "10 routes + guest scope"
 
+    @add("the pages' javascript parses")
+    def _():
+        """A template is only parsed when somebody asks for it.
+
+        So a syntax error in three and a half thousand lines of inline script
+        ships perfectly happily and shows up as a blank player. node is
+        already a hard requirement here, so it may as well read them.
+        """
+        import re
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        node = shutil.which("node")
+        if not node:
+            return "skipped (no node)"
+        root = Path(resource_dir()) / "web" / "templates"
+        checked, bad = 0, []
+        for page in sorted(root.glob("*.html")):
+            text = page.read_text(encoding="utf-8")
+            for i, body in enumerate(re.findall(r"<script>(.*?)</script>",
+                                                text, re.S)):
+                if not body.strip():
+                    continue
+                tmp = Path(tempfile.gettempdir()) / f"mrs_{page.stem}_{i}.js"
+                tmp.write_text(body, encoding="utf-8")
+                try:
+                    r = subprocess.run([node, "--check", str(tmp)],
+                                       capture_output=True, text=True,
+                                       timeout=30)
+                    checked += 1
+                    if r.returncode != 0:
+                        first = (r.stderr or "").strip().splitlines()
+                        bad.append(f"{page.name}: {first[-1] if first else 'failed'}")
+                finally:
+                    tmp.unlink(missing_ok=True)
+        if bad:
+            raise AssertionError("; ".join(bad))
+        return f"{checked} script blocks"
+
+    @add("access rules hold")
+    def _():
+        # The whole of checks.py, folded in — every rule about who may do
+        # what, run on every build rather than whenever somebody thinks to.
+        from .checks import run
+        got = run()
+        if not got.ok:
+            raise AssertionError(f"{len(got.failed)} failed: "
+                                 + "; ".join(got.failed[:4]))
+        return f"{got.passed} checks"
+
     @add("yt-dlp and mpv are on PATH")
     def _():
         import shutil
