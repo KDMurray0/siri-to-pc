@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
-import threading
-
 import socket
+import subprocess
+import threading
+from pathlib import Path
 
 from .config import config
 from .core import cookies as cookie_mod
@@ -25,7 +27,7 @@ log = get("server")
 # The port we actually ended up on, which may not be the configured one.
 # `wanted_port` is set only when those differ, so the Sharing tab can say the
 # links it's showing don't match the port the router forwards.
-runtime = {"port": None, "wanted_port": None}
+runtime = {"port": None, "wanted_port": None, "error": ""}
 
 
 def _port_free(port: int) -> bool:
@@ -91,16 +93,110 @@ def pick_port(preferred: int) -> int:
     return preferred
 
 
+# What the app cannot do its job without, and what setup.ps1 calls each one.
+TOOLS = (
+    ("mpv", True, "plays the audio"),
+    ("yt-dlp", True, "fetches it"),
+    ("node", False, "YouTube returns no audio formats without it"),
+)
+
+
+def missing_tools() -> list[str]:
+    """Which of the outside pieces aren't here."""
+    return [name for name, _fatal, _why in TOOLS if not shutil.which(name)]
+
+
 def preflight() -> list[str]:
     """Check the outside world. Returns a list of fatal problems."""
     problems = []
-    if not shutil.which("mpv"):
-        problems.append("mpv is not on PATH — run setup.ps1")
-    if not shutil.which("yt-dlp"):
-        problems.append("yt-dlp is not on PATH — run setup.ps1")
-    if not shutil.which("node"):
-        log.warning("Node.js missing — YouTube will return no audio formats")
+    for name, fatal, why in TOOLS:
+        if shutil.which(name):
+            continue
+        if fatal:
+            problems.append(f"{name} is not on PATH — it {why}")
+        else:
+            log.warning("%s missing — %s", name, why)
     return problems
+
+
+def setup_script() -> str:
+    """Where setup.ps1 is, whether we're frozen or running from source.
+
+    Beside the exe first, because that's the copy someone may have edited,
+    then the one packed into the bundle — which exists precisely so a deleted
+    or moved script can't leave the app with no way to fix itself.
+    """
+    import sys
+    from .paths import resource_dir
+
+    here = Path(sys.executable).parent if getattr(sys, "frozen", False) else None
+    roots = [here] if here else []
+    roots += [Path(resource_dir()), Path(__file__).resolve().parents[2]]
+    for root in roots:
+        try:
+            got = root / "setup.ps1"
+            if got.is_file():
+                return str(got)
+        except Exception:
+            continue
+    return ""
+
+
+def repair(missing: list[str]) -> bool:
+    """Hand the missing pieces to setup.ps1 and wait for it.
+
+    The alternative — which is what used to happen — is that the app exits
+    with a line in a log file nobody opens, and the tray launcher then puts a
+    window on screen pointing at a server that isn't running. A visible
+    console that says what it's installing is worth a great deal more.
+
+    Only the missing ones are named, so this doesn't reinstall a working mpv
+    or walk back through the cookie setup to fix a missing Node.
+    """
+    script = setup_script()
+    if not script:
+        log.error("setup.ps1 isn't next to the app — install %s by hand",
+                  ", ".join(missing))
+        return False
+    log.warning("missing %s — running setup to fetch just those",
+                ", ".join(missing))
+    cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+           "-File", script, "-Repair", ",".join(missing)]
+    try:
+        # A new console, because this is a windowed app and the whole point is
+        # that you can see it working.
+        CREATE_NEW_CONSOLE = 0x00000010
+        subprocess.run(cmd, timeout=900, creationflags=CREATE_NEW_CONSOLE)
+    except Exception as exc:
+        log.error("couldn't run setup: %s", exc)
+        return False
+    # winget puts things on PATH for *new* processes; ours already started.
+    _reload_path()
+    still = missing_tools()
+    fixed = [m for m in missing if m not in still]
+    if fixed:
+        log.info("setup installed %s", ", ".join(fixed))
+    return not [m for m in still if any(
+        m == name and fatal for name, fatal, _ in TOOLS)]
+
+
+def _reload_path() -> None:
+    """Pick up what winget just added, without making anyone restart."""
+    try:
+        import winreg
+        parts = []
+        for hive, key in ((winreg.HKEY_LOCAL_MACHINE,
+                           r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+                          (winreg.HKEY_CURRENT_USER, "Environment")):
+            try:
+                with winreg.OpenKey(hive, key) as k:
+                    parts.append(winreg.QueryValueEx(k, "Path")[0])
+            except OSError:
+                pass
+        if parts:
+            os.environ["PATH"] = os.pathsep.join(parts + [os.environ.get("PATH", "")])
+    except Exception as exc:
+        log.debug("couldn't reload PATH: %s", exc)
 
 
 def be_polite(quiet: bool = False) -> None:
@@ -154,10 +250,19 @@ def startup() -> None:
     log.info("data directory: %s", data_dir())
 
     problems = preflight()
-    for p in problems:
-        log.error(p)
     if problems:
-        raise SystemExit(1)
+        # Don't just die with a line in a log file. Everything it needs is one
+        # winget install away, and the script that does it ships alongside.
+        for p in problems:
+            log.error(p)
+        if not repair(missing_tools()):
+            for p in preflight():
+                log.error("still missing after setup: %s", p)
+            raise SystemExit(
+                "Music Request Server needs mpv and yt-dlp. Setup ran but "
+                "couldn't install them — run setup.ps1 by hand and check "
+                "setup-log.txt.")
+        log.info("setup finished — carrying on")
 
     try:
         catalog.validate()
@@ -178,6 +283,7 @@ def startup() -> None:
     # If they connected Last.fm at some point, borrow what it knows.
     spawn(scrobbler.maybe_seed_taste, name="lastfm seed")
 
+    cookie_mod.settle_path()
     if not downloader.have_cookies():
         log.warning("no cookies configured — YouTube will refuse downloads")
     cookie_mod.start_watch()
@@ -238,9 +344,15 @@ def run_in_thread(port: int | None = None) -> threading.Thread:
     def target() -> None:
         try:
             run()
-        except SystemExit:
-            pass
-        except Exception:
+        except SystemExit as exc:
+            # Keep the reason. Swallowing it meant the launcher had nothing to
+            # show but a guess, and the guess was wrong — "nothing obvious is
+            # missing" when what actually happened was "another copy of this
+            # is already running on that port".
+            runtime["error"] = str(exc) or "the server stopped during startup"
+            log.error("server did not start: %s", runtime["error"])
+        except Exception as exc:
+            runtime["error"] = f"{type(exc).__name__}: {exc}"
             log.exception("server crashed")
 
     t = threading.Thread(target=target, daemon=True, name="server")

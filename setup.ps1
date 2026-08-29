@@ -24,7 +24,12 @@
 param(
     [switch]$SkipCookies,
     [ValidateSet("chrome","edge","firefox","brave","vivaldi","opera","chromium")]
-    [string]$CookieBrowser
+    [string]$CookieBrowser,
+    # Fetch only these, then stop. The app calls this itself when it starts
+    # and finds something missing, naming exactly what it couldn't find — so
+    # a missing Node doesn't reinstall mpv or walk back through the cookie
+    # setup. Comma-separated: "mpv,yt-dlp,node".
+    [string]$Repair
 )
 
 # Native exes (pip, yt-dlp, winget) write progress to stderr. With EAP=Stop that
@@ -82,14 +87,53 @@ function Invoke-YtdlpCheck([string[]]$authArgs) {
     return @{ result="fail"; text=$out }
 }
 
+$TOOLS = @{
+    "mpv"    = @{ id = "shinchiro.mpv";     label = "mpv" }
+    "yt-dlp" = @{ id = "yt-dlp.yt-dlp";     label = "yt-dlp" }
+    "node"   = @{ id = "OpenJS.NodeJS.LTS"; label = "Node.js" }
+}
+
 try {
+
+# -- 0. repair -------------------------------------------------------
+# Named tools only, then out. No pip, no config, no cookies — those are all
+# either already done or not what's broken.
+if ($Repair) {
+    Write-Host ""
+    Write-Host "Music Request Server - fetching what's missing" -ForegroundColor Cyan
+    $want = $Repair -split "[,;\s]+" | Where-Object { $_ }
+    $bad = @()
+    foreach ($name in $want) {
+        $t = $TOOLS[$name]
+        if (-not $t) { Warn "don't know how to install '$name'"; continue }
+        # Coerced: a stray line of output from a helper would otherwise
+        # make this an array, and an array is always truthy.
+        $got = [bool]((Install-Tool $name $t.id $t.label) | Select-Object -Last 1)
+        if (-not $got) { $bad += $t.label }
+    }
+    Write-Host ""
+    if ($bad) {
+        Fail ("couldn't install: " + ($bad -join ", "))
+        Info "Log: $LOG"
+        Write-Host ""
+        Write-Host "Press any key to close..." -ForegroundColor Gray
+        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        exit 1
+    }
+    Ok "all set - the player is starting"
+    Start-Sleep -Seconds 2
+    exit 0
+}
 
 # -- 1. tools ---------------------------------------------------------
 Step "Prerequisites"
-$null   = Install-Tool "mpv"    "shinchiro.mpv"     "mpv"
-$null   = Install-Tool "yt-dlp" "yt-dlp.yt-dlp"     "yt-dlp"
-$okNode = Install-Tool "node"   "OpenJS.NodeJS.LTS" "Node.js"
-if (-not $okNode) { Warn "Without Node, YouTube returns no audio formats at all." }
+foreach ($name in @("mpv", "yt-dlp", "node")) {
+    $t = $TOOLS[$name]
+    $got = [bool]((Install-Tool $name $t.id $t.label) | Select-Object -Last 1)
+    if ($name -eq "node" -and -not $got) {
+        Warn "Without Node, YouTube returns no audio formats at all."
+    }
+}
 
 # -- 2. python packages (source runs only; the .exe bundles them) -----
 Step "Python packages"

@@ -874,6 +874,16 @@ def api_playlist(op: str, name: str = "", shuffle: bool = False,
 _GUEST_SETTINGS = ("theme", "show_visualiser", "eq_presets",
                    "party_mode", "block_full_guests")
 
+# What each outside tool is actually for, in words that mean something to
+# somebody who has just unzipped this and doesn't know what yt-dlp is.
+_TOOL_INFO = (
+    ("mpv", True, "Plays the audio. Without it nothing makes a sound."),
+    ("yt-dlp", True, "Fetches the audio from YouTube. Without it there's "
+                     "nothing to play."),
+    ("node", False, "YouTube's player needs a JavaScript engine to hand over "
+                    "audio formats. Without it every download comes back empty."),
+)
+
 
 @app.get("/api/settings")
 def api_settings(request: Request, _: bool = Auth):
@@ -1016,6 +1026,81 @@ def api_audio_device(request: Request, name: str = "auto", client: str = "",
     if _pass_scope(request) == "phone" and name != CAST_DEVICE:
         raise HTTPException(403, "That link plays on your own device only")
     return {"status": "ok", **player.set_audio_device(name, client=client)}
+
+
+# ── the first-run guide ───────────────────────────────────────────────
+
+@app.get("/welcome", response_class=HTMLResponse)
+async def welcome_page(request: Request, key: str = Query(default=""),
+                       token: str = Query(default="")):
+    """What all this is, before you're asked to decide anything about it."""
+    return _serve_page(request, "welcome.html", key, token)
+
+
+@app.get("/api/setup/state")
+def api_setup_state(_: bool = Owner):
+    """Everything the guide needs to say where you're up to.
+
+    One call rather than six, because every one of these is a status dot on
+    the same screen and they should never be able to disagree with each other.
+    """
+    from ..core import net
+    from ..server import missing_tools
+
+    gone = missing_tools()
+    ck = dict(cookie_mod.state)
+    return {
+        "status": "ok",
+        "done": bool(config.get("setup_done")),
+        "tools": [{"name": name, "have": name not in gone, "needed": fatal,
+                   "why": why}
+                  for name, fatal, why in _TOOL_INFO],
+        "missing": gone,
+        "cookies": {"ok": ck.get("ok"), "source": ck.get("source", ""),
+                    "message": ck.get("message", ""),
+                    "checking": bool(ck.get("checking"))},
+        "groq": bool(config.get("groq_api_key")),
+        "lastfm": bool(config.get("lastfm_session")),
+        "spotify": spotify.available(),
+        "announce": bool(config.get("announce", True)),
+        "key_set": bool(config.get("api_key")),
+        "port": net.live_port(),
+        "release": __version__,
+    }
+
+
+@app.get("/api/setup/tools")
+def api_setup_tools(_: bool = Owner):
+    """Fetch whatever's missing, and nothing else.
+
+    Runs the same repair path the app uses when it starts and finds a gap —
+    a visible console, only the named tools, no cookie dance and no config
+    rewrite for something that isn't broken.
+    """
+    from ..server import missing_tools, repair, setup_script
+
+    gone = missing_tools()
+    if not gone:
+        return {"status": "ok", "installed": [], "missing": [],
+                "message": "Everything's already here"}
+    if not setup_script():
+        return {"status": "error",
+                "message": "setup.ps1 isn't next to the app — install "
+                           + ", ".join(gone) + " by hand"}
+    repair(gone)
+    still = missing_tools()
+    got = [g for g in gone if g not in still]
+    return {"status": "ok", "installed": got, "missing": still,
+            "message": ("Installed " + ", ".join(got) if got else
+                        "Nothing installed — see setup-log.txt")
+                       + (f". Still missing: {', '.join(still)}" if still else "")}
+
+
+@app.get("/api/setup/done")
+def api_setup_done(done: int = 1, _: bool = Owner):
+    """Stop opening by itself. Reopenable from Settings whenever."""
+    config.set("setup_done", bool(done))
+    return {"status": "ok", "done": bool(done)}
 
 
 @app.get("/api/whoami")
@@ -1404,15 +1489,27 @@ def api_cookies_extension(_: bool = Auth):
 
 @app.get("/api/cookies/signedin")
 def api_cookies_signedin(saved: int = 0, _: bool = Auth):
-    """The sign-in window finished. Say so, rather than just vanishing."""
-    state = cookie_mod.find_now(close_browsers=False)
-    if saved and state.get("ok"):
+    """The sign-in window finished. Say so, rather than just vanishing.
+
+    Checks, and only checks. This used to call find_now(), which on a failed
+    check goes rummaging through the browsers and writes whatever it finds
+    over the master file — so a successful sign-in could be overwritten by
+    the very thing it exists to work around, seconds after it happened.
+    """
+    ok, why = cookie_mod.check()
+    cookie_mod.state.update(ok=ok, checked_at=time.time(),
+                            message="ok" if ok else why,
+                            source="signed in" if ok else cookie_mod.state.get("source", ""))
+    if saved and ok:
         bus.publish(Ev.TOAST, f"Signed in — {saved} cookies saved")
     elif saved:
-        bus.publish(Ev.TOAST, f"Saved {saved} cookies, but they don't work yet")
+        # Distinguish "these cookies are no good" from "something else is
+        # wrong": the two have completely different fixes, and calling a
+        # player-client problem a cookie problem sends you round in circles.
+        bus.publish(Ev.TOAST, f"Saved {saved} cookies — but {why}")
     else:
         bus.publish(Ev.TOAST, "Sign-in finished without any YouTube cookies")
-    return {"status": "ok", **state, "saved": saved}
+    return {"status": "ok", "ok": ok, "message": why, "saved": saved}
 
 
 @app.get("/api/cookies/import")

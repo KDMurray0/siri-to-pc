@@ -39,6 +39,11 @@ SHUFFLE_BUFFER = 3
 # file it never fetched. Every one of those showed up in the list as
 # "bTE8texJH7g.webm", because the only fallback was the filename.
 _KNOWN: dict[str, Track] = {}
+# The same tracks again, keyed by video id. Paths are a fragile key: pinning
+# copies a file somewhere else, a cache move renames it, and mpv is free to
+# hand a playlist entry back in a form that isn't character-for-character
+# what it was given. The id survives all of that, and it's in the filename.
+_KNOWN_ID: dict[str, Track] = {}
 _KNOWN_LOCK = threading.Lock()
 _KNOWN_MAX = 4000
 
@@ -48,14 +53,27 @@ def remember(path: str, track: Track) -> None:
         return
     with _KNOWN_LOCK:
         _KNOWN[path] = track
+        if track.video_id:
+            _KNOWN_ID[track.video_id] = track
         if len(_KNOWN) > _KNOWN_MAX:
             for old in list(_KNOWN)[:len(_KNOWN) - _KNOWN_MAX]:
                 _KNOWN.pop(old, None)
+        if len(_KNOWN_ID) > _KNOWN_MAX:
+            for old in list(_KNOWN_ID)[:len(_KNOWN_ID) - _KNOWN_MAX]:
+                _KNOWN_ID.pop(old, None)
 
 
 def recall(path: str) -> Track | None:
+    """Whatever we know about this file, by path and then by id."""
     with _KNOWN_LOCK:
-        return _KNOWN.get(path)
+        got = _KNOWN.get(path)
+        if got:
+            return got
+    vid = _vid_from(path)
+    if not vid:
+        return None
+    with _KNOWN_LOCK:
+        return _KNOWN_ID.get(vid)
 
 
 def _vid_from(path: str) -> str:
@@ -808,9 +826,13 @@ class QueueManager:
         out = []
         for i, entry in enumerate(pl):
             path = entry.get("filename", "")
-            # Mine first, then anyone's. Falling straight through to the
-            # filename is what put "bTE8texJH7g.webm" in the list.
+            # Mine first, then anyone's, by path and then by the id in the
+            # filename. Falling straight through put "bTE8texJH7g.webm" in
+            # the list; falling through to "Loading…" is better but still a
+            # row nobody can read, so say so in the log when it happens.
             tr = self._meta.get(path) or recall(path)
+            if tr is None and path:
+                log.debug("no metadata for queue entry %s", path)
             out.append({
                 "index": i,
                 "current": bool(entry.get("current")),

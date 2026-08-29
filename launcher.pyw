@@ -61,12 +61,14 @@ from pystray import Icon as TrayIcon
 from pystray import Menu, MenuItem
 
 from mrs.config import config
-from mrs.logging_setup import get
+from mrs.logging_setup import get, log_path
 from mrs import server as srv
 
 log = get("launcher")
 
 U32 = ctypes.windll.user32
+U32.MessageBoxW.argtypes = [wintypes.HWND, wintypes.LPCWSTR,
+                            wintypes.LPCWSTR, wintypes.UINT]
 U32.GetWindowLongW.restype = ctypes.c_long
 U32.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
 U32.SetWindowLongW.restype = ctypes.c_long
@@ -778,7 +780,32 @@ def main() -> None:
             break
         time.sleep(0.5)
     if not _wait_for_server(port):
+        # Opening a window onto a server that isn't there is how this used to
+        # look like the app "just died". Say what's wrong instead — by now
+        # startup has already tried to install anything missing, so if we're
+        # here it needs a person.
         log.error("server did not come up — see the log")
+        # Say what actually happened. Guessing produced "nothing obvious is
+        # missing" for a server that had refused to start because another copy
+        # was already running on the port, which helps nobody.
+        why = srv.runtime.get("error") or ""
+        missing = ", ".join(srv.missing_tools())
+        if why:
+            msg = f"Music Request Server couldn't start.\n\n{why}"
+        elif missing:
+            msg = (f"Music Request Server couldn't start.\n\n"
+                   f"Missing: {missing}\n\nSetup ran but couldn't install "
+                   f"{'them' if ',' in missing else 'it'}. Run setup.ps1 next "
+                   f"to the app, then try again.")
+        else:
+            msg = ("Music Request Server couldn't start.\n\n"
+                   "Nothing obvious is missing, so the log has the detail:\n"
+                   f"{log_path()}")
+        try:
+            U32.MessageBoxW(None, msg, TITLE, 0x10)   # MB_ICONERROR
+        except Exception:
+            pass
+        os._exit(1)
 
     sw = U32.GetSystemMetrics(0)
     sh = U32.GetSystemMetrics(1)
@@ -787,9 +814,14 @@ def main() -> None:
     hidden = "--hidden" in sys.argv
     flyout = Flyout()
     flyout._visible = not hidden
+    # First run opens the guide instead of the player. It explains what the
+    # three tools are for, what the key is as against a shared link, and which
+    # of the optional services are worth having — then hands over. Every step
+    # of it is skippable, and it stops appearing once it's been through.
+    landing = "player" if config.get("setup_done") else "welcome"
     flyout.window = webview.create_window(
         TITLE,
-        url=f"http://127.0.0.1:{port}/player?key={config.get('api_key','')}",
+        url=f"http://127.0.0.1:{port}/{landing}?key={config.get('api_key','')}",
         js_api=Bridge(), frameless=True, easy_drag=False, on_top=True,
         resizable=False, width=Flyout.W, height=Flyout.H, x=x, y=y,
         # pywebview defaults this to (200, 100), so the 80px idle bar was

@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Music Request — first run</title>
+<style>
+:root{
+  --bg:#0e0f16; --card:#161822; --line:#242736; --fg:#eef0f6; --sub:#9aa0b4;
+  --accent:#c98b5e; --accent-ink:#161010;
+  --ok:#5fb3a4; --warn:#d69a3c; --bad:#d9614e;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-size:15px;line-height:1.6;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:640px;margin:0 auto;padding:34px 20px 90px}
+
+h1{font-size:26px;line-height:1.2;margin:0 0 6px;letter-spacing:-.02em}
+h2{font-size:19px;margin:0 0 4px;letter-spacing:-.01em}
+p{margin:0 0 12px;color:var(--sub)}
+p.lead{color:var(--fg);font-size:16px}
+b{color:var(--fg);font-weight:600}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.88em;
+  background:#0a0b11;border:1px solid var(--line);border-radius:5px;padding:.1em .4em}
+
+/* progress along the top, so it's obvious this ends */
+.rail{display:flex;gap:5px;margin-bottom:26px}
+.rail i{flex:1;height:3px;border-radius:2px;background:var(--line);transition:background .25s}
+.rail i.on{background:var(--accent)}
+.rail i.past{background:color-mix(in srgb,var(--accent) 45%,var(--line))}
+
+.step{display:none;animation:in .22s ease}
+.step.on{display:block}
+@keyframes in{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+
+.eyebrow{font-size:11px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--accent);font-weight:600;margin-bottom:8px}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:15px 16px;margin:12px 0}
+.card h3{margin:0 0 3px;font-size:15px;display:flex;align-items:center;gap:9px}
+.card p{margin:0;font-size:13.5px}
+.card .foot{margin-top:11px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+
+.dot{width:9px;height:9px;border-radius:50%;background:var(--line);flex:0 0 auto}
+.dot.ok{background:var(--ok)}
+.dot.warn{background:var(--warn)}
+.dot.bad{background:var(--bad)}
+.tagline{margin-left:auto;font-size:11.5px;color:var(--sub);font-weight:500}
+
+.btn{background:#20232f;border:1px solid var(--line);color:var(--fg);
+  border-radius:9px;padding:8px 14px;font:inherit;font-size:13.5px;cursor:pointer;
+  transition:background .15s,border-color .15s}
+.btn:hover{background:#282c3b}
+.btn:disabled{opacity:.5;cursor:default}
+.btn.go{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+.btn.go:hover{background:#d89a6d;border-color:#d89a6d}
+.btn.quiet{background:none;border-color:transparent;color:var(--sub);padding-left:4px}
+.btn.quiet:hover{color:var(--fg);background:none}
+
+.nav{display:flex;gap:10px;align-items:center;margin-top:26px;
+  padding-top:18px;border-top:1px solid var(--line)}
+.nav .spacer{flex:1}
+
+.note{border-left:3px solid var(--accent);background:color-mix(in srgb,var(--accent) 7%,transparent);
+  border-radius:0 9px 9px 0;padding:11px 14px;margin:14px 0;font-size:13.5px;color:var(--sub)}
+.note b{color:var(--fg)}
+
+.linkbox{background:#0a0b11;border:1px solid var(--line);border-radius:9px;
+  padding:11px 13px;margin:12px 0;font-family:ui-monospace,Consolas,monospace;
+  font-size:12px;word-break:break-all;color:var(--sub)}
+.busy{display:inline-block;width:12px;height:12px;border:2px solid var(--line);
+  border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;
+  vertical-align:-2px;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+#say{min-height:20px;font-size:13px;color:var(--sub);margin-top:10px}
+ul{margin:0 0 12px;padding-left:20px;color:var(--sub)}
+li{margin-bottom:5px}
+li b{color:var(--fg)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="rail" id="rail"></div>
+
+  <!-- 1 ─────────────────────────────────────────────────────────── -->
+  <section class="step on" data-step="0">
+    <div class="eyebrow">Music Request <span id="rel"></span></div>
+    <h1>Ask for music. It works out the rest.</h1>
+    <p class="lead">Type or say the name of a song, a band, an album or a mood.
+      It finds it, plays it, and keeps the queue going on its own.</p>
+    <p>This takes about a minute. Everything in it is optional except the first
+      step, and you can change any of it later in Settings.</p>
+    <div class="note">
+      <b>Nothing here is sent anywhere.</b> Your music, your history and your
+      settings live in a folder on this PC. The only things that leave the
+      machine are the searches and downloads themselves.
+    </div>
+  </section>
+
+  <!-- 2 ─────────────────────────────────────────────────────────── -->
+  <section class="step" data-step="1">
+    <div class="eyebrow">Step 1 of 4 · Required</div>
+    <h1>Three programs do the actual work</h1>
+    <p>This app is the part that decides <em>what</em> to play. Three
+      well-known open-source tools do the playing and fetching, and they're
+      installed with <code>winget</code>, which comes with Windows.</p>
+    <div id="tools"></div>
+    <div class="foot" style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
+      <button class="btn go" id="fix">Install what's missing</button>
+      <button class="btn quiet" id="recheck">Check again</button>
+    </div>
+    <div id="say"></div>
+    <div class="note" id="toolnote" style="display:none">
+      <b>Only the missing ones are downloaded.</b> Anything already on your PC
+      is left exactly as it is.
+    </div>
+  </section>
+
+  <!-- 3 ─────────────────────────────────────────────────────────── -->
+  <section class="step" data-step="2">
+    <div class="eyebrow">Step 2 of 4 · Recommended</div>
+    <h1>Signing in to YouTube</h1>
+    <p>YouTube increasingly refuses to hand audio to anything that doesn't look
+      like a signed-in browser. Without this, some songs download fine and
+      others fail with "sign in to confirm you're not a bot".</p>
+    <div class="card">
+      <h3><span class="dot" id="ckdot"></span> YouTube session
+        <span class="tagline" id="cktag">not checked</span></h3>
+      <p>A copy of the session cookies from a browser you're already signed in
+        with. It stays on this PC, it's never sent anywhere except back to
+        YouTube, and you can delete it whenever you like.</p>
+      <div class="foot">
+        <button class="btn" id="cktest">Check what I've got</button>
+      </div>
+    </div>
+    <p>If it isn't working, open <b>Settings → Access</b> after this and pick
+      <b>Sign in</b> — it opens a normal Google login and keeps the result.</p>
+    <div class="note">
+      <b>Happy to skip it?</b> Plenty plays without it. Come back when
+      something refuses to download.
+    </div>
+  </section>
+
+  <!-- 4 ─────────────────────────────────────────────────────────── -->
+  <section class="step" data-step="3">
+    <div class="eyebrow">Step 3 of 4 · Optional</div>
+    <h1>Extras, all of them skippable</h1>
+    <p>None of these are needed. Each one is off until you turn it on, and
+      each says plainly what it wants.</p>
+
+    <div class="card">
+      <h3><span class="dot" id="groqdot"></span> Groq key
+        <span class="tagline">free tier · better dictation</span></h3>
+      <p>Reads messy phrasing — "put on that one by the bloke from Oasis" —
+        and turns it into a search. There's a local parser that handles the
+        ordinary cases perfectly well without it. A key is free from
+        <b>console.groq.com</b>; it's stored on this PC and used only to
+        interpret what you asked for.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="dot" id="lfmdot"></span> Last.fm
+        <span class="tagline">scrobbling</span></h3>
+      <p>Records what you play to your Last.fm profile, and borrows your top
+        artists once to give the radio a head start. Connect it and it asks
+        Last.fm for permission in the normal way — this app never sees your
+        password. Only what plays on <em>this</em> computer is scrobbled;
+        guests on shared links never are.</p>
+    </div>
+
+    <div class="card">
+      <h3><span class="dot" id="spotdot"></span> Spotify links
+        <span class="tagline">playlist import</span></h3>
+      <p>Paste a Spotify or Apple Music playlist link into the search box and
+        it matches the tracks up and plays them. Needs no account and no key —
+        it only reads public playlists.</p>
+    </div>
+
+    <div class="note">
+      Turn any of these on later in <b>Settings → Extras</b>. Nothing here
+      stops the app working.
+    </div>
+  </section>
+
+  <!-- 5 ─────────────────────────────────────────────────────────── -->
+  <section class="step" data-step="4">
+    <div class="eyebrow">Step 4 of 4 · Worth reading</div>
+    <h1>Your key, and the links you hand out</h1>
+    <p>There are two different credentials here and it's worth thirty seconds
+      to know which is which.</p>
+    <ul>
+      <li><b>The key</b> is the master password for this server. It was
+        generated on this PC when you first ran the app and it never leaves
+        it. It's what the desktop player and your iPhone Shortcut use.</li>
+      <li><b>A link</b> is something else: a signed pass that says <em>who</em>
+        and <em>for how long</em>. Handing someone a link never hands them the
+        key, and you can take any link back on its own without affecting
+        anything else.</li>
+    </ul>
+    <div class="note">
+      <b>Links are how other people listen.</b> Make one in
+      <b>Settings → Sharing</b>. Choose <em>their phone only</em> and it plays
+      on their device and nowhere else; choose <em>any speaker</em> and they
+      can also drive this computer. Either way they get their own queue and
+      never see your history.
+    </div>
+    <p>Three wrong guesses from one address earns a 24-hour ban, links can be
+      set to expire, and there's a red <b>Revoke all</b> button at the top of
+      the Sharing tab for when you want everything back at once.</p>
+    <div class="linkbox" id="reach">Working out how to reach this player…</div>
+  </section>
+
+  <!-- 6 ─────────────────────────────────────────────────────────── -->
+  <section class="step" data-step="5">
+    <div class="eyebrow">All set</div>
+    <h1>Ask it for something</h1>
+    <p class="lead">Type a song, a band, an album or a vibe into the box at the
+      top of the player. "Something like Radiohead", "the new Fontaines album",
+      "quiet stuff for working" all work.</p>
+    <ul>
+      <li><b>Settings → Sharing</b> — links for other people, and who's
+        listening right now.</li>
+      <li><b>Settings → Access</b> — YouTube sign-in, if something won't play.</li>
+      <li><b>Settings → System</b> — this guide again, any time.</li>
+    </ul>
+  </section>
+
+  <div class="nav">
+    <button class="btn" id="back" style="visibility:hidden">Back</button>
+    <div class="spacer"></div>
+    <button class="btn quiet" id="skip">Skip the guide</button>
+    <button class="btn go" id="next">Get started</button>
+  </div>
+</div>
+
+<script>
+const KEY = "{{ api_key }}";
+const $ = id => document.getElementById(id);
+const api = p => fetch(p, { headers: { "X-Music-Key": KEY } })
+  .then(r => r.json()).catch(() => null);
+
+const STEPS = document.querySelectorAll(".step");
+const LAST = STEPS.length - 1;
+let at = 0;
+
+/* The rail is built from the steps themselves, so adding one can't leave it
+   out of step with the dots above it. */
+$("rail").innerHTML = Array.from(STEPS).map(() => "<i></i>").join("");
+const pips = $("rail").querySelectorAll("i");
+
+function show(n) {
+  at = Math.max(0, Math.min(LAST, n));
+  STEPS.forEach((s, i) => s.classList.toggle("on", i === at));
+  pips.forEach((p, i) => {
+    p.classList.toggle("on", i === at);
+    p.classList.toggle("past", i < at);
+  });
+  $("back").style.visibility = at ? "visible" : "hidden";
+  $("next").textContent = at === 0 ? "Get started"
+                        : at === LAST ? "Open the player" : "Next";
+  $("skip").style.display = at === LAST ? "none" : "";
+  window.scrollTo({ top: 0, behavior: "instant" });
+  if (at === 4) loadReach();
+}
+
+$("next").onclick = () => (at === LAST ? finish() : show(at + 1));
+$("back").onclick = () => show(at - 1);
+$("skip").onclick = finish;
+
+async function finish() {
+  await api("/api/setup/done?done=1");
+  location.href = "/player";
+}
+
+/* ── step 1: the tools ─────────────────────────────────────────── */
+function paintTools(s) {
+  $("tools").innerHTML = (s.tools || []).map(t => {
+    const cls = t.have ? "ok" : (t.needed ? "bad" : "warn");
+    const tag = t.have ? "installed" : (t.needed ? "required" : "strongly advised");
+    return `<div class="card"><h3><span class="dot ${cls}"></span>${t.name}` +
+           `<span class="tagline">${tag}</span></h3><p>${t.why}</p></div>`;
+  }).join("");
+  const gone = (s.missing || []).length;
+  $("fix").disabled = !gone;
+  $("fix").textContent = gone ? `Install ${s.missing.join(" and ")}`
+                              : "Everything's here";
+  $("toolnote").style.display = gone ? "" : "none";
+}
+
+$("fix").onclick = async () => {
+  $("fix").disabled = true;
+  $("say").innerHTML = '<span class="busy"></span>Installing — a window will ' +
+                       'open showing what it\'s doing.';
+  const r = await api("/api/setup/tools");
+  $("say").textContent = (r && r.message) || "That didn't work — see setup-log.txt";
+  refresh();
+};
+$("recheck").onclick = () => { $("say").textContent = ""; refresh(); };
+
+/* ── step 2: cookies ───────────────────────────────────────────── */
+function paintCookies(s) {
+  const c = s.cookies || {};
+  const dot = $("ckdot"), tag = $("cktag");
+  dot.className = "dot " + (c.ok === true ? "ok" : c.ok === false ? "bad" : "");
+  tag.textContent = c.checking ? "checking…"
+    : c.ok === true ? ("working" + (c.source ? " · " + c.source : ""))
+    : c.ok === false ? (c.message || "not working")
+    : "not checked yet";
+}
+$("cktest").onclick = async () => {
+  $("cktest").disabled = true;
+  $("cktag").textContent = "checking…";
+  await api("/api/cookies/find");
+  setTimeout(() => { $("cktest").disabled = false; refresh(); }, 2500);
+};
+
+/* ── step 3: extras ────────────────────────────────────────────── */
+function paintExtras(s) {
+  $("groqdot").className = "dot " + (s.groq ? "ok" : "");
+  $("lfmdot").className = "dot " + (s.lastfm ? "ok" : "");
+  $("spotdot").className = "dot " + (s.spotify ? "ok" : "");
+}
+
+/* ── step 4: how to reach it ───────────────────────────────────── */
+async function loadReach() {
+  const r = await api("/api/network");
+  if (!r || !r.addresses) { $("reach").textContent = "Couldn't work that out."; return; }
+  $("reach").innerHTML = r.addresses.map(a =>
+    `${a.label}: ${a.host}:${r.port}`).join("<br>") +
+    (r.port_moved ? `<br><br>Note: running on ${r.port}, not the ` +
+                    `${r.configured_port} your settings say.` : "");
+}
+
+/* ── state ─────────────────────────────────────────────────────── */
+async function refresh() {
+  const s = await api("/api/setup/state");
+  if (!s || s.status !== "ok") {
+    $("tools").innerHTML = '<div class="card"><p>Couldn\'t read the setup ' +
+      'state — this page needs to be opened from the app itself.</p></div>';
+    return;
+  }
+  $("rel").textContent = s.release ? "v" + s.release : "";
+  paintTools(s); paintCookies(s); paintExtras(s);
+}
+refresh();
+show(0);
+</script>
+</body>
+</html>

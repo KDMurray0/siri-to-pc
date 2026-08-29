@@ -12,7 +12,11 @@ Build:  pyinstaller --noconfirm MusicRequestServer.spec
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
 # Templates are loaded via mrs.paths.resource_dir() -> _MEIPASS/web/templates
-datas = [('src/mrs/web/templates', 'web/templates')]
+# setup.ps1 rides along so the app can repair itself when mpv or yt-dlp have
+# gone missing, even if the copy beside the exe was deleted or never unzipped.
+datas = [('src/mrs/web/templates', 'web/templates'),
+         ('setup.ps1', '.'),
+         ('config.example.json', '.')]
 binaries = []
 hiddenimports = [
     'clr', 'pystray._win32',

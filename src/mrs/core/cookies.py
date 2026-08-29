@@ -118,6 +118,40 @@ def ensure_session() -> str:
     return str(session)
 
 
+def settle_path() -> None:
+    """Keep the cookie master in the data directory, where it belongs.
+
+    setup.ps1 records whatever path it used, which on a source checkout is the
+    repo folder. That path then outlives the reason for it: move the folder,
+    or install the packaged build instead, and the config goes on naming a
+    file that isn't there — with no obvious connection between "I moved a
+    folder" and "YouTube stopped working".
+
+    Copied rather than moved, and only when the destination doesn't already
+    hold something, so this can never lose a working file.
+    """
+    home = data_dir() / "youtube_cookies.txt"
+    named = (config.get("cookies_file") or "").strip()
+    if not named or Path(named) == home:
+        return                                  # already where it should be
+
+    here = Path(named)
+    if here.is_file():
+        try:
+            if not home.is_file() or home.stat().st_mtime < here.stat().st_mtime:
+                home.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(here, home)
+                log.info("brought the cookie file in from %s", here)
+        except Exception as exc:
+            log.debug("couldn't bring the cookie file in: %s", exc)
+            return                              # leave the working one alone
+    elif not home.is_file():
+        log.warning("cookies_file names %s and nothing is there", named)
+        return
+
+    config.set("cookies_file", str(home))
+
+
 def save_master(text: str) -> None:
     """Write a new export, back up the old one, and reset the working copy."""
     master = cookie_path()
@@ -127,6 +161,11 @@ def save_master(text: str) -> None:
     except Exception:
         pass
     master.write_text(text, encoding="utf-8")
+    # Point the config at what we just wrote. refresh() does this and this
+    # didn't, so signing in saved perfectly good cookies while the config went
+    # on naming some other file — often a path from a source checkout that a
+    # packaged install hasn't got. The sign-in worked; nothing used it.
+    config.update({"cookies_file": str(master), "cookies_from_browser": ""})
     try:
         session_path().unlink(missing_ok=True)
     except Exception:
@@ -275,12 +314,66 @@ def check(cookies_file: str | None = None) -> tuple[bool, str]:
     code, out = _run(args)
     if code == 0 and TEST_ID in out:
         return True, "ok"
+
+    # Not everything that fails here is a cookie. "No formats" and "reload the
+    # page" mean the player client we asked for isn't working today — nothing
+    # to do with being signed in — and reporting that as "your cookies don't
+    # work" sends you off exporting fresh ones that were never the problem.
+    low = out.lower()
+    client = str(config.get("player_client") or "default")
+    if any(s in low for s in ("requested format is not available",
+                              "no video formats", "only images are available",
+                              "page needs to be reloaded")):
+        better = _working_client()
+        if better is not None and better != config.get("player_client"):
+            # It fixed itself: some other client does work, so use that.
+            config.set("player_client", better)
+            log.warning("player client %r gave no formats — switched to %r",
+                        client, better or "default")
+            ok2, msg2 = check(cookies_file)
+            if ok2:
+                return True, "ok"
+            return False, msg2
+        return False, (f"YouTube's {client} player isn't returning audio right "
+                       "now. That's not your sign-in — try another client in "
+                       "Settings, or update yt-dlp.")
+
     info = inspect()
     if info["exists"] and not info["healthy"]:
         return False, ("Your cookies file has lost its Google sign-in cookies "
                        f"({info['lines']} left) — export a fresh one.")
     err = next((l.strip() for l in reversed(out.splitlines()) if "ERROR" in l), "")
     return False, (err[:180] or "check failed")
+
+
+def _working_client() -> str | None:
+    """The first configured client that actually hands over a format.
+
+    Tried in the order the downloader would try them, so if one works here it
+    works there too.
+    """
+    exe = shutil.which("yt-dlp")
+    if not exe:
+        return None
+    chain = [str(config.get("player_client") or "")]
+    chain += [str(c) for c in (config.get("player_client_fallbacks") or [])]
+    seen, order = set(), []
+    for c in chain:
+        if c not in seen:
+            seen.add(c)
+            order.append(c)
+    for client in order:
+        args = [exe, "--simulate", "--no-warnings", "--no-playlist",
+                "--print", "%(id)s", "--cookies", str(session_path())]
+        if config.get("js_runtime"):
+            args += ["--js-runtimes", str(config.get("js_runtime"))]
+        if client:
+            args += ["--extractor-args", f"youtube:player_client={client}"]
+        args += ["--", TEST_URL]
+        code, out = _run(args)
+        if code == 0 and TEST_ID in out:
+            return client
+    return None
 
 
 def extract_from(browser: str, dest: Path) -> bool:

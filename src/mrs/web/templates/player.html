@@ -985,6 +985,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 
       <section class="spane" data-s="system">
         <div class="srow"><span class="slabel">Version</span><span class="sval" id="release">—</span></div>
+        <div class="srow"><span class="slabel">Setup guide<em>What the tools are for, what the key is, and which extras are worth having</em></span>
+          <button class="btn" id="reguide">Open</button></div>
         <div class="srow"><span class="slabel">Start with Windows</span><div class="toggle" id="boot"></div></div>
         <div class="srow"><span class="slabel">Only my devices<em>Rejects other machines on the network</em></span>
           <div class="toggle" id="lockips"></div></div>
@@ -3146,6 +3148,10 @@ $("libadd").onclick = async () => {
   $("libpath").value = ""; loadLibPaths();
   toast("Added — press Scan to index it");
 };
+
+/* The guide, again. Same page the first run shows — it reads live state, so
+   it's a status screen as much as an explanation. */
+$("reguide").onclick = () => { location.href = "/welcome?key=" + encodeURIComponent(KEY); };
 
 async function loadSettings() {
   const s = await api("/api/settings");

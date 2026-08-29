@@ -72,6 +72,9 @@ DEFAULTS: dict[str, Any] = {
     # may walk out of the door, and thirty minutes of that is a gigabyte
     # nobody hears. Applies only while they're playing *here* — a phone being
     # used as a remote for the PC is on the PC's queue and unaffected.
+    # Whether the first-run guide has been through once. Not "have you read
+    # it" — you can reopen it whenever — just "should it open by itself".
+    "setup_done": False,
     "cast_queue_minutes": 10,
     # A guest whose browser has stopped saying hello. Pause at the first,
     # let the session go at the second — nothing closes a tab politely, so
