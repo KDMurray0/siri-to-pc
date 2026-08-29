@@ -173,8 +173,34 @@ Owner = Depends(require_admin)
 # ── pages ─────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
+async def index(request: Request, key: str = Query(default=""),
+                token: str = Query(default="")):
+    """The setup page: the Shortcut recipe, and the key it needs.
+
+    Guarded, because it prints the master key straight into the html. This
+    was the one page that never got the treatment /player did — it predates
+    the whole idea of the server being reachable from outside the house, and
+    once the port was forwarded it meant anyone who found it owned the
+    server. On the home network it opens as it always has.
+
+    Owner-only rather than any-valid-link: a guest has no business here, and
+    what's on it is the credential their link exists to avoid handing over.
+    """
     import socket
+    from .security import _is_local
+
+    ip = _client_ip(request)
+    offered = (token or key
+               or request.headers.get("X-Music-Key")
+               or request.headers.get("X-API-Key") or "")
+    home = _is_local(ip) and config.get("lan_open", True) and not offered
+    if not home:
+        require_key(request, key, token)
+        if not is_owner(request, key):
+            raise HTTPException(
+                status_code=403,
+                detail="That page has the master key on it — it needs the key, "
+                       "not a shared link")
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 53))
@@ -182,8 +208,9 @@ async def index(request: Request):
         s.close()
     except Exception:
         host = "127.0.0.1"
+    from ..core import net
     return templates.TemplateResponse(request, "setup.html", {
-        "host": host, "port": config.get("port", 5000),
+        "host": host, "port": net.live_port(),
         "api_key": config.get("api_key", "")})
 
 
