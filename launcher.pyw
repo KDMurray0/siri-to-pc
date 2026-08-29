@@ -187,7 +187,7 @@ class Flyout:
         finally:
             self._moving = False
 
-    # -- sizing (centre-anchored) --
+    # -- sizing (anchored to the top middle) --
     def _rect(self):
         h = self.hwnd()
         r = wintypes.RECT()
@@ -243,8 +243,20 @@ class Flyout:
         y = min(max(y, d.top), d.bottom - 28)
         return x, y
 
-    def _resize_centered(self, tw: int, th: int, dur: float = 0.16, steps: int = 10) -> None:
-        """Grow/shrink around the window's centre, clamped to the screen."""
+    def _resize_from_top(self, tw: int, th: int, dur: float = 0.16, steps: int = 10) -> None:
+        """Grow and shrink from the top middle, clamped to the screen.
+
+        The top edge stays put and the width opens out either side of the
+        centre. Anchoring the centre instead meant every hover moved the
+        window both ways at once, so the thing you were reaching for slid out
+        from under the pointer — and the title, the artwork and the controls
+        all sat somewhere new each time. With the top pinned, everything you
+        actually look at holds still and the window only ever grows downwards.
+
+        It also removes a whole class of drift: half of "the height we got
+        isn't the height we asked for" was being turned into vertical
+        movement by the centring maths.
+        """
         self._resize_gen += 1
         gen = self._resize_gen
         h = self.hwnd()
@@ -252,7 +264,10 @@ class Flyout:
             return
         r = self._rect()
         cw, ch = r.right - r.left, r.bottom - r.top
-        cx, cy = r.left + cw / 2, r.top + ch / 2
+        cx, top = r.left + cw / 2, r.top
+
+        def place(w: int, ht: int) -> tuple[int, int]:
+            return self._clamp(int(round(cx - w / 2)), int(top), w, ht)
 
         def run() -> None:
             for i in range(1, steps + 1):
@@ -261,23 +276,20 @@ class Flyout:
                 f = i / steps
                 w = int(cw + (tw - cw) * f)
                 ht = int(ch + (th - ch) * f)
-                x, y = self._clamp(int(cx - w / 2), int(cy - ht / 2), w, ht)
+                x, y = place(w, ht)
                 try:
                     U32.SetWindowPos(h, 0, x, y, w, ht, SWP_NOZORDER | SWP_NOACTIVATE)
                 except Exception:
                     return
                 time.sleep(dur / steps)
 
-            # A window can refuse a size, and then the height we asked for and
-            # the height we got are different numbers. Centring the next
-            # resize on the one we asked for walks the window a few pixels
-            # down the screen every time, which over a dozen hovers is very
-            # noticeable. Settle it on what it actually is.
+            # A window can refuse a size, so settle on what it actually became
+            # rather than on what was asked for.
             if gen != self._resize_gen:
                 return
             got = self._rect()
             gw, gh = got.right - got.left, got.bottom - got.top
-            fx, fy = self._clamp(round(cx - gw / 2), round(cy - gh / 2), gw, gh)
+            fx, fy = place(gw, gh)
             if (fx, fy) != (got.left, got.top):
                 try:
                     U32.SetWindowPos(h, 0, fx, fy, gw, gh,
@@ -290,15 +302,15 @@ class Flyout:
     def set_mini(self, on) -> bool:
         self._mini = bool(on)
         if on:
-            self._resize_centered(Flyout.MINI_W, Flyout.MINI_HOVER_H)
+            self._resize_from_top(Flyout.MINI_W, Flyout.MINI_HOVER_H)
         else:
-            self._resize_centered(Flyout.W, Flyout.H, dur=0.2)
+            self._resize_from_top(Flyout.W, Flyout.H, dur=0.2)
         return bool(on)
 
     def set_mini_hover(self, on) -> bool:
         if not self._mini:
             return False
-        self._resize_centered(Flyout.MINI_W,
+        self._resize_from_top(Flyout.MINI_W,
                               Flyout.MINI_HOVER_H if on else Flyout.MINI_IDLE_H)
         return bool(on)
 
