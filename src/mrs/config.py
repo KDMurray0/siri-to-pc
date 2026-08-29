@@ -66,15 +66,15 @@ DEFAULTS: dict[str, Any] = {
     # requests one guest may make an hour before they're asked to slow down.
     "max_downloads": 4,
     "guest_requests_hour": 40,
+    # Whether the first-run guide has been through once. Not "have you read
+    # it" — you can reopen it whenever — just "should it open by itself".
+    "setup_done": False,
     # How far ahead to build a queue for somebody playing on their own phone.
     # Deliberately much shorter than the speakers' half-hour: every track is
     # fetched, transcoded and then pushed over the network to a device that
     # may walk out of the door, and thirty minutes of that is a gigabyte
     # nobody hears. Applies only while they're playing *here* — a phone being
     # used as a remote for the PC is on the PC's queue and unaffected.
-    # Whether the first-run guide has been through once. Not "have you read
-    # it" — you can reopen it whenever — just "should it open by itself".
-    "setup_done": False,
     "cast_queue_minutes": 10,
     # A guest whose browser has stopped saying hello. Pause at the first,
     # let the session go at the second — nothing closes a tab politely, so
@@ -162,6 +162,9 @@ class Config:
         self._data: dict[str, Any] = dict(DEFAULTS)
         self._path = config_path()
         self._subs: list = []
+        # Keys this process has actually changed. Only these are written back
+        # over whatever is on disk; see save().
+        self._dirty: set[str] = set()
         self.load()
 
     # -- io --
@@ -209,7 +212,7 @@ class Config:
             # key and the port kept diverging between the two.
             added = [k for k in DEFAULTS if k not in raw]
             if fresh_key or added or not self._path.exists():
-                self.save()
+                self.save(full=True)      # nothing else is in flight yet
             self._write_shadow()
 
     def _shadow_path(self):
@@ -246,11 +249,41 @@ class Config:
         except Exception:
             pass
 
-    def save(self) -> None:
+    def save(self, full: bool = False) -> None:
+        """Write our changes, not our whole idea of the file.
+
+        Two processes sharing one config each hold a snapshot taken when they
+        started, and writing the whole snapshot means the last one to save
+        silently discards everything the other changed since. That is not
+        hypothetical: a hostname typed into the running app disappeared
+        because a second process — which had never heard of it — later set
+        something unrelated and wrote its stale copy back over the top.
+
+        So a save re-reads the file and lays only the keys this process
+        actually changed on top of it. `full` is for the one caller that
+        genuinely owns the whole thing: the initial load filling in defaults.
+        """
         with _lock:
+            data = self._data
+            if not full and self._dirty:
+                try:
+                    on_disk = json.loads(
+                        self._path.read_text(encoding="utf-8-sig") or "{}")
+                    if isinstance(on_disk, dict) and on_disk:
+                        data = {**on_disk, **{k: self._data[k]
+                                              for k in self._dirty
+                                              if k in self._data}}
+                        # Keep our own view in step with what everyone else
+                        # has changed, or the next save reintroduces our stale
+                        # values for keys we never touched.
+                        self._data.update({k: v for k, v in on_disk.items()
+                                           if k not in self._dirty})
+                except Exception:
+                    pass          # unreadable: our copy is better than nothing
             # no BOM, and atomically: this file holds the api key and every
             # setting, and losing it to a torn write means a fresh setup
-            write_atomic(self._path, json.dumps(self._data, indent=2))
+            write_atomic(self._path, json.dumps(data, indent=2))
+            self._dirty.clear()
 
     # -- access --
     def __getitem__(self, key: str) -> Any:
@@ -263,6 +296,7 @@ class Config:
         with _lock:
             old = self._data.get(key)
             self._data[key] = value
+            self._dirty.add(key)
             if save:
                 self.save()
         if old != value:
@@ -271,6 +305,7 @@ class Config:
     def update(self, values: dict[str, Any]) -> None:
         with _lock:
             self._data.update(values)
+            self._dirty.update(values)
             self.save()
         for k, v in values.items():
             self._notify(k, v)

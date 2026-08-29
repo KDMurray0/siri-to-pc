@@ -345,7 +345,8 @@ class ContextBuilder:
               exclude_keys: set[str] | None = None,
               limit: int = 40, focus: float = 1.0,
               anchor=None, theme: str = "",
-              artist_counts: dict[str, int] | None = None) -> list[Candidate]:
+              artist_counts: dict[str, int] | None = None,
+              queued_titles: list[str] | None = None) -> list[Candidate]:
         exclude = exclude or set()
         exclude_keys = exclude_keys or set()
         # No route out? Don't spend eleven seconds finding that out again
@@ -544,7 +545,8 @@ class ContextBuilder:
         out = self._rank(raw, current, exclude, limit, exclude_keys, focus=focus,
                          anchor=anchors, theme=theme, roots=roots,
                          primaries=primaries,
-                         artist_counts=artist_counts)
+                         artist_counts=artist_counts,
+                         queued_titles=queued_titles)
 
         # The first pass ranks on whatever happens to be cached, which means
         # the checks that need tags — the similarity floors especially — are
@@ -585,7 +587,8 @@ class ContextBuilder:
             out = self._rank(raw, current, exclude, limit, exclude_keys,
                              focus=focus, anchor=anchors, theme=theme, roots=roots,
                              primaries=primaries,
-                             artist_counts=artist_counts)
+                             artist_counts=artist_counts,
+                         queued_titles=queued_titles)
 
         # The genre-name test is strict on purpose, but some tags barely exist
         # at track level. Ask for drum and bass and it leaves Goldie's own back
@@ -615,7 +618,8 @@ class ContextBuilder:
                                    focus=focus, anchor=anchors, theme=theme,
                                    roots=roots, primaries=primaries,
                                    artist_counts=artist_counts,
-                                   **kw)
+                                   **kw,
+                         queued_titles=queued_titles)
                 if len(wider) > len(out):
                     out = wider
                 if not _squeezed(out):
@@ -630,7 +634,8 @@ class ContextBuilder:
             out += self._rank(raw, current, exclude, limit, exclude_keys,
                               ignore_recency=True, focus=focus, anchor=anchors,
                               theme=theme, roots=roots, primaries=primaries,
-                              artist_counts=artist_counts)
+                              artist_counts=artist_counts,
+                         queued_titles=queued_titles)
             seen, merged = set(), []
             for c in out:
                 if c.track.video_id not in seen:
@@ -662,7 +667,8 @@ class ContextBuilder:
                                 f"{current.primary_artist()} similar artists", 10):
                 raw.append((t, "radio"))
         widened = self._rank(raw, current, exclude | have, 25, exclude_keys,
-                             focus=focus)
+                             focus=focus,
+                         queued_titles=queued_titles)
         if widened:
             log.info("pool was thin — widened out to %d more", len(widened))
         return widened
@@ -782,7 +788,8 @@ class ContextBuilder:
               roots: list[str] | None = None, primaries: list[str] | None = None,
               strict: bool = True,
               wide_gate: bool = False,
-              artist_counts: dict[str, int] | None = None) -> list[Candidate]:
+              artist_counts: dict[str, int] | None = None,
+              queued_titles: list[str] | None = None) -> list[Candidate]:
         # Skipping late, again and again, means the run has gone stale rather
         # than any one song being wrong. Loosen the grip a little when that
         # happens — at worst it halves.
@@ -806,6 +813,12 @@ class ContextBuilder:
         # Enough again four tracks later, by Diana Ross.
         seen_titles: set[str] = {norm_title(r.get("title") or "")
                                  for r in self.taste.recent(60)}
+        # And what's already queued, which history doesn't know about yet.
+        # Bohemian Rhapsody went on, and then Bohemian Rhapsody went on again
+        # credited "Queen, The Muppets" — a different act by every test here,
+        # because primary_artist() reads the first name and the first name was
+        # still Queen. It is the same song; the title is what gives it away.
+        seen_titles |= {norm_title(t) for t in (queued_titles or ())}
         seen_titles.discard("")
         # The last few records, newest first, for the run-fit tests below.
         # What's on hasn't been recorded yet, so it goes on the front itself.

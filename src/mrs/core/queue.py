@@ -169,6 +169,11 @@ class QueueManager:
         self._workers: list[threading.Thread] = []
         self._activity = Activity()
         self._last_pos = -1
+        # Bumped whenever what's wanted changes. A worker captures it when it
+        # takes a job and checks it again before touching the playlist, so a
+        # download that was already in flight when you asked for something
+        # else can't land in the queue you asked for instead.
+        self._era = 0
         # The last running order we saw, kept off the sink so a crash can't
         # take it away. See snapshot() and restore_order().
         self._last_order: list[str] = []
@@ -228,6 +233,10 @@ class QueueManager:
             self._work.clear()
             self._pool.clear()
             self._claimed.clear()
+            # This is the other way a request gets replaced: not cancelled,
+            # just superseded by the next "play X". Anything a worker is
+            # already holding belongs to the old one.
+            self._era += 1
             self._hold_radio = hold_radio
             self._request_kind = kind
             self._anchors = [a for a in (anchors or []) if a] or [tracks[0]]
@@ -267,6 +276,7 @@ class QueueManager:
         with self._lock:
             dropped = len(self._work)
             self._work.clear()
+            self._era += 1        # nothing older than this may reach the sink
         # Only this queue's. Everybody else is still listening to theirs.
         killed = downloader.cancel_all(self.session_id)
         self._set_activity("idle")
@@ -512,6 +522,13 @@ class QueueManager:
 
     def _process(self, item: WorkItem) -> None:
         track = item.track
+        # What was being asked for when this job was picked up. Clearing the
+        # work list stops jobs that haven't started; this is what stops the
+        # one already downloading — or, worse, already downloaded, because a
+        # cached track goes from "taken" to "in the playlist" with no pause
+        # at all, which is how a track from the search you'd abandoned still
+        # turned up in the results of the one you replaced it with.
+        era = self._era
         if item.mode in ("now", "next"):
             self._set_activity("finding", f"{track.title}")
 
@@ -559,6 +576,19 @@ class QueueManager:
         # And in the registry every queue reads, so a handoff or a collapsed
         # concurrent fetch can still put a name on it.
         remember(path, track)
+
+        # The moment of truth. Everything above is harmless — a file on disk
+        # and a name in a dictionary — but from here we change what plays, and
+        # if the request that wanted this has been replaced, changing it is
+        # the bug. A cached track reaches this point in milliseconds, which is
+        # why clearing the work list alone never closed the window.
+        if era != self._era:
+            log.info("dropped %s — a newer request replaced it", track.title)
+            with self._lock:
+                if track.key():
+                    self._claimed.discard(track.key())
+            return
+
         self.taste.mark_queued(track)
 
         if item.mode == "now":
@@ -735,7 +765,8 @@ class QueueManager:
             cands = self.context.build(self.current_track(), exclude=ids,
                                        exclude_keys=keys, focus=focus,
                                        anchor=self._anchors, theme=self._theme,
-                                       artist_counts=self._recent_artists())
+                                       artist_counts=self._recent_artists(),
+                                       queued_titles=self.queued_titles())
         except Exception as exc:
             log.warning("context build failed: %s", exc)
             return
@@ -773,6 +804,17 @@ class QueueManager:
         cutoff = time.time() - 3600
         recent = [t for t in self._request_times if t > cutoff]
         return recent[0] if recent else time.time()
+
+    def queued_titles(self) -> list[str]:
+        """Song titles already in the running order, however they're credited.
+
+        History alone doesn't cover this: a track queued two minutes ago
+        hasn't been played yet, so nothing has recorded it, and the radio was
+        free to line up the same song again under a different artist credit.
+        """
+        with self._lock:
+            names = [t.title for t in self._meta.values() if t and t.title]
+        return names[-120:]
 
     def keep_paths(self) -> set[str]:
         """Files the queue still needs, so pruning doesn't take them."""
