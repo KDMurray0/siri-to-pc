@@ -85,6 +85,9 @@ HWND_TOPMOST, HWND_NOTOPMOST = -1, -2
 SWP_NOSIZE, SWP_NOMOVE, SWP_NOZORDER, SWP_NOACTIVATE = 0x1, 0x2, 0x4, 0x10
 LWA_ALPHA = 2
 TITLE = "Music Request"
+# Set when Quit is chosen, so the tray keep-alive loop knows the icon
+# went away on purpose.
+_tray_quit = threading.Event()
 
 
 class MONITORINFO(ctypes.Structure):
@@ -678,6 +681,7 @@ def _tray() -> None:
         webbrowser.open(f"http://{host}:{config.get('port',5000)}/?key={config.get('api_key','')}")
 
     def quit_(icon, _it):
+        _tray_quit.set()          # so the keep-alive loop doesn't rebuild it
         try:
             from mrs.player import player
             player.stop()
@@ -699,7 +703,31 @@ def _tray() -> None:
         Menu.SEPARATOR,
         MenuItem("Quit", quit_),
     )
-    TrayIcon("Music Request Server", _icon_image(), menu=menu).run()
+    # Keep trying. Shell_NotifyIcon fails outright if the taskbar isn't ready
+    # yet, which is exactly the case when this starts with Windows — and it
+    # failed in a daemon thread with nothing caught and nothing logged, so the
+    # app ran perfectly with no way to reach it. Explorer restarting takes the
+    # icon away the same way, and that wants the same answer: put it back.
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            icon = TrayIcon("Music Request Server", _icon_image(), menu=menu)
+            if attempt > 1:
+                log.info("tray icon back after %d attempts", attempt)
+            icon.run()
+            # run() returning without Quit means the shell took it away.
+            if _tray_quit.is_set():
+                return
+            log.warning("tray icon vanished — putting it back")
+        except Exception as exc:
+            log.warning("tray icon failed (attempt %d): %s", attempt, exc)
+        if _tray_quit.is_set():
+            return
+        # Backs off to half a minute: a logon race clears in seconds, a
+        # genuinely broken shell shouldn't be hammered all day.
+        time.sleep(min(30.0, 2.0 * attempt))
+
 
 
 def _singleton():
@@ -753,8 +781,20 @@ def _after_start() -> None:
                 flyout._shown_at = time.monotonic()
         except Exception:
             pass
+    def guarded(fn):
+        # A daemon thread that raises takes its reason with it. These are the
+        # window watchers and the tray; losing one silently is how the app
+        # ends up running with no way to reach it.
+        def go():
+            try:
+                fn()
+            except Exception:
+                log.exception("%s stopped", getattr(fn, "__name__", fn))
+        return go
+
     for fn in (flyout.focus_watch, flyout.fullscreen_watch, flyout.hotkey_watch, _tray):
-        threading.Thread(target=fn, daemon=True).start()
+        threading.Thread(target=guarded(fn), daemon=True,
+                         name=getattr(fn, "__name__", "watch")).start()
 
 
 def main() -> None:
