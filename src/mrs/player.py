@@ -16,7 +16,9 @@ from .core.extras import AlarmClock, scrobbler
 from .core.library import library
 from .core.listen import listener
 from .core.playlists import playlists
-from .core.mpv import MpvClient, PIPE_ALT, PIPE_MAIN, kill_stray_mpv
+from .core.mpv import (MpvClient, PIPE_ALT, PIPE_MAIN, fresh_pipes,
+                       kill_orphan_mpv,
+                       kill_stray_mpv)
 from .core.queue import QueueManager
 from .core.sink import MpvSink
 from .core import radio
@@ -74,12 +76,12 @@ class PlayerService:
 
     # -- lifecycle -----------------------------------------------------
     def start(self) -> None:
-        # Longer than it looks like it needs. A force-killed mpv releases its
-        # named pipe at the kernel's convenience, not ours, and spawning into
-        # a pipe name that is still held is how a run starts by connecting to
-        # a corpse.
+        # Ours from a previous run in this process (there aren't any on a
+        # cold start), then anything left behind by an app that died without
+        # cleaning up. The pipe names are unique per process now, so neither
+        # of these can block us — this is housekeeping, not a prerequisite.
         kill_stray_mpv()
-        time.sleep(1.2)
+        kill_orphan_mpv()
         vol = int(config.get("volume", 70))
         # gapless=yes so albums run together properly
         self.mpv.spawn(vol, extra_args=["--gapless-audio=yes"])
@@ -139,8 +141,13 @@ class PlayerService:
             pass
         kill_stray_mpv()
         time.sleep(0.8)
-        self.mpv = MpvClient(PIPE_MAIN, primary=True)
-        self.alt = MpvClient(PIPE_ALT, primary=False)
+        # Fresh pipe names. If the mpv we're replacing wedged while holding
+        # its pipe — and a wedged mpv can refuse taskkill /F — reusing the
+        # name means the replacement can never have it, and the restart fails
+        # for exactly the reason it was needed.
+        main, alt = fresh_pipes()
+        self.mpv = MpvClient(main, primary=True)
+        self.alt = MpvClient(alt, primary=False)
         self.mpv.spawn(int(config.get("volume", 70)),
                        extra_args=["--gapless-audio=yes"])
         try:

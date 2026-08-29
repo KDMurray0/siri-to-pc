@@ -2266,6 +2266,16 @@ $("passmake").onclick = async () => {
 
 /* The link, and the two things you'd want to do with it, without hunting for
    the row it just created. */
+/* The address for a pass, as it stands right now — hostname if there is one,
+   the raw IP if there isn't. Asked fresh every time, because the answer
+   changes the moment a hostname is set up or the address moves. */
+async function passUrl(id) {
+  const r = await api("/api/network?pass_id=" + encodeURIComponent(id));
+  const rows = (r && r.addresses) || [];
+  const row = rows.find(a => a.kind === "wan") || rows[0];
+  return row ? row.url : "";
+}
+
 function showMade(r, name, scope, hours) {
   const life = hours === "0" ? "permanent"
              : hours === "168" ? "a week" : "24 hours";
@@ -2278,8 +2288,15 @@ function showMade(r, name, scope, hours) {
     `<button class="btn" id="madeqr">QR</button>` +
     `<button class="btn" id="madedone">Done</button></div>` +
     `<div class="qrbox" id="madeqrbox"></div>`;
-  $("madecopy").onclick = async () =>
-    toast(await copyText(r.url) ? "Link copied" : "Couldn't copy that");
+  // Resolved now, not remembered from when the pass was minted. Setting up a
+  // hostname after making a link left this box handing out the raw-IP URL for
+  // the rest of the session — while the QR button beside it, which re-fetches,
+  // gave the right one. Two buttons, two answers.
+  $("madecopy").onclick = async () => {
+    const url = await passUrl(r.id) || r.url;
+    if (url !== r.url) $("madebox").querySelector(".made-url").textContent = url;
+    toast(await copyText(url) ? "Link copied" : "Couldn't copy that");
+  };
   $("madeqr").onclick = async () => {
     const box = $("madeqrbox");
     if (box.innerHTML) { box.innerHTML = ""; return; }
@@ -2295,10 +2312,8 @@ $("passlist").addEventListener("click", async e => {
   if (!btn) return;
   const id = btn.dataset.i;
   if (btn.classList.contains("passcopy")) {
-    const r = await api("/api/network?pass_id=" + encodeURIComponent(id));
-    const row = ((r && r.addresses) || []).find(a => a.kind === "wan") ||
-                ((r && r.addresses) || [])[0];
-    toast(row && await copyText(row.url) ? "Link copied" : "Couldn't copy that");
+    const url = await passUrl(id);
+    toast(url && await copyText(url) ? "Link copied" : "Couldn't copy that");
     return;
   }
   if (btn.classList.contains("passqr")) {

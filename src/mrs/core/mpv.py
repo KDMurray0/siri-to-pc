@@ -10,6 +10,7 @@ Don't "clean up" these bits, they're all load-bearing:
 from __future__ import annotations
 
 import ctypes
+import itertools
 import json
 import os
 import shutil
@@ -38,9 +39,36 @@ _PIPE_DEAD = {232, 109, 233, 6, 2}
 
 # A suffix keeps a second instance (or a test run alongside the real app) from
 # fighting over the same pipe — and from killing the other's mpv as a "stray".
-_SUFFIX = os.environ.get("MRS_PIPE_SUFFIX", "")
+#
+# It defaults to our own process id, which makes the name unique per run and
+# not merely per copy. That matters because a fixed name is a single point of
+# failure owned by whatever grabbed it first: an mpv orphaned by a parent that
+# died without cleaning up keeps hold of it, every mpv we then launch exits
+# immediately because the name is taken, and startup fails with "IPC pipe
+# never appeared" — permanently, because a wedged mpv can survive taskkill /F
+# and only really goes on a reboot. With a unique name it simply doesn't
+# matter that the old one is still sitting there.
+_SUFFIX = os.environ.get("MRS_PIPE_SUFFIX") or f"_{os.getpid()}"
+# "alt" rather than a trailing 2: the suffix now ends in a digit, so
+# mpvsocket_1234 and mpvsocket_12342 are one substring away from killing
+# each other.
 PIPE_MAIN = rf"\\.\pipe\mpvsocket{_SUFFIX}"
-PIPE_ALT = rf"\\.\pipe\mpvsocket{_SUFFIX}2"
+PIPE_ALT = rf"\\.\pipe\mpvsocketalt{_SUFFIX}"
+
+_restarts = itertools.count(1)
+
+
+def fresh_pipes() -> tuple[str, str]:
+    """New names for a restart.
+
+    Reusing the name is what makes a restart fail for the same reason the
+    first start did: if the mpv we are replacing wedged while holding the
+    pipe, the replacement can never have it. A restart that can't restart is
+    no use to crash recovery, which is the one caller that needs it most.
+    """
+    n = next(_restarts)
+    return (rf"\\.\pipe\mpvsocket{_SUFFIX}x{n}",
+            rf"\\.\pipe\mpvsocketalt{_SUFFIX}x{n}")
 
 
 class _OVERLAPPED(ctypes.Structure):
@@ -102,11 +130,11 @@ def kill_stray_mpv(pipe: str = "") -> bool:
     main player down with it.
     """
     if pipe:
-        name = pipe.rsplit("\\", 1)[-1]
-        # mpvsocket must not match mpvsocket2, so anchor on a non-digit.
-        marker = name + ("" if name[-1:].isdigit() else "(?![0-9])")
+        marker = pipe.rsplit("\\", 1)[-1]
     else:
-        marker = f"mpvsocket{_SUFFIX}" if _SUFFIX else "mpvsocket"
+        # Ours, both engines — not every mpv on the machine. Another instance's
+        # player is not this instance's to kill.
+        marker = f"mpvsocket(alt)?{_SUFFIX}"
     ps = ("Get-CimInstance Win32_Process -Filter \"Name='mpv.exe'\" | "
           f"Where-Object {{ $_.CommandLine -match '{marker}' }} | "
           "ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
@@ -118,6 +146,35 @@ def kill_stray_mpv(pipe: str = "") -> bool:
         return "killed" in (r.stdout or "")
     except Exception:
         return False
+
+
+def kill_orphan_mpv() -> int:
+    """Tidy up mpv processes whose parent has gone.
+
+    Nobody is coming back for these: the app that started them died without
+    getting the chance to stop them. They cost memory and a sound-card handle
+    and, before the pipe names became unique, they could stop the next run
+    dead. Best effort — some get wedged badly enough that even taskkill /F is
+    refused, which is exactly why we no longer depend on winning this.
+    """
+    ps = ("$live = @{}; Get-Process -ErrorAction SilentlyContinue | "
+          "ForEach-Object { $live[$_.Id] = $true }; "
+          "Get-CimInstance Win32_Process -Filter \"Name='mpv.exe'\" | "
+          "Where-Object { $_.CommandLine -match 'mpvsocket' -and "
+          "-not $live[[int]$_.ParentProcessId] } | "
+          "ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
+          "-ErrorAction SilentlyContinue; 'killed' }")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                           capture_output=True, text=True, timeout=20,
+                           creationflags=CREATE_NO_WINDOW)
+        n = (r.stdout or "").count("killed")
+        if n:
+            log.info("cleared %d orphaned mpv process(es)", n)
+        return n
+    except Exception as exc:
+        log.debug("orphan sweep failed: %s", exc)
+        return 0
 
 
 class MpvClient:
