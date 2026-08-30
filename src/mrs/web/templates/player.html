@@ -577,7 +577,20 @@ body.nopc .seg-b#segphone{background:none;color:var(--sub);box-shadow:none;
 body.nodevices .playhere{border-bottom:0}
 /* A shared link has no business in here. The server refuses these endpoints
    anyway; hiding the door as well is so nobody is invited to rattle it. */
-body.guest .owneronly,body.guest .navgear{display:none}
+body.guest .owneronly{display:none}
+/* A guest gets a settings sheet too, with only what's theirs in it: how
+   their own queue behaves and how it sounds on their own device. Everything
+   about the machine stays hidden, and the server refuses it regardless —
+   this is so nobody is invited to rattle a locked door. */
+body.guest .sheet .srow:not(.guestok),
+body.guest .sheet .stab:not(.guestok),
+body.guest .sheet .seclbl,
+body.guest .sheet .mk,
+body.guest .sheet .hint:not(.guesthint),
+body.guest #passlist,body.guest #netaddrs,body.guest #whoslistening{display:none}
+/* Whether anything they change here will still be here tomorrow. */
+.kept{font-size:11.5px;color:var(--sub);padding:2px 0 10px}
+.kept b{color:var(--accent)}
 /* Playing on your own device: the volume is the phone's hardware buttons,
    and liking, saving and playlists all write to the owner's library — which
    a guest hasn't got. Hidden rather than shown doing nothing. */
@@ -649,6 +662,12 @@ body.casting.guest .vol{flex:0 0 auto}
   width:100%;padding:9px 0}
 .btn.danger:hover{background:#d24c39;border-color:#d24c39}
 .btn.danger.arm{background:#8e2c1e;border-color:#8e2c1e}
+.profrow{padding:9px 0;border-bottom:1px solid var(--line)}
+.profrow:last-child{border-bottom:0}
+.favs{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.fav{font-size:11px;padding:3px 8px;border-radius:999px;
+  background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--fg)}
+.fav.quiet{background:none;color:var(--sub);padding-left:0}
 .passmeta{grid-column:1; font-size:10.5px; color:var(--sub)}
 .passmeta b{color:var(--accent)}
 /* What the link has done sits under what the link is, so the two don't
@@ -818,8 +837,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
       <button class="ib small" id="closeSettings" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M19 6.4L17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg></button>
     </div>
     <div class="sheet-tabs" id="sheettabs">
-      <button class="stab on" data-s="sound">Sound</button>
-      <button class="stab" data-s="queue">Queue</button>
+      <button class="stab on guestok" data-s="sound">Sound</button>
+      <button class="stab guestok" data-s="queue">Queue</button>
       <button class="stab" data-s="access">Access</button>
       <button class="stab" data-s="extras">Extras</button>
       <button class="stab" data-s="sharing">Sharing</button>
@@ -828,25 +847,26 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
     <div class="sheet-body">
 
       <section class="spane open" data-s="sound">
-        <div class="srow"><span class="slabel">Theme</span><div class="swatches" id="swatches"></div></div>
-        <div class="srow"><span class="slabel">Equaliser</span><select id="eq"></select></div>
+        <div class="kept" id="keptnote"></div>
+        <div class="srow guestok"><span class="slabel">Theme</span><div class="swatches" id="swatches"></div></div>
+        <div class="srow guestok"><span class="slabel">Equaliser</span><select id="eq"></select></div>
         <div class="srow"><span class="slabel">Visualiser<em>The bars across the artwork</em></span>
           <div class="toggle" id="viz"></div></div>
-        <div class="srow"><span class="slabel">Even out volume<em>Keeps quiet and loud songs level</em></span>
+        <div class="srow guestok"><span class="slabel">Even out volume<em>Keeps quiet and loud songs level</em></span>
           <div class="toggle" id="normalize"></div></div>
-        <div class="srow"><span class="slabel">Crossfade<em>Overlap between tracks</em></span>
+        <div class="srow guestok"><span class="slabel">Crossfade<em>Overlap between tracks</em></span>
           <div class="chips" id="crossfade"></div></div>
-        <div class="srow"><span class="slabel">Announce songs<em>Says the track name out loud</em></span>
+        <div class="srow guestok"><span class="slabel">Announce songs<em>Says the track name out loud</em></span>
           <div class="toggle" id="announce"></div></div>
-        <div class="srow"><span class="slabel">Sleep timer</span><div class="chips" id="sleep"></div></div>
+        <div class="srow guestok"><span class="slabel">Sleep timer</span><div class="chips" id="sleep"></div></div>
       </section>
 
       <section class="spane" data-s="queue">
-        <div class="srow"><span class="slabel">Stay on the artist<em>How hard the radio sticks to the band you asked for</em></span>
+        <div class="srow guestok"><span class="slabel">Stay on the artist<em>How hard the radio sticks to the band you asked for</em></span>
           <div class="chips" id="cohesion"></div></div>
-        <div class="srow"><span class="slabel">Remember the first song<em>Stops a long session wandering off — every step is close to the last, but the end isn't close to the start</em></span>
+        <div class="srow guestok"><span class="slabel">Remember the first song<em>Stops a long session wandering off — every step is close to the last, but the end isn't close to the start</em></span>
           <div class="chips" id="anchor"></div></div>
-        <div class="srow"><span class="slabel">Where songs come from</span>
+        <div class="srow guestok"><span class="slabel">Where songs come from</span>
           <select id="source"><option value="youtube">YouTube</option><option value="soundcloud">SoundCloud</option><option value="bandcamp">Bandcamp</option></select></div>
         <div class="srow"><span class="slabel">Keep playlists on disk<em>Downloads them into their folder</em></span>
           <div class="toggle" id="pldl"></div></div>
@@ -972,6 +992,11 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         </div>
         <div class="madebox" id="madebox"></div>
         <div id="passlist"></div>
+
+        <div class="seclbl">People with a permanent link</div>
+        <div class="hint">What their listening has built up. Their top artists
+          and how much they've played — not what they played, and not when.</div>
+        <div id="profilelist"></div>
 
         <div class="seclbl">While people are round</div>
         <div class="srow"><span class="slabel">Party mode<em>Requests queue up in order — no radio, and nobody skips the line</em></span>
@@ -1144,7 +1169,8 @@ function setTheme(t, persist) {
   curTheme = t || "default";
   document.documentElement.setAttribute("data-theme", t === "default" ? "" : t);
   localStorage.setItem("theme", t);
-  if (persist !== false) api("/api/theme?value=" + encodeURIComponent(t));
+  if (persist !== false) setPref("theme", t,
+        () => api("/api/theme?value=" + encodeURIComponent(t)));
   document.querySelectorAll(".sw").forEach(s => s.classList.toggle("sel", s.dataset.t === t));
   applyAccent();
 }
@@ -1892,10 +1918,19 @@ $("panel-lists").addEventListener("click", async e => {
 
 /* ── settings ──────────────────────────────────────────────────────── */
 $("openSettings").onclick = () => {
-  if (!ME.owner) { toast("Settings are the owner's"); return; }
   $("sheet").classList.add("open");
+  // A guest lands on Sound; the tabs past Queue aren't theirs and are hidden.
+  if (ME && !ME.owner) showSheetTab("sound");
   loadSettings();
 };
+
+function showSheetTab(name) {
+  const tab = document.querySelector('.stab[data-s="' + name + '"]');
+  if (!tab) return;
+  document.querySelectorAll(".stab").forEach(t => t.classList.toggle("on", t === tab));
+  document.querySelectorAll(".spane").forEach(p =>
+    p.classList.toggle("open", p.dataset.s === name));
+}
 document.querySelectorAll(".stab").forEach(tab => tab.onclick = () => {
   document.querySelectorAll(".stab").forEach(t => t.classList.toggle("on", t === tab));
   document.querySelectorAll(".spane").forEach(p =>
@@ -1907,7 +1942,7 @@ document.querySelectorAll(".stab").forEach(tab => tab.onclick = () => {
     loadHealth(); loadCache(); loadBlocked();
   }
   if (tab.dataset.s === "sharing") {
-    loadNetwork(); loadPasses(); loadDdns();
+    loadNetwork(); loadPasses(); loadDdns(); loadProfiles();
     if (ME.owner) watchSharing();
   }
 });
@@ -1923,7 +1958,7 @@ function watchSharing() {
     const open = $("sheet").classList.contains("open") &&
                  document.querySelector('.spane[data-s="sharing"]').classList.contains("open");
     if (!open) { clearInterval(sharingTimer); sharingTimer = null; return; }
-    loadSessions();
+    loadSessions(); loadProfiles();
     // Not while a QR is on screen — redrawing the list would take it away
     // mid-scan.
     if (!$("passlist").querySelector(".qrbox:not(:empty)")) loadPasses();
@@ -2032,13 +2067,14 @@ const markChips = (id, v) => document.querySelectorAll("#" + id + " .chip")
   .forEach(c => c.classList.toggle("sel", String(c.dataset.v) === String(v)));
 
 buildChips("crossfade", [{label:"Off",val:0},{label:"3s",val:3},{label:"6s",val:6},{label:"10s",val:10}],
-  v => { api("/api/audio?crossfade=" + v); markChips("crossfade", v); });
+  v => { setPref("crossfade", v, () => api("/api/audio?crossfade=" + v));
+         markChips("crossfade", v); });
 buildChips("sleep", [{label:"Off",val:0},{label:"15m",val:15},{label:"30m",val:30},{label:"60m",val:60}],
   v => api("/api/sleep?minutes=" + v).then(r => { toast(r && r.message); markChips("sleep", v); }));
 buildChips("cohesion", [{label:"Explore",val:0},{label:"Balanced",val:1},{label:"Stay put",val:2}],
-  v => { api("/api/setting?key=artist_cohesion&value=" + v); markChips("cohesion", v); });
+  v => { setPref("artist_cohesion", v); markChips("cohesion", v); });
 buildChips("anchor", [{label:"Let it wander",val:0},{label:"Soft",val:0.35},{label:"Strong",val:0.6}],
-  v => { api("/api/setting?key=anchor_pull&value=" + v); markChips("anchor", v); });
+  v => { setPref("anchor_pull", v); markChips("anchor", v); });
 
 // generic on/off row -> endpoint with ?enabled=
 const toggleRow = (id, path) => {
@@ -2357,11 +2393,28 @@ $("viz").onclick = () => {
 $("normalize").onclick = () => {
   const on = !$("normalize").classList.contains("on");
   $("normalize").classList.toggle("on", on);
-  api("/api/audio?normalize=" + (on ? 1 : 0));
+  setPref("normalize", on ? 1 : 0, () => api("/api/audio?normalize=" + (on ? 1 : 0)));
 };
 
 
-$("eq").onchange = () => api("/api/audio?eq=" + encodeURIComponent($("eq").value));
+/* Where a preference goes.
+ *
+ * The owner's live on the machine and are applied by the endpoints that also
+ * *do* the thing — /api/audio retunes mpv, not just the config. A guest has
+ * no mpv and no business in the machine's config, so theirs go to their own
+ * profile through one route. Same controls, two destinations, decided here
+ * rather than at nine call sites. */
+function setPref(key, value, ownerCall) {
+  if (ME && !ME.owner) {
+    return api("/api/setting?key=" + encodeURIComponent(key) +
+               "&value=" + encodeURIComponent(value));
+  }
+  return ownerCall ? ownerCall() : api("/api/setting?key=" +
+      encodeURIComponent(key) + "&value=" + encodeURIComponent(value));
+}
+
+$("eq").onchange = () => setPref("eq", $("eq").value,
+  () => api("/api/audio?eq=" + encodeURIComponent($("eq").value)));
 $("source").onchange = () => api("/api/source?value=" + encodeURIComponent($("source").value));
 /* output device picker, hung off the speaker icon */
 const devpicker = $("devpicker");
@@ -3168,9 +3221,49 @@ $("libadd").onclick = async () => {
    it's a status screen as much as an explanation. */
 $("reguide").onclick = () => { location.href = "/welcome?key=" + encodeURIComponent(KEY); };
 
+/* Who has a profile, and the one genuinely fun thing in here. */
+async function loadProfiles() {
+  const r = await api("/api/profiles");
+  const rows = (r && r.profiles) || [];
+  if (!rows.length) {
+    $("profilelist").innerHTML =
+      '<div class="hint">Nobody has a permanent link yet. Make one and it ' +
+      'starts remembering what they like.</div>';
+    return;
+  }
+  $("profilelist").innerHTML = rows.map(p => {
+    const top = (p.top_artists || []).map(a =>
+      `<span class="fav">${esc(a.artist)}</span>`).join("");
+    return `<div class="profrow"><span class="passname">${esc(p.name)}</span>` +
+      `<span class="passmeta">${p.tracks_played} played` +
+      (p.playlists ? ` &middot; ${p.playlists} playlist${p.playlists === 1 ? "" : "s"}` : "") +
+      `</span>` +
+      (top ? `<div class="favs">${top}</div>`
+           : '<div class="favs"><span class="fav quiet">nothing yet</span></div>') +
+      `</div>`;
+  }).join("");
+}
+
 async function loadSettings() {
   const s = await api("/api/settings");
   if (!s) return;
+  if (s.guest) {
+    $("keptnote").innerHTML = s.persistent
+      ? "These are yours. <b>Kept</b> — they'll be here next time you open this link."
+      : "These are yours for now. This link expires, so they <b>aren't saved</b>.";
+    if (s.eq_presets && !$("eq").options.length)
+      s.eq_presets.forEach(p => { const o = document.createElement("option");
+        o.value = o.textContent = p; $("eq").appendChild(o); });
+    if (s.eq) $("eq").value = s.eq;
+    if (s.source) $("source").value = s.source;
+    $("normalize").classList.toggle("on", !!s.normalize);
+    $("announce").classList.toggle("on", !!s.announce);
+    markChips("crossfade", s.crossfade);
+    markChips("cohesion", s.artist_cohesion);
+    markChips("anchor", s.anchor_pull);
+    if (s.theme) setTheme(s.theme, false);
+    return;
+  }
   if (s.release) $("release").textContent = s.release;
   if (s.eq_presets && !$("eq").options.length)
     s.eq_presets.forEach(p => { const o = document.createElement("option"); o.value = o.textContent = p; $("eq").appendChild(o); });

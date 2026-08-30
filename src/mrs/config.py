@@ -270,6 +270,17 @@ class Config:
                     on_disk = json.loads(
                         self._path.read_text(encoding="utf-8-sig") or "{}")
                     if isinstance(on_disk, dict) and on_disk:
+                        # The key is identity, not a preference. Adopting a
+                        # different one from disk mid-run invalidates every
+                        # token this process has handed out and every link
+                        # anyone is holding — silently, and only until the
+                        # next restart, which is the worst way to find out.
+                        theirs = on_disk.get("api_key")
+                        mine_key = self._data.get("api_key")
+                        if theirs and mine_key and theirs != mine_key:
+                            print("[config] the key on disk changed under us — "
+                                  "keeping the one this process started with")
+                            on_disk = dict(on_disk, api_key=mine_key)
                         data = {**on_disk, **{k: self._data[k]
                                               for k in self._dirty
                                               if k in self._data}}

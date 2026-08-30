@@ -36,18 +36,25 @@ GUEST_QUEUE_CAP = 40           # tracks one guest may pin at once
 class Session:
     """A guest's player: their queue, their sink, nothing of yours."""
 
-    def __init__(self, pass_id: str, name: str, scope: str) -> None:
+    def __init__(self, pass_id: str, name: str, scope: str,
+                 profile=None) -> None:
         from .queue import QueueManager      # imported late; queue imports sink
 
         self.id = pass_id
         self.name = name or "guest"
         self.scope = scope or "full"
+        self.profile = profile
         self.sink = ListSink()
-        # A neutral taste store, and its own context builder — sharing the
-        # owner's would score this queue by the owner's history.
+        # Their taste, not the owner's, and not nobody's either: a permanent
+        # link gets a real store that learns, so coming back next week the
+        # radio already knows them. A link that expires gets one that reads
+        # flat and swallows writes — an evening shouldn't leave a profile
+        # behind, and shouldn't be scored by the owner's listening.
+        mine = profile.taste if profile is not None else NeutralTaste()
         self.queue = QueueManager(self.sink,
-                                  ContextBuilder(catalog, taste=NeutralTaste()),
-                                  taste=NeutralTaste(), session_id=pass_id,
+                                  ContextBuilder(catalog, taste=mine),
+                                  taste=mine, session_id=pass_id,
+                                  prefs=profile,
                                   # Two, like the owner's. One meant a guest
                                   # fetched strictly one track at a time and
                                   # spent the whole evening saying
@@ -241,11 +248,12 @@ class Sessions:
         self._lock = threading.Lock()
         self._rooms: dict[str, Session] = {}
 
-    def for_pass(self, pass_id: str, name: str = "", scope: str = "full") -> Session:
+    def for_pass(self, pass_id: str, name: str = "", scope: str = "full",
+                 profile=None) -> Session:
         with self._lock:
             room = self._rooms.get(pass_id)
             if room is None:
-                room = Session(pass_id, name, scope)
+                room = Session(pass_id, name, scope, profile)
                 self._rooms[pass_id] = room
                 log.info("opened a session for %r (%s)", room.name, room.scope)
         room.start()

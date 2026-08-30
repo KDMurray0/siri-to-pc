@@ -103,11 +103,16 @@ def run(verbose: bool = False) -> Result:
         out.failed.append("no api key set — nothing to check access against")
         return out
 
-    owner_h = {"X-Music-Key": key}
+    started_with = key
     minted: list[str] = []
 
+    def now_key() -> str:
+        """Read fresh. The key is identity — a suite that caches it would
+        report every symptom of it changing and never the cause."""
+        return config.get("api_key") or ""
+
     def link(name: str, scope: str = "full", hours: int = 1) -> str:
-        got = issue(key, name=name, hours=hours, scope=scope)
+        got = issue(now_key(), name=name, hours=hours, scope=scope)
         minted.append(got["id"])
         return got["token"]
 
@@ -130,7 +135,8 @@ def run(verbose: bool = False) -> Result:
             here = {"X-Play-Here": "1"}
 
             def get(path, tok=None, extra=None):
-                h = dict(owner_h if tok is None else {"X-Music-Key": tok})
+                h = dict({"X-Music-Key": now_key()} if tok is None
+                         else {"X-Music-Key": tok})
                 h.update(extra or {})
                 return client.get(path, headers=h)
 
@@ -145,19 +151,112 @@ def run(verbose: bool = False) -> Result:
                   not get("/api/liked", tok, here).json().get("liked"))
             say("recents and liked", c)
 
-            # -- 2. settings are not a shared thing ------------------------
+            # -- 2. settings are the caller's own, never the owner's -------
             c = _Checker("settings")
             cfg = get("/api/settings", full, here).json()
             leaked = [k for k in ("api_key", "library_paths", "allowed_ips",
-                                  "ddns_hostname", "ddns_user", "volume",
-                                  "crossfade", "repeat", "shuffle",
-                                  "cookies_from_browser", "queue_minutes")
+                                  "ddns_hostname", "ddns_user", "ddns_password",
+                                  "cookies_from_browser", "cookies_file",
+                                  "groq_api_key", "lastfm_session", "port",
+                                  "allowed_ips", "cache_size_mb")
                       if k in cfg]
-            c("a link gets none of the owner's preferences", not leaked,
+            c("a link gets nothing about the machine", not leaked,
               ", ".join(leaked))
             c("...but enough to draw itself",
               cfg.get("guest") is True and "theme" in cfg)
+
+            # The keys a guest *does* see are theirs. Prove it by moving the
+            # owner's and checking the guest's stays put — sharing a name is
+            # not the same as sharing a value.
+            from .config import config as _cfg
+            was = _cfg.get("shuffle")
+            try:
+                _cfg.set("shuffle", not bool(was))
+                mine = get("/api/settings", full, here).json()
+                c("the owner's shuffle doesn't reach a link",
+                  mine.get("shuffle") is False,
+                  f"owner={_cfg.get('shuffle')} guest={mine.get('shuffle')}")
+            finally:
+                _cfg.set("shuffle", was)
             say("settings", c)
+
+            # -- 2b. a guest may change their own, and only their own ------
+            c = _Checker("guest settings")
+            r = get("/api/setting?key=artist_cohesion&value=1.7", full, here)
+            c("a guest can set one of theirs", r.status_code == 200,
+              f"HTTP {r.status_code}")
+            c("...and it comes back changed",
+              get("/api/settings", full, here).json().get("artist_cohesion") == 1.7)
+            r = get("/api/setting?key=artist_cohesion&value=99", full, here)
+            c("a silly value is clamped, not taken",
+              r.status_code == 200 and r.json().get("value") == 2.0,
+              str(r.json().get("value")))
+            for machine in ("port", "api_key", "cache_size_mb", "lan_open",
+                            "guest_requests_hour"):
+                r = get(f"/api/setting?key={machine}&value=1", full, here)
+                c(f"a guest can't set {machine}", r.status_code == 403,
+                  f"HTTP {r.status_code}")
+            r = get("/api/setting?key=repeat&value=sideways", full, here)
+            c("a nonsense choice is refused", r.status_code == 400,
+              f"HTTP {r.status_code}")
+            # An eq name that isn't a preset is accepted by any plain string
+            # check and then renders as an empty dropdown, which reads as
+            # "the setting is broken" rather than "that isn't a thing".
+            r = get("/api/setting?key=eq&value=rock", full, here)
+            c("an eq that isn't a real preset is refused", r.status_code == 400,
+              f"HTTP {r.status_code}")
+            r = get("/api/setting?key=eq&value=bass", full, here)
+            c("a real one is taken", r.status_code == 200,
+              f"HTTP {r.status_code}")
+            # And none of that touched the machine.
+            c("the owner's config is untouched",
+              _cfg.get("artist_cohesion") != 1.7,
+              f"owner cohesion={_cfg.get('artist_cohesion')}")
+            say("a guest's own settings", c)
+
+            # -- 2c. permanent remembers, temporary doesn't ----------------
+            c = _Checker("persistence")
+            from .core.profile import profiles
+            forever = issue(now_key(), name="check-forever", hours=0, scope="full")
+            minted.append(forever["id"])
+            perm_tok = forever["token"]
+            _sr = get("/api/setting?key=eq&value=warm", perm_tok, here)
+            p = profiles.find(forever["id"])
+            c("a permanent link gets a profile that persists",
+              bool(p and p.permanent),
+              f"profile={p!r} set-resp={_sr.status_code} {_sr.text[:80]}")
+            if p:
+                c("...written to disk", (p.home() / "settings.json").is_file())
+                profiles.forget(forever["id"])
+                again = profiles.for_row({"id": forever["id"],
+                                          "name": "check-forever", "expires": 0})
+                c("...and read back after a restart",
+                  again.get("eq") == "warm", str(again.get("eq")))
+            temp = profiles.find(minted[0])
+            c("a temporary link's profile keeps nothing",
+              temp is not None and not temp.permanent
+              and not temp.home().exists())
+            say("permanent vs temporary", c)
+
+            # -- 2d. playlists follow the same line ------------------------
+            c = _Checker("playlists")
+            r = get("/api/playlists", full, here).json()
+            c("a temporary link is told playlists need a permanent one",
+              r.get("temporary") is True and r.get("playlists") == [])
+            r = get("/api/playlist/create?name=nope", full, here)
+            c("...and can't make one", r.status_code == 403,
+              f"HTTP {r.status_code}")
+            r = get("/api/playlist/create?name=check-list", perm_tok, here)
+            c("a permanent link can", r.status_code == 200,
+              f"HTTP {r.status_code}")
+            names = [x["name"] for x in
+                     get("/api/playlists", perm_tok, here).json().get("playlists", [])]
+            c("...and sees it", "check-list" in names, str(names))
+            c("...while the owner's list is untouched",
+              "check-list" not in [x["name"] for x in
+                                   get("/api/playlists").json().get("playlists", [])])
+            profiles.wipe(forever["id"])
+            say("playlists per profile", c)
 
             # -- 3. the admin surface is shut ------------------------------
             c = _Checker("admin")
@@ -177,11 +276,11 @@ def run(verbose: bool = False) -> Result:
             c("a link can't open the setup page", page.status_code == 403,
               f"HTTP {page.status_code}")
             c("...and the key isn't in what it does return",
-              key not in page.text)
+              now_key() not in page.text)
             bad_key = client.get("/?key=nonsense")
             c("a wrong key can't either", bad_key.status_code == 403,
               f"HTTP {bad_key.status_code}")
-            c("...and leaks nothing", key not in bad_key.text)
+            c("...and leaks nothing", now_key() not in bad_key.text)
             say("setup page", c)
 
             # -- 5. scope: a phone link stays on its own phone -------------
@@ -198,22 +297,32 @@ def run(verbose: bool = False) -> Result:
             p = get("/player", full)
             c("a link gets the player", p.status_code == 200)
             c("...carrying its own pass, not the key",
-              key not in p.text and full in p.text)
+              now_key() not in p.text and full in p.text)
             c("...and is told it's a guest", 'const GUEST = "1"' in p.text)
             mine = get("/player")
-            c("the owner's page carries the key", key in mine.text)
+            c("the owner's page carries the key", now_key() in mine.text,
+              f"HTTP {mine.status_code} {mine.text[:90]}")
             c("...and is told so", 'const GUEST = "0"' in mine.text)
             say("player page", c)
 
             # -- 7. revoking a link stops it dead --------------------------
             c = _Checker("revocation")
             doomed = link("check-doomed", "full")
-            c("it works before", get("/api/status", doomed, here).status_code == 200)
+            _r = get("/api/status", doomed, here)
+            c("it works before", _r.status_code == 200,
+              f"HTTP {_r.status_code} {_r.text[:90]}")
             from .web.security import revoke
             revoke(minted[-1])
             code = get("/api/status", doomed, here).status_code
             c("and not after", code == 403, f"HTTP {code}")
             say("revocation", c)
+
+            # -- 7b. the key must not move under a running process ---------
+            c = _Checker("identity")
+            c("the api key is the same one this run started with",
+              now_key() == started_with,
+              "it changed mid-run — every token handed out is now invalid")
+            say("the key holds still", c)
 
             # -- 8. "inside the house" must mean inside the house ----------
             c = _Checker("home")

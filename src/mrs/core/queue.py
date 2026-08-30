@@ -124,13 +124,21 @@ class WorkItem:
 
 class QueueManager:
     def __init__(self, sink, context_builder, taste=None, session_id: str = "",
-                 workers: int = 0, cap: int = 0, max_minutes: float = 0) -> None:
+                 workers: int = 0, cap: int = 0, max_minutes: float = 0,
+                 prefs=None) -> None:
         # Whatever is going to play these — mpv for the owner, a plain list
         # for a guest's browser. The engine above it doesn't care which.
         self.sink = sink
         self.context = context_builder
-        # Handed in so a guest is scored by, and teaches, a neutral store.
+        # Handed in so a guest is scored by, and teaches, their own store.
         self.taste = taste if taste is not None else _default_taste
+        # Whose settings this queue obeys. The owner's is the machine config;
+        # a guest's is their profile, which answers for the handful of things
+        # that are theirs and falls through to the machine for the rest. A
+        # guest's queue used to read the owner's toggles outright — the owner
+        # turning shuffle on reordered every guest, and setting repeat starved
+        # them, because a repeating set list stops growing.
+        self.prefs = prefs if prefs is not None else config
         # Stamped onto every event this queue publishes, so the stream can be
         # filtered per listener instead of shouting everything at everybody.
         self.session_id = session_id
@@ -475,7 +483,7 @@ class QueueManager:
 
     def _take_candidate(self) -> Candidate | None:
         now = time.monotonic()
-        recent_artists = self._tail_artists(int(config.get("artist_run_limit", 3)))
+        recent_artists = self._tail_artists(int(self.prefs.get("artist_run_limit", 3)))
         with self._lock:
             usable = [c for c in self._pool if c.can_try(now)]
             if not usable:
@@ -500,8 +508,8 @@ class QueueManager:
             # been on for a few records — but not every time. A rule that
             # never bends is its own kind of wrong: sometimes the best thing
             # to play next really is the same band again.
-            gap = int(config.get("artist_gap", 4))
-            slip = float(config.get("artist_gap_slip", 0.15))
+            gap = int(self.prefs.get("artist_gap", 4))
+            slip = float(self.prefs.get("artist_gap_slip", 0.15))
             near = {a for a in self._tail_artists(gap)}
             if near and random.random() >= slip:
                 pick = next((c for c in usable
@@ -614,8 +622,8 @@ class QueueManager:
 
     # -- depth / maintenance -------------------------------------------
     def target_minutes(self) -> float:
-        base = float(config.get("queue_minutes", 30))
-        cap = float(config.get("queue_minutes_max", 60))
+        base = float(self.prefs.get("queue_minutes", 30))
+        cap = float(self.prefs.get("queue_minutes_max", 60))
         # grows a little the longer you listen
         want = min(cap, base + min(20.0, self._session_plays * 1.5))
         # Somebody playing on their own phone gets a much shorter buffer.
@@ -793,10 +801,10 @@ class QueueManager:
 
     def _pref_shuffle(self) -> bool:
         """Shuffle is the owner's switch and lives on the owner's player."""
-        return False if self._solo else bool(config.get("shuffle"))
+        return bool(self.prefs.get("shuffle"))
 
     def _pref_repeat(self) -> str:
-        return "off" if self._solo else str(config.get("repeat", "off"))
+        return str(self.prefs.get("repeat", "off"))
 
     def oldest_request(self) -> float:
         """When the hour's allowance started running, so a refusal can say

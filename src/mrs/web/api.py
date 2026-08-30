@@ -809,10 +809,28 @@ def _owner_view(request: Request) -> bool:
 
 # ── playlists ─────────────────────────────────────────────────────────
 
+def _lists_for(request: Request):
+    """Whose playlists these are.
+
+    The owner's, or a permanent link's own. A link that expires gets None:
+    saving a list to a credential that dies at midnight is a promise the
+    thing can't keep, and it's better to say so than to lose it quietly.
+    """
+    me = _profile_for(request)
+    if me is None:
+        return playlists
+    return me.lists          # None when the link isn't permanent
+
+
 @app.get("/api/playlists")
-def api_playlists(_: bool = Auth):
-    return {"status": "ok", "playlists": playlists.summary(),
-            "folder": str(playlists.root()),
+def api_playlists(request: Request, _: bool = Auth):
+    mine = _lists_for(request)
+    if mine is None:
+        return {"status": "ok", "playlists": [], "folder": "",
+                "download": False, "temporary": True,
+                "message": "Playlists need a permanent link"}
+    return {"status": "ok", "playlists": mine.summary(),
+            "folder": str(mine.root()) if mine is playlists else "",
             "download": bool(config.get("playlist_download"))}
 
 
@@ -867,30 +885,54 @@ def api_spotify_add(url: str = "", _: bool = Auth):
 
 
 @app.get("/api/playlist/{op}")
-def api_playlist(op: str, name: str = "", shuffle: bool = False,
-                 video_id: str = "", title: str = "", artist: str = "",
-                 art: str = "", start: int = 0, _: bool = Auth):
+def api_playlist(request: Request, op: str, name: str = "",
+                 shuffle: bool = False, video_id: str = "", title: str = "",
+                 artist: str = "", art: str = "", start: int = 0,
+                 _: bool = Auth):
+    """Make and play lists — the caller's own, not always the owner's."""
+    mine = _lists_for(request)
+    if mine is None:
+        raise HTTPException(
+            403, "Playlists need a permanent link — this one expires")
+    room = _session_for(request)
+
     if op == "create":
-        playlists.create(name)
+        mine.create(name)
         return {"status": "ok", "message": f"Created {name}"}
     if op == "add":
+        from ..models import Track as _T
         if video_id:
-            from ..models import Track as _T
-            return {"status": "ok", **playlists.add(
+            return {"status": "ok", **mine.add(
                 name, _T(video_id=video_id, title=title, artist=artist, art=art))}
+        if room:
+            # "add what's on" needs to mean what's on *their* player.
+            cur = room.current()
+            if not cur:
+                return {"status": "ok", "ok": False, "message": "Nothing playing"}
+            return {"status": "ok", **mine.add(name, cur)}
         return {"status": "ok", **player.playlist_add_current(name)}
     if op == "remove":
-        return {"status": "ok", **playlists.remove(name, video_id)}
+        return {"status": "ok", **mine.remove(name, video_id)}
     if op == "delete":
-        return {"status": "ok", **playlists.delete(name)}
+        return {"status": "ok", **mine.delete(name)}
     if op == "play":
+        if room:
+            tracks = list(mine.tracks(name))
+            if not tracks:
+                return {"status": "ok", "ok": False, "message": "That list is empty"}
+            room.queue.play_now(tracks, shuffle=shuffle, hold_radio=True,
+                                kind="playlist")
+            return {"status": "ok", "ok": True,
+                    "message": f"Playing {name}"}
         return {"status": "ok", **player.playlist_play(name, shuffle, start)}
     if op == "download":
-        playlists.download_async(name)
+        if room:
+            raise HTTPException(403, "Keeping lists on disk is the computer's")
+        mine.download_async(name)
         return {"status": "ok", "message": f"Saving {name} offline"}
     if op == "tracks":
         return {"status": "ok",
-                "tracks": [t.to_dict() for t in playlists.tracks(name)]}
+                "tracks": [t.to_dict() for t in mine.tracks(name)]}
     raise HTTPException(404, "unknown playlist operation")
 
 
@@ -923,9 +965,18 @@ def api_settings(request: Request, _: bool = Auth):
     full = player.settings()
     if not is_owner(request):
         # A shared link shouldn't be handed the whole configuration just
-        # because the page it loads happens to read from here.
+        # because the page it loads happens to read from here. What it gets
+        # instead is its own: the handful of things a guest chooses, at
+        # whatever they've set them to.
+        from ..core.profile import GUEST_SETTINGS
+        me = _profile_for(request)
+        mine = me.all() if me else dict(GUEST_SETTINGS)
         return {"status": "ok", "guest": True,
-                **{k: full[k] for k in _GUEST_SETTINGS if k in full}}
+                "settable": sorted(GUEST_SETTINGS),
+                "persistent": bool(me and me.permanent),
+                "eq_presets": full.get("eq_presets", []),
+                **{k: full[k] for k in _GUEST_SETTINGS if k in full},
+                **mine}
     return {"status": "ok", **full, "release": __version__,
             "groq": llm.status(), "cookies": dict(cookie_mod.state),
             "spotdl": spotify.available()}
@@ -966,7 +1017,29 @@ _SETTABLE = {
 
 
 @app.get("/api/setting")
-def api_setting(key: str, value: str = "", _: bool = Owner):
+def api_setting(request: Request, key: str, value: str = "", _: bool = Auth):
+    """Change a setting. Whose depends on who's asking.
+
+    A guest writes into their own profile and can only reach the short list
+    that is theirs — how their queue behaves and how it sounds on their
+    device. Everything about the machine still needs the key.
+    """
+    me = _profile_for(request)
+    if me is not None:
+        from ..core.profile import GUEST_SETTINGS
+        if key not in GUEST_SETTINGS:
+            raise HTTPException(403, f"{key} is the computer's, not yours")
+        got = me.set(key, value)
+        if got is None:
+            raise HTTPException(400, f"bad value for {key}")
+        # Only stamped onto their own stream — nobody else's page should
+        # redraw because somebody changed their own crossfade.
+        bus.publish(Ev.SETTINGS, {"session": me.id, **me.all()})
+        return {"status": "ok", "key": key, "value": got,
+                "kept": me.permanent}
+
+    if not is_owner(request):
+        raise HTTPException(403, "That needs the key, not a shared link")
     caster_type = _SETTABLE.get(key)
     if caster_type is None:
         raise HTTPException(400, f"{key} isn't settable from here")
@@ -995,6 +1068,7 @@ def _session_for(request: Request):
     playing on their own device: their own session, created the first time
     they ask for anything.
     """
+    from ..core.profile import profiles
     from ..core.session import sessions
     row = getattr(request.state, "pass_row", None)
     if not row or row.get("internal") or row.get("owner"):
@@ -1002,8 +1076,22 @@ def _session_for(request: Request):
     here = request.headers.get("X-Play-Here", "") == "1"
     if row.get("scope") == "phone" or here:
         return sessions.for_pass(row["id"], row.get("name", ""),
-                                 row.get("scope", "full"))
+                                 row.get("scope", "full"),
+                                 profiles.for_row(row))
     return None
+
+
+def _profile_for(request: Request):
+    """This caller's profile, or None if they're the owner.
+
+    A permanent link is a person and gets a folder; one that expires is an
+    evening and gets defaults it can change for as long as it lasts.
+    """
+    from ..core.profile import profiles
+    row = getattr(request.state, "pass_row", None)
+    if not row or row.get("internal") or row.get("owner"):
+        return None
+    return profiles.for_row(row)
 
 
 def _guard_rate(room, request: Request | None = None) -> None:
@@ -1246,13 +1334,34 @@ def api_pass_new(name: str = "", hours: float = 24, scope: str = "full",
     return {"status": "ok", "url": row["url"], "kind": row["kind"], **got}
 
 
+@app.get("/api/profiles")
+def api_profiles(_: bool = Owner):
+    """Who has a profile, and a little about them.
+
+    Their top artists and how much they've played — the fun bit — and
+    nothing that amounts to reading over their shoulder. Not what they
+    played last night, not their history, not their queue.
+    """
+    from ..core.profile import profiles
+    return {"status": "ok", "profiles": profiles.listing()}
+
+
 @app.get("/api/passes/revoke")
 def api_pass_revoke(id: str = "", restore: int = 0, forget: int = 0,
-                    _: bool = Owner):
-    """Ban a link by name, or let it back in."""
+                    wipe: int = 0, _: bool = Owner):
+    """Ban a link by name, or let it back in.
+
+    `wipe` also deletes what that link had built up — its settings, its
+    taste, its playlists. Off by default: banning a link is usually "stop
+    this working", not "erase the person", and the two shouldn't be the
+    same button.
+    """
     if not id:
         return {"status": "error", "message": "Which one?"}
     if forget:
+        if wipe:
+            from ..core.profile import profiles
+            profiles.wipe(id)
         ok = sec.forget_pass(id)
     elif restore:
         ok = sec.restore_pass(id)

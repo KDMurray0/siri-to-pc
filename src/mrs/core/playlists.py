@@ -41,13 +41,16 @@ def _safe_name(name: str) -> str:
 
 
 class Playlists:
-    def __init__(self) -> None:
+    """Saved lists. `home` is whose — the owner's, or one guest's folder."""
+
+    def __init__(self, home: Path | None = None) -> None:
+        self._home = home
         self._lock = threading.RLock()
         self._downloading: set[str] = set()
 
     # -- layout --------------------------------------------------------
     def root(self) -> Path:
-        p = data_dir() / "playlists"
+        p = (self._home or data_dir()) / "playlists"
         p.mkdir(parents=True, exist_ok=True)
         return p
 

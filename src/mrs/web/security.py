@@ -22,8 +22,10 @@ this behind TLS or a private network if it faces the internet.
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import hmac
+import os
 import json
 import secrets
 import threading
@@ -61,11 +63,59 @@ def _unb64(text: str) -> bytes:
 
 SCOPES = ("full", "phone")     # what the holder may play out of
 
-_PASS_LOCK = threading.Lock()
+# Reentrant: _held() takes it too, and note_use nests inside.
+_PASS_LOCK = threading.RLock()
 
 
 def _passes_file():
     return data_dir() / "passes.json"
+
+
+@contextlib.contextmanager
+def _held():
+    """Hold the pass registry across processes for a read-modify-write.
+
+    _PASS_LOCK only covers threads in one process. Everything here is
+    load-the-whole-file, change one row, write-the-whole-file back — so two
+    processes doing that at once means the second one's write silently
+    deletes whatever the first added. That is somebody's link disappearing,
+    and it happens for real: the app runs all day while `--check` or a second
+    copy is started alongside it.
+
+    A lock file taken with O_EXCL, because it's the one thing every
+    filesystem agrees on. Never blocks forever: a stale lock from a process
+    that died mid-write is broken after a couple of seconds, which is far
+    better than the registry becoming unwritable until a reboot.
+    """
+    path = _passes_file().with_suffix(".lock")
+    fd, end = None, time.time() + 3.0
+    while fd is None:
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            if time.time() > end:
+                try:                       # stale: whoever held it is gone
+                    age = time.time() - path.stat().st_mtime
+                    if age > 3.0:
+                        path.unlink(missing_ok=True)
+                        continue
+                except OSError:
+                    pass
+                log.warning("pass registry stayed locked — writing anyway")
+                break
+            time.sleep(0.02)
+        except OSError:
+            break                          # can't lock here; don't refuse to work
+    with _PASS_LOCK:
+        try:
+            yield
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                path.unlink(missing_ok=True)
 
 
 def _load_passes() -> dict:
@@ -115,6 +165,11 @@ def note_use(tid: str, *, requests: int = 0, plays: int = 0,
         if not (requests or plays) and time.time() < _TALLY_DUE:
             return
         _TALLY_DUE = time.time() + 30
+    # The stats flush is a read-modify-write like any other, and it is the
+    # one that runs constantly — every thirty seconds, in the copy that's
+    # been playing music all day. Without the cross-process lock it was the
+    # most likely thing to overwrite a pass somebody had just been given.
+    with _held():
         rows, dirty = _load_passes(), False
         for pid, acc in list(_TALLY.items()):
             row = rows.get(pid)
@@ -175,7 +230,7 @@ def owner_pass(key: str) -> str:
     """
     if not key:
         return ""
-    with _PASS_LOCK:
+    with _held():
         rows = _load_passes()
         for tid, r in rows.items():
             if r.get("owner") and not r.get("revoked"):
@@ -202,7 +257,7 @@ def issue(key: str, name: str = "", hours: float = 24,
     body = f"{tid}.{expires}.{scope}"
     token = f"{body}.{_sign(key, body)}"
 
-    with _PASS_LOCK:
+    with _held():
         rows = _load_passes()
         rows[tid] = {"name": (name or "").strip()[:40] or "unnamed",
                      "scope": scope, "expires": expires,
@@ -235,7 +290,7 @@ def read_token(key: str, token: str) -> dict | None:
     except Exception:
         return None
 
-    with _PASS_LOCK:
+    with _held():
         rows = _load_passes()
         row = rows.get(tid)
         # A pass with no registry entry is one whose record was deleted;
@@ -282,7 +337,7 @@ def reissue_token(key: str, tid: str) -> str:
 
 def list_passes() -> list[dict]:
     now = time.time()
-    with _PASS_LOCK:
+    with _held():
         rows = _load_passes()
     out = []
     for tid, r in rows.items():
@@ -309,7 +364,7 @@ def list_passes() -> list[dict]:
 
 def revoke(tid: str) -> bool:
     """Ban one pass. The link keeps its shape and stops working."""
-    with _PASS_LOCK:
+    with _held():
         rows = _load_passes()
         row = rows.get(tid)
         if not row:
@@ -329,7 +384,7 @@ def revoke_owner_pass() -> int:
     fresh one is minted the next time an address is asked for.
     """
     gone = 0
-    with _PASS_LOCK:
+    with _held():
         rows = _load_passes()
         for tid, r in rows.items():
             if r.get("owner") and not r.get("revoked"):
@@ -343,7 +398,7 @@ def revoke_owner_pass() -> int:
 
 
 def restore_pass(tid: str) -> bool:
-    with _PASS_LOCK:
+    with _held():
         rows = _load_passes()
         row = rows.get(tid)
         if not row:
@@ -354,7 +409,7 @@ def restore_pass(tid: str) -> bool:
 
 
 def forget_pass(tid: str) -> bool:
-    with _PASS_LOCK:
+    with _held():
         rows = _load_passes()
         if tid not in rows:
             return False
@@ -370,7 +425,7 @@ def tidy_passes() -> int:
     every time it loads, so keeping the dead ones only grows the file.
     """
     now = time.time()
-    with _PASS_LOCK:
+    with _held():
         rows = _load_passes()
         spent = [t for t, r in rows.items()
                  if r.get("internal") and r.get("expires") and r["expires"] < now]
@@ -379,7 +434,7 @@ def tidy_passes() -> int:
         if spent:
             _save_passes(rows)
     cutoff = time.time() - 14 * 86400
-    with _PASS_LOCK:
+    with _held():
         rows = _load_passes()
         dead = [t for t, r in rows.items()
                 if r.get("expires") and r["expires"] < cutoff]

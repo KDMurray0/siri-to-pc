@@ -309,31 +309,55 @@ class MpvClient:
             self._mark_broken()
 
     def _read_forever(self, gen: int) -> None:
+        """One outstanding read at a time.
+
+        The wait timeout is the subtle bit. When WaitForSingleObject times out
+        the ReadFile is *still pending*, and going back to the top to call
+        ReadFile again reissues on the same handle, the same OVERLAPPED and the
+        same buffer while the kernel is still using all three. Sparse traffic
+        survives it; a burst loses whole replies, and a swallowed reply comes
+        back as None — which reads as "mpv dropped the file".
+
+        Found in the movie/TV port, where a video player's event rate makes it
+        happen every time. Fixed here too: `pending` tracks whether an
+        operation is in flight, and a timeout goes back to waiting on the one
+        already running instead of starting another.
+        """
         buf = b""
         size = 65536
         chunk = self._chunk
         ov = self._ov
+        pending = False
+        read = wintypes.DWORD(0)
         while not self._stop.is_set() and gen == self._gen:
             handle = self._handle
             if not handle:
                 return
-            ov.hEvent = self._read_event
-            _K32.ResetEvent(self._read_event)
-            read = wintypes.DWORD(0)
-            ok = _K32.ReadFile(handle, chunk, size, ctypes.byref(read),
-                               ctypes.byref(ov))
-            if not ok:
-                err = ctypes.get_last_error()
-                if err == ERROR_IO_PENDING:
-                    if _K32.WaitForSingleObject(self._read_event, 1000) != 0:
-                        continue
-                    if not _K32.GetOverlappedResult(handle, ctypes.byref(ov),
-                                                    ctypes.byref(read), False):
+            if not pending:
+                ov.hEvent = self._read_event
+                _K32.ResetEvent(self._read_event)
+                read = wintypes.DWORD(0)
+                ok = _K32.ReadFile(handle, chunk, size, ctypes.byref(read),
+                                   ctypes.byref(ov))
+                if not ok:
+                    err = ctypes.get_last_error()
+                    if err == ERROR_IO_PENDING:
+                        pending = True
+                    elif err in _PIPE_DEAD:
                         self._mark_broken(); return
-                elif err in _PIPE_DEAD:
-                    self._mark_broken(); return
-                else:
+                    else:
+                        time.sleep(0.05)      # don't spin on an odd error
+                        continue
+            if pending:
+                if _K32.WaitForSingleObject(self._read_event, 1000) != 0:
+                    continue                  # still running — leave it alone
+                if not _K32.GetOverlappedResult(handle, ctypes.byref(ov),
+                                                ctypes.byref(read), False):
+                    if ctypes.get_last_error() in _PIPE_DEAD:
+                        self._mark_broken(); return
+                    pending = False
                     continue
+                pending = False
             n = read.value
             if not n:
                 continue

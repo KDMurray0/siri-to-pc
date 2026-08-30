@@ -21,7 +21,16 @@ log = get("taste")
 
 
 class TasteEngine:
-    def __init__(self) -> None:
+    """What somebody has listened to, and what that says about them.
+
+    `root` is whose. The owner's is the data directory; a guest with a
+    permanent link gets their own folder, so their evening teaches their
+    radio and nothing else's. Left unset it's the owner's, which is what
+    every existing caller means.
+    """
+
+    def __init__(self, root=None) -> None:
+        self._root = root
         self._lock = threading.RLock()
         self._liked: list[dict] = []
         self._song: dict[str, list[int]] = defaultdict(lambda: [0, 0])   # id -> [plays, skips]
@@ -35,9 +44,15 @@ class TasteEngine:
         self._load()
 
     # -- persistence ---------------------------------------------------
+    def _file(self, name: str):
+        if self._root is None:
+            return state_file(name)
+        self._root.mkdir(parents=True, exist_ok=True)
+        return self._root / name
+
     def _load(self) -> None:
         try:
-            d = json.loads(state_file("play_stats.json").read_text("utf-8-sig"))
+            d = json.loads(self._file("play_stats.json").read_text("utf-8-sig"))
             self._song.update({k: list(v) for k, v in d.get("songs", {}).items()})
             self._artist.update({k: list(v) for k, v in d.get("artists", {}).items()})
             self._history = d.get("history", [])[-config.get("history_size", 200):]
@@ -46,7 +61,7 @@ class TasteEngine:
         except Exception:
             pass
         try:
-            self._liked = json.loads(state_file("liked_songs.json").read_text("utf-8-sig"))
+            self._liked = json.loads(self._file("liked_songs.json").read_text("utf-8-sig"))
         except Exception:
             self._liked = []
 
@@ -67,7 +82,7 @@ class TasteEngine:
         with self._lock:
             self._prune()
             try:
-                write_atomic(state_file("play_stats.json"), json.dumps({
+                write_atomic(self._file("play_stats.json"), json.dumps({
                     "songs": self._song, "artists": self._artist,
                     "history": self._history[-config.get("history_size", 200):],
                     "recent": self._recent_meta[-100:],
@@ -89,7 +104,7 @@ class TasteEngine:
 
     def _save_liked(self) -> None:
         try:
-            state_file("liked_songs.json").write_text(
+            self._file("liked_songs.json").write_text(
                 json.dumps(self._liked[-500:]), encoding="utf-8")
         except Exception as exc:
             # Silence here loses everything you've ever liked, and the only
