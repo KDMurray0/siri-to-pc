@@ -522,6 +522,14 @@ def api_control(request: Request, action: str, value: int | None = None,
     # A browser session has no mpv to command: the phone is the transport, so
     # these only move the queue and the client follows.
     q, sink = room.queue, room.sink
+    if action in ("next", "skip", "previous"):
+        # Leaving a track early is the clearest thing anybody ever tells a
+        # radio, and a guest's was going unheard: only /api/session/ended
+        # recorded anything, and that fires when a track runs out. Somebody
+        # who skips everything they're offered — which is what you do when
+        # you're being offered the wrong thing — taught their profile nothing
+        # at all, and its history stayed empty however long they listened.
+        room.note_played(room.current(), room.position)
     if action in ("next", "skip"):
         sink.advance()
         room.rewound()          # the clock belonged to the track that just went
@@ -780,8 +788,17 @@ def api_play_album(request: Request, name: str, artist: str = "", _: bool = Auth
 
 
 @app.get("/api/lyrics")
-def api_lyrics(_: bool = Auth):
-    track = player.queue.current_track()
+def api_lyrics(request: Request, _: bool = Auth):
+    """Words to whatever the caller is listening to.
+
+    This said player.queue outright, so it answered with the owner's track
+    whoever asked — which for a listener on their own device meant the wrong
+    song's words, or, far more often, "no lyrics for this one" because the
+    computer's speakers weren't playing anything at all. It also meant a link
+    could read what the owner was listening to.
+    """
+    room = _session_for(request)
+    track = room.current() if room else player.queue.current_track()
     if not track:
         return {"status": "ok", "lyrics": None}
     data = lyrics_mod.get_lyrics(track.title, track.artist, track.duration)

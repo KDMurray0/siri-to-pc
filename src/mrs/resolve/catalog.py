@@ -317,6 +317,27 @@ def to_track(row: dict, origin: str = "radio") -> Track:
     )
 
 
+def _words(name: str) -> set[str]:
+    """A name reduced to the words worth comparing."""
+    folded = Track(title="", artist=name or "").primary_artist()
+    return {"".join(c for c in w if c.isalnum()) for w in folded.split()} - {""}
+
+
+def _same_act(wanted: str, got: Track) -> bool:
+    """Is this search result by the artist we asked for?
+
+    One name has to contain the other, whole words either way round, so
+    "Evanescence" still matches "Evanescence feat. Amy Lee" and "Panic! At
+    The Disco" still matches "Panic at the Disco" — but somebody sharing no
+    name at all with the act we searched for is not a near miss, it's a
+    different record that happened to answer.
+    """
+    a, b = _words(wanted), _words(got.artist if got else "")
+    if not a or not b:
+        return False
+    return a <= b or b <= a
+
+
 def _acceptable(t: Track, *, allow_variant: bool = False) -> bool:
     if not t.video_id or not t.title:
         return False
@@ -687,8 +708,19 @@ def _from_genre_tag(genre: str, limit: int, budget: float = 6.0) -> list[Track]:
     def find(pair):
         if time.monotonic() > deadline:
             return None
-        hits = search_songs(f"{pair[0]} {pair[1]}", limit=1)
-        return hits[0] if hits else None
+        title, artist = pair
+        # Three, and take the first that is actually the record we went
+        # looking for. This took hits[0] on trust, and a search always
+        # answers — for a pairing YouTube hasn't got, the answer is whatever
+        # shares a couple of words with the query. Nothing downstream could
+        # tell the difference afterwards, because by then the track's artist
+        # *is* whoever answered: a gothic rock pool came back full of AI
+        # worship uploads, and every guard after this point dutifully scored
+        # them as gothic rock.
+        for hit in search_songs(f"{title} {artist}", limit=3):
+            if _same_act(artist, hit):
+                return hit
+        return None
 
     with ThreadPoolExecutor(max_workers=5) as pool:
         found = list(pool.map(find, wanted))

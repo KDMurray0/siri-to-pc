@@ -102,6 +102,21 @@ class TasteEngine:
                 return
         self.save()
 
+    def flush(self) -> None:
+        """Write anything save_soon() deferred.
+
+        save_soon() sets the dirty flag and returns without writing if it
+        wrote recently, on the understanding that somebody comes back for it.
+        For the owner's store the player does, on shutdown. A guest's store
+        had nobody: everything recorded in the twenty seconds before they
+        stopped listening — usually the last track, often all of them — stayed
+        in memory until the session was dropped, and then went with it.
+        """
+        with self._lock:
+            if not self._dirty:
+                return
+        self.save()
+
     def _save_liked(self) -> None:
         try:
             self._file("liked_songs.json").write_text(
@@ -377,6 +392,9 @@ class NeutralTaste:
         pass
 
     def save_soon(self, *a, **k) -> None:
+        pass
+
+    def flush(self, *a, **k) -> None:
         pass
 
 

@@ -481,6 +481,68 @@ def run(verbose: bool = False) -> Result:
               and blank_status(pid)["closed"] is False)
             say("sessions end cleanly", c)
 
+            # -- 9d. a listener's own listening ----------------------------
+            c = _Checker("listening")
+            from .core.profile import Profile
+            from .models import Track as _Tr
+
+            who = Profile("check-listener", "Listener", permanent=True)
+            song = _Tr(video_id="chk1", title="One", artist="A",
+                       duration=200, origin="request")
+            more = _Tr(video_id="chk2", title="Two", artist="B",
+                       duration=200, origin="request")
+            who.taste.record(song, 199, 200)
+            who.taste.record(more, 199, 200)      # inside save_soon's window
+            c("both plays are remembered",
+              len(who.taste.recent(10)) == 2, str(who.taste.recent(10)))
+            import json as _json
+            f = who.home() / "taste" / "play_stats.json"
+            on_disk = _json.loads(f.read_text("utf-8-sig")) if f.exists() else {}
+            c("...but only one reached disk on its own",
+              len(on_disk.get("recent", [])) == 1,
+              "if this fails save_soon stopped throttling, which is fine — "
+              "the flush below is what matters")
+            who.taste.flush()
+            on_disk = _json.loads(f.read_text("utf-8-sig"))
+            c("flush writes what save_soon deferred",
+              len(on_disk.get("recent", [])) == 2,
+              str([r["title"] for r in on_disk.get("recent", [])]))
+            import shutil as _sh
+            _sh.rmtree(who.home(), ignore_errors=True)
+            say("a listener's own listening", c)
+
+            # -- 9c. a search result has to be the record we asked for -----
+            # The genre pool took the first hit on trust. A search always
+            # answers, so for a pairing YouTube hasn't got it answered with
+            # whatever shared a couple of words — and nothing downstream
+            # could tell, because by then the track's artist *is* whoever
+            # answered. Measured: 1% wrong across rock tags, 10% across
+            # worship ones, which is how a gothic rock queue filled up with
+            # AI worship uploads.
+            c = _Checker("pool")
+            from .models import Track as _T
+            from .resolve.catalog import _same_act
+
+            same = [("Evanescence", "Evanescence"),
+                    ("Evanescence", "Evanescence feat. Paul McCoy"),
+                    ("Florence + the Machine", "Florence and the Machine"),
+                    ("Panic! At The Disco", "Panic at the Disco"),
+                    ("Sigur Rós", "Sigur Ros")]
+            for want, got in same:
+                c(f"{want} is still {got}", _same_act(want, _T(artist=got)))
+            other = [("Lacuna Coil", "Theresa Vandermeer"),
+                     ("Within Temptation", "I Needed This Dave"),
+                     ("Nightwish", "Timeless Hebrew Tunes"),
+                     ("Rich Dolce", "Al Stewart"),
+                     ("Vanessa Carlton", "Twenty One Two"),
+                     ("Hillsong United", "Hillsong Musical")]
+            for want, got in other:
+                c(f"{got} is not {want}", not _same_act(want, _T(artist=got)))
+            c("an empty name vouches for nobody",
+              not _same_act("", _T(artist="Anyone"))
+              and not _same_act("Someone", _T(artist="")))
+            say("the pool gets what it asked for", c)
+
             # -- 10. usage is recorded against the link --------------------
             c = _Checker("stats")
             rows = get("/api/passes").json().get("passes", [])

@@ -121,9 +121,15 @@ class Session:
         there was anything to play. That is the whole of "it pulls up a song
         and then does nothing".
         """
-        last, quiet = None, 0
+        last, quiet, ticks = None, 0, 0
         while not self._stop.wait(1.0):
             try:
+                ticks += 1
+                # Waiting for the session to end is too late to be the only
+                # time their listening reaches disk — an app restart or a
+                # crash takes the lot with it.
+                if ticks % 30 == 0:
+                    self.queue.taste.flush()
                 now = self.status()
                 # Only when it actually changes: this goes to a phone, and a
                 # kilobyte a second of identical json is somebody's data. But
@@ -220,6 +226,11 @@ class Session:
 
     def stop(self) -> None:
         self._stop.set()
+        # Their listening, before the session holding it goes away.
+        try:
+            self.queue.taste.flush()
+        except Exception as exc:
+            log.debug("couldn't save %s's listening: %s", self.name, exc)
         try:
             self.queue.stop()
         except Exception as exc:
