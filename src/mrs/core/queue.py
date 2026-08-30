@@ -120,6 +120,10 @@ class WorkItem:
     mode: str = "append"          # now | next | append
     alternates: list[str] | None = None
     announce: bool = False
+    # Part of an import somebody asked for by name. Those survive being
+    # superseded: pasting a forty-track playlist and then asking for one song
+    # while it matched shouldn't throw the other thirty-nine away.
+    imported: bool = False
 
 
 class QueueManager:
@@ -182,6 +186,9 @@ class QueueManager:
         # download that was already in flight when you asked for something
         # else can't land in the queue you asked for instead.
         self._era = 0
+        # Bumped only by a deliberate stop, so a long import can tell the
+        # difference between "you cancelled me" and "somebody asked for a song".
+        self._import_gen = 0
         # The last running order we saw, kept off the sink so a crash can't
         # take it away. See snapshot() and restore_order().
         self._last_order: list[str] = []
@@ -273,23 +280,39 @@ class QueueManager:
             self._work.appendleft(WorkItem(track, mode="next"))
         self._wake.set()
 
-    def enqueue(self, tracks: list[Track]) -> None:
+    def enqueue(self, tracks: list[Track], imported: bool = False) -> None:
         with self._lock:
             for t in tracks:
-                self._work.append(WorkItem(t, mode="append"))
+                self._work.append(WorkItem(t, mode="append", imported=imported))
         self._wake.set()
 
-    def cancel(self) -> dict:
-        """Abandon whatever we're fetching and stop chasing it."""
+    def cancel(self, user: bool = True) -> dict:
+        """Abandon whatever we're fetching and stop chasing it.
+
+        `user` is whether a person pressed the X. They didn't when this is
+        the automatic clear-out before a new request — and that difference
+        matters for an import, which is a job somebody asked for by name and
+        which takes a minute of matching. Asking for a song while forty
+        tracks were still being matched used to bin the rest of them; only
+        the X does that now.
+        """
         with self._lock:
-            dropped = len(self._work)
+            keep = [] if user else [w for w in self._work if w.imported]
+            dropped = len(self._work) - len(keep)
             self._work.clear()
+            self._work.extend(keep)
             self._era += 1        # nothing older than this may reach the sink
+            if user:
+                self._import_gen += 1     # and stop the matching itself
         # Only this queue's. Everybody else is still listening to theirs.
         killed = downloader.cancel_all(self.session_id)
         self._set_activity("idle")
         return {"ok": True, "cancelled": killed, "dropped": dropped,
                 "message": "Stopped" if (killed or dropped) else "Nothing to stop"}
+
+    def import_era(self) -> int:
+        """The token an import holds. Changes only when somebody presses X."""
+        return self._import_gen
 
     def shuffle_upcoming(self) -> None:
         """Reorder what's still to come, and only that.
@@ -590,7 +613,7 @@ class QueueManager:
         # if the request that wanted this has been replaced, changing it is
         # the bug. A cached track reaches this point in milliseconds, which is
         # why clearing the work list alone never closed the window.
-        if era != self._era:
+        if era != self._era and not item.imported:
             log.info("dropped %s — a newer request replaced it", track.title)
             with self._lock:
                 if track.key():

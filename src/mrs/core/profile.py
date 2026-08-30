@@ -119,7 +119,7 @@ class Profile:
         if self.permanent:
             self.taste = TasteEngine(root=self.home(create=True) / "taste")
             from .playlists import Playlists          # late: it imports paths
-            self.lists = Playlists(home=self.home(create=True))
+            self.lists = Playlists(home=self.home(create=True), session=pass_id)
             self._load()
         else:
             # An evening, not a person. Reads flat, writes nowhere.

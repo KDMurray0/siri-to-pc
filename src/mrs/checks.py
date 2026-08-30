@@ -362,6 +362,33 @@ def run(verbose: bool = False) -> Result:
               "it changed mid-run — every token handed out is now invalid")
             say("the key holds still", c)
 
+            # -- 7c. an import is a job, not a whim -----------------------
+            c = _Checker("imports")
+            from .core.queue import QueueManager, WorkItem
+            from .core.sink import ListSink
+            from .core.taste import NeutralTaste
+            from .models import Track as _Tk
+
+            class _Ctx:
+                def build(self, *a, **k): return []
+                def quick(self, *a, **k): return []
+
+            q = QueueManager(ListSink(), _Ctx(), taste=NeutralTaste(),
+                             session_id="importcheck")
+            q.enqueue([_Tk(video_id="imp1", title="From a list")], imported=True)
+            q.enqueue([_Tk(video_id="ord1", title="Ordinary")])
+            before = q.import_era()
+            q.cancel(user=False)          # a new request came in
+            left = [w.track.video_id for w in q._work]
+            c("a new request drops ordinary work", "ord1" not in left, str(left))
+            c("...but keeps an import running", "imp1" in left, str(left))
+            c("...and doesn't stop the matching", q.import_era() == before)
+            q.cancel(user=True)           # the X
+            c("the X drops the import too", not q._work,
+              str([w.track.video_id for w in q._work]))
+            c("...and stops the matching", q.import_era() != before)
+            say("imports survive being superseded", c)
+
             # -- 8. "inside the house" must mean inside the house ----------
             c = _Checker("home")
             from .web.security import _own_wan, is_home

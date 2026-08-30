@@ -43,8 +43,9 @@ def _safe_name(name: str) -> str:
 class Playlists:
     """Saved lists. `home` is whose — the owner's, or one guest's folder."""
 
-    def __init__(self, home: Path | None = None) -> None:
+    def __init__(self, home: Path | None = None, session: str = "") -> None:
         self._home = home
+        self._session = session
         self._lock = threading.RLock()
         self._downloading: set[str] = set()
 
@@ -138,7 +139,13 @@ class Playlists:
 
     def _save(self, name: str, rows: list[dict]) -> None:
         write_atomic(self._index(name), json.dumps(rows, indent=1))
-        bus.publish(Ev.SETTINGS, {"playlists": True})
+        # Stamped with whose library changed. Unstamped, a guest editing
+        # their own list sent the redraw to the owner's page and not to
+        # theirs — the stream routes on that stamp.
+        evt = {"playlists": True}
+        if self._session:
+            evt["session"] = self._session
+        bus.publish(Ev.SETTINGS, evt)
 
     def add(self, name: str, track: Track) -> dict:
         if not track or not (track.video_id or track.url):

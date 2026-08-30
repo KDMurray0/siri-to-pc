@@ -19,6 +19,10 @@ from .resolve import applemusic, numbers, parser, resolver, spotify
 
 log = get("request")
 
+
+class _Stopped(Exception):
+    """The X was pressed while an import was matching tracks."""
+
 # Which request is the live one. Resolving can take tens of seconds — an LLM
 # call, several searches, then a download — and asking for something else
 # during that used to leave two of them racing, with whichever finished last
@@ -149,7 +153,9 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
         # queue slot.
         mine = _claim(room)
         if plan.mode not in ("next", "queue"):
-            queue.cancel()
+            # Not the X — just making room for what was asked for. An import
+            # already running is somebody's forty-track playlist and survives.
+            queue.cancel(user=False)
 
         queue._set_activity("finding", plan.query)
         res = resolver.resolve(plan)
@@ -443,29 +449,71 @@ def _import_link(reader, service: str, url: str, *,
     # owner's — a stranger's Spotify link filing itself in your collection.
     store = lists if lists is not None else (None if room else playlists)
 
-    queue._set_activity("finding", f"Reading {service} link")
-    say_to(room, f"Reading that {service} link…")
+    # Saving a list is a background errand, not a performance. It used to
+    # take over the progress bar and narrate every step, which is fine when
+    # you're waiting to hear it and noise when you're filing it away.
+    quiet = not play
+    if not quiet:
+        queue._set_activity("finding", f"Reading {service} link")
+        say_to(room, f"Reading that {service} link…")
     verb = "Playing" if play else "Saved"
+    guard = getattr(queue, "import_era", lambda: 0)()
 
     def work() -> None:
         names = reader.track_names(url)
         if not names:
             say_to(room, "Couldn't read that link — is the playlist public?")
-            queue._set_activity("idle")
+            if not quiet:
+                queue._set_activity("idle")
             return
 
         label = reader.link_name(url) or f"{service} import"
-        say_to(room, f"{label}: {len(names)} tracks, matching them up…")
+        if not quiet:
+            say_to(room, f"{label}: {len(names)} tracks, matching them up…")
+
+        def tell(busy: bool, done: int = 0) -> None:
+            """Nudge whoever owns this library to redraw.
+
+            The list appears the moment the name is known and fills in as the
+            matching runs, so you can watch it happen. It used to appear only
+            once every track had been found, and only if you happened to
+            leave the tab and come back.
+            """
+            evt = {"playlists": True, "importing": label if busy else "",
+                   "found": done, "total": len(names)}
+            if room:
+                evt["session"] = room
+            bus.publish(Ev.SETTINGS, evt)
+
+        # The list exists straight away, empty, with the right name on it.
+        if store is not None:
+            store.create(label)
+            tell(True, 0)
 
         def progress(i, total, title):
-            queue._set_activity("finding", f"{i}/{total} {title}", i / total)
+            # Only the X stops this, and only the bar it was already using.
+            if getattr(queue, "import_era", lambda: guard)() != guard:
+                raise _Stopped()
+            if not quiet:
+                queue._set_activity("finding", f"{i}/{total} {title}", i / total)
 
         # Start on the first match instead of the last. The rest are appended
         # as they turn up, so the downloader is working the whole time the
         # remaining names are still being looked up.
-        started = [False]
+        started, saved = [False], [0]
 
         def arrived(track, count):
+            # Into the list as it's found, so the count climbs while you
+            # watch rather than jumping from nothing to forty at the end.
+            if store is not None:
+                try:
+                    store.add(label, track)
+                    saved[0] += 1
+                    # Every few, not every one: this redraws a panel.
+                    if saved[0] < 4 or saved[0] % 5 == 0:
+                        tell(True, saved[0])
+                except Exception as exc:
+                    log.debug("couldn't file %s: %s", track.title, exc)
             if not play:
                 return
             if not started[0]:
@@ -474,20 +522,30 @@ def _import_link(reader, service: str, url: str, *,
                 if announce:
                     player.announce(f"{verb} {label}", room)
             else:
-                queue.enqueue([track])
+                queue.enqueue([track], imported=True)
 
-        tracks = spotify.resolve_imported(names, on_progress=progress,
-                                          on_track=arrived)   # service-agnostic
-        queue._set_activity("idle")
+        try:
+            tracks = spotify.resolve_imported(names, on_progress=progress,
+                                              on_track=arrived)  # service-agnostic
+        except _Stopped:
+            log.info("%s import stopped by the user", service)
+            if not quiet:
+                queue._set_activity("idle")
+            tell(False, saved[0])      # spinner off; keep what was found
+            return
+        if not quiet:
+            queue._set_activity("idle")
         if not tracks:
             say_to(room, "None of those tracks could be found")
+            if store is not None:
+                store.delete(label)    # an empty list nobody asked for
+                tell(False, 0)
             return
 
-        # keep it, so the import isn't a one-off — one write, not one per
-        # track. Into whosever library this belongs to; a temporary link has
-        # none, and gets the music without the bookmark.
+        # Anything the incremental pass missed, and the spinner off.
         if store is not None:
             store.add_many(label, tracks)
+            tell(False, len(tracks))
 
         msg = f"{verb} {label} — {len(tracks)} tracks"
         if play:
@@ -496,13 +554,12 @@ def _import_link(reader, service: str, url: str, *,
             say_to(room, msg + (" (saved as a playlist)" if store is not None else ""))
         else:
             say_to(room, msg)
-            if not room:
-                bus.publish(Ev.SETTINGS, {"playlists": True})
 
     def unstick(_exc):
         # Whatever went wrong, the spinner has to come back down — the line
         # that lowers it sits three statements past the one that threw.
-        queue._set_activity("idle")
+        if not quiet:
+            queue._set_activity("idle")
         say_to(room, "That import failed — see the log")
 
     spawn(work, name=f"{service.lower()} import", on_error=unstick)

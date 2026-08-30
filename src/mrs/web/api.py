@@ -925,25 +925,38 @@ def api_playlist(request: Request, op: str, name: str = "",
             403, "Playlists need a permanent link — this one expires")
     room = _session_for(request)
 
+    def changed():
+        room_id = room.id if room else ""
+        bus.publish(Ev.SETTINGS, {"playlists": True, "session": room_id}
+                    if room_id else {"playlists": True})
+
     if op == "create":
         mine.create(name)
+        changed()
         return {"status": "ok", "message": f"Created {name}"}
     if op == "add":
         from ..models import Track as _T
         if video_id:
-            return {"status": "ok", **mine.add(
-                name, _T(video_id=video_id, title=title, artist=artist, art=art))}
-        if room:
-            # "add what's on" needs to mean what's on *their* player.
+            got = mine.add(
+                name, _T(video_id=video_id, title=title, artist=artist, art=art))
+        elif room:
+            # "add what's on" has to mean what's on *their* player.
             cur = room.current()
             if not cur:
                 return {"status": "ok", "ok": False, "message": "Nothing playing"}
-            return {"status": "ok", **mine.add(name, cur)}
-        return {"status": "ok", **player.playlist_add_current(name)}
+            got = mine.add(name, cur)
+        else:
+            got = player.playlist_add_current(name)
+        changed()
+        return {"status": "ok", **got}
     if op == "remove":
-        return {"status": "ok", **mine.remove(name, video_id)}
+        got = mine.remove(name, video_id)
+        changed()
+        return {"status": "ok", **got}
     if op == "delete":
-        return {"status": "ok", **mine.delete(name)}
+        got = mine.delete(name)
+        changed()
+        return {"status": "ok", **got}
     if op == "play":
         if room:
             tracks = list(mine.tracks(name))

@@ -218,6 +218,20 @@ body.mini .magic{display:none}
 .qbtn{background:var(--panel);border:1px solid var(--line);color:var(--sub);
   border-radius:9px;padding:6px 10px;font-size:11.5px;cursor:pointer;font-family:inherit}
 .qbtn:hover{color:var(--accent);border-color:var(--accent)}
+/* A list still filling up: it's there, named, and visibly working. */
+.plspin{width:13px;height:13px;flex:0 0 auto;border-radius:50%;
+  border:2px solid var(--line);border-top-color:var(--accent);
+  animation:plspin .7s linear infinite}
+@keyframes plspin{to{transform:rotate(360deg)}}
+.plrow.busy .pn em{color:var(--accent)}
+/* Pasting a playlist link is a different job from searching, so the row
+   changes to suit it: importing is offered, and the three that would
+   silently do the same thing as Enter are not. */
+#addimport{display:none}
+body.pastedlink #addimport{display:inline-block}
+body.pastedlink #addnext,body.pastedlink #addqueue,body.pastedlink #radio{display:none}
+/* Nowhere to save it: a link that expires has no library of its own. */
+body.guest:not(.keeps) #addimport{display:none}
 
 /* results open upward: the input sits low, a downward list runs off the window */
 .results{position:absolute;left:0;right:0;bottom:calc(100% + 6px);z-index:8;
@@ -776,6 +790,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         <button class="qbtn" id="addnext">Play next</button>
         <button class="qbtn" id="addqueue">Add to queue</button>
         <button class="qbtn" id="radio">Radio</button>
+        <button class="qbtn" id="addimport">Import as playlist</button>
       </div>
     </div>
 
@@ -1400,6 +1415,7 @@ let searchT, searchSeq = 0;
 $("q").addEventListener("input", () => {
   const v = $("q").value.trim();
   $("qactions").classList.toggle("show", v.length > 0);
+  document.body.classList.toggle("pastedlink", isLink(v));
   clearTimeout(searchT);
   if (v.length < 2) { hideResults(); return; }
   searchT = setTimeout(() => showResults(v), 320);
@@ -1427,11 +1443,13 @@ document.addEventListener("mousedown", e => {
   if (!e.target.closest(".search")) hideResults();
 });
 const SPOTIFY_RE = /open\.spotify\.com\/(playlist|album|track|artist)\//i;
+const APPLE_RE = /music\.apple\.com\/[^\s]*\/(playlist|album)\//i;
+const isLink = v => SPOTIFY_RE.test(v) || APPLE_RE.test(v);
 
 async function showResults(v) {
   // A newer search wins; stale replies are dropped rather than racing.
   const seq = ++searchSeq;
-  if (SPOTIFY_RE.test(v)) {
+  if (isLink(v)) {
     $("results").innerHTML =
       `<div class="rres" data-act="spotify"><div class="qi"></div>` +
       `<div class="rt"><div class="rn">Import this Spotify link</div>` +
@@ -1554,9 +1572,32 @@ $("results").addEventListener("mousedown", async e => {
   toast((r && r.message) || "Playing");
 });
 
+/* Save the list without putting it on. Enter already imports *and* plays,
+   which is the wrong half of the choice when you're collecting rather than
+   listening — and there was no way to say so. */
+$("addimport").onclick = async () => {
+  const v = $("q").value.trim();
+  if (!isLink(v)) return;
+  $("addimport").disabled = true;
+  $("addimport").textContent = "Importing…";
+  const r = await api("/api/spotify/add?url=" + encodeURIComponent(v));
+  $("addimport").disabled = false;
+  $("addimport").textContent = "Import as playlist";
+  toast((r && r.message) || "Couldn't import that");
+  if (r && r.status === "ok") {
+    $("q").value = "";
+    $("qactions").classList.remove("show");
+    document.body.classList.remove("pastedlink");
+    hideResults();
+    // It arrives track by track over the next few seconds.
+    setTimeout(() => { if (activePanel === "lists") loadLists(); }, 5000);
+  }
+};
+
 const withQuery = (mode) => {
   const v = $("q").value.trim(); if (!v) return;
-  $("q").value = ""; $("qactions").classList.remove("show"); hideResults();
+  $("q").value = ""; $("qactions").classList.remove("show");
+  document.body.classList.remove("pastedlink"); hideResults();
   apiSay("/api/play?q=" + encodeURIComponent(v) + "&mode=" + mode, true)
     .then(r => { if (r) toast(r.message); });
 };
@@ -1845,6 +1886,9 @@ $("panel-recent").addEventListener("click", e => {
   }
 });
 
+/* The list being imported right now, if any, and how far along. */
+let importing = "", importFound = 0, importTotal = 0;
+
 async function loadLists() {
   const box = $("panel-lists");
   box.innerHTML = '<div class="muted">Loading…</div>';
@@ -1859,10 +1903,16 @@ async function loadLists() {
   html += rows.length
     ? rows.map(p => {
         const n = p.name || "";
-        return `<div class="plrow"><span class="pn" data-open="${esc(n)}">${esc(n)}` +
-        `<em>${p.count || 0} song${p.count === 1 ? "" : "s"}</em></span>` +
-        `<button class="qc" data-play="${esc(n)}" title="Play">▶</button>` +
-        `<button class="qc" data-del="${esc(n)}" title="Delete">✕</button></div>` +
+        const busy = n && n === importing;
+        const sub = busy
+          ? `adding… ${importFound}${importTotal ? " of " + importTotal : ""}`
+          : `${p.count || 0} song${p.count === 1 ? "" : "s"}`;
+        return `<div class="plrow${busy ? " busy" : ""}">` +
+        `<span class="pn" data-open="${esc(n)}">${esc(n)}<em>${esc(sub)}</em></span>` +
+        (busy ? '<span class="plspin" aria-label="Importing"></span>'
+              : `<button class="qc" data-play="${esc(n)}" title="Play">▶</button>` +
+                `<button class="qc" data-del="${esc(n)}" title="Delete">✕</button>`) +
+        `</div>` +
         `<div class="pltracks" id="pl-${esc(n).replace(/[^a-zA-Z0-9]/g, "_")}"></div>`;
       }).join("")
     : '<div class="muted">No lists yet.</div>';
@@ -3565,7 +3615,17 @@ function connect() {
         else { live = null; lv = msg.data; }
         break;
       case "cookies": applyCookies(msg.data); break;
-      case "settings": break;
+      case "settings":
+        // A list arriving, or filling up. The panel used to redraw only when
+        // you left the tab and came back, so an import you were watching
+        // looked like it hadn't happened.
+        if (msg.data && msg.data.playlists) {
+          importing = msg.data.importing || "";
+          importFound = msg.data.found || 0;
+          importTotal = msg.data.total || 0;
+          if (activePanel === "lists") loadLists();
+        }
+        break;
     }
   };
   es.onerror = () => { es.close(); setTimeout(connect, 2500); };
