@@ -1362,9 +1362,16 @@ function qiFail(el) {
   el.replaceWith(d);
 }
 let lastArt = "", artRetries = 0, artRetryFor = "";
+/* One transparent pixel. Taking the src attribute off an <img> that is
+   currently showing a cover doesn't clear what's painted — Chromium leaves
+   the torn-page glyph sitting in the corner over the placeholder. Pointing
+   it at nothing-shaped-like-an-image does clear it, and costs no request. */
+const BLANK_PIXEL = "data:image/gif;base64," +
+  "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
 function artBlank() {
   const img = $("art"), amb = $("ambient");
-  img.removeAttribute("src");
+  img.src = BLANK_PIXEL;
   img.classList.add("placeholder");
   amb.innerHTML = "";
   artAccent = null; applyAccent();
@@ -2367,10 +2374,16 @@ async function loadSessions() {
   $("whoslistening").innerHTML = rows.map(s => {
     const heat = s.requests_hour >= 30 ? "hot" : s.requests_hour >= 12 ? "warm" : "";
     const at = s.duration ? " " + fmt(s.position) + "/" + fmt(s.duration) : "";
+    // Dropped means the server has already paused them for going quiet. It
+    // was reported and never shown, so the row went on naming a track that
+    // had been stopped for them minutes ago, with the live dot still lit.
+    const what = s.dropped
+      ? "away · paused" + (s.playing ? " on " + esc(s.playing) : "")
+      : s.playing ? esc(s.playing) + at
+      : s.active ? "picking something"
+      : "idle " + s.idle_minutes + "m";
     return `<div class="sessrow${s.active ? " live" : ""}">` +
-      `<span class="sessname">${esc(s.name)}` +
-      `<em>${s.playing ? esc(s.playing) + at
-                       : (s.active ? "picking something" : "idle " + s.idle_minutes + "m")}</em></span>` +
+      `<span class="sessname">${esc(s.name)}<em>${what}</em></span>` +
       `<span class="sessmeta ${heat}">${s.ahead} to come · ${s.requests_hour}/h` +
       ` · ${s.plays} played · ${s.listened_minutes}m</span>` +
       `<button class="pickx sesskick" data-i="${esc(s.id)}" title="End this session">✕</button>` +
@@ -2382,7 +2395,11 @@ $("whoslistening").addEventListener("click", async e => {
   if (!b) return;
   await api("/api/sessions?close=" + encodeURIComponent(b.dataset.i));
   toast("Session ended");
-  loadSessions();
+  // Both lists say something about this person, so both are wrong the moment
+  // one of them changes. Refreshing only this one left their link claiming
+  // they were listening for another eight seconds, directly underneath a
+  // list that had just stopped mentioning them.
+  loadSessions(); loadPasses();
 });
 
 /* Two presses, because it can't be undone and one press is how it happens
@@ -2424,9 +2441,14 @@ function passLife(p) {
        : Math.round(h / 24) + "d left";
 }
 function passSeen(p) {
+  // "Listening now" is asked of the sessions, not guessed from the clock. A
+  // link touched a minute ago whose session has since been ended is not
+  // listening to anything, and saying so for another minute is how the list
+  // ends up disagreeing with the one right above it.
+  if (p.listening) return "listening now";
   if (!p.last_seen) return "never used";
   const mins = (Date.now() / 1000 - p.last_seen) / 60;
-  return mins < 2 ? "listening now"
+  return mins < 2 ? "just now"
        : mins < 90 ? Math.round(mins) + "m ago"
        : mins < 2880 ? Math.round(mins / 60) + "h ago"
        : Math.round(mins / 1440) + "d ago";
@@ -2558,7 +2580,7 @@ $("passlist").addEventListener("click", async e => {
     await api("/api/passes/revoke?id=" + encodeURIComponent(id) +
               (me && me.revoked ? "&forget=1" : ""));
     toast(me && me.revoked ? "Forgotten" : "That link stops working now");
-    loadPasses();
+    loadPasses(); loadSessions();
   }
 });
 
@@ -3104,6 +3126,11 @@ castEls.forEach(el => el.addEventListener("ended", async () => {
    reconnect used to resume up to twenty seconds behind. */
 function reportProgress() {
   if (!cast.on || ME.owner) return;
+  // Nothing loaded, nothing to report — and reporting anyway would open a
+  // session just to say "still at zero". That matters right after one has
+  // been ended: pausing the audio fires this, and the session the owner
+  // just closed would come straight back as an empty row in their list.
+  if (!cast.vid) return;
   const el = castLive();
   api("/api/session/progress?pos=" + Math.round(el.currentTime || 0));
 }
@@ -3671,8 +3698,30 @@ function showTimer(t) {
     ? "Starts in " + clock : "Stops in " + clock;
 }
 
+/* The session under this page has gone — ended by the owner, revoked, or
+   quiet long enough to be let go. Everything on screen belonged to it, and
+   nothing stamped for it can arrive again, so left alone the page sits there
+   showing that queue and that track: it doesn't look finished, it looks like
+   a player that has stopped responding. Put it back to empty, which is what
+   a reload would have shown, and let the next request open a new one. */
+function sessionEnded(reason) {
+  try {
+    castEls.forEach(el => { el.pause(); el.removeAttribute("src"); el.load(); });
+  } catch (e) {}
+  cast.vid = ""; cast.tries = 0; cast.ready = "";
+  renderQueue([]);
+  state.trackKey = ""; state.position = 0; state.duration = 0;
+  env = null;
+  // Telling somebody whose link has just been turned off to ask for
+  // something else is worse than saying nothing.
+  toast(reason === "revoked"
+    ? "This link has been turned off"
+    : "That session ended — ask for something to start another");
+}
+
 function applyStatus(d) {
   if (!d) return;
+  if (d.closed) sessionEnded(d.reason);
   const t = d.track || {};
   const key = (t.name || "") + "|" + (t.artist || "");
   $("title").textContent = t.name || "Nothing playing";

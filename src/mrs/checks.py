@@ -17,6 +17,7 @@ whose queue a request lands in. Playback is checked by playing something.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 
@@ -413,6 +414,72 @@ def run(verbose: bool = False) -> Result:
               not unguarded,
               "unguarded: " + ", ".join(unguarded) if unguarded else "")
             say("route inventory", c)
+
+            # -- 9b. a session that ends says so ---------------------------
+            # Both surfaces used to go on claiming somebody was there: the
+            # owner's link row from a two-minute timestamp guess, and the
+            # listener's own page because every event is delivered by session
+            # and theirs no longer existed to send one.
+            c = _Checker("session end")
+            from .core.session import blank_status, sessions
+            from .events import Ev, bus
+
+            tok = link("check-ending", scope="phone", hours=1)
+            pid = tok.split(".")[0]
+            # /api/status is enough to open one and asks nothing of the
+            # network — the suite must not go looking up songs.
+            get("/api/status", tok)
+            c("asking opens a session", sessions.find(pid) is not None)
+            rows = get("/api/passes").json().get("passes", [])
+            mine = next((r for r in rows if r["id"] == pid), None)
+            c("the link says somebody is on it",
+              bool(mine) and mine.get("listening") is True,
+              str(mine and mine.get("listening")))
+
+            # The bus drops everything until uvicorn binds it a loop, and
+            # under TestClient there isn't one — so lend it a loop, and only
+            # if it hasn't got one, in case a real server is up alongside.
+            import asyncio as _aio
+
+            lent = bus._loop is None
+            loop = _aio.new_event_loop() if lent else None
+            if lent:
+                bus.bind_loop(loop)
+            heard: list[dict] = []
+            sub = bus.subscribe()
+            try:
+                sessions.close(pid, "revoked")
+                if lent:
+                    loop.run_until_complete(_aio.sleep(0))   # drain the fanout
+                else:
+                    time.sleep(0.25)
+                while not sub.empty():
+                    heard.append(sub.get_nowait())
+            finally:
+                bus.unsubscribe(sub)
+                if lent:
+                    bus.bind_loop(None)
+                    loop.close()
+            shut = [e for e in heard
+                    if not e.get("replay")
+                    and isinstance(e.get("data"), dict)
+                    and e["data"].get("session") == pid
+                    and e["data"].get("closed")]
+            c("closing one tells the page", bool(shut),
+              "nothing stamped for that session was published")
+            c("...and says why", bool(shut) and shut[0]["data"].get("reason") == "revoked")
+            c("...with nothing left playing",
+              bool(shut) and not shut[0]["data"]["track"]["name"])
+
+            rows = get("/api/passes").json().get("passes", [])
+            mine = next((r for r in rows if r["id"] == pid), None)
+            c("the link stops saying they're listening",
+              bool(mine) and mine.get("listening") is False,
+              "it still claims they are, off a recent timestamp")
+            c("a page with no session isn't shown the owner's",
+              not blank_status(pid)["track"]["name"]
+              and blank_status(pid)["closed"] is False)
+            say("sessions end cleanly", c)
 
             # -- 10. usage is recorded against the link --------------------
             c = _Checker("stats")

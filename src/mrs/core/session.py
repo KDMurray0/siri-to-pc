@@ -33,6 +33,33 @@ IDLE_DEATH = 6 * 3600          # silence after which a session is let go
 GUEST_QUEUE_CAP = 40           # tracks one guest may pin at once
 
 
+def _pause_after() -> float:
+    """Silence after which a guest is assumed to have walked off."""
+    return float(config.get("guest_quiet_pause", 45))
+
+
+def blank_status(pass_id: str, closed: bool = False,
+                 reason: str = "") -> dict:
+    """A guest's player with nothing in it.
+
+    The same shape as a real status so nothing on the client has to special
+    case it. `closed` is the bit that says a session was taken away rather
+    than never having been opened — one clears the page and says so, the
+    other is just what a listener sees before they've asked for anything.
+    `reason` is the difference between "ask again" and "you can't".
+    """
+    return {
+        "session": pass_id, "closed": closed, "reason": reason,
+        "state": "idle",
+        "position": 0.0, "playlist_pos": 0, "playlist_count": 0,
+        "volume": 100, "shuffle": False, "repeat": "off", "crossfade": 0,
+        "activity": {"stage": "idle"}, "timer": None,
+        "track": {"name": "", "artist": "", "album": "", "art": "",
+                  "video_id": "", "duration": 0,
+                  "live": False, "song_known": False, "liked": False},
+    }
+
+
 class Session:
     """A guest's player: their queue, their sink, nothing of yours."""
 
@@ -253,7 +280,11 @@ class Session:
             "queued": self.sink.count(),
             "ahead": max(0, self.sink.count() - (self.sink.pos() or 0) - 1),
             "idle_minutes": round(quiet / 60, 1),
-            "active": quiet < 120,
+            # The same line that decides to pause them. It used to be a flat
+            # two minutes, which is longer than the silence it takes to get
+            # paused — so for over a minute the owner's list showed somebody
+            # listening to a track that had already been stopped for them.
+            "active": not self._dropped and quiet < _pause_after(),
             "dropped": self._dropped,
             "requests_hour": self.queue.recent_requests(),
             "plays": self.plays,
@@ -285,13 +316,25 @@ class Sessions:
         with self._lock:
             return self._rooms.get(pass_id)
 
-    def close(self, pass_id: str) -> bool:
+    def close(self, pass_id: str, reason: str = "ended") -> bool:
         with self._lock:
             room = self._rooms.pop(pass_id, None)
-        if room:
-            room.stop()
-            log.info("closed the session for %r", room.name)
-        return bool(room)
+        if not room:
+            return False
+        room.stop()
+        # Tell the page. Every event carries the session that produced it and
+        # is delivered on that, so once the session is gone nothing stamped
+        # for it can ever arrive again — a page whose session was ended just
+        # keeps showing the queue and the track it had, looking alive rather
+        # than looking finished. This is the last thing it hears.
+        try:
+            bus.publish(Ev.STATUS,
+                        blank_status(pass_id, closed=True, reason=reason))
+            bus.publish(Ev.QUEUE, {"rows": [], "session": pass_id})
+        except Exception as exc:
+            log.debug("couldn't announce the end of %s: %s", pass_id, exc)
+        log.info("closed the session for %r", room.name)
+        return True
 
     def listing(self) -> list[dict]:
         with self._lock:
@@ -329,15 +372,16 @@ class Sessions:
         now = time.time()
         with self._lock:
             rooms = list(self._rooms.items())
-        dead = []
+        dead: list[tuple[str, str]] = []
         for pid, room in rooms:
-            if now - room.last_seen > IDLE_DEATH or pid not in alive:
-                dead.append(pid)
-                continue
-            if room.check_alive() == "close":
-                dead.append(pid)
-        for pid in dead:
-            self.close(pid)
+            if pid not in alive:
+                dead.append((pid, "revoked"))
+            elif now - room.last_seen > IDLE_DEATH:
+                dead.append((pid, "quiet"))
+            elif room.check_alive() == "close":
+                dead.append((pid, "quiet"))
+        for pid, why in dead:
+            self.close(pid, why)
         return len(dead)
 
     def watch(self) -> None:

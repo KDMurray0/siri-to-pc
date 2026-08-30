@@ -368,10 +368,16 @@ async def events(request: Request, key: str = Query(default=""),
             # state settles waits for something to happen before it learns
             # there is anything playing — which for a browser session means
             # it never starts, because nothing will happen until it does.
-            from ..core.session import sessions
+            from ..core.session import blank_status, sessions
             try:
                 room = sessions.find(mine) if mine else None
-                first = room.status() if room else player.status()
+                # A listener on their own device gets their own player even
+                # when they haven't got one yet. Falling through to the
+                # shared player here opened their page on the owner's
+                # now-playing — and after their session had been let go,
+                # that is exactly the moment they reconnect.
+                first = (room.status() if room else
+                         blank_status(mine) if mine else player.status())
                 yield _sse({"type": "status", "data": first})
             except Exception as exc:
                 log.debug("couldn't send the opening status: %s", exc)
@@ -1353,8 +1359,19 @@ def api_token(hours: int = 12, _: bool = Owner):
 @app.get("/api/passes")
 def api_passes(_: bool = Owner):
     """Every link you've handed out, and who has it."""
+    from ..core.session import sessions
+
     sec.tidy_passes()
-    return {"status": "ok", "passes": sec.list_passes()}
+    sessions.reap()
+    # Whether anyone is on the other end, asked of the sessions rather than
+    # guessed from how recently the link was touched. A timestamp can only
+    # say "not long ago", so a link went on claiming somebody was listening
+    # for minutes after their session had been ended or had timed out.
+    live = {r["id"] for r in sessions.listing() if r["active"]}
+    rows = sec.list_passes()
+    for row in rows:
+        row["listening"] = row["id"] in live
+    return {"status": "ok", "passes": rows}
 
 
 @app.get("/api/passes/new")
@@ -1398,6 +1415,8 @@ def api_pass_revoke(id: str = "", restore: int = 0, forget: int = 0,
     this working", not "erase the person", and the two shouldn't be the
     same button.
     """
+    from ..core.session import sessions
+
     if not id:
         return {"status": "error", "message": "Which one?"}
     if forget:
@@ -1409,6 +1428,12 @@ def api_pass_revoke(id: str = "", restore: int = 0, forget: int = 0,
         ok = sec.restore_pass(id)
     else:
         ok = sec.revoke(id)
+    if ok and not restore:
+        # End it here rather than leaving it to the reaper. "That link stops
+        # working now" was true of the next request and not of the music
+        # already playing on it, which carried on for up to five seconds
+        # while the list still showed them listening.
+        sessions.close(id, "revoked")
     return {"status": "ok" if ok else "error", "passes": sec.list_passes()}
 
 
@@ -1431,7 +1456,8 @@ def api_lockdown(port: int = 1, _: bool = Owner):
             sec.revoke(row["id"])
             killed += 1
     killed += sec.revoke_owner_pass()
-    ended = sum(1 for r in sessions.listing() if sessions.close(r["id"]))
+    ended = sum(1 for r in sessions.listing()
+                if sessions.close(r["id"], "revoked"))
     moved = 0
     if port:
         from .security import random_port
