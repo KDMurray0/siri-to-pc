@@ -40,6 +40,19 @@ The whole player runs in a browser, so anything with one is a speaker.
 Links are signed passes rather than the key itself, they expire, and three
 wrong guesses from one address earns a 24-hour ban.
 
+### On a computer
+
+Open any link in a browser window wider than 900px and the player rearranges
+itself rather than stretching: the queue becomes a column down the right that
+stays visible while you use the rest of it, the cover takes the height it's
+given, and the search box moves to the top. The tray flyout stays the narrow
+bar it's meant to be — **right-click the tray icon → Open desktop player** to
+get the wide one on this machine.
+
+A link playing on a laptop also gets the volume slider, which used to be
+hidden from every link on the assumption that "playing on your own device"
+meant a phone with hardware buttons.
+
 ## Quick Start
 
 ### Option 1 — download the release (no Python needed)

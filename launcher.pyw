@@ -692,6 +692,13 @@ def _tray() -> None:
             host = "127.0.0.1"
         webbrowser.open(f"http://{host}:{config.get('port',5000)}/?key={config.get('api_key','')}")
 
+    def desktop(_i, _it):
+        # The flyout is a fixed 400px window on purpose, so the wide layout
+        # can't be reached by dragging it — a browser is the only way in.
+        import webbrowser
+        webbrowser.open(f"http://127.0.0.1:{config.get('port',5000)}"
+                        f"/player?key={config.get('api_key','')}")
+
     def quit_(icon, _it):
         _tray_quit.set()          # so the keep-alive loop doesn't rebuild it
         try:
@@ -708,6 +715,7 @@ def _tray() -> None:
 
     menu = Menu(
         MenuItem("Show player", show, default=True),
+        MenuItem("Open desktop player", desktop),
         MenuItem("Restart player", restart_player),
         MenuItem("Find cookies", find_cookies),
         Menu.SEPARATOR,
