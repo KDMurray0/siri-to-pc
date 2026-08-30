@@ -140,16 +140,53 @@ def run(verbose: bool = False) -> Result:
                 h.update(extra or {})
                 return client.get(path, headers=h)
 
-            # -- 1. the owner's listening is the owner's ------------------
+            # -- 1. everyone's listening is their own ---------------------
             c = _Checker("history")
-            c("owner sees their own recents",
-              get("/api/history").json().get("mine") is True)
-            for who, tok in (("a full link", full), ("a phone link", phone)):
+            owner_hist = get("/api/history").json()
+            c("owner sees their own recents", owner_hist.get("mine") is True)
+            owner_titles = {r.get("title") for r in owner_hist.get("history") or []}
+            for who, tok in (("a temporary full link", full),
+                             ("a temporary phone link", phone)):
+                # No profile to keep one in, so there is nothing to show.
                 c(f"{who} gets no recents",
                   not get("/api/history", tok, here).json().get("history"))
                 c(f"{who} gets no liked songs",
                   not get("/api/liked", tok, here).json().get("liked"))
+            # A permanent link has a history — its own, and never the owner's.
+            keeper = issue(now_key(), name="check-keeper", hours=0, scope="full")
+            minted.append(keeper["id"])
+            kt = keeper["token"]
+            khist = get("/api/history", kt, here).json()
+            mine_titles = {r.get("title") for r in khist.get("history") or []}
+            c("a permanent link gets a history of its own",
+              khist.get("mine") is True)
+            c("...which is not the owner's",
+              not (mine_titles & owner_titles) if owner_titles else True,
+              f"overlap={sorted(mine_titles & owner_titles)[:3]}")
+            c("...and liked songs of its own, empty to start",
+              get("/api/liked", kt, here).json().get("liked") == [])
             say("recents and liked", c)
+
+            # -- 1b. liking writes somewhere, and somewhere of theirs ------
+            c = _Checker("liking")
+            from .core.profile import profiles as _profs
+            from .models import Track as _T
+            kp = _profs.find(keeper["id"])
+            c("a permanent link has a real taste store",
+              kp is not None and kp.permanent)
+            if kp:
+                song = _T(video_id="LIKECHK001", title="A Song", artist="Someone")
+                kp.taste.toggle_like(song)
+                c("a like is remembered", kp.taste.is_liked("LIKECHK001"))
+                c("...and comes back over http",
+                  any(x.get("video_id") == "LIKECHK001"
+                      for x in get("/api/liked", kt, here).json().get("liked", [])))
+                c("...and is not in the owner's liked songs",
+                  not any(x.get("video_id") == "LIKECHK001"
+                          for x in get("/api/liked").json().get("liked", [])))
+                kp.taste.toggle_like(song)
+                c("unliking works too", not kp.taste.is_liked("LIKECHK001"))
+            say("liking", c)
 
             # -- 2. settings are the caller's own, never the owner's -------
             c = _Checker("settings")
@@ -256,6 +293,7 @@ def run(verbose: bool = False) -> Result:
               "check-list" not in [x["name"] for x in
                                    get("/api/playlists").json().get("playlists", [])])
             profiles.wipe(forever["id"])
+            profiles.wipe(keeper["id"])
             say("playlists per profile", c)
 
             # -- 3. the admin surface is shut ------------------------------

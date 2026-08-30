@@ -64,7 +64,7 @@ _COMMANDS = {
 
 def handle_request(text: str, *, mode: str = "play", source: str | None = None,
                    announce: bool = True, cast: bool = False,
-                   queue=None) -> dict:
+                   queue=None, lists=None) -> dict:
     """The one entry point. Never raises.
 
     `queue` is whose queue this lands in — the shared player by default, or a
@@ -93,9 +93,11 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
 
         # A streaming link is a playlist import, not a search.
         if spotify.is_spotify_url(text):
-            return _import_spotify(text, announce=announce, queue=queue, room=room)
+            return _import_spotify(text, announce=announce, queue=queue,
+                                   room=room, lists=lists)
         if applemusic.is_apple_url(text):
-            return _import_apple(text, announce=announce, queue=queue, room=room)
+            return _import_apple(text, announce=announce, queue=queue,
+                                 room=room, lists=lists)
 
         # Your own playlists win over anything YouTube might suggest. Yours,
         # though — a guest naming one would have played it out of the front
@@ -423,7 +425,7 @@ def play_later(what: str, minutes: float, *, announce: bool = True) -> dict:
 
 def _import_link(reader, service: str, url: str, *,
                  announce: bool = True, play: bool = True, queue=None,
-                 room: str = "") -> dict:
+                 room: str = "", lists=None) -> dict:
     """Turn a streaming link into a playlist, keeping its name.
 
     `reader` is whichever module knows how to read that service — it needs
@@ -436,6 +438,10 @@ def _import_link(reader, service: str, url: str, *,
     """
     queue = queue if queue is not None else player.queue
     from .core.playlists import playlists
+    # Whose library the result is filed in. A guest's own, if they have one;
+    # theirs is the only place it should go, and it used to go into the
+    # owner's — a stranger's Spotify link filing itself in your collection.
+    store = lists if lists is not None else (None if room else playlists)
 
     queue._set_activity("finding", f"Reading {service} link")
     say_to(room, f"Reading that {service} link…")
@@ -477,17 +483,17 @@ def _import_link(reader, service: str, url: str, *,
             say_to(room, "None of those tracks could be found")
             return
 
-        # keep it, so the import isn't a one-off — one write, not one per track.
-        # Not a guest's, though: playlists are the owner's library, and a
-        # stranger's Spotify link has no business filing itself in there.
-        if not room:
-            playlists.add_many(label, tracks)
+        # keep it, so the import isn't a one-off — one write, not one per
+        # track. Into whosever library this belongs to; a temporary link has
+        # none, and gets the music without the bookmark.
+        if store is not None:
+            store.add_many(label, tracks)
 
         msg = f"{verb} {label} — {len(tracks)} tracks"
         if play:
             if not started[0]:          # nothing matched early enough to start
                 queue.play_now(tracks, hold_radio=True, kind="playlist")
-            say_to(room, msg + ("" if room else " (saved as a playlist)"))
+            say_to(room, msg + (" (saved as a playlist)" if store is not None else ""))
         else:
             say_to(room, msg)
             if not room:
@@ -505,23 +511,24 @@ def _import_link(reader, service: str, url: str, *,
 
 
 def _import_spotify(url: str, *, announce: bool = True, play: bool = True,
-                    queue=None, room: str = "") -> dict:
+                    queue=None, room: str = "", lists=None) -> dict:
     return _import_link(spotify, "Spotify", url, announce=announce, play=play,
-                        queue=queue, room=room)
+                        queue=queue, room=room, lists=lists)
 
 
 def _import_apple(url: str, *, announce: bool = True, play: bool = True,
-                  queue=None, room: str = "") -> dict:
-    return _import_link(applemusic, "Apple Music", url,
-                        announce=announce, play=play, queue=queue, room=room)
+                  queue=None, room: str = "", lists=None) -> dict:
+    return _import_link(applemusic, "Apple Music", url, announce=announce,
+                        play=play, queue=queue, room=room, lists=lists)
 
 
-def add_spotify(url: str) -> dict:
+def add_spotify(url: str, queue=None, room: str = "", lists=None) -> dict:
     """Save a streaming link as a playlist without interrupting what's on."""
+    common = dict(announce=False, play=False, queue=queue, room=room, lists=lists)
     if spotify.is_spotify_url(url):
-        return _import_spotify(url, announce=False, play=False)
+        return _import_spotify(url, **common)
     if applemusic.is_apple_url(url):
-        return _import_apple(url, announce=False, play=False)
+        return _import_apple(url, **common)
     return {"status": "error", "message": "That isn't a Spotify or Apple Music link"}
 
 

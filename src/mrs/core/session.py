@@ -169,6 +169,23 @@ class Session:
             self.listened += moved
         return max(0.0, moved)
 
+    def note_played(self, track, seconds: float) -> None:
+        """Record a finished track against this listener's taste.
+
+        The owner's plays are recorded by mpv's monitor loop, which a browser
+        session hasn't got — so without this a permanent link accumulated
+        settings and playlists but never learned anything, and its radio
+        stayed as blank on the tenth evening as the first.
+        """
+        if not track:
+            return
+        try:
+            length = float(track.duration or 0)
+            if self.queue.taste.record(track, seconds, length):
+                self.plays += 1
+        except Exception as exc:
+            log.debug("couldn't record a play for %s: %s", self.name, exc)
+
     def rewound(self) -> None:
         """A new track started, so the old position means nothing."""
         self.position = 0.0
@@ -212,7 +229,11 @@ class Session:
                 "art": track.art if track else "",
                 "video_id": track.video_id if track else "",
                 "duration": (track.duration if track else 0) or 0,
-                "live": False, "song_known": False, "liked": False,
+                "live": False, "song_known": False,
+                # Their own liked list, so the heart means something. It was
+                # hardcoded false, which made the button look broken even
+                # once there was somewhere for it to write.
+                "liked": bool(track and self.queue.taste.is_liked(track.video_id)),
             } if track else {"name": "", "artist": "", "art": "", "duration": 0,
                              "live": False, "song_known": False},
         }

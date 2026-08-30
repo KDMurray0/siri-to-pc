@@ -596,16 +596,20 @@ body.guest #passlist,body.guest #netaddrs,body.guest #whoslistening{display:none
    a guest hasn't got. Hidden rather than shown doing nothing. */
 body.casting.guest #volslider,
 body.casting.guest #minivol,
-body.guest #like,
-body.guest #download,
-body.guest #addlist,
-body.guest .navtab[data-panel="lists"]{display:none}
-/* Recently played is the owner's listening history. A guest on their own
-   phone has no business reading it, and nothing they play goes into it —
-   so the tab goes rather than sitting there empty. It comes back when they
-   switch to the computer's speakers, because then they *are* looking at
-   what that player has been doing. */
-body.guest.casting .navtab[data-panel="recent"]{display:none}
+/* Downloading a copy to the machine's disk stays the owner's. */
+body.guest #download{display:none}
+/* Liking, saving and lists all need somewhere of their own to write. A
+   permanent link has one — its own liked songs, its own playlists, its own
+   history — so it gets the buttons. A link that expires has nowhere to put
+   any of it, and a heart that forgets by morning is worse than no heart. */
+body.guest:not(.keeps) #like,
+body.guest:not(.keeps) #addlist,
+body.guest:not(.keeps) .navtab[data-panel="lists"]{display:none}
+/* Recently played, likewise: theirs when they have one, and never the
+   owner's. On the computer's speakers they're looking at that player, so
+   the tab is the owner's history and stays hidden from a link. */
+body.guest:not(.keeps) .navtab[data-panel="recent"],
+body.guest.casting:not(.keeps) .navtab[data-panel="recent"]{display:none}
 /* The speaker icon stays — it opens the here-or-computer capsule — but with
    the slider gone it shouldn't sit in a gap where a slider used to be. */
 body.casting.guest .vol{flex:0 0 auto}
@@ -2548,6 +2552,9 @@ async function loadWhoami() {
   // Somebody who opened a link is on the device they want it to come out of.
   // cast.on was already true before the first request went out; this applies
   // the rest of the mode — the classes, the hidden controls, the handlers.
+  // A link that never expires is a person with somewhere to keep things:
+  // liked songs, playlists, a history of their own. One that expires isn't.
+  document.body.classList.toggle("keeps", !r.owner && !r.expires);
   if (!r.owner) castOn();
   return ME;
 }

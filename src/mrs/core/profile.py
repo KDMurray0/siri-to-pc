@@ -214,7 +214,18 @@ class Profile:
         top: list[dict] = []
         played = 0
         try:
-            top = [{"artist": a.get("artist", ""), "plays": a.get("plays", 0)}
+            # top_artists is keyed by the folded, article-stripped name the
+            # scoring uses — "franz ferdinand", "ac dc". Fine for maths and
+            # wrong on screen, so put the spelling back from what was
+            # actually played.
+            from ..models import Track
+            spelt: dict[str, str] = {}
+            for row in self.taste.recent(200):
+                real = (row.get("artist") or "").strip()
+                if real:
+                    spelt.setdefault(Track(artist=real).primary_artist(), real)
+            top = [{"artist": spelt.get(a["artist"], a["artist"].title()),
+                    "plays": a.get("plays", 0)}
                    for a in self.taste.top_artists(5) if a.get("artist")]
             played = len(self.taste.history_ids())
         except Exception as exc:

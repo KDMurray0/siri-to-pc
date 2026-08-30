@@ -492,7 +492,8 @@ def api_play(request: Request, q: str = "", song: str = "", artist: str = "", mo
     if not room:
         _guard_shared(request)
     return handle_request(text, mode=mode, source=source or None, cast=cast,
-                          queue=room.queue if room else None)
+                          queue=room.queue if room else None,
+                          lists=_lists_for(request))
 
 
 @app.get("/api/play/video/{video_id}")
@@ -527,6 +528,11 @@ def api_control(request: Request, action: str, value: int | None = None,
                         (action == "playpause" and not sink.paused))
     elif action == "shuffle":
         q.shuffle_upcoming()
+    elif action == "like":
+        # Into their own liked list. There is one now, so the heart works.
+        track = room.current()
+        if track:
+            q.taste.toggle_like(track)
     q.publish_queue(force=True)
     return {"status": "ok", **room.status()}
 
@@ -541,7 +547,9 @@ def api_session_ended(request: Request, _: bool = Auth):
     room = _session_for(request)
     if not room:
         return {"status": "ok", "shared": True}
-    room.plays += 1
+    # Their taste learns from what they actually sat through, the same way
+    # the owner's does from mpv's monitor loop.
+    room.note_played(room.current(), room.position)
     sec.note_use(room.id, plays=1)
     room.sink.advance()
     room.rewound()
@@ -784,7 +792,16 @@ def api_history(request: Request, _: bool = Auth):
     session records into a neutral store that swallows writes.
     """
     if not _owner_view(request):
-        return {"status": "ok", "history": [], "top_artists": [], "mine": False}
+        # Their own, if they have one. A permanent link builds a history the
+        # same way the owner does, and it's theirs to look at — what it must
+        # never be is a window onto the owner's.
+        me = _profile_for(request)
+        if me is None or not me.permanent:
+            return {"status": "ok", "history": [], "top_artists": [],
+                    "mine": False}
+        return {"status": "ok", "history": me.taste.recent(),
+                "top_artists": me.taste.top_artists(), "mine": True,
+                "whose": me.name}
     return {"status": "ok", "history": taste.recent(),
             "top_artists": taste.top_artists(), "mine": True}
 
@@ -792,7 +809,9 @@ def api_history(request: Request, _: bool = Auth):
 @app.get("/api/liked")
 def api_liked(request: Request, _: bool = Auth):
     if not _owner_view(request):
-        return {"status": "ok", "liked": []}
+        me = _profile_for(request)
+        return {"status": "ok",
+                "liked": me.taste.liked() if me and me.permanent else []}
     return {"status": "ok", "liked": taste.liked()}
 
 
@@ -879,9 +898,19 @@ def api_spectrum(_: bool = Auth):
 
 
 @app.get("/api/spotify/add")
-def api_spotify_add(url: str = "", _: bool = Auth):
-    """Save a Spotify link as a playlist without hijacking what's playing."""
-    return add_spotify(url)
+def api_spotify_add(request: Request, url: str = "", _: bool = Auth):
+    """Save a Spotify link as a playlist without hijacking what's playing.
+
+    Into the caller's own library. A guest pasting a link here used to file
+    it in the owner's collection, which is both a surprise and a mess.
+    """
+    mine = _lists_for(request)
+    if mine is None:
+        raise HTTPException(
+            403, "Saving a list needs a permanent link — this one expires")
+    room = _session_for(request)
+    return add_spotify(url, queue=room.queue if room else None,
+                       room=room.id if room else "", lists=mine)
 
 
 @app.get("/api/playlist/{op}")
