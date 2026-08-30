@@ -777,9 +777,19 @@ class QueueManager:
         # Cold pool: put something playable in it now rather than after a
         # minute of network calls. Ranked candidates land on top of these.
         if not self._pool:
+            # A bridge, not a queue. quick() is one artist's own catalogue by
+            # design, and six of them is the whole of what a listener can see
+            # — a guest's queue is capped at ten minutes, so by the time the
+            # real build lands there is nowhere left to put it and you asked
+            # for one song and got that band's greatest hits. Two is enough to
+            # cover the gap; the next track by the same band is a perfectly
+            # good second track. Asking for the band is a different question,
+            # and there six is the answer.
+            bridge = 6 if self._request_kind in ("artist", "album",
+                                                 "playlist") else 2
             try:
                 fast = self.context.quick(self.current_track(), exclude=ids,
-                                          exclude_keys=keys, limit=6)
+                                          exclude_keys=keys, limit=bridge)
             except Exception as exc:
                 log.debug("quick prefill failed: %s", exc)
                 fast = []

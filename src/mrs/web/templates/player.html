@@ -3111,6 +3111,19 @@ function applyAnnounce(d) {
 /* Audio really started, so whatever refused it earlier no longer applies. */
 castEls.forEach(el => el.addEventListener("playing", castUnblock));
 
+/* The length arrives with the file's metadata, which is usually after the
+   status that named the track — so the bar has to be told again once it's
+   known, or a track the server has no duration for stays flat until the
+   next status happens to land. */
+castEls.forEach(el => el.addEventListener("durationchange", () => {
+  if (el !== castLive() || ME.owner || !cast.on) return;
+  if (!isFinite(el.duration) || el.duration <= 0) return;
+  if (Math.abs((state.duration || 0) - el.duration) < 1) return;
+  state.duration = el.duration;
+  $("dur").textContent = fmt(state.duration);
+  if (!seekDrag) paintSeek(state.position / state.duration, state.position);
+}));
+
 /* The phone finishing a track is what moves a session on — the server holds
    the queue and the index, never the position. Survives the phone sleeping,
    which a server-side timer would not. */
@@ -3728,6 +3741,15 @@ function applyStatus(d) {
   $("artist").textContent = t.artist || "";
   setArt(t.art || "");
   state.duration = t.duration || 0;
+  // The server doesn't always know how long a track is: anything that came
+  // out of an artist's catalogue rather than a search arrives without one,
+  // and a bar with no length can't move — it sat at zero reading "0:33 /
+  // 0:00" for the whole song. When this page is the one playing the file it
+  // knows better than the server does, so ask it.
+  if (cast.on && !ME.owner) {
+    const el = castLive();
+    if (el && isFinite(el.duration) && el.duration > 0) state.duration = el.duration;
+  }
   // When this page is the speaker, the seek bar reads the audio element, not
   // the server's echo of it — otherwise the bar snapped back to zero on
   // every tick, which is what "it keeps restarting" looked like on screen.
