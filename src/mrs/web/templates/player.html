@@ -386,31 +386,30 @@ body.reordering .q{transition:transform .12s ease}
 .lyrics .lrow .w{font-style:normal;transition:color .22s ease,opacity .22s ease}
 .lyrics .lrow.active .w{color:var(--sub);opacity:.5}
 .lyrics .lrow.active .w.lit{color:var(--fg);opacity:1}
-/* The word being sung, filling across itself: a hard stop between the two
-   colours, moved along the word by --f.
+/* Each word comes up as it's sung.
 
-   --f is animated by the browser rather than written by script. Registering
-   it as a percentage is what makes it interpolatable — without @property a
-   custom property is just a string and jumps from 0 to 100. The whole line
-   is armed once, each word with its own delay, and then nothing runs: no
-   timer, no rAF, no work at all between one line and the next. */
-@property --f { syntax:'<percentage>'; inherits:false; initial-value:0%; }
+   It used to be a hard stop between two colours sweeping across the letters,
+   which is a karaoke machine's idea and looked it. A word simply arriving,
+   quickly, is the same information and reads like the rest of the app. The
+   line is armed once, each word with its own delay, and then nothing runs:
+   no timer, no rAF, no work between one line and the next. */
 /* A length, so the sidebar's column can be transitioned closed. An
    unregistered custom property is a string and jumps. */
 @property --side { syntax:'<length>'; inherits:true; initial-value:0px; }
-@keyframes wordfill { from { --f:0%; } to { --f:100%; } }
-.lyrics .lrow.active .w.now{opacity:1;color:transparent;transition:none;
-  background-image:linear-gradient(90deg,
-    var(--fg) var(--f,0%),var(--sub) var(--f,0%));
-  -webkit-background-clip:text;background-clip:text}
+/* Dim until its moment, then up over a fifth of its own length — quick
+   enough to land with the voice, slow enough not to blink. */
+@keyframes wordfill {
+  0%   { color:var(--sub); opacity:.5 }
+  22%  { color:var(--fg);  opacity:1 }
+  100% { color:var(--fg);  opacity:1 }
+}
+.lyrics .lrow.active .w.now{transition:none}
 /* Stopped means stopped. The animations hold where they are rather than
    running on while the music doesn't. */
 body.paused .lyrics .lrow .w{animation-play-state:paused}
 /* No @property support: the fill can't tween, so don't pretend. The word
    still turns over at the right moment, it just doesn't sweep. */
-@supports not (background: paint(x)) {
-  @media (scripting: enabled) { .lyrics .lrow.active .w.now{color:var(--sub)} }
-}
+
 .lyrics:not(.plain) .lrow{cursor:pointer;border-radius:8px}
 .lyrics:not(.plain) .lrow:hover{color:var(--fg);opacity:.9;
   background:color-mix(in srgb,var(--accent) 10%,transparent)}
@@ -1103,11 +1102,14 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   /* Room to breathe. Tight leading and negative tracking are for headlines
      you scan; these are read one line at a time against a clock, and the
      gap between them is what makes it obvious which one you're on. */
-  /* Half the gap it had. Airy was better than cramped, but not this airy —
-     at 26px a line was carrying nearly 50px of space around it. */
-  body:not(.mini) #panel-lyrics .lrow{font-size:clamp(17px,1.45vw,26px);
-    line-height:1.5;padding:6px 0;font-weight:600;letter-spacing:.005em}
-  body:not(.mini) #panel-lyrics .lrow.active{font-weight:800}
+  /* The small player's lyrics with more room, not a different design. The
+     centre column had become a poster: 26px at weight 600, with the line
+     you're on picked out by a gradient sweeping across each word. Same
+     size relationship as the sidebar version, same weight, same way of
+     saying which line is which. The room is the only thing that changes. */
+  body:not(.mini) #panel-lyrics .lrow{font-size:clamp(15px,1.1vw,20px);
+    line-height:1.55;padding:6px 0;font-weight:500;letter-spacing:0}
+  body:not(.mini) #panel-lyrics .lrow.active{font-weight:700}
   /* The panel already carries the vertical room, so the message shouldn't
      add another half-screen on top of it — and at 12px it read as a fault
      rather than an answer in a column that size. */

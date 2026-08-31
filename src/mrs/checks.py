@@ -652,6 +652,168 @@ def run(verbose: bool = False) -> Result:
               and not looks_like_genre("evanescence"))
             say("more than one thing", c)
 
+            # -- 9i. a link's queue knows what's playing -------------------
+            # ListSink didn't put `current` on its entries the way mpv does,
+            # and the snapshot reads it straight through — so no row in any
+            # link's queue was ever marked, and "3 already played" had no
+            # current track to count back from. Every session but the
+            # owner's, permanent and temporary alike.
+            c = _Checker("queue marking")
+            from .core.sink import ListSink
+
+            sink = ListSink()
+            for name in ("a.webm", "b.webm", "c.webm"):
+                sink.load(name, "append")
+            pl = sink.playlist()
+            c("the sink lists what it holds", len(pl) == 3, str(len(pl)))
+            c("every entry says whether it's the one playing",
+              all("current" in e for e in pl))
+            c("and exactly one of them is",
+              sum(1 for e in pl if e.get("current")) == 1,
+              str([e.get("current") for e in pl]))
+            c("...the one at the sink's position",
+              pl[sink.pos() or 0].get("current") is True, f"pos={sink.pos()}")
+            sink.advance()
+            pl = sink.playlist()
+            c("and it moves with it",
+              pl[1].get("current") is True and not pl[0].get("current"),
+              str([e.get("current") for e in pl]))
+            say("a link's queue", c)
+
+            # -- 9j. a playlist you can ask for out loud -------------------
+            c = _Checker("spoken playlists")
+            from .resolve.grammar import playlist_make
+
+            for said, want in (
+                ("make a 30 minute playlist with jazz blues", ("jazz blues", 30)),
+                ("make a grunge playlist which is 15 minutes long", ("grunge", 15)),
+                ("create a 45 min bon jovi playlist", ("bon jovi", 45)),
+                ("build me an hour of shoegaze playlist", ("shoegaze", 60)),
+                ("make a half an hour metal playlist", ("metal", 30)),
+                ("make a two hour playlist of nirvana and soundgarden",
+                 ("nirvana and soundgarden", 120)),
+                ("make a playlist of nirvana and soundgarden",
+                 ("nirvana and soundgarden", None)),
+                ("make a playlist like bohemian rhapsody",
+                 ("bohemian rhapsody", None)),
+            ):
+                got = playlist_make(said)
+                c(f"{said!r}", got == want, f"got {got!r}")
+            for said in ("play some bon jovi", "add this to my favourites",
+                         "make me a coffee", "pause"):
+                c(f"{said!r} isn't one", playlist_make(said) is None)
+
+            # And the whole way through, with the search stubbed out — this
+            # is about the plumbing, not about what YouTube has today.
+            from . import requests as _rq
+            from .core.playlists import Playlists as _Lists
+            from .resolve import resolver as _rs
+
+            real_resolve = _rs.resolve
+            home = _pl.Path(_tf.mkdtemp(prefix="mrs-make-"))
+            try:
+                def _stub(plan):
+                    hits = [_T(video_id=f"mk{i}", title=f"{plan.query} {i}",
+                               artist=plan.query.title(), duration=200)
+                            for i in range(5)]
+                    return _rs.Resolution(hits, f"Playing {plan.query}")
+
+                class _Ctx:
+                    def build(self, current, exclude=None, exclude_keys=None,
+                              limit=40, anchor=None, theme="", **kw):
+                        from .models import Candidate
+                        n = len(exclude or ())
+                        return [Candidate(track=_T(video_id=f"r{n}-{i}",
+                                                   title=f"Radio {n}-{i}",
+                                                   artist="Some Band",
+                                                   duration=200))
+                                for i in range(12)]
+
+                class _Q:
+                    session_id = ""
+                    context = _Ctx()
+                    taste = _NeutralTaste()
+                    def _set_activity(self, *a, **k): pass
+
+                _rs.resolve = _stub
+                lists = _Lists(home / "lists")
+                q = _Q()
+                got = _rq._build_playlist("make a 30 minute jazz playlist",
+                                          announce=False, queue=q, room="",
+                                          lists=lists)
+                c("asking for one makes one", got and got["status"] == "made",
+                  str(got))
+                c("named after what was asked for",
+                  got.get("playlist") == "Jazz", str(got.get("playlist")))
+                c("and it's the length that was asked for",
+                  25 <= got.get("minutes", 0) <= 34, str(got.get("minutes")))
+                c("saved, not just announced",
+                  "Jazz" in lists.names() and len(lists.tracks("Jazz")) > 1)
+                longer = _rq._build_playlist("make a two hour jazz playlist",
+                                             announce=False, queue=q, room="",
+                                             lists=lists)
+                c("a longer one is topped up from the radio",
+                  longer.get("minutes", 0) >= 110, str(longer.get("minutes")))
+                c("and doesn't overwrite the first",
+                  longer.get("playlist") == "Jazz 2", str(longer.get("playlist")))
+                c("an expiring link is told, not silently given the owner's",
+                  (_rq._build_playlist("make a 20 minute jazz playlist",
+                                       announce=False, queue=q, room="sess",
+                                       lists=None) or {}).get("status") == "error")
+                # And with nobody on the player page, so there's no room id
+                # to give it away. That's how a temporary link's blues
+                # playlist ended up in the owner's library.
+                c("...even with no session open",
+                  (_rq._build_playlist("make a 20 minute jazz playlist",
+                                       announce=False, queue=q, room="",
+                                       lists=None) or {}).get("status") == "error")
+                c("the owner, who passes no library at all, writes to theirs",
+                  _rq._store_for(_rq.OWN) is _rq.playlists
+                  and _rq._store_for(None) is None
+                  and _rq._store_for(lists) is lists)
+                # One from each act in turn, not three of the first.
+                mixed = _rq._spread([_T(video_id="s1", title="a", artist="One"),
+                                     _T(video_id="s2", title="b", artist="One"),
+                                     _T(video_id="s3", title="c", artist="Two"),
+                                     _T(video_id="s4", title="d", artist="Three")])
+                c("acts are dealt out, not stacked",
+                  [t.artist for t in mixed] == ["One", "Two", "Three", "One"],
+                  str([t.artist for t in mixed]))
+                # Every jazz result being a two hour compilation must not
+                # come back as a playlist with nothing in it.
+                def _all_long(plan):
+                    hits = [_T(video_id=f"lg{i}", title=f"{plan.query} mix {i}",
+                               artist="V/A", duration=4620) for i in range(3)]
+                    return _rs.Resolution(hits, f"Playing {plan.query}")
+
+                _rs.resolve = _all_long
+                long_one = _rq._build_playlist("make a 15 minute jazz playlist",
+                                               announce=False, queue=q, room="",
+                                               lists=lists)
+                c("all-compilation results still make a playlist",
+                  long_one.get("status") == "made", str(long_one))
+                _rs.resolve = lambda plan: _rs.Resolution([], "nothing", error="x")
+                empty = _rq._build_playlist("make a 15 minute nonsense playlist",
+                                            announce=False, queue=q, room="",
+                                            lists=lists)
+                c("nothing found makes no playlist at all",
+                  empty.get("status") == "not_found"
+                  and not [n for n in lists.names() if "nonsense" in n.lower()],
+                  str(empty))
+                _rs.resolve = _stub
+                c("an hour-long upload isn't a song",
+                  _rq._too_long(_T(video_id="lng", title="best of jazz",
+                                   artist="V/A", duration=4620))
+                  and not _rq._too_long(_T(video_id="ok", title="Plush",
+                                           artist="STP", duration=311)))
+                c("and an ordinary request still isn't one",
+                  _rq._build_playlist("play some jazz", announce=False,
+                                      queue=q, room="", lists=lists) is None)
+            finally:
+                _rs.resolve = real_resolve
+                _sh2.rmtree(home, ignore_errors=True)
+            say("spoken playlists", c)
+
             # -- 10. usage is recorded against the link --------------------
             c = _Checker("stats")
             rows = get("/api/passes").json().get("passes", [])

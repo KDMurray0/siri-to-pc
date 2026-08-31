@@ -234,7 +234,7 @@ async def siri(request: Request, key: str = Query(default="")):
     # Resolution + download happen on a worker; Siri gets an answer immediately.
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
-        None, lambda: handle_request(text, queue=target))
+        None, lambda: handle_request(text, queue=target, lists=_lists_for(request)))
     return JSONResponse(result)
 
 
@@ -774,7 +774,8 @@ def api_play_artist(request: Request, name: str, _: bool = Auth):
     _guard_rate(room, request)
     if not room:
         _guard_shared(request)
-    return handle_request(f"songs by {name}", queue=room.queue if room else None)
+    return handle_request(f"songs by {name}", queue=room.queue if room else None,
+                          lists=_lists_for(request))
 
 
 @app.get("/api/play/album")
@@ -784,7 +785,8 @@ def api_play_album(request: Request, name: str, artist: str = "", _: bool = Auth
     if not room:
         _guard_shared(request)
     return handle_request(f"play the {name} album" + (f" by {artist}" if artist else ""),
-                          queue=room.queue if room else None)
+                          queue=room.queue if room else None,
+                          lists=_lists_for(request))
 
 
 @app.get("/api/lyrics")

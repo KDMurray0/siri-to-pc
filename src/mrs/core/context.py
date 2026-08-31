@@ -628,7 +628,8 @@ class ContextBuilder:
         # a thin pool is how the queue used to die — widen out first
         if len(out) < 8:
             out += self._widen(current, exclude, exclude_keys,
-                               have={c.track.video_id for c in out}, focus=focus)
+                               have={c.track.video_id for c in out}, focus=focus,
+                               queued_titles=queued_titles)
         if len(out) < 4:
             # Last resort: allow songs heard a while ago rather than run dry.
             out += self._rank(raw, current, exclude, limit, exclude_keys,
@@ -650,7 +651,8 @@ class ContextBuilder:
         return out[:limit]
 
     def _widen(self, current, exclude: set[str], exclude_keys: set[str],
-               have: set[str], focus: float = 1.0) -> list[Candidate]:
+               have: set[str], focus: float = 1.0,
+               queued_titles: list[str] | None = None) -> list[Candidate]:
         """Pull in neighbouring artists and your own favourites."""
         raw: list[tuple[Track, str]] = []
         for artist in self.taste.top_artists(4):

@@ -13,9 +13,10 @@ from .core.playlists import playlists
 from .core.taste import taste
 from .events import Ev, bus
 from .logging_setup import get, spawn
-from .models import Track
+from .models import Track, _fold
 from .player import player
-from .resolve import applemusic, numbers, parser, resolver, spotify
+from .resolve import applemusic, grammar, numbers, parser, resolver, spotify
+from .resolve.conjunction import looks_like_genre
 
 log = get("request")
 
@@ -59,6 +60,19 @@ def say_to(room: str, msg: str) -> None:
     bus.publish(Ev.TOAST, {"text": msg, "session": room} if room else msg)
 
 
+# "Whoever asked is the owner", which is not the same as "there is nowhere
+# to save this". A link that expires has no library of its own and passes
+# None; the owner's own callers pass nothing at all. Told apart by a plain
+# default of None, a temporary link's playlist quietly went into the
+# owner's library — with the guest's name on none of it.
+OWN = object()
+
+
+def _store_for(lists):
+    """Which library this request writes to. None means it can't."""
+    return playlists if lists is OWN else lists
+
+
 _COMMANDS = {
     "pause": "pause", "resume": "resume", "next": "next", "previous": "previous",
     "shuffle": "shuffle", "repeat": "repeat", "mute": "mute", "unmute": "unmute",
@@ -68,7 +82,7 @@ _COMMANDS = {
 
 def handle_request(text: str, *, mode: str = "play", source: str | None = None,
                    announce: bool = True, cast: bool = False,
-                   queue=None, lists=None) -> dict:
+                   queue=None, lists=OWN) -> dict:
     """The one entry point. Never raises.
 
     `queue` is whose queue this lands in — the shared player by default, or a
@@ -102,6 +116,14 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
         if applemusic.is_apple_url(text):
             return _import_apple(text, announce=announce, queue=queue,
                                  room=room, lists=lists)
+
+        # "make me a 30 minute grunge playlist" — build one and file it.
+        # Ahead of the playlist match below, which would otherwise read the
+        # same sentence as a request to play a list of that name.
+        built = _build_playlist(text, announce=announce, queue=queue,
+                                room=room, lists=lists)
+        if built is not None:
+            return built
 
         # Your own playlists win over anything YouTube might suggest. Yours,
         # though — a guest naming one would have played it out of the front
@@ -209,6 +231,167 @@ def _match_playlist(text: str) -> str | None:
         if found:
             return found[0]
     return None
+
+
+
+# A "song" of an hour and a quarter is a compilation upload, and one of them
+# is a fifteen minute playlist all by itself. Songs get longer than you'd
+# think — Shine On You Crazy Diamond is thirteen — so the line is generous.
+_LONGEST_SONG = 15 * 60
+
+
+def _nice_name(subject: str, tracks: list[Track], seeds: list[str]) -> str:
+    """What to call it — their words tidied up, not the resolver's."""
+    if seeds:
+        return " & ".join(s.strip().title() for s in seeds[:3])
+    # One band asked for by name gets their name spelled their way, so it's
+    # "AC/DC" and "R.E.M." rather than what .title() would do to them.
+    who = (tracks[0].artist or "") if tracks else ""
+    if who and _fold(who) == _fold(subject):
+        return who
+    return subject.strip().title()
+
+
+def _free_name(store, name: str) -> str:
+    """Never quietly add to a list that's already there."""
+    taken = {n.lower() for n in store.names()}
+    if name.lower() not in taken:
+        return name
+    for n in range(2, 50):
+        if f"{name} {n}".lower() not in taken:
+            return f"{name} {n}"
+    return name
+
+
+def _too_long(t: Track) -> bool:
+    """A seventy-seven minute "song" is somebody's best-of upload. Asked for
+    fifteen minutes of jazz, one of those was the whole playlist."""
+    return (t.duration or 0) > _LONGEST_SONG
+
+
+def _stretch_to(res, minutes: float, queue, theme: str) -> list[Track]:
+    """Enough music to fill the ask, topped up from the radio.
+
+    A genre search comes back with 25 tracks and an artist with half an
+    hour of their own, so anything longer than that has to be built the
+    same way the queue builds itself — off the same anchors, minus what's
+    already in.
+    """
+    allowed = [t for t in res.tracks if not queue.taste.is_blocked(t)]
+    tracks = [t for t in allowed if not _too_long(t)]
+    want = minutes * 60
+    ids = {t.video_id for t in tracks if t.video_id}
+    keys = {t.key() for t in tracks if t.key()}
+    for _ in range(4):
+        if sum(t.duration or 210 for t in tracks) >= want:
+            break
+        try:
+            cands = queue.context.build(tracks[-1] if tracks else None,
+                                        exclude=set(ids), exclude_keys=set(keys),
+                                        limit=40, anchor=res.anchors, theme=theme)
+        except Exception as exc:
+            log.warning("playlist top-up failed: %s", exc)
+            break
+        fresh = [c.track for c in cands
+                 if c.track.video_id not in ids and c.track.key() not in keys
+                 and not _too_long(c.track)]
+        if not fresh:
+            break                      # the radio has run out of ideas
+        for t in fresh:
+            ids.add(t.video_id)
+            keys.add(t.key())
+        tracks.extend(fresh)
+    # Ask for jazz and every single result is a two hour "relaxing jazz cafe"
+    # upload. The radio gets first refusal at finding actual songs; only if
+    # that comes back empty too is one long one better than nothing.
+    return tracks or allowed[:1]
+
+
+def _spread(tracks: list[Track]) -> list[Track]:
+    """One from each act in turn.
+
+    A twenty minute grunge list cut off the front of the search was three
+    Alice in Chains and two Pearl Jam — everyone else was further down the
+    list than twenty minutes reached. Dealing them out puts the fourth and
+    fifth band in front of the third song by the first. Order within an
+    artist, and the order the artists first appeared in, are both kept.
+    """
+    lanes: dict[str, list[Track]] = {}
+    for t in tracks:
+        lanes.setdefault((t.artist or "").strip().lower(), []).append(t)
+    out: list[Track] = []
+    while lanes:
+        for who in list(lanes):
+            out.append(lanes[who].pop(0))
+            if not lanes[who]:
+                del lanes[who]
+    return out
+
+
+def _build_playlist(text: str, *, announce: bool, queue, room: str,
+                    lists) -> dict | None:
+    """"make me a 30 minute grunge playlist". None if that isn't what was said.
+
+    The subject goes through the ordinary resolver, so several genres,
+    several artists and a single song to build around all behave exactly as
+    they do when you ask to play them. The length is the only new idea.
+    """
+    made = grammar.playlist_make(text)
+    if not made:
+        return None
+    subject, minutes = made
+    minutes = float(minutes or config.get("queue_minutes", 30))
+
+    store = _store_for(lists)
+    if store is None:
+        msg = "Playlists need a permanent link"
+        say_to(room, msg)
+        return {"status": "error", "message": msg, "via": "grammar"}
+
+    queue._set_activity("finding", subject)
+    plan = grammar.parse(subject)
+    plan.mode = "queue"
+    # "jazz" on its own is ambiguous enough that the grammar leaves it as
+    # auto, and the resolver then goes looking for a song called Jazz — which
+    # is how "fifteen minutes of jazz" came back as one seventy-seven minute
+    # "relaxing jazz cafe" upload. Saying "playlist" supplies the missing
+    # noun: nobody means a song when they ask for a jazz playlist.
+    if plan.kind == "auto" and not plan.seeds and looks_like_genre(subject):
+        plan.kind = "genre"
+    res = resolver.resolve(plan)
+    if not res:
+        queue._set_activity("idle")
+        say_to(room, res.spoken)
+        return {"status": "not_found", "message": res.spoken, "via": "grammar"}
+
+    theme = plan.query if plan.kind == "genre" else ""
+    pool = _stretch_to(res, minutes, queue, theme)
+    # Asking for a band means that band, so only a wider ask gets dealt out.
+    if plan.kind not in ("artist", "album"):
+        pool = _spread(pool)
+    tracks = resolver.first_minutes(pool, minutes) if pool else []
+    if not tracks:
+        # An empty playlist is worse than none: it sits in the library
+        # looking like it worked.
+        queue._set_activity("idle")
+        msg = f"I couldn't find enough for a {subject} playlist"
+        say_to(room, msg)
+        return {"status": "not_found", "message": msg, "via": "grammar"}
+    name = _free_name(store, _nice_name(subject, tracks, plan.seeds))
+    store.create(name)
+    store.add_many(name, tracks)
+    queue._set_activity("idle")
+
+    mins = round(sum(t.duration or 210 for t in tracks) / 60)
+    msg = f"Made {name} — {len(tracks)} songs, about {mins} minutes"
+    if announce:
+        player.announce(msg, room)
+    else:
+        say_to(room, msg)
+    log.info("built playlist %r: %d tracks, %d min (asked for %d)",
+             name, len(tracks), mins, minutes)
+    return {"status": "made", "message": msg, "via": "grammar",
+            "playlist": name, "tracks": len(tracks), "minutes": mins}
 
 
 def _run_command(plan, queue=None) -> dict:
@@ -431,7 +614,7 @@ def play_later(what: str, minutes: float, *, announce: bool = True) -> dict:
 
 def _import_link(reader, service: str, url: str, *,
                  announce: bool = True, play: bool = True, queue=None,
-                 room: str = "", lists=None) -> dict:
+                 room: str = "", lists=OWN) -> dict:
     """Turn a streaming link into a playlist, keeping its name.
 
     `reader` is whichever module knows how to read that service — it needs
@@ -447,7 +630,7 @@ def _import_link(reader, service: str, url: str, *,
     # Whose library the result is filed in. A guest's own, if they have one;
     # theirs is the only place it should go, and it used to go into the
     # owner's — a stranger's Spotify link filing itself in your collection.
-    store = lists if lists is not None else (None if room else playlists)
+    store = _store_for(lists)
 
     # Saving a list is a background errand, not a performance. It used to
     # take over the progress bar and narrate every step, which is fine when
@@ -568,18 +751,18 @@ def _import_link(reader, service: str, url: str, *,
 
 
 def _import_spotify(url: str, *, announce: bool = True, play: bool = True,
-                    queue=None, room: str = "", lists=None) -> dict:
+                    queue=None, room: str = "", lists=OWN) -> dict:
     return _import_link(spotify, "Spotify", url, announce=announce, play=play,
                         queue=queue, room=room, lists=lists)
 
 
 def _import_apple(url: str, *, announce: bool = True, play: bool = True,
-                  queue=None, room: str = "", lists=None) -> dict:
+                  queue=None, room: str = "", lists=OWN) -> dict:
     return _import_link(applemusic, "Apple Music", url, announce=announce,
                         play=play, queue=queue, room=room, lists=lists)
 
 
-def add_spotify(url: str, queue=None, room: str = "", lists=None) -> dict:
+def add_spotify(url: str, queue=None, room: str = "", lists=OWN) -> dict:
     """Save a streaming link as a playlist without interrupting what's on."""
     common = dict(announce=False, play=False, queue=queue, room=room, lists=lists)
     if spotify.is_spotify_url(url):

@@ -127,7 +127,14 @@ class ListSink(Sink):
 
     def playlist(self) -> list[dict]:
         with self._lock:
-            return [{"filename": p} for p in self._items]
+            # `current` as well as the name. mpv puts it on the entry that's
+            # playing and the snapshot reads it straight through, so leaving
+            # it off here meant no row in a link's queue was ever marked as
+            # playing — nothing highlighted, and "3 already played" counting
+            # the rows before a current track that didn't exist. Every
+            # session that isn't the owner's, not only the temporary ones.
+            return [{"filename": p, "current": i == self._pos}
+                    for i, p in enumerate(self._items)]
 
     def pos(self) -> int | None:
         with self._lock:

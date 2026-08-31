@@ -122,7 +122,7 @@ def _several(plan: Plan, kind: str) -> "Resolution | None":
                       anchors=[p.tracks[0] for p in parts])
 
 
-def _first_minutes(tracks: list[Track], minutes: float) -> list[Track]:
+def first_minutes(tracks: list[Track], minutes: float) -> list[Track]:
     """Take roughly `minutes` worth off the front of a track list."""
     budget = minutes * 60
     out: list[Track] = []
@@ -211,7 +211,7 @@ def resolve(plan: Plan) -> Resolution:
             return _nothing(f"I couldn't find {who}")
         # Queue about half an hour of them rather than the whole discography;
         # the queue tops itself up from the same catalogue as you listen.
-        tracks = _first_minutes(tracks, float(config.get("queue_minutes", 30)))
+        tracks = first_minutes(tracks, float(config.get("queue_minutes", 30)))
         return Resolution(tracks, f"Playing {who}", hold_radio=True)
 
     if kind == "genre":

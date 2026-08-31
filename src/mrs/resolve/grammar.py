@@ -94,6 +94,74 @@ def playlist_add(text: str) -> str | None:
     return m.group("name").strip() if m else None
 
 
+# "make a 30 minute jazz and blues playlist", "create a grunge playlist
+# that's 15 minutes long", "build me an hour of Bon Jovi".
+#
+# The length can come before the subject or after it, and the word
+# "playlist" can sit on either side of the subject too, which is why this is
+# a handful of small patterns rather than one clever one.
+_MAKE = re.compile(
+    r"^(?:make|create|build|put together|generate)\s+(?:me\s+)?(?:an|a|the)\b\s*", re.I)
+_LEN = re.compile(
+    r"\b(?:(?P<h>\d+)\s*(?:h|hr|hrs|hour|hours))"
+    r"|\b(?P<m>\d+)\s*(?:m|min|mins|minute|minutes)\b", re.I)
+# Said rather than counted. Longest first so "half an hour" wins over "an
+# hour". Matched against the whole sentence, because "build me an hour of
+# shoegaze" has already had its "an" taken off by _MAKE by then.
+_SPOKEN_LENGTHS = [("quarter of an hour", 15), ("half an hour", 30),
+                   ("three hour", 180), ("two hour", 120),
+                   ("an hour", 60), ("one hour", 60), ("a hour", 60)]
+_HOUR_LEFT = re.compile(r"\b(?:half\s+(?:an\s+)?|quarter\s+of\s+(?:an\s+)?)?"
+                        r"(?:an\s+|a\s+|one\s+|two\s+|three\s+)?hours?\b", re.I)
+_PLAYLIST_WORD = re.compile(
+    r"\b(?:playlist|mix|set|selection)\b", re.I)
+_LEN_TAIL = re.compile(
+    r"\b(?:that(?:'s| is)?|which(?:'s| is)?|lasting|of|for|about|around)?\s*"
+    r"\d+\s*(?:h|hr|hrs|hour|hours|m|min|mins|minute|minutes)\s*(?:long)?\b", re.I)
+
+
+def playlist_make(text: str):
+    """A request to build a playlist, as (subject, minutes) — or None.
+
+    Minutes is None when no length was asked for, which the caller reads as
+    "a sensible one". The subject is handed on untouched so the ordinary
+    resolver can decide whether it is an artist, a genre, several of either,
+    or a song to build around — this only works out that a playlist is what
+    was wanted, and how long.
+    """
+    said = clean(text)
+    if not _MAKE.match(said) or not _PLAYLIST_WORD.search(said):
+        return None
+    body = _MAKE.sub("", said, count=1)
+
+    minutes = None
+    m = _LEN.search(body)
+    if m:
+        minutes = int(m.group("h")) * 60 if m.group("h") else int(m.group("m"))
+    else:
+        low = said.lower()
+        for phrase, mins in _SPOKEN_LENGTHS:
+            if phrase in low:
+                minutes = mins
+                body = _HOUR_LEFT.sub(" ", body)
+                break
+
+    # Take out the length and the word "playlist", and whatever is left is
+    # what it should be a playlist of.
+    body = _LEN_TAIL.sub(" ", body)
+    body = _PLAYLIST_WORD.sub(" ", body)
+    body = re.sub(r"\b(?:with|of|about|featuring|full of|made (?:up )?of)\b",
+                  " ", body, flags=re.I)
+    body = re.sub(r"\b(?:long|please|thanks)\b", " ", body, flags=re.I)
+    body = re.sub(r"\s{2,}", " ", body).strip(" ,.-")
+    # "a playlist like Bohemian Rhapsody" — the subject is that record, and
+    # the resolver builds around it exactly as it would if you'd asked to
+    # play it. The word itself would only confuse the search.
+    body = re.sub(r"^(?:like|similar to|based on|around|inspired by)\s+", "",
+                  body, flags=re.I).strip()
+    return (body, minutes) if body else None
+
+
 _FILLER = re.compile(r"^(?:some|any|a bit of|a little|a few)\s+", re.I)
 
 
