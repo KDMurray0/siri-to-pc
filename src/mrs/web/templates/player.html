@@ -381,6 +381,8 @@ body.reordering .q{transition:transform .12s ease}
    sampled four times a second look continuous — each word takes a quarter
    of a second to come up, so they overlap into a sweep rather than a
    flicker of steps. */
+.lyrics .lrow.inst{font-size:.72em;opacity:.22;letter-spacing:.3em}
+.lyrics .lrow.inst.active{opacity:.4;font-weight:inherit}
 .lyrics .lrow .w{font-style:normal;transition:color .22s ease,opacity .22s ease}
 .lyrics .lrow.active .w{color:var(--sub);opacity:.5}
 .lyrics .lrow.active .w.lit{color:var(--fg);opacity:1}
@@ -878,10 +880,20 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   body:not(.mini) .picker{width:340px;right:auto;bottom:86px;left:30px}
   body:not(.mini) .devpick{width:320px;bottom:auto;left:auto}
   body:not(.mini) .picker-list{max-height:280px}
+  /* Settings become a dialog rather than a full-screen takeover. Capping
+     the content at 720px and leaving it against the top of a 2560px black
+     field read as a page that had failed to load the rest of itself; the
+     answer is to stop pretending the sheet is the whole window. The huge
+     spread shadow is the backdrop — it wants no element of its own. */
+  body:not(.mini) .sheet{
+    left:50%;right:auto;top:50%;bottom:auto;
+    translate:-50% -50%;
+    width:min(880px,92vw);height:min(780px,86vh);
+    border:1px solid var(--line);border-radius:18px;overflow:hidden;
+    box-shadow:0 30px 90px rgba(0,0,0,.55),0 0 0 100vmax rgba(0,0,0,.5)}
   body:not(.mini) .sheet-head,
   body:not(.mini) .sheet-tabs,
-  body:not(.mini) .sheet-body{width:100%;max-width:720px;
-    margin-left:auto;margin-right:auto}
+  body:not(.mini) .sheet-body{width:100%;max-width:none}
 
   /* ── the queue, out of the way ──────────────────────────────────────
      Sometimes you want the record and not the list. Collapsing sets the
@@ -932,14 +944,18 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
        alone it was stuck at 430px on a monitor with 900px of room going
        spare underneath it — a postage stamp with an empty column beside
        it, which is what "doesn't work on other monitors" looked like. */
-    --deck:clamp(240px,min(27vw,calc(100vh - 360px)),660px);
+    --deck:clamp(230px,min(22vw,calc(100vh - 400px)),540px);
     grid-template-columns:var(--deck) minmax(0,1fr) var(--side);
     /* six content rows down the left, then slack, so the player sits at
        the top of its column instead of drifting into the middle */
     grid-template-rows:auto auto auto auto auto auto minmax(0,1fr);
     column-gap:clamp(20px,2.2vw,44px)}
 
-  body:not(.mini) .search  {grid-area:1/1/2/3;margin-top:0}
+  /* Room under the search box. It was sitting straight on top of the cover
+     and the first line of the lyrics, which made the whole top edge read as
+     one crowded band. */
+  body:not(.mini) .search  {grid-area:1/1/2/3;margin-top:0;
+    margin-bottom:clamp(16px,2vh,30px)}
   body:not(.mini) .art-wrap{grid-area:2/1;margin-top:0;align-items:start}
   body:not(.mini) .meta    {grid-area:3/1;margin-top:18px;min-height:0;
     text-align:left}
@@ -1982,7 +1998,11 @@ function showPanel(name, toggleExpand) {
     document.body.classList.toggle("expand",
       wasActive ? !document.body.classList.contains("expand") : activePanel === "lyrics");
   }
-  if (activePanel === "lyrics" || lyricsPinned()) loadLyrics(true);
+  // Only when the tab itself was chosen. When the words live in their own
+  // column they are already loaded and already scrolled to the right place,
+  // and re-fetching them because somebody looked at Recent threw the panel
+  // back to the top of the song.
+  if (activePanel === "lyrics") loadLyrics(true);
   if (activePanel === "recent") loadRecent();
   if (activePanel === "lists") loadLists();
 }
@@ -2195,8 +2215,14 @@ async function loadLyrics(force) {
   lyricData = L; box.classList.add("lyrics");
   if (L.synced && L.synced.length) {
     box.classList.remove("plain");
-    box.innerHTML = L.synced.map(ln =>
-      `<div class="lrow" data-t="${ln.t}">${words(ln.text) || "♪"}</div>`).join("");
+    // A line with no words is a gap in the singing, not a lyric. It still
+    // has to be there — it carries the timing of the line after it — but at
+    // full size a bare ♪ between two verses reads as something broken.
+    box.innerHTML = L.synced.map(ln => {
+      const w = words(ln.text);
+      return `<div class="lrow${w ? "" : " inst"}" data-t="${ln.t}">` +
+             `${w || "♪"}</div>`;
+    }).join("");
   } else {
     box.classList.add("plain");
     box.innerHTML = (L.plain||"").split("\n").map(l => `<div class="lrow">${esc(l)||"&nbsp;"}</div>`).join("");
@@ -2268,6 +2294,20 @@ function litWords(box, s, idx, pos) {
   const rows = box.querySelectorAll(".lrow");
   const row = rows[idx];
   if (!row) return;
+  if (idx !== lastLine) {
+    // Before anything else, and whether or not this line has words in it:
+    // an instrumental bar used to return early and leave the line before it
+    // still lit as though it were the one playing.
+    rows.forEach((r, i) => {
+      if (i === idx) return;
+      r._cur = undefined; r._f = undefined;
+      r.querySelectorAll(".w").forEach(w => {
+        w.classList.toggle("lit", i < idx);
+        w.classList.remove("now");
+        w.style.removeProperty("--f");
+      });
+    });
+  }
   const ws = row.querySelectorAll(".w");
   if (!ws.length) return;
   const start = s[idx].t;
@@ -2283,33 +2323,28 @@ function litWords(box, s, idx, pos) {
   const span = Math.max(0.35, Math.min(gap, starts.natural));
   const through = Math.max(0, Math.min(1, (pos - start) / span));
 
-  if (idx !== lastLine) {
-    // Everything before this line is sung, everything after it isn't.
-    rows.forEach((r, i) => {
-      if (i === idx) return;
-      r.querySelectorAll(".w").forEach(w => {
-        w.classList.toggle("lit", i < idx);
-        w.classList.remove("now");
-        w.style.removeProperty("--f");
-      });
-    });
-  }
+  // Which word is being sung, and how far through it. Only these two change
+  // between frames, so only these two get written — rewriting the class on
+  // every word sixty times a second is what made it flicker, because each
+  // write restarted the .22s colour transition it was already halfway
+  // through.
+  let cur = starts.findIndex(p => through < p.to);
+  if (cur < 0) cur = ws.length - 1;
+  const { from, to } = starts[cur];
+  const f = Math.max(0, Math.min(1, (through - from) / Math.max(1e-4, to - from)));
 
-  ws.forEach((w, i) => {
-    const { from, to } = starts[i];
-    const done = through >= to;
-    const now = !done && through >= from;
-    w.classList.toggle("lit", done);
-    w.classList.toggle("now", now);
-    // The one being sung fills across itself rather than snapping on, which
-    // is what carries the eye between one word and the next.
-    if (now) {
-      const f = Math.max(0, Math.min(1, (through - from) / Math.max(1e-4, to - from)));
-      w.style.setProperty("--f", (f * 100).toFixed(1) + "%");
-    } else if (w.style.getPropertyValue("--f")) {
-      w.style.removeProperty("--f");
-    }
-  });
+  if (idx !== lastLine || cur !== row._cur) {
+    ws.forEach((w, i) => {
+      w.classList.toggle("lit", i < cur);
+      w.classList.toggle("now", i === cur);
+      if (i !== cur) w.style.removeProperty("--f");
+    });
+    row._cur = cur;
+  }
+  // The word being sung fills across itself. This is the one per-frame
+  // write, and it's a custom property on a single element.
+  const pct = (f * 100).toFixed(1) + "%";
+  if (row._f !== pct) { ws[cur].style.setProperty("--f", pct); row._f = pct; }
 }
 
 function syncLyrics(pos) {
@@ -4107,11 +4142,18 @@ function livePos() {
   if (typeof cast !== "undefined" && cast.on && clockMine()) {
     try {
       const el = castLive();
+      // The element is the truth here, paused or not — asked before
+      // state.playing, which is an echo and arrives late.
       if (el && isFinite(el.currentTime) && el.currentTime > 0) return el.currentTime;
     } catch (e) {}
   }
   if (!state.playing || !posAt) return state.position;
-  return state.position + Math.min(1.5, (performance.now() - posAt) / 1000);
+  // Half a second at the outside. Pressing pause stops mpv immediately but
+  // the status saying so is up to a second behind, and for that second the
+  // words carried on without the music — which is the whole of "it plays on
+  // a bit after a pause". Running on briefly is worth it for smoothness;
+  // running on for a second is just wrong.
+  return state.position + Math.min(0.5, (performance.now() - posAt) / 1000);
 }
 (function fillLoop() {
   requestAnimationFrame(fillLoop);
