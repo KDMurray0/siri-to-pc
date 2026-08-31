@@ -38,9 +38,16 @@ log = get("profile")
 # reasonable evening for somebody who never opens the settings at all.
 GUEST_SETTINGS: dict[str, object] = {
     # how it sounds on their device
-    "theme": "default",
+    #
+    # A link that expires never sets any of this — it gets these and nothing
+    # else, for one evening — so these three are the whole of what somebody
+    # borrowing the player for a night will hear and see. Black and white
+    # because it doesn't fight the artwork, levelled because a shared queue
+    # is a stranger's mastering every third track, and flat because an EQ
+    # curve is a room's problem and this isn't our room.
+    "theme": "mono",
     "eq": "flat",
-    "normalize": False,
+    "normalize": True,
     "crossfade": 0,
     "announce": False,        # off by default: it's a shared house
     # how their queue behaves

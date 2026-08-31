@@ -786,9 +786,11 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 @media (min-width:900px) and (min-height:520px){
   body:not(.mini) .stage{
     display:grid;
-    /* One number for the sidebar, so the toggle can be placed against its
-       edge and collapsing it is a matter of setting that number to zero. */
+    /* One number for the sidebar and one for the margin, so the toggle can
+       be placed against the sidebar's edge and collapsing it is a matter of
+       setting the first to zero. */
     --side:clamp(300px,20vw,520px);
+    --edge:30px;
     grid-template-columns:minmax(0,1fr) var(--side);
     /* the cover's row takes the slack, so it floats centred in whatever
        height is left over instead of the controls doing so */
@@ -916,13 +918,24 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
      since on an ultrawide it is sized from what's left over. */
   body:not(.mini) .sidetoggle{
     position:absolute;top:50%;translate:0 -50%;z-index:6;
-    right:calc(var(--side) + 15px);
+    /* Pinned to the right wall; script pushes it left to meet the sidebar.
+       Both CSS attempts at this were wrong in the same way — a calc() over
+       a custom property that changes when the sidebar collapses does not
+       re-resolve while a transition on that property is in flight, so the
+       button stayed where the sidebar used to be. Measuring the sidebar's
+       actual edge can't drift from it, whatever the grid decided. */
+    right:0;
     width:20px;height:56px;padding:0;display:grid;place-items:center;
     background:color-mix(in srgb,var(--panel) 88%,transparent);
     border:1px solid var(--line);border-right:0;
     border-radius:8px 0 0 8px;color:var(--sub);cursor:pointer;
     font-size:15px;line-height:1;font-family:inherit;
-    transition:right .22s cubic-bezier(.4,0,.2,1),color .15s,background .15s}
+    /* No transition on the transform. The sidebar itself appears and
+       disappears without animating, so a button sliding to meet it is
+       chasing something that has already gone — and an in-flight
+       transition overrides the cascade, which is what kept putting it
+       back where the sidebar used to be. */
+    transition:color .15s,background .15s}
   body:not(.mini) .sidetoggle:hover{color:var(--accent);
     background:color-mix(in srgb,var(--accent) 14%,var(--panel))}
   body:not(.mini) .sidetoggle span{display:block;
@@ -937,12 +950,16 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   body:not(.mini).sidehid .prog,
   body:not(.mini).sidehid .controls,
   body:not(.mini).sidehid .row2{max-width:1040px}
-  body:not(.mini).sidehid .sidetoggle{right:0;border-radius:8px 0 0 8px}
+  body:not(.mini).sidehid .sidetoggle{border-radius:8px 0 0 8px}
+  /* The panels were carrying more inner padding than a list of rows needs,
+     which pushed the scrollbar in off the edge of the column. */
+  body:not(.mini) .nav{padding:9px 10px 8px}
+  body:not(.mini) .panel{padding:6px 6px 8px}
   body:not(.mini).sidehid .sidetoggle span{transform:rotate(180deg)}
 }
 
 /* ── three zones ───────────────────────────────────────────────────────
-   Past about 1250px there is room to stop making the lyrics wait their
+   Past about 1500px there is room to stop making the lyrics wait their
    turn behind a tab. The record and its controls go down the left, the
    words take the middle for as long as the song lasts, and the queue
    keeps the right — where it can still be folded away.
@@ -950,7 +967,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
    The cover is the width of its column rather than a share of the height:
    in a column of its own it is a portrait of the record, not the whole
    view, and the transport reads better under it than beside it. */
-@media (min-width:1250px) and (min-height:520px){
+@media (min-width:1500px) and (min-height:520px){
   body:not(.mini) .stage{
     --side:clamp(300px,19vw,460px);
     /* The player column is a square cover plus about 350px of chrome, so
@@ -958,7 +975,14 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
        alone it was stuck at 430px on a monitor with 900px of room going
        spare underneath it — a postage stamp with an empty column beside
        it, which is what "doesn't work on other monitors" looked like. */
-    --deck:clamp(220px,min(19vw,calc(100vh - 430px)),440px);
+    /* The height, and only the height. A square cover with a fixed stack of
+       controls under it is a column of a known height, so that is the one
+       thing it should answer to — with a vw term in here as well, dragging
+       the window wider moved everything in the column up and down, which on
+       something laid out this rigidly reads as a fault rather than a
+       response. The width is handled by not entering this layout until
+       there is room for it; see the breakpoint. */
+    --deck:clamp(220px,calc(100vh - 470px),500px);
     grid-template-columns:var(--deck) minmax(0,1fr) var(--side);
     /* Slack above the player as well as below it, so the whole left column
        sits in the middle of its own height. Pinned to the top it left a
@@ -969,7 +993,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
        to the left of the cover and the space to the right of it are the
        same space. They were 30 and 122 — the lyrics carried a fat left
        padding of their own on top of the column gap. */
-    --edge:30px;
+    --edge:clamp(34px,3.4vw,76px);
     padding:46px var(--edge) 24px;
     column-gap:var(--edge)}
 
@@ -1021,8 +1045,10 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
        Nothing on the left: the column gap is already the space between the
        cover and the words, and a padding on top of it made that gap four
        times the one on the other side of the cover. */
-    padding-block:42vh;padding-left:0;
-    padding-right:clamp(14px,1.6vw,40px);
+    /* Nothing either side. The column gap is the space on the left, and on
+       the right the scrollbar should sit on the column's edge rather than
+       be held off it by a padding of its own. */
+    padding-block:42vh;padding-inline:0;
     align-self:stretch;scroll-behavior:smooth}
   body:not(.mini) .navtab[data-panel="lyrics"]{display:none}
   /* The rows are the panel's own children — .lyrics is a class on
@@ -1517,6 +1543,65 @@ let state = { volume: 70, position: 0, duration: 0, trackKey: "", playing: false
 /* The queue folds away on the desktop layout. Remembered, because it's a
    preference about how you like looking at it rather than a thing you'd
    want to say again every time you open the page. */
+/* Put the tab on the sidebar's left edge, measured rather than derived.
+   Asked of the sidebar itself so it cannot end up describing a column that
+   is a different width from the one on screen. */
+let lastOff = null;
+function placeToggle() {
+  const b = $("sidetoggle"), st = document.querySelector(".stage");
+  if (!b || !st) return;
+  // Always written, never cleared. Removing the inline style to mean "on
+  // the wall" left whatever was there before if the clear didn't land.
+  //
+  // The grid reports its columns in resolved pixels, so the sidebar's width
+  // comes from the layout that actually happened rather than from a clamp()
+  // re-evaluated by hand. Measuring the sidebar element instead looked
+  // simpler and wasn't: it can be display:none, and it moves.
+  let off = 0;
+  if (!document.body.classList.contains("sidehid")) {
+    const cs = getComputedStyle(st);
+    const cols = cs.gridTemplateColumns.trim().split(/\s+/);
+    const side = parseFloat(cols[cols.length - 1]);
+    if (side > 0) off = side + (parseFloat(cs.paddingRight) || 0);
+  }
+  off = Math.round(off);
+  if (off === lastOff) return;          // nothing to write, and usually so
+  lastOff = off;
+  b.style.right = off + "px";
+}
+/* Watched rather than guessed at. A ResizeObserver on the stage fires after
+   layout, which is the only moment the grid's columns are actually known —
+   chasing it with rAF after a resize event put the button against the
+   column widths from before the resize about half the time. */
+/* Now, next frame, and once more a beat after that. placeToggle itself is
+   exact — every time it was wrong it had been asked before the grid had
+   re-resolved its columns, and was reading the widths from the layout
+   before the one on screen. Three calls on an event this rare is cheaper
+   than being subtly wrong half the time. */
+let placeSoon = 0, placeLater = 0;
+function placeToggleSoon() {
+  placeToggle();
+  cancelAnimationFrame(placeSoon);
+  placeSoon = requestAnimationFrame(placeToggle);
+  clearTimeout(placeLater);
+  placeLater = setTimeout(placeToggle, 120);
+}
+(function watchStage() {
+  const st = document.querySelector(".stage"), nav = document.querySelector(".nav");
+  if (!st) return;
+  if (window.ResizeObserver) {
+    // The sidebar as well as the stage. Folding it away doesn't change the
+    // stage's own box at all — only the columns inside it — so watching the
+    // stage alone missed every open and close.
+    const ro = new ResizeObserver(placeToggleSoon);
+    ro.observe(st);
+    if (nav) ro.observe(nav);
+  }
+  // Belt and braces: the observer is the reliable one, but a plain resize
+  // costs nothing to listen for and covers anything it doesn't see.
+  addEventListener("resize", placeToggleSoon);
+})();
+
 function setSide(hidden, remember) {
   document.body.classList.toggle("sidehid", !!hidden);
   const b = $("sidetoggle");
@@ -1524,6 +1609,8 @@ function setSide(hidden, remember) {
     b.title = hidden ? "Show the queue" : "Hide the queue";
     b.setAttribute("aria-label", b.title);
   }
+  // After the class, so the sidebar is where it is going to be.
+  placeToggleSoon();
   if (remember !== false) {
     try { localStorage.setItem("sidehid", hidden ? "1" : "0"); } catch (e) {}
   }
@@ -2275,7 +2362,7 @@ async function loadLyrics(force) {
 /* On a wide screen the words have a column of their own and are on all the
    time, so everything that used to wait for the Lyrics tab to be open has to
    stop asking whether it is. */
-const PINNED_AT = window.matchMedia("(min-width:1250px) and (min-height:520px)");
+const PINNED_AT = window.matchMedia("(min-width:1500px) and (min-height:520px)");
 const lyricsPinned = () =>
   PINNED_AT.matches && !document.body.classList.contains("mini");
 
@@ -4398,6 +4485,11 @@ setInterval(() => {
   if (state.playing && !seekDrag && state.duration) {
     state.position = Math.min(state.duration, state.position + 0.25);
     posAt = performance.now();          // so the fill can run on between ticks
+    // Self-healing: a resize the observer didn't see leaves the tab against
+    // the wrong column width, and a quarter second is a short time to be
+    // wrong. It reads two computed values and writes nothing unless the
+    // answer has actually changed.
+    placeToggle();
     paintSeek(state.position / state.duration, state.position);
     syncLyrics(state.position);
   }
@@ -4420,7 +4512,7 @@ document.addEventListener("keydown", e => {
 });
 
 /* ── init ──────────────────────────────────────────────────────────── */
-setTheme(localStorage.getItem("theme") || "default", false);
+setTheme(localStorage.getItem("theme") || "mono", false);
 buildSwatches();
 setVol(70);
 /* A page that's already the output starts its own elements at what the

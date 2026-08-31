@@ -250,6 +250,20 @@ def run(verbose: bool = False) -> Result:
             c("the owner's config is untouched",
               _cfg.get("artist_cohesion") != 1.7,
               f"owner cohesion={_cfg.get('artist_cohesion')}")
+            # What somebody borrowing the player for a night is handed. They
+            # set none of it and it isn't kept, so these three defaults are
+            # the whole of what an evening looks and sounds like.
+            from .core.profile import GUEST_SETTINGS
+            night = link("check-night", scope="phone", hours=24)
+            mine = get("/api/settings", night).json()
+            for key, want in (("theme", "mono"), ("eq", "flat"),
+                              ("normalize", True)):
+                c(f"a link for the night starts on {key}={want}",
+                  mine.get(key) == want, f"got {mine.get(key)!r}")
+                c(f"...and that is the default, not a saved value",
+                  GUEST_SETTINGS[key] == want)
+            c("a link that expires keeps nothing",
+              mine.get("persistent") is False, str(mine.get("persistent")))
             say("a guest's own settings", c)
 
             # -- 2c. permanent remembers, temporary doesn't ----------------

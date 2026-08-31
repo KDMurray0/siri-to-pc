@@ -30,7 +30,7 @@ DEFAULTS: dict[str, Any] = {
     "shuffle": False,
     "announce": True,
     "tts_voice": "en-US-AriaNeural",
-    "theme": "default",
+    "theme": "mono",
     "audio_device": "auto",
     "audio_device_label": "",
     "cast_client": "",         # the one browser acting as the speaker
