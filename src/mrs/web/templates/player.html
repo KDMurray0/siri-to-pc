@@ -944,25 +944,33 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
        alone it was stuck at 430px on a monitor with 900px of room going
        spare underneath it — a postage stamp with an empty column beside
        it, which is what "doesn't work on other monitors" looked like. */
-    --deck:clamp(230px,min(22vw,calc(100vh - 400px)),540px);
+    --deck:clamp(220px,min(19vw,calc(100vh - 430px)),440px);
     grid-template-columns:var(--deck) minmax(0,1fr) var(--side);
-    /* six content rows down the left, then slack, so the player sits at
-       the top of its column instead of drifting into the middle */
-    grid-template-rows:auto auto auto auto auto auto minmax(0,1fr);
-    column-gap:clamp(20px,2.2vw,44px)}
+    /* Slack above the player as well as below it, so the whole left column
+       sits in the middle of its own height. Pinned to the top it left a
+       growing hole underneath every time the cover came down a size. */
+    grid-template-rows:auto minmax(0,1fr) auto auto auto auto auto
+                       minmax(0,1fr);
+    /* One number for the wall and for the gap between columns, so the space
+       to the left of the cover and the space to the right of it are the
+       same space. They were 30 and 122 — the lyrics carried a fat left
+       padding of their own on top of the column gap. */
+    --edge:30px;
+    padding:46px var(--edge) 24px;
+    column-gap:var(--edge)}
 
   /* Room under the search box. It was sitting straight on top of the cover
      and the first line of the lyrics, which made the whole top edge read as
      one crowded band. */
   body:not(.mini) .search  {grid-area:1/1/2/3;margin-top:0;
     margin-bottom:clamp(16px,2vh,30px)}
-  body:not(.mini) .art-wrap{grid-area:2/1;margin-top:0;align-items:start}
-  body:not(.mini) .meta    {grid-area:3/1;margin-top:18px;min-height:0;
+  body:not(.mini) .art-wrap{grid-area:3/1;margin-top:0;align-items:start}
+  body:not(.mini) .meta    {grid-area:4/1;margin-top:18px;min-height:0;
     text-align:left}
-  body:not(.mini) .prog    {grid-area:4/1;margin-top:14px}
-  body:not(.mini) .controls{grid-area:5/1;margin-top:14px;gap:10px;
+  body:not(.mini) .prog    {grid-area:5/1;margin-top:14px}
+  body:not(.mini) .controls{grid-area:6/1;margin-top:14px;gap:10px;
     justify-content:space-between}
-  body:not(.mini) .row2    {grid-area:6/1;margin-top:14px;padding-top:12px}
+  body:not(.mini) .row2    {grid-area:7/1;margin-top:14px;padding-top:12px}
   body:not(.mini) .nav     {grid-area:1/3;align-self:end}
   body:not(.mini) .panel   {grid-column:3;grid-row:2/-1;margin-top:0;
     min-height:0}
@@ -995,8 +1003,12 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
     /* Half a panel of empty space top and bottom, so the first line and the
        last one can both reach the middle. Without it the scroll clamps at
        zero and the opening verse sits at the top of the column until the
-       song has run far enough to push it down. */
-    padding:42vh clamp(22px,3.4vw,78px);
+       song has run far enough to push it down.
+       Nothing on the left: the column gap is already the space between the
+       cover and the words, and a padding on top of it made that gap four
+       times the one on the other side of the cover. */
+    padding-block:42vh;padding-left:0;
+    padding-right:clamp(14px,1.6vw,40px);
     align-self:stretch;scroll-behavior:smooth}
   body:not(.mini) .navtab[data-panel="lyrics"]{display:none}
   /* The rows are the panel's own children — .lyrics is a class on
@@ -1005,8 +1017,10 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   /* Room to breathe. Tight leading and negative tracking are for headlines
      you scan; these are read one line at a time against a clock, and the
      gap between them is what makes it obvious which one you're on. */
+  /* Half the gap it had. Airy was better than cramped, but not this airy —
+     at 26px a line was carrying nearly 50px of space around it. */
   body:not(.mini) #panel-lyrics .lrow{font-size:clamp(17px,1.45vw,26px);
-    line-height:1.8;padding:13px 0;font-weight:600;letter-spacing:.005em}
+    line-height:1.5;padding:6px 0;font-weight:600;letter-spacing:.005em}
   body:not(.mini) #panel-lyrics .lrow.active{font-weight:800}
   /* The panel already carries the vertical room, so the message shouldn't
      add another half-screen on top of it — and at 12px it read as a fault
