@@ -775,11 +775,13 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
      square so it can only ever answer the height; the rest sits in a column
      of a readable width, centred under it, which is what stops the space
      either side reading as something missing. */
+  /* The search box is deliberately not in this list. It runs the width of
+     the column and stays that way — it's the thing you aim at first and it
+     was fine as it was. */
   body:not(.mini) .meta,
   body:not(.mini) .prog,
   body:not(.mini) .controls,
-  body:not(.mini) .row2,
-  body:not(.mini) .search{max-width:820px;margin-left:auto;margin-right:auto;
+  body:not(.mini) .row2{max-width:820px;margin-left:auto;margin-right:auto;
     width:100%}
   body:not(.mini) .title{font-size:27px}
   body:not(.mini) .artist{font-size:14.5px;margin-top:5px}
@@ -851,7 +853,12 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
    resolve. */
 @media (min-width:900px) and (min-height:520px) and (min-aspect-ratio:19/10){
   body:not(.mini) .stage{
-    grid-template-columns:clamp(240px,58vh,760px) minmax(0,1fr)
+    /* Measured off what's actually left rather than a share of the window:
+       the cover has everything below the search box, so the only heights it
+       doesn't get are the padding top and bottom and that one row. 58vh was
+       a guess, and on a short ultrawide it left the bottom third of the
+       column empty underneath a cover that could have filled it. */
+    grid-template-columns:clamp(240px,calc(100vh - 150px),840px) minmax(0,1fr)
                           clamp(290px,25vw,380px);
     grid-template-rows:auto minmax(0,1fr) auto auto auto auto minmax(0,1fr);
     column-gap:clamp(24px,3vw,56px)}
