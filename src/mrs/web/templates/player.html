@@ -743,7 +743,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 @media (min-width:900px) and (min-height:520px){
   body:not(.mini) .stage{
     display:grid;
-    grid-template-columns:minmax(0,1fr) clamp(290px,25vw,380px);
+    grid-template-columns:minmax(0,1fr) clamp(300px,20vw,520px);
     /* the cover's row takes the slack, so it floats centred in whatever
        height is left over instead of the controls doing so */
     grid-template-rows:auto minmax(0,1fr) auto auto auto auto;
@@ -858,8 +858,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
        doesn't get are the padding top and bottom and that one row. 58vh was
        a guess, and on a short ultrawide it left the bottom third of the
        column empty underneath a cover that could have filled it. */
-    grid-template-columns:clamp(240px,calc(100vh - 150px),840px) minmax(0,1fr)
-                          clamp(290px,25vw,380px);
+    grid-template-columns:clamp(240px,calc(100vh - 150px),980px) minmax(0,1fr)
+                          clamp(320px,20vw,520px);
     grid-template-rows:auto minmax(0,1fr) auto auto auto auto minmax(0,1fr);
     column-gap:clamp(24px,3vw,56px)}
 
@@ -882,10 +882,16 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
      something that isn't above them */
   body:not(.mini) .meta{text-align:left}
   body:not(.mini) .controls{justify-content:flex-start}
+  /* Wide, but not the whole column. A seek bar the width of an ultrawide
+     is nearly 1200px of hairline: precise to about a fifth of a second,
+     which nobody needs, and a very long way for the eye to travel between
+     the time on the left and the time on the right. Capped generously and
+     kept against the cover rather than floating in the middle of the gap. */
   body:not(.mini) .meta,
   body:not(.mini) .prog,
   body:not(.mini) .controls,
-  body:not(.mini) .row2{max-width:none;margin-left:0;margin-right:0}
+  body:not(.mini) .row2{max-width:min(100%,880px);
+    margin-left:0;margin-right:auto}
   body:not(.mini) .title{font-size:clamp(28px,3.2vw,44px)}
   body:not(.mini) .artist{font-size:clamp(15px,1.2vw,19px)}
 }
