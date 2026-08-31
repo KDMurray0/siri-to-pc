@@ -1068,6 +1068,7 @@ def api_settings(request: Request, _: bool = Auth):
                 **mine}
     return {"status": "ok", **full, "release": __version__,
             "groq": llm.status(), "cookies": dict(cookie_mod.state),
+            "start_before_signin": bool(config.get("start_before_signin")),
             "spotdl": spotify.available()}
 
 
@@ -1712,6 +1713,151 @@ def _set_run_at_boot(enable: bool) -> bool:
     except Exception as exc:
         log.warning("boot registry write failed: %s", exc)
         return False
+
+
+TASK_NAME = "MusicRequestServer-BeforeSignIn"
+
+
+def _headless_command() -> str:
+    import sys
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}" --headless'
+    root = Path(__file__).resolve().parents[3]
+    pyw = sys.executable.replace("python.exe", "pythonw.exe")
+    return f'"{pyw}" "{root / "launcher.pyw"}" --headless'
+
+
+def _run_ps(script: str) -> tuple[bool, str]:
+    import subprocess
+    try:
+        got = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-Command", script],
+            capture_output=True, text=True, timeout=90,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception as exc:
+        return False, str(exc)
+    out = (got.stdout or "").strip() or (got.stderr or "").strip()
+    return got.returncode == 0, out
+
+
+def _run_ps_elevated(script: str) -> tuple[bool, str]:
+    """Same, but through UAC.
+
+    A task that runs when nobody is signed in is a privileged thing to
+    register — Windows answers a plain Register-ScheduledTask with "Access is
+    denied" however ordinary the program asking. So this raises the prompt
+    once, and the answer is read back from Windows afterwards rather than
+    from an exit code the elevated process can't easily hand back.
+    """
+    import base64
+    import subprocess
+
+    blob = base64.b64encode(script.encode("utf-16-le")).decode()
+    outer = ("Start-Process powershell -Verb RunAs -WindowStyle Hidden -Wait "
+             "-ArgumentList '-NoProfile','-ExecutionPolicy','Bypass',"
+             f"'-EncodedCommand','{blob}'")
+    try:
+        got = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-Command", outer],
+            capture_output=True, text=True, timeout=300,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception as exc:
+        return False, str(exc)
+    out = (got.stderr or "").strip() or (got.stdout or "").strip()
+    return got.returncode == 0, out
+
+
+def _set_run_before_signin(enable: bool) -> tuple[bool, str]:
+    """A scheduled task that starts the server with the machine.
+
+    As the user, not SYSTEM. SYSTEM has its own profile, so it would look for
+    the config, the links and the cookies in a folder that has none of them
+    and quietly come up as a stranger's first run.
+
+    S4U, so no password has to be stored anywhere for it. The cost is that
+    the task gets no network credentials, which matters not at all to a
+    server that only listens.
+    """
+    import getpass
+    import os as _os
+
+    if enable:
+        cmd = _headless_command()
+        exe, _, args = cmd.partition('" ')
+        exe = exe.strip('"')
+        # Whose account, decided here rather than inside the elevated shell —
+        # elevating can land in a different user, and a task registered
+        # against the wrong one looks in the wrong profile for everything.
+        domain = _os.environ.get("USERDOMAIN") or _os.environ.get("COMPUTERNAME") or ""
+        user = f"{domain}\\{getpass.getuser()}" if domain else getpass.getuser()
+        script = f"""
+$ErrorActionPreference = 'Stop'
+$a = New-ScheduledTaskAction -Execute '{exe}' -Argument '{args.strip()}'
+$t = New-ScheduledTaskTrigger -AtStartup
+$p = New-ScheduledTaskPrincipal -UserId '{user}' -LogonType S4U -RunLevel Limited
+$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries -StartWhenAvailable `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 `
+        -RestartInterval (New-TimeSpan -Minutes 1)
+Register-ScheduledTask -TaskName '{TASK_NAME}' -Action $a -Trigger $t `
+        -Principal $p -Settings $s -Force | Out-Null
+"""
+    else:
+        script = (f"Unregister-ScheduledTask -TaskName '{TASK_NAME}' "
+                  f"-Confirm:$false -ErrorAction SilentlyContinue")
+    _run_ps_elevated(script)
+    # Ask Windows what actually happened. The elevated shell is a separate
+    # process behind a prompt the user can decline, so its exit code says
+    # nothing useful about whether the task is there.
+    there = _before_signin_installed()
+    ok = there if enable else not there
+    if not ok:
+        log.warning("couldn't %s the before-sign-in task",
+                    "install" if enable else "remove")
+    return ok, "" if ok else (
+        "Windows refused, or the permission prompt was declined")
+
+
+def _before_signin_installed() -> bool:
+    ok, out = _run_ps(
+        f"if (Get-ScheduledTask -TaskName '{TASK_NAME}' "
+        f"-ErrorAction SilentlyContinue) {{'yes'}} else {{'no'}}")
+    return ok and out.strip() == "yes"
+
+
+@app.get("/api/boot/early")
+def api_boot_early(enabled: int = 0, _: bool = Owner):
+    """Start with the machine rather than with the desktop.
+
+    Worth being plain about what this can and can't do: before anyone signs
+    in there is no audio device for Windows to give us, so the computer's own
+    speakers stay silent until you log in. Links play on their own devices
+    and work exactly as they always do — which is the point of it.
+    """
+    want = bool(enabled)
+    ok, out = _set_run_before_signin(want)
+    config.set("start_before_signin", want and ok)
+    if want and ok and not config.get("start_on_boot"):
+        # The two go together. The early copy has no desktop, which means no
+        # tray and no sound out of this machine; what makes that acceptable
+        # is that signing in starts the ordinary copy, which takes the port
+        # off it. Without that second half you sign in to a player that has
+        # no icon and plays to nobody, which is precisely the state this was
+        # meant to avoid.
+        if _set_run_at_boot(True):
+            config.set("start_on_boot", True)
+            log.info("turned on start-at-sign-in too, so something takes over")
+    return {"status": "ok" if ok else "error",
+            "start_before_signin": want and ok,
+            "start_on_boot": bool(config.get("start_on_boot")),
+            "message": ("Serving from startup. Signing in hands it over to "
+                        "the normal player — until then this computer's own "
+                        "speakers stay silent"
+                        if want and ok else
+                        "Back to starting when you sign in" if ok else
+                        f"Windows wouldn't take the task: {out[:200]}")}
 
 
 # ── cookies ───────────────────────────────────────────────────────────

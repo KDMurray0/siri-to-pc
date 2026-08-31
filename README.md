@@ -576,3 +576,20 @@ whether you run the .exe or from source.
 ## Legal Note
 
 This server streams audio from YouTube Music, which is outside YouTube's terms of service for playback. It is intended for personal use only. `ytmusicapi` is an unofficial client that communicates with reverse-engineered YouTube Music endpoints and may need updating when YouTube changes its internals.
+### Start before sign-in
+
+**Settings → System → Start before sign-in** registers a scheduled task that
+starts the server with the machine rather than with the desktop, so links keep
+working while the computer sits at the lock screen. Windows asks permission
+once; the task runs as you, with no stored password (S4U).
+
+Two things worth knowing:
+
+- **This computer's own speakers stay silent until you sign in.** Nothing
+  running before a user session gets given an audio device — the player is
+  there, it will queue and download, and no sound comes out of the machine.
+  Links play on their own devices exactly as always, which is the point of it.
+- **Signing in hands over.** The early copy has no tray icon and no window, so
+  the ordinary player takes the port off it when you log in. That's why turning
+  this on also turns on *Start with Windows*: without something to hand over
+  to, you would sign in to a server with no icon playing to nobody.

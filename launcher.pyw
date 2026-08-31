@@ -49,6 +49,7 @@ if _reexec_if_needed():
     sys.exit(0)
 
 import ctypes
+import subprocess
 import threading
 import time
 from ctypes import wintypes
@@ -750,6 +751,94 @@ def _tray() -> None:
 
 
 
+def _headless_marker():
+    from mrs.paths import data_dir
+    return data_dir() / "headless.pid"
+
+
+def _stand_down_headless() -> bool:
+    """Stop a copy that's been serving since before anyone signed in.
+
+    It holds the mutex, the port and the mpv pipes, and it can't play to the
+    speakers — nothing in session 0 can, Windows gives it no audio device. So
+    when somebody actually signs in, the copy with a desktop takes over. The
+    handover is a file naming a pid rather than a shutdown route on the web
+    server: this is our own process, on this machine, and adding a way to ask
+    an HTTP server to kill itself is a bigger thing to own than a pid file.
+    """
+    marker = _headless_marker()
+    try:
+        pid = int(marker.read_text(encoding="utf-8").strip())
+    except Exception:
+        return False
+    if pid == os.getpid():
+        return False
+    try:
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                       capture_output=True, timeout=20,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception as exc:
+        log.warning("couldn't stop the headless copy (pid %s): %s", pid, exc)
+        return False
+    try:
+        marker.unlink()
+    except Exception:
+        pass
+    # Wait for it to actually be gone, by asking the port rather than the
+    # mutex. Probing with _singleton() *takes* the mutex, so the caller's
+    # next check found the handle this process had just made for itself and
+    # concluded somebody else had it.
+    port = config.get("port", 5000)
+    for _ in range(60):
+        if not srv._is_ours(port):
+            break
+        time.sleep(0.25)
+    mark(f"took over from the headless copy (pid {pid})")
+    return True
+
+
+def _run_headless() -> None:
+    """Serve, with no desktop to put anything on.
+
+    This is what runs before anyone signs in. There is no tray icon and no
+    window because there is no session to show them in; links work, and the
+    computer's own speakers do not, because session 0 has no audio device to
+    give mpv. Signing in starts the normal copy, which takes over.
+    """
+    mark("headless: starting")
+    if _singleton() is None:
+        mark("headless: something else already holds the mutex — stopping")
+        sys.exit(0)
+    try:
+        _headless_marker().write_text(str(os.getpid()), encoding="utf-8")
+    except Exception as exc:
+        log.warning("couldn't write the headless marker: %s", exc)
+    thread = srv.run_in_thread()
+    port = config.get("port", 5000)
+    for _ in range(60):
+        if srv.runtime.get("port"):
+            port = srv.runtime["port"]
+            break
+        time.sleep(0.5)
+    if _wait_for_server(port):
+        mark(f"headless: serving on {port}")
+        log.info("running headless on port %s — no desktop, so no tray and "
+                 "no sound out of this computer; links play on their own "
+                 "devices as usual", port)
+    else:
+        mark("headless: the server never came up")
+        log.error("headless: server did not come up — %s",
+                  srv.runtime.get("error") or "no reason recorded")
+    try:
+        while thread.is_alive():
+            thread.join(timeout=3600)
+    finally:
+        try:
+            _headless_marker().unlink()
+        except Exception:
+            pass
+
+
 def _singleton():
     """Named mutex so a second launch can't fight over mpv and the port."""
     try:
@@ -758,8 +847,16 @@ def _singleton():
         k32 = ctypes.WinDLL("kernel32", use_last_error=True)
         k32.CreateMutexW.restype = ctypes.c_void_p
         k32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+        ctypes.set_last_error(0)
         h = k32.CreateMutexW(None, False, "MusicRequestServer_singleton")
         if ctypes.get_last_error() == 183:      # ERROR_ALREADY_EXISTS
+            # Let go of it. CreateMutexW hands back a handle even when it's
+            # somebody else's mutex, and keeping that handle keeps the mutex
+            # alive after its owner has gone — so having found the headless
+            # copy holding it, killed that copy and asked again, we were
+            # answered by the reference we ourselves had left behind.
+            if h:
+                k32.CloseHandle(ctypes.c_void_p(h))
             return None
         return h or True
     except Exception:
@@ -832,8 +929,21 @@ def main() -> None:
         from mrs.checks import main as checks
         sys.exit(checks())
 
+    # No desktop to draw on: serve and nothing else.
+    if "--headless" in sys.argv:
+        _run_headless()
+        return
+
     mark("starting")
-    if _singleton() is None:
+    # Taken exactly once. Every call to _singleton() that succeeds creates a
+    # handle, so asking twice means the second answer is about the first ask.
+    holder = _singleton()
+    if holder is None:
+        # Probably the copy that has been serving since before sign-in. That
+        # one can't reach the speakers, and this one can, so it stands aside.
+        if _stand_down_headless():
+            holder = _singleton()
+    if holder is None:
         mark("another copy already has the mutex — leaving it to that one")
         sys.exit(0)
 

@@ -767,9 +767,20 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
      cover doesn't know what the controls underneath it need and on a short
      window it simply grows down through the title. */
   body:not(.mini) .art,
-  body:not(.mini) .artnote{height:min(100%,520px);width:auto;
+  body:not(.mini) .artnote{height:min(100%,760px);width:auto;
     max-width:100%;aspect-ratio:1}
   body:not(.mini) .art{border-radius:24px}
+  /* On 16:9 the left column runs to about 1400px, and a title, a seek bar
+     and five buttons stretched across all of it is mostly gap. The cover is
+     square so it can only ever answer the height; the rest sits in a column
+     of a readable width, centred under it, which is what stops the space
+     either side reading as something missing. */
+  body:not(.mini) .meta,
+  body:not(.mini) .prog,
+  body:not(.mini) .controls,
+  body:not(.mini) .row2,
+  body:not(.mini) .search{max-width:820px;margin-left:auto;margin-right:auto;
+    width:100%}
   body:not(.mini) .title{font-size:27px}
   body:not(.mini) .artist{font-size:14.5px;margin-top:5px}
   body:not(.mini) .ambient{height:64%;opacity:.26}
@@ -823,6 +834,53 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   body:not(.mini) .sheet-tabs,
   body:not(.mini) .sheet-body{width:100%;max-width:720px;
     margin-left:auto;margin-right:auto}
+}
+
+/* ── ultrawide ─────────────────────────────────────────────────────────
+   Stacking the cover above the controls spends height, and an ultrawide
+   hasn't got height to spend — it has width, which the stacked layout
+   leaves empty on both sides. Past about 2:1 the cover moves beside the
+   controls instead of above them: it stops being bounded by "whatever is
+   left after the transport" and gets the whole column, and the words and
+   buttons get the space to its right rather than a 1700px seek bar with a
+   title floating in the middle of it.
+
+   The cover's column is sized off the viewport height rather than left to
+   the grid, because a square whose width depends on its height inside a
+   column whose width depends on the square is a circle the layout can't
+   resolve. */
+@media (min-width:900px) and (min-height:520px) and (min-aspect-ratio:19/10){
+  body:not(.mini) .stage{
+    grid-template-columns:clamp(240px,58vh,760px) minmax(0,1fr)
+                          clamp(290px,25vw,380px);
+    grid-template-rows:auto minmax(0,1fr) auto auto auto auto minmax(0,1fr);
+    column-gap:clamp(24px,3vw,56px)}
+
+  body:not(.mini) .search  {grid-area:1/1/2/3}
+  body:not(.mini) .art-wrap{grid-area:2/1/8/2;align-self:stretch;
+    justify-content:center}
+  body:not(.mini) .meta    {grid-area:3/2;margin-top:0}
+  body:not(.mini) .prog    {grid-area:4/2}
+  body:not(.mini) .controls{grid-area:5/2}
+  body:not(.mini) .row2    {grid-area:6/2}
+  body:not(.mini) .nav     {grid-area:1/3}
+  body:not(.mini) .panel   {grid-column:3;grid-row:2/-1}
+
+  /* width-led here, so it fills the column the height decided on */
+  body:not(.mini) .art,
+  body:not(.mini) .artnote{width:100%;height:auto;max-height:100%;
+    aspect-ratio:1}
+  /* the stacked layout centred these under the cover; beside it they read
+     as a column of their own, so they stop pretending to be centred on
+     something that isn't above them */
+  body:not(.mini) .meta{text-align:left}
+  body:not(.mini) .controls{justify-content:flex-start}
+  body:not(.mini) .meta,
+  body:not(.mini) .prog,
+  body:not(.mini) .controls,
+  body:not(.mini) .row2{max-width:none;margin-left:0;margin-right:0}
+  body:not(.mini) .title{font-size:clamp(28px,3.2vw,44px)}
+  body:not(.mini) .artist{font-size:clamp(15px,1.2vw,19px)}
 }
 
 /* A laptop is a desktop with about 640px of browser in it. Everything above
@@ -1158,7 +1216,9 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         <div class="srow"><span class="slabel">Version</span><span class="sval" id="release">—</span></div>
         <div class="srow"><span class="slabel">Setup guide<em>What the tools are for, what the key is, and which extras are worth having</em></span>
           <button class="btn" id="reguide">Open</button></div>
-        <div class="srow"><span class="slabel">Start with Windows</span><div class="toggle" id="boot"></div></div>
+        <div class="srow"><span class="slabel">Start with Windows<em>When you sign in</em></span><div class="toggle" id="boot"></div></div>
+        <div class="srow"><span class="slabel">Start before sign-in<em>Serves links from the moment the machine is on. Windows asks permission once. This computer's own speakers stay silent until you sign in — nothing running that early is given an audio device</em></span>
+          <div class="toggle" id="bootearly"></div></div>
         <div class="srow"><span class="slabel">Only my devices<em>Rejects other machines on the network</em></span>
           <div class="toggle" id="lockips"></div></div>
 
@@ -2330,6 +2390,22 @@ const toggleRow = (id, path) => {
 toggleRow("announce", "/api/announce");
 toggleRow("boot", "/api/boot");
 toggleRow("lockips", "/api/lockips");
+/* Not fire-and-forget: this one asks Windows to register a scheduled task,
+   and Windows is entitled to say no. A switch that stays on after the thing
+   it switches on didn't happen is worse than no switch. */
+$("bootearly").onclick = async () => {
+  const el = $("bootearly");
+  const on = !el.classList.contains("on");
+  el.classList.toggle("on", on);
+  const r = await api("/api/boot/early?enabled=" + (on ? 1 : 0));
+  const got = !!(r && r.start_before_signin);
+  el.classList.toggle("on", got);
+  // It turns the other one on with it, so the switch has to show that.
+  if (r && r.start_on_boot !== undefined) {
+    $("boot").classList.toggle("on", !!r.start_on_boot);
+  }
+  toast((r && r.message) || "That needs the key");
+};
 /* These two are plain settings rather than their own endpoints. */
 const settingRow = (id, key) => {
   $(id).onclick = async () => {
@@ -3562,6 +3638,7 @@ async function loadSettings() {
   $("normalize").classList.toggle("on", !!s.normalize);
   $("announce").classList.toggle("on", s.announce !== false);
   $("boot").classList.toggle("on", !!s.start_on_boot);
+  $("bootearly").classList.toggle("on", !!s.start_before_signin);
   $("lockips").classList.toggle("on", !!s.lock_ips);
   $("usehttps").classList.toggle("on", !!s.https);
   $("blockguests").classList.toggle("on", !!s.block_full_guests);
