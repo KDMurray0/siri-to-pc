@@ -21,6 +21,33 @@ phone, without touching yours — on the right.
 </p>
 </details>
 
+## A few things it does that aren't obvious
+
+**Ask for a playlist out loud.** "Make me a thirty minute grunge playlist",
+"a two hour playlist of Nirvana and Soundgarden", "half an hour of jazz and
+blues", "a playlist like Bohemian Rhapsody". The length can be counted or
+said; the subject can be one genre, several, one band, several, or a single
+record to build around. It fills to the length asked for, one act at a time
+rather than five songs by the first one, and files it under a sensible name.
+
+**About this song.** The ⓘ beside the settings gear — or the
+Lyrics / About switch, on a screen wide enough to give the words their own
+column — swaps the lyrics for where the record came from. Wikipedia's
+background section and Last.fm's write-up, never anything invented: the
+model that shortens them is only allowed to use what those said.
+
+**Shared playlists.** Press ⇄ on one of your lists and everyone holding a
+link can see it, play it and add to it. There is one copy — the house is
+looking at the same list, and each row says who put it there. People can
+take back their own additions and nothing else, and the list stays yours to
+delete. Even a link that expires can put a song in one, because the list
+outlives the evening.
+
+**The volume follows the clock.** Quieter after eleven, eased off after
+eight, back up at seven. The level you set is remembered as the level you
+meant for that time of day, so turning it up at midnight makes midnight
+louder rather than starting an argument. One toggle in settings turns it off.
+
 ## Playing somewhere else
 
 The whole player runs in a browser, so anything with one is a speaker.

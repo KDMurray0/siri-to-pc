@@ -912,6 +912,89 @@ def run(verbose: bool = False) -> Result:
                 config.set("auto_volume", was[2])
             say("volume follows the clock", c)
 
+            # -- 9m. a list the house shares -------------------------------
+            # One copy, the owner's. The flag is the whole permission, so
+            # every rule about who may touch what is checked here.
+            c = _Checker("shared lists")
+            from urllib.parse import quote
+
+            from .core.playlists import playlists as _pl
+            from .models import Track as _T
+
+            SHARED, PRIVATE = "check-shared-list", "check-private-list"
+            try:
+                for nm in (SHARED, PRIVATE):
+                    _pl.create(nm)
+                    _pl.add(nm, _T(video_id=f"own-{nm}", title="Owner's pick",
+                                   artist="Someone"))
+                c("a new list isn't shared", not _pl.is_shared(SHARED))
+                _pl.set_shared(SHARED, True)
+                c("...until it's opened up", _pl.is_shared(SHARED))
+                c("and only that one", not _pl.is_shared(PRIVATE))
+                c("it's listed as shared",
+                  any(r["name"] == SHARED and r.get("shared")
+                      for r in _pl.summary()))
+
+                # What a link can see.
+                seen = get("/api/playlists", tok=phone).json()
+                names = [r["name"] for r in seen.get("shared", [])]
+                c("a link is shown the shared list", SHARED in names, str(names))
+                c("...and not the private one", PRIVATE not in names)
+                c("...and not the owner's library as its own",
+                  not [r for r in seen.get("playlists", [])
+                       if r["name"] == PRIVATE])
+
+                # What a link can do to it.
+                url = "/api/playlist/add?name=" + quote(SHARED) + \
+                      "&shared=1&video_id=guestvid&title=Theirs&artist=Them"
+                c("a link can add to it", get(url, tok=phone).status_code == 200)
+                rows = get("/api/playlist/tracks?name=" + quote(SHARED)
+                           + "&shared=1", tok=phone).json()
+                added = {r["video_id"]: r.get("added_by") for r in rows["tracks"]}
+                c("the track is in it", "guestvid" in added, str(list(added)))
+                c("signed with the name on the link",
+                  added.get("guestvid") == "check-phone", str(added))
+                c("and the owner's own row isn't signed",
+                  not added.get("own-" + SHARED))
+                c("they can take back their own",
+                  get("/api/playlist/remove?name=" + quote(SHARED)
+                      + "&shared=1&video_id=guestvid",
+                      tok=phone).status_code == 200)
+                c("but not somebody else's",
+                  get("/api/playlist/remove?name=" + quote(SHARED)
+                      + "&shared=1&video_id=own-" + SHARED,
+                      tok=phone).status_code == 403)
+                c("they can't delete the list",
+                  get("/api/playlist/delete?name=" + quote(SHARED) + "&shared=1",
+                      tok=phone).status_code == 403)
+                c("they can't stop it being shared",
+                  get("/api/playlist/share?name=" + quote(SHARED) + "&on=0",
+                      tok=phone).status_code == 403)
+
+                # And a list that wasn't shared stays out of reach, whatever
+                # the caller claims.
+                for op in ("tracks", "play",
+                           "add&video_id=x&title=y", "delete"):
+                    r2 = get(f"/api/playlist/{op.split('&')[0]}?name="
+                             + quote(PRIVATE) + "&shared=1"
+                             + ("&" + op.split("&", 1)[1] if "&" in op else ""),
+                             tok=phone)
+                    c(f"{op.split('&')[0]} on a private list is refused",
+                      r2.status_code == 403, str(r2.status_code))
+                c("the owner can still see all of theirs",
+                  {SHARED, PRIVATE} <=
+                  {r["name"] for r in get("/api/playlists").json()["playlists"]})
+                _pl.set_shared(SHARED, False)
+                c("and closing it takes it back off the list",
+                  not get("/api/playlists", tok=phone).json().get("shared"))
+            finally:
+                for nm in (SHARED, PRIVATE):
+                    try:
+                        _pl.delete(nm)
+                    except Exception:
+                        pass
+            say("a list the house shares", c)
+
             # -- 10. usage is recorded against the link --------------------
             c = _Checker("stats")
             rows = get("/api/passes").json().get("passes", [])

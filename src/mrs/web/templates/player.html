@@ -356,6 +356,15 @@ body.reordering .q{transition:transform .12s ease}
   color:var(--sub);margin-top:1px}
 /* the tracks inside a list, shown without starting it */
 .pltracks:empty{display:none}
+/* A list the house shares. The tag is on the row, not in the name, so a
+   list called "Shared" doesn't look like one. */
+.plhead{font-size:10.5px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--sub);padding:12px 6px 4px}
+.plshare{font-size:9.5px;font-weight:700;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--accent);border:1px solid var(--accent);
+  border-radius:5px;padding:0 4px;margin-left:6px;vertical-align:1px}
+.qc.on{color:var(--accent)}
+.plby{font-style:normal;opacity:.75}
 .pltracks{margin:0 0 8px 8px;border-left:2px solid var(--line);padding-left:8px}
 .pltrack{display:flex;align-items:center;gap:8px;padding:5px 4px;border-radius:7px}
 .pltrack:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}
@@ -722,6 +731,10 @@ body.guest #download{display:none}
 body.guest:not(.keeps) #like,
 body.guest:not(.keeps) #addlist,
 body.guest:not(.keeps) .navtab[data-panel="lists"]{display:none}
+/* Unless the house is sharing a list. That one is the owner's and survives
+   the morning, so an evening's guest putting a song in it loses nothing —
+   which was the whole reason the button was hidden. */
+body.guest:not(.keeps).houselists #addlist{display:grid}
 /* Recently played, likewise: theirs when they have one, and never the
    owner's. On the computer's speakers they're looking at that player, so
    the tab is the owner's history and stays hidden from a link. */
@@ -2929,6 +2942,32 @@ $("panel-recent").addEventListener("click", e => {
 /* The list being imported right now, if any, and how far along. */
 let importing = "", importFound = 0, importTotal = 0;
 
+// Shared lists live in the owner's library, so a guest can have one of
+// their own by the same name. The id has to say which is which.
+const plSlug = (n, shared) =>
+  (shared ? "sh-" : "pl-") + (n || "").replace(/[^a-zA-Z0-9]/g, "_");
+
+function listRow(p, shared, owner) {
+  const n = p.name || "";
+  const busy = n && n === importing;
+  const sub = busy
+    ? `adding… ${importFound}${importTotal ? " of " + importTotal : ""}`
+    : `${p.count || 0} song${p.count === 1 ? "" : "s"}`;
+  const sh = shared ? "1" : "";
+  const tag = (owner && p.shared) ? '<span class="plshare">shared</span>' : "";
+  return `<div class="plrow${busy ? " busy" : ""}">` +
+    `<span class="pn" data-open="${esc(n)}" data-sh="${sh}">${esc(n)}${tag}<em>${esc(sub)}</em></span>` +
+    (busy ? '<span class="plspin" aria-label="Importing"></span>'
+          : `<button class="qc" data-play="${esc(n)}" data-sh="${sh}" title="Play">▶</button>` +
+            (owner
+              ? `<button class="qc${p.shared ? " on" : ""}" data-share="${esc(n)}" ` +
+                `data-on="${p.shared ? 0 : 1}" title="${p.shared ? "Stop sharing" : "Let everyone add to this"}">⇄</button>`
+              : "") +
+            (shared ? "" : `<button class="qc" data-del="${esc(n)}" title="Delete">✕</button>`)) +
+    `</div>` +
+    `<div class="pltracks" id="${plSlug(n, shared)}"></div>`;
+}
+
 async function loadLists() {
   const box = $("panel-lists");
   box.innerHTML = '<div class="muted">Loading…</div>';
@@ -2937,25 +2976,20 @@ async function loadLists() {
   // array hands back "0", "1", "2" — which is where the mystery playlist
   // called 0 came from, and why the real names never showed up.
   const rows = (r && r.playlists) || [];
+  const house = (r && r.shared) || [];      // the owner's, opened to everyone
+  const owner = !!(ME && ME.owner);
   let html = `<div class="srow" style="border:0"><button class="btn primary" id="plnew">Save current song to a list</button></div>` +
     `<div class="plimport"><input id="plspot" placeholder="Paste a Spotify or Apple Music link" autocomplete="off" spellcheck="false">` +
     `<button class="btn" id="plspotgo">Add</button></div>`;
   html += rows.length
-    ? rows.map(p => {
-        const n = p.name || "";
-        const busy = n && n === importing;
-        const sub = busy
-          ? `adding… ${importFound}${importTotal ? " of " + importTotal : ""}`
-          : `${p.count || 0} song${p.count === 1 ? "" : "s"}`;
-        return `<div class="plrow${busy ? " busy" : ""}">` +
-        `<span class="pn" data-open="${esc(n)}">${esc(n)}<em>${esc(sub)}</em></span>` +
-        (busy ? '<span class="plspin" aria-label="Importing"></span>'
-              : `<button class="qc" data-play="${esc(n)}" title="Play">▶</button>` +
-                `<button class="qc" data-del="${esc(n)}" title="Delete">✕</button>`) +
-        `</div>` +
-        `<div class="pltracks" id="pl-${esc(n).replace(/[^a-zA-Z0-9]/g, "_")}"></div>`;
-      }).join("")
+    ? rows.map(p => listRow(p, false, owner)).join("")
     : '<div class="muted">No lists yet.</div>';
+  // Only for the people who aren't the owner — theirs are already in the
+  // list above, marked as shared.
+  if (house.length) {
+    html += '<div class="plhead">Shared with the house</div>' +
+      house.map(p => listRow(p, true, owner)).join("");
+  }
   box.innerHTML = html;
   $("plnew").onclick = async () => {
     const name = prompt("List name:");
@@ -2976,24 +3010,35 @@ $("panel-lists").addEventListener("click", async e => {
   if (open) {
     // Look inside without starting it. Pressing the name again folds it back.
     const name = open.dataset.open;
-    const box = $("pl-" + name.replace(/[^a-zA-Z0-9]/g, "_"));
+    const sh = open.dataset.sh ? "&shared=1" : "";
+    const box = $(plSlug(name, !!open.dataset.sh));
     if (!box) return;
     if (box.innerHTML) { box.innerHTML = ""; return; }
     box.innerHTML = '<div class="muted" style="padding:6px 2px">Loading…</div>';
-    const r = await api("/api/playlist/tracks?name=" + encodeURIComponent(name));
+    const r = await api("/api/playlist/tracks?name=" + encodeURIComponent(name) + sh);
     const ts = (r && r.tracks) || [];
+    const me = (r && r.me) || "";
     box.innerHTML = ts.length
-      ? ts.map((t, i) => `<div class="pltrack"><span class="pli">${i + 1}</span>` +
-          `<span class="plt">${esc(t.title || "")}<em>${esc(t.artist || "")}</em></span>` +
-          `<button class="qc" data-plplay="${esc(name)}" data-idx="${i}" title="Play from here">▶</button>` +
-          `<button class="qc" data-plrm="${esc(name)}" data-vid="${esc(t.video_id || "")}" title="Remove">✕</button>` +
-          `</div>`).join("")
+      ? ts.map((t, i) => {
+          // Only on a shared list, and never "added by you" on your own
+          // library — there it would be on every row and say nothing.
+          const who = (r && r.shared && t.added_by)
+            ? ` · <span class="plby">${esc(t.added_by === me ? "you" : t.added_by)}</span>` : "";
+          // On a shared list you can only take back your own.
+          const canRm = !r.shared || !me || t.added_by === me;
+          return `<div class="pltrack"><span class="pli">${i + 1}</span>` +
+          `<span class="plt">${esc(t.title || "")}<em>${esc(t.artist || "")}${who}</em></span>` +
+          `<button class="qc" data-plplay="${esc(name)}" data-sh="${esc(open.dataset.sh || "")}" data-idx="${i}" title="Play from here">▶</button>` +
+          (canRm ? `<button class="qc" data-plrm="${esc(name)}" data-sh="${esc(open.dataset.sh || "")}" data-vid="${esc(t.video_id || "")}" title="Remove">✕</button>` : "") +
+          `</div>`;
+        }).join("")
       : '<div class="muted" style="padding:6px 2px">Empty.</div>';
     return;
   }
   const from = e.target.closest("[data-plplay]");
   if (from) {
     const r = await api("/api/playlist/play?name=" + encodeURIComponent(from.dataset.plplay) +
+                        (from.dataset.sh ? "&shared=1" : "") +
                         "&start=" + encodeURIComponent(from.dataset.idx));
     toast(r && r.message);
     return;
@@ -3001,12 +3046,25 @@ $("panel-lists").addEventListener("click", async e => {
   const rm = e.target.closest("[data-plrm]");
   if (rm) {
     const r = await api("/api/playlist/remove?name=" + encodeURIComponent(rm.dataset.plrm) +
+                        (rm.dataset.sh ? "&shared=1" : "") +
                         "&video_id=" + encodeURIComponent(rm.dataset.vid));
     toast(r && r.message);
     loadLists();
     return;
   }
-  if (play) { const r = await api("/api/playlist/play?name=" + encodeURIComponent(play.dataset.play)); toast(r && r.message); }
+  const share = e.target.closest("[data-share]");
+  if (share) {
+    const r = await api("/api/playlist/share?name=" + encodeURIComponent(share.dataset.share) +
+                        "&on=" + encodeURIComponent(share.dataset.on));
+    toast(r && r.message);
+    loadLists();
+    return;
+  }
+  if (play) {
+    const r = await api("/api/playlist/play?name=" + encodeURIComponent(play.dataset.play) +
+                        (play.dataset.sh ? "&shared=1" : ""));
+    toast(r && r.message);
+  }
   if (del) { const r = await api("/api/playlist/delete?name=" + encodeURIComponent(del.dataset.del)); toast(r && r.message); loadLists(); }
 });
 
@@ -3690,6 +3748,13 @@ async function loadWhoami() {
   // A link that never expires is a person with somewhere to keep things:
   // liked songs, playlists, a history of their own. One that expires isn't.
   document.body.classList.toggle("keeps", !r.owner && !r.expires);
+  // A link that expires has nowhere of its own to keep a list — but the
+  // house's shared one isn't its own, and outlives the evening. If there is
+  // one, the button comes back so they can put a song in it.
+  if (!r.owner && r.expires) {
+    api("/api/playlists").then(got => document.body.classList.toggle(
+      "houselists", (((got || {}).shared) || []).length > 0));
+  }
   if (!r.owner) castOn();
   return ME;
 }
@@ -4143,9 +4208,16 @@ const picker = $("picker");
 async function openPicker() {
   const r = await api("/api/playlists");
   const rows = (r && r.playlists) || [];
-  $("pickerlist").innerHTML = rows.length
-    ? rows.map(p => `<div class="picker-row" data-n="${esc(p.name)}">${esc(p.name)}` +
-        `<span class="cnt">${p.count}</span></div>`).join("")
+  // The house's shared lists too, so putting a song in one is the same two
+  // taps as putting it in your own. Marked, because it isn't yours.
+  const house = (r && r.shared) || [];
+  const row = (p, sh) =>
+    `<div class="picker-row" data-n="${esc(p.name)}" data-sh="${sh ? 1 : ""}">${esc(p.name)}` +
+    (sh ? '<span class="plshare">shared</span>' : "") +
+    `<span class="cnt">${p.count}</span></div>`;
+  const all = rows.map(p => row(p, false)).concat(house.map(p => row(p, true)));
+  $("pickerlist").innerHTML = all.length
+    ? all.join("")
     : '<div class="picker-row" style="color:var(--sub);cursor:default">No playlists yet</div>';
   picker.classList.add("show");
   $("newlist").value = "";
@@ -4158,7 +4230,8 @@ $("pickerlist").addEventListener("click", async e => {
   const row = e.target.closest(".picker-row[data-n]");
   if (!row) return;
   picker.classList.remove("show");
-  const r = await api("/api/playlist/add?name=" + encodeURIComponent(row.dataset.n));
+  const r = await api("/api/playlist/add?name=" + encodeURIComponent(row.dataset.n) +
+                      (row.dataset.sh ? "&shared=1" : ""));
   toast((r && r.message) || "Added");
 });
 async function createList() {

@@ -973,11 +973,16 @@ def _lists_for(request: Request):
 @app.get("/api/playlists")
 def api_playlists(request: Request, _: bool = Auth):
     mine = _lists_for(request)
+    # Lists the house shares. One copy, the owner's, and everybody sees the
+    # same rows in it — including a link that expires, which has nowhere to
+    # keep a list of its own but can still put a song in the shared one.
+    house = ([r for r in playlists.summary() if r.get("shared")]
+             if mine is not playlists else [])
     if mine is None:
         return {"status": "ok", "playlists": [], "folder": "",
-                "download": False, "temporary": True,
+                "download": False, "temporary": True, "shared": house,
                 "message": "Playlists need a permanent link"}
-    return {"status": "ok", "playlists": mine.summary(),
+    return {"status": "ok", "playlists": mine.summary(), "shared": house,
             "folder": str(mine.root()) if mine is playlists else "",
             "download": bool(config.get("playlist_download"))}
 
@@ -1042,14 +1047,38 @@ def api_spotify_add(request: Request, url: str = "", _: bool = Auth):
                        room=room.id if room else "", lists=mine)
 
 
+def _whoami(request: Request) -> str:
+    """The name on the link, for signing what you add to a shared list."""
+    row = getattr(request.state, "pass_row", None)
+    if not row or row.get("internal") or row.get("owner"):
+        return ""
+    return (row.get("name") or "guest").strip()
+
+
 @app.get("/api/playlist/{op}")
 def api_playlist(request: Request, op: str, name: str = "",
                  shuffle: bool = False, video_id: str = "", title: str = "",
                  artist: str = "", art: str = "", start: int = 0,
+                 shared: bool = False, on: int = 1,
                  _: bool = Auth):
-    """Make and play lists — the caller's own, not always the owner's."""
+    """Make and play lists — the caller's own, not always the owner's.
+
+    `shared=1` names a list in the owner's library that has been opened to
+    the house. There is one copy of it, so everyone is looking at the same
+    list and adding to the same list; who added what is recorded so the
+    rows can say so, and so somebody can take back their own.
+    """
+    who = _whoami(request)
     mine = _lists_for(request)
-    if mine is None:
+    if shared:
+        # The flag is the permission. A guest naming any other list of the
+        # owner's gets the same answer as if it weren't there.
+        if not playlists.is_shared(name):
+            raise HTTPException(403, "That list isn't shared")
+        if op in ("delete", "download", "share", "create"):
+            raise HTTPException(403, "That's the owner's to do")
+        mine = playlists
+    elif mine is None:
         raise HTTPException(
             403, "Playlists need a permanent link — this one expires")
     room = _session_for(request)
@@ -1063,22 +1092,34 @@ def api_playlist(request: Request, op: str, name: str = "",
         mine.create(name)
         changed()
         return {"status": "ok", "message": f"Created {name}"}
+    if op == "share":
+        if _profile_for(request) is not None:
+            raise HTTPException(403, "That's the owner's to do")
+        got = playlists.set_shared(name, bool(on))
+        changed()
+        return {"status": "ok", **got}
     if op == "add":
         from ..models import Track as _T
         if video_id:
             got = mine.add(
-                name, _T(video_id=video_id, title=title, artist=artist, art=art))
+                name, _T(video_id=video_id, title=title, artist=artist, art=art),
+                by=who)
         elif room:
             # "add what's on" has to mean what's on *their* player.
             cur = room.current()
             if not cur:
                 return {"status": "ok", "ok": False, "message": "Nothing playing"}
-            got = mine.add(name, cur)
+            got = mine.add(name, cur, by=who)
         else:
             got = player.playlist_add_current(name)
         changed()
         return {"status": "ok", **got}
     if op == "remove":
+        # On a shared list you can take back what you put in. Everything
+        # else in it is somebody else's, and the owner's list is the
+        # owner's to prune.
+        if shared and who and playlists.credit(name).get(video_id) != who:
+            raise HTTPException(403, "You can only take out what you put in")
         got = mine.remove(name, video_id)
         changed()
         return {"status": "ok", **got}
@@ -1102,8 +1143,14 @@ def api_playlist(request: Request, op: str, name: str = "",
         mine.download_async(name)
         return {"status": "ok", "message": f"Saving {name} offline"}
     if op == "tracks":
-        return {"status": "ok",
-                "tracks": [t.to_dict() for t in mine.tracks(name)]}
+        by = mine.credit(name)
+        rows = []
+        for t in mine.tracks(name):
+            row = t.to_dict()
+            row["added_by"] = by.get(t.video_id, "")
+            rows.append(row)
+        return {"status": "ok", "tracks": rows,
+                "shared": mine.is_shared(name), "me": who}
     raise HTTPException(404, "unknown playlist operation")
 
 

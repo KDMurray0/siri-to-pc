@@ -111,8 +111,64 @@ class Playlists:
             rows = self.tracks(name)
             downloaded = sum(1 for t in rows if t.path and Path(t.path).is_file())
             out.append({"name": name, "count": len(rows), "downloaded": downloaded,
+                        "shared": self.is_shared(name),
                         "folder": str(self.folder(name))})
         return out
+
+    # -- shared lists --------------------------------------------------
+    # A list the whole house can add to. The folder stays the owner's —
+    # there is one copy, not a copy each — and a marker file says it's open.
+    # Who put each track in is kept beside the index rather than in it,
+    # because the index is written out of Track objects and anything a
+    # Track doesn't have a field for is lost on the next save.
+
+    def _flag(self, name: str) -> Path:
+        return self.folder(name) / "shared"
+
+    def is_shared(self, name: str) -> bool:
+        try:
+            return self._flag(name).exists()
+        except Exception:
+            return False
+
+    def set_shared(self, name: str, on: bool) -> dict:
+        with self._lock:
+            if not self._index(name).exists():
+                return {"ok": False, "message": f"There's no list called {name}"}
+            flag = self._flag(name)
+            if on:
+                flag.write_text("", encoding="utf-8")
+            else:
+                flag.unlink(missing_ok=True)
+        self._save_event()
+        return {"ok": True, "shared": bool(on),
+                "message": f"{name} is {'open to everyone' if on else 'yours again'}"}
+
+    def shared(self) -> list[str]:
+        return [n for n in self.names() if self.is_shared(n)]
+
+    def _by_file(self, name: str) -> Path:
+        return self.folder(name) / "by.json"
+
+    def credit(self, name: str) -> dict:
+        """video id -> who added it. Empty for anything the owner put in."""
+        try:
+            return json.loads(self._by_file(name).read_text("utf-8-sig"))
+        except Exception:
+            return {}
+
+    def _credit(self, name: str, tracks: list, who: str) -> None:
+        if not who:
+            return
+        with self._lock:
+            rows = self.credit(name)
+            for t in tracks:
+                if t and t.video_id:
+                    rows[t.video_id] = who
+            try:
+                write_atomic(self._by_file(name), json.dumps(rows, indent=1))
+            except Exception as exc:
+                log.debug("couldn't record who added to %r: %s", name, exc)
 
     def find(self, query: str) -> list[str]:
         """Playlists whose name matches — used by search and by voice requests."""
@@ -137,8 +193,7 @@ class Playlists:
                 log.info("created playlist %r at %s", name, folder)
         return name
 
-    def _save(self, name: str, rows: list[dict]) -> None:
-        write_atomic(self._index(name), json.dumps(rows, indent=1))
+    def _save_event(self) -> None:
         # Stamped with whose library changed. Unstamped, a guest editing
         # their own list sent the redraw to the owner's page and not to
         # theirs — the stream routes on that stamp.
@@ -147,7 +202,11 @@ class Playlists:
             evt["session"] = self._session
         bus.publish(Ev.SETTINGS, evt)
 
-    def add(self, name: str, track: Track) -> dict:
+    def _save(self, name: str, rows: list[dict]) -> None:
+        write_atomic(self._index(name), json.dumps(rows, indent=1))
+        self._save_event()
+
+    def add(self, name: str, track: Track, by: str = "") -> dict:
         if not track or not (track.video_id or track.url):
             return {"ok": False, "message": "Nothing to add"}
         with self._lock:
@@ -162,11 +221,12 @@ class Playlists:
                         "message": f"{track.title} is already in {name}"}
             rows.append(track.to_dict())
             self._save(name, rows)
+        self._credit(name, [track], by)
         if config.get("playlist_download"):
             self.download_async(name)
         return {"ok": True, "message": f"Added to {name}", "count": len(rows)}
 
-    def add_many(self, name: str, tracks: list) -> dict:
+    def add_many(self, name: str, tracks: list, by: str = "") -> dict:
         """Add a batch in one pass.
 
         add() re-reads the whole index, rewrites it and republishes settings
@@ -192,6 +252,8 @@ class Playlists:
                 added += 1
             if added:
                 self._save(name, rows)
+        if added:
+            self._credit(name, good, by)
         if added and config.get("playlist_download"):
             self.download_async(name)
         return {"ok": True, "message": f"Added {added} to {name}",
