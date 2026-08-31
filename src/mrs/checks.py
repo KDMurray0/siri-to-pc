@@ -865,6 +865,53 @@ def run(verbose: bool = False) -> Result:
               == _ins._key("money for nothing", "dire straits"))
             say("about this song", c)
 
+            # -- 9l. the volume follows the clock --------------------------
+            c = _Checker("ambient")
+            from datetime import datetime as _dt
+
+            from .core.ambient import Ambient, band as _band, factor as _factor
+
+            at = lambda h: _dt(2026, 8, 31, h, 30)
+            for hour, want in ((9, "day"), (14, "day"), (19, "day"),
+                               (20, "evening"), (22, "evening"),
+                               (23, "night"), (2, "night"), (6, "night"),
+                               (7, "day")):
+                c(f"{hour:02d}:30 is {want}", _band(at(hour)) == want,
+                  _band(at(hour)))
+            c("the day is left alone", _factor("day") == 1.0)
+            c("the evening is eased off", 0.5 < _factor("evening") < 1.0)
+            c("the night is quieter still", _factor("night") < _factor("evening"))
+
+            was = (config.get("volume_base"), config.get("volume"),
+                   config.get("auto_volume"))
+            try:
+                config.set("auto_volume", True)
+                config.set("volume_base", 80)
+                amb = Ambient()
+                first = amb.due()
+                c("the first look sets the level without announcing it",
+                  first is not None and first[1] == "", str(first))
+                c("...and nothing more until the hour moves on",
+                  amb.due(force=True) is None)
+                # Turning it up at night means night is louder, not that the
+                # level you chose for the day has changed.
+                amb._band = ""
+                lvl = amb.wanted()
+                amb.note_manual(lvl)
+                c("re-setting the level it chose changes nothing",
+                  config.get("volume_base") == 80, str(config.get("volume_base")))
+                amb.note_manual(lvl + 20)
+                c("but turning it up rebases it",
+                  int(config.get("volume_base")) > 80,
+                  str(config.get("volume_base")))
+                config.set("auto_volume", False)
+                c("switched off, it asks for nothing", Ambient().due() is None)
+            finally:
+                config.set("volume_base", was[0])
+                config.set("volume", was[1])
+                config.set("auto_volume", was[2])
+            say("volume follows the clock", c)
+
             # -- 10. usage is recorded against the link --------------------
             c = _Checker("stats")
             rows = get("/api/passes").json().get("passes", [])

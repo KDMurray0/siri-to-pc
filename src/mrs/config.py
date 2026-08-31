@@ -23,6 +23,17 @@ DEFAULTS: dict[str, Any] = {
 
     # playback
     "volume": 70,
+    # The volume follows the clock: quieter late, a little quieter in the
+    # evening, back up in the morning. volume_base is the level you actually
+    # chose — what you set at midnight is remembered as a midnight level, so
+    # the adjustment scales your choice instead of overruling it.
+    "auto_volume": True,
+    "volume_base": None,
+    "evening_hour": 20,
+    "quiet_hour": 23,
+    "wake_hour": 7,
+    "evening_level": 80,      # percent of your level
+    "quiet_level": 55,
     "eq": "flat",
     "normalize": False,
     "crossfade": 0,

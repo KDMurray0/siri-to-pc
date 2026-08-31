@@ -9,6 +9,7 @@ import threading
 import time
 
 from .config import config
+from .core.ambient import ambient
 from .core.audio import EQ_PRESETS, AudioEngine
 from .core.context import ContextBuilder
 from .core.downloader import downloader
@@ -66,6 +67,7 @@ class PlayerService:
         self._sleep_at: float | None = None
         self._start_at: float | None = None      # a "play in ten minutes" job
         self._ducking = False
+        self._auto_volume = False
         self._alarms: AlarmClock | None = None
         self._announce_seq = 0
         self._announce_files: dict[str, str] = {}
@@ -178,6 +180,7 @@ class PlayerService:
                     continue
                 self._watch_track()
                 self._persist_volume()
+                self._follow_the_clock()
                 # cheap when it's already there, and the audio capture keeps
                 # undoing it
                 from .server import be_polite
@@ -373,6 +376,30 @@ class PlayerService:
         v = int(round(v))
         if abs(v - int(config.get("volume", 70))) >= 1:
             config.set("volume", v)
+            # Turned with the keyboard or from mpv itself rather than
+            # through control() — still you choosing, so it still counts.
+            if not self._auto_volume:
+                ambient.note_manual(v)
+
+    def _follow_the_clock(self) -> None:
+        """Quieter late, back up in the morning. See core/ambient."""
+        due = ambient.due()
+        if not due:
+            return
+        want, say = due
+        if abs(want - int(config.get("volume", 70))) < 1:
+            return
+        # Flagged so _persist_volume doesn't read our own change back as a
+        # decision you made and rebase the level on it.
+        self._auto_volume = True
+        try:
+            self.mpv.set("volume", want)
+            config.set("volume", want)
+        finally:
+            self._auto_volume = False
+        log.info("volume %d for the %s", want, ambient.band())
+        if say:
+            bus.publish(Ev.TOAST, f"{say} — volume {want}")
 
     def _levels(self) -> None:
         """Loudness fallback, only when we can't hear the output directly."""
@@ -611,6 +638,7 @@ class PlayerService:
             vol = max(0, min(150, int(value or 0)))
             self.mpv.set("volume", vol)
             config.set("volume", vol)
+            ambient.note_manual(vol)
             return {"message": f"Volume {vol}", "volume": vol}
         if a == "volume_delta":
             cur = int(self.mpv.get("volume", config.get("volume", 70)))

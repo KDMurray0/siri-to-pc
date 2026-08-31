@@ -1185,6 +1185,8 @@ _SETTABLE = {
     "ddns_provider": str, "ddns_hostname": str, "ddns_user": str,
     "max_downloads": int, "guest_requests_hour": int,
     "cast_queue_minutes": int, "guest_quiet_pause": int, "guest_quiet_close": int,
+    "auto_volume": bool, "evening_hour": int, "quiet_hour": int,
+    "wake_hour": int, "evening_level": int, "quiet_level": int,
 }
 
 

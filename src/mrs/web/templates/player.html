@@ -1398,6 +1398,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
           <div class="toggle" id="viz"></div></div>
         <div class="srow guestok"><span class="slabel">Even out volume<em>Keeps quiet and loud songs level</em></span>
           <div class="toggle" id="normalize"></div></div>
+        <div class="srow"><span class="slabel">Follow the clock<em id="autovolnote">Quieter late at night, back up in the morning</em></span>
+          <div class="toggle" id="autovol"></div></div>
         <div class="srow guestok"><span class="slabel">Crossfade<em>Overlap between tracks</em></span>
           <div class="chips" id="crossfade"></div></div>
         <div class="srow guestok"><span class="slabel">Announce songs<em>Says the track name out loud</em></span>
@@ -2344,17 +2346,26 @@ function showAbout(on) {
 }
 function toggleAbout() {
   // Only the three-zone layout has a middle column to give it. Narrower
-  // than that and the story is a panel like the others.
+  // than that and the story is a panel like the others — including the
+  // second tap on it expanding the panel, the same as every other tab.
   if (lyricsPinned()) {
-    showAbout(!document.body.classList.contains("about"));
+    if (document.body.classList.contains("about")) foldForAbout();
+    else showAbout(true);
     return;
   }
-  if (activePanel === "about") showPanel("queue", false);
-  else showPanel("about", false);
+  showPanel("about", true);
+}
+// The middle column's version of expanding: fold the queue away and let
+// the story have the width. Same control, same second click.
+function foldForAbout() {
+  setSide(!document.body.classList.contains("sidehid"));
 }
 $("openAbout").onclick = toggleAbout;
 document.querySelectorAll("#lyrswitch button").forEach(b => b.onclick = () => {
-  showAbout(b.dataset.view === "about");
+  const want = b.dataset.view === "about";
+  if (want && document.body.classList.contains("about")) { foldForAbout(); return; }
+  if (!want && document.body.classList.contains("sidehid")) foldForAbout();
+  showAbout(want);
 });
 
 let aboutFor = "", aboutTries = 0, aboutTimer = 0;
@@ -3510,6 +3521,12 @@ $("normalize").onclick = () => {
   setPref("normalize", on ? 1 : 0, () => api("/api/audio?normalize=" + (on ? 1 : 0)));
 };
 
+$("autovol").onclick = () => {
+  const on = !$("autovol").classList.contains("on");
+  $("autovol").classList.toggle("on", on);
+  api("/api/setting?key=auto_volume&value=" + (on ? 1 : 0));
+};
+
 
 /* Where a preference goes.
  *
@@ -4426,6 +4443,7 @@ async function loadSettings() {
   document.body.classList.toggle("noviz", !viz);
   $("normalize").classList.toggle("on", !!s.normalize);
   $("announce").classList.toggle("on", s.announce !== false);
+  $("autovol").classList.toggle("on", s.auto_volume !== false);
   $("boot").classList.toggle("on", !!s.start_on_boot);
   $("bootearly").classList.toggle("on", !!s.start_before_signin);
   $("lockips").classList.toggle("on", !!s.lock_ips);
