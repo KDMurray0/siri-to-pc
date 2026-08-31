@@ -386,14 +386,28 @@ body.reordering .q{transition:transform .12s ease}
 .lyrics .lrow .w{font-style:normal;transition:color .22s ease,opacity .22s ease}
 .lyrics .lrow.active .w{color:var(--sub);opacity:.5}
 .lyrics .lrow.active .w.lit{color:var(--fg);opacity:1}
-/* The word being sung, filling across itself. A hard stop between the two
-   colours moved along the word by --f: no transition on it, because the
-   position it's driven from already moves every frame, and a transition on
-   top of that would only make it lag. */
+/* The word being sung, filling across itself: a hard stop between the two
+   colours, moved along the word by --f.
+
+   --f is animated by the browser rather than written by script. Registering
+   it as a percentage is what makes it interpolatable — without @property a
+   custom property is just a string and jumps from 0 to 100. The whole line
+   is armed once, each word with its own delay, and then nothing runs: no
+   timer, no rAF, no work at all between one line and the next. */
+@property --f { syntax:'<percentage>'; inherits:false; initial-value:0%; }
+@keyframes wordfill { from { --f:0%; } to { --f:100%; } }
 .lyrics .lrow.active .w.now{opacity:1;color:transparent;transition:none;
   background-image:linear-gradient(90deg,
     var(--fg) var(--f,0%),var(--sub) var(--f,0%));
   -webkit-background-clip:text;background-clip:text}
+/* Stopped means stopped. The animations hold where they are rather than
+   running on while the music doesn't. */
+body.paused .lyrics .lrow .w{animation-play-state:paused}
+/* No @property support: the fill can't tween, so don't pretend. The word
+   still turns over at the right moment, it just doesn't sweep. */
+@supports not (background: paint(x)) {
+  @media (scripting: enabled) { .lyrics .lrow.active .w.now{color:var(--sub)} }
+}
 .lyrics:not(.plain) .lrow{cursor:pointer;border-radius:8px}
 .lyrics:not(.plain) .lrow:hover{color:var(--fg);opacity:.9;
   background:color-mix(in srgb,var(--accent) 10%,transparent)}
@@ -1742,7 +1756,17 @@ function wheelVol(e) {
 ["volslider","volicon","minivol"].forEach(id => $(id).addEventListener("wheel", wheelVol, {passive:false}));
 
 /* ── transport ─────────────────────────────────────────────────────── */
-$("play").onclick = () => api("/api/control/playpause");
+$("play").onclick = () => {
+  // Optimistic, for the computer's own player. mpv stops the moment it's
+  // told, but the status saying so is up to a second behind — and the word
+  // fill holds on this class, so that second is a second of words moving
+  // over silence. The next status puts it right either way. When this page
+  // is the one playing, its own element fires pause and does it properly.
+  if (!(typeof cast !== "undefined" && cast.on)) {
+    document.body.classList.toggle("paused");
+  }
+  api("/api/control/playpause");
+};
 $("next").onclick = () => api("/api/control/next");
 $("prev").onclick = () => api("/api/control/previous");
 $("shuffle").onclick = () => api("/api/control/shuffle");
@@ -2251,9 +2275,9 @@ async function loadLyrics(force) {
 /* On a wide screen the words have a column of their own and are on all the
    time, so everything that used to wait for the Lyrics tab to be open has to
    stop asking whether it is. */
-const lyricsPinned = () => window.matchMedia(
-  "(min-width:1250px) and (min-height:520px)").matches &&
-  !document.body.classList.contains("mini");
+const PINNED_AT = window.matchMedia("(min-width:1250px) and (min-height:520px)");
+const lyricsPinned = () =>
+  PINNED_AT.matches && !document.body.classList.contains("mini");
 
 /* Roughly how long a word takes to sing.
    Splitting a line's time equally between its words gives "I" and
@@ -2314,11 +2338,10 @@ function litWords(box, s, idx, pos) {
     // still lit as though it were the one playing.
     rows.forEach((r, i) => {
       if (i === idx) return;
-      r._cur = undefined; r._f = undefined;
+      r._armAt = undefined; r._armWall = undefined;
       r.querySelectorAll(".w").forEach(w => {
-        w.classList.toggle("lit", i < idx);
-        w.classList.remove("now");
-        w.style.removeProperty("--f");
+        w.className = i < idx ? "w lit" : "w";
+        w.style.animation = "";
       });
     });
   }
@@ -2337,33 +2360,48 @@ function litWords(box, s, idx, pos) {
   const span = Math.max(0.35, Math.min(gap, starts.natural));
   const through = Math.max(0, Math.min(1, (pos - start) / span));
 
-  // Which word is being sung, and how far through it. Only these two change
-  // between frames, so only these two get written — rewriting the class on
-  // every word sixty times a second is what made it flicker, because each
-  // write restarted the .22s colour transition it was already halfway
-  // through.
-  let cur = starts.findIndex(p => through < p.to);
-  if (cur < 0) cur = ws.length - 1;
-  const { from, to } = starts[cur];
-  const f = Math.max(0, Math.min(1, (through - from) / Math.max(1e-4, to - from)));
+  // Arm the whole line in one go and then leave it alone. Each word gets an
+  // animation with its own delay — negative for one already under way,
+  // positive for one still to come — so the browser runs the sweep and the
+  // hand-off from word to word without another line of script until the
+  // line changes. This used to be a rAF loop doing two querySelectorAll and
+  // a style write every frame for the whole song.
+  //
+  // Re-armed when the clock disagrees with where the animations think they
+  // are by more than a moment: a seek, a resume, a track that started late.
+  const wall = performance.now();
+  const drifted = row._armAt === undefined ||
+    Math.abs((pos - row._armAt) - (wall - row._armWall) / 1000) > 0.35;
+  if (idx === lastLine && !drifted) return;
+  row._armAt = pos; row._armWall = wall;
 
-  if (idx !== lastLine || cur !== row._cur) {
-    ws.forEach((w, i) => {
-      w.classList.toggle("lit", i < cur);
-      w.classList.toggle("now", i === cur);
-      if (i !== cur) w.style.removeProperty("--f");
-    });
-    row._cur = cur;
-  }
-  // The word being sung fills across itself. This is the one per-frame
-  // write, and it's a custom property on a single element.
-  const pct = (f * 100).toFixed(1) + "%";
-  if (row._f !== pct) { ws[cur].style.setProperty("--f", pct); row._f = pct; }
+  ws.forEach((w, i) => {
+    const from = start + starts[i].from * span;
+    const to = start + starts[i].to * span;
+    if (pos >= to) {                      // already sung
+      w.className = "w lit";
+      w.style.animation = "";
+    } else {
+      // Every word from here to the end of the line, each waiting its turn.
+      // Longhands, not the shorthand: `animation:` also writes
+      // animation-play-state:running, and inline beats the stylesheet — so
+      // the shorthand quietly made body.paused unable to stop anything.
+      w.className = "w now";
+      w.style.animationName = "wordfill";
+      w.style.animationDuration = (to - from).toFixed(3) + "s";
+      w.style.animationTimingFunction = "linear";
+      w.style.animationDelay = (from - pos).toFixed(3) + "s";
+      w.style.animationFillMode = "both";
+    }
+  });
 }
 
 function syncLyrics(pos) {
   if ((activePanel !== "lyrics" && !lyricsPinned()) ||
       !lyricData || !lyricData.synced || !lyricData.synced.length) return;
+  // The best clock there is, which when this page is the one playing is the
+  // element's own rather than the server's echo of it.
+  pos = livePos();
   const s = lyricData.synced;
   let idx = 0;
   for (let i = 0; i < s.length; i++) { if (s[i].t <= pos + 0.25) idx = i; else break; }
@@ -3604,7 +3642,12 @@ setInterval(() => {
   reportProgress();
 }, 5000);
 castEls.forEach(el => el.addEventListener("pause", () => {
-  if (el === castLive()) reportProgress();
+  if (el !== castLive()) return;
+  reportProgress();
+  // Straight away, not when the status gets round to saying so. The word
+  // fill is a CSS animation now and it holds on body.paused, so a second of
+  // lag here is a second of words carrying on without any music.
+  document.body.classList.add("paused");
 }));
 
 /* A .webm still being transcoded answers 503. Retry instead of going silent. */
@@ -3626,7 +3669,11 @@ castEls.forEach(el => el.addEventListener("error", () => {
 }));
 castEls.forEach(el => el.addEventListener("playing", () => {
   cast.tries = 0;
-  document.body.classList.remove("waiting");
+  document.body.classList.remove("waiting", "paused");
+  // Re-arm from the real clock rather than resuming animations that were
+  // held at whatever the position was when they stopped.
+  lastLine = -1;
+  syncLyrics(0);
 }));
 
 /* Make the capsule agree with where the sound is actually coming from.
@@ -4101,6 +4148,7 @@ function envBands() {
 }
 
 function buildMeters() {
+  forgetMeterBoxes();          // the cached list is about to be wrong
   document.querySelectorAll(".eq, .miniwave").forEach(box => {
     if (box.childElementCount === BARS) return;
     box.innerHTML = "";
@@ -4121,9 +4169,22 @@ function bandsNow() {
   return out;
 }
 
+/* The bars the meter writes to. Looked up when the layout changes rather
+   than twice a frame — this was two querySelectorAll every frame for the
+   life of the page, which is a lot of DOM walking to discover the same two
+   elements sixty times a second. */
+let meterBoxes = null;
+function meterTargets() {
+  if (!meterBoxes) meterBoxes = [...document.querySelectorAll(".eq, .miniwave")];
+  return meterBoxes;
+}
+const forgetMeterBoxes = () => { meterBoxes = null; };
+
 function paintMeter() {
-  const boxes = document.querySelectorAll(".eq, .miniwave");
-  if (boxes.length && state.playing) {
+  requestAnimationFrame(paintMeter);
+  const boxes = meterTargets();
+  const playing = state.playing && boxes.length;
+  if (playing) {
     const b = bandsNow();
     for (let i = 0; i < BARS; i++) {
       const target = b[Math.min(BANDS - 1, i)] || 0;   // real bands, low->high
@@ -4132,17 +4193,27 @@ function paintMeter() {
       s.peak = Math.max(s.peak - 0.015, s.v);
     }
   } else {
-    for (const s of meterBars) { s.v *= 0.88; s.peak *= 0.9; }
+    // Settled. Once the decay has run out there is nothing left to say, and
+    // saying it anyway is 2 x BARS style writes a frame, all night, for a
+    // set of bars that are already flat and quite possibly not on screen.
+    if (meterIdle) return;
+    let live = false;
+    for (const s of meterBars) {
+      s.v *= 0.88; s.peak *= 0.9;
+      if (s.v > 0.002 || s.peak > 0.002) live = true;
+    }
+    if (!live) { meterIdle = true; for (const s of meterBars) { s.v = 0; s.peak = 0; } }
   }
-  document.querySelectorAll(".eq, .miniwave").forEach(box => {
+  if (playing) meterIdle = false;
+  for (const box of boxes) {
     const bars = box.children;
     for (let i = 0; i < bars.length && i < BARS; i++) {
       bars[i].style.height = (Math.max(0.05, meterBars[i].v) * 100) + "%";
       bars[i].style.opacity = 0.5 + 0.5 * meterBars[i].peak;
     }
-  });
-  requestAnimationFrame(paintMeter);
+  }
 }
+let meterIdle = false;
 buildMeters();
 requestAnimationFrame(paintMeter);
 
@@ -4169,15 +4240,8 @@ function livePos() {
   // running on for a second is just wrong.
   return state.position + Math.min(0.5, (performance.now() - posAt) / 1000);
 }
-(function fillLoop() {
-  requestAnimationFrame(fillLoop);
-  if (!lyricData || !lyricData.synced || !lyricData.synced.length) return;
-  if (activePanel !== "lyrics" && !lyricsPinned()) return;
-  const s = lyricData.synced, pos = livePos();
-  let idx = 0;
-  for (let i = 0; i < s.length; i++) { if (s[i].t <= pos + 0.25) idx = i; else break; }
-  litWords($("panel-lyrics"), s, idx, pos);
-})();
+/* No loop. The line is armed when it changes — four times a second at the
+   most, from syncLyrics — and the browser runs the rest. */
 
 /* ── live updates over SSE (no more polling) ───────────────────────── */
 
