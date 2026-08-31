@@ -829,6 +829,30 @@ def api_history(request: Request, _: bool = Auth):
             "top_artists": taste.top_artists(), "mine": True}
 
 
+@app.get("/api/history/forget")
+def api_history_forget(request: Request, video_id: str = "", artist: str = "",
+                       _: bool = Auth):
+    """Take a song or an artist out of your recents — and out of the radio.
+
+    Whosever history it is. A permanent link edits its own; the owner edits
+    the machine's; a link that expires has nothing to edit, and says so
+    rather than quietly doing nothing.
+    """
+    if not video_id and not artist:
+        return {"status": "error", "message": "Forget what?"}
+    store = taste
+    if not _owner_view(request):
+        me = _profile_for(request)
+        if me is None or not me.permanent:
+            return {"status": "error",
+                    "message": "This link doesn't keep a history"}
+        store = me.taste
+    gone = store.forget(video_id=video_id, artist=artist)
+    return {"status": "ok" if gone else "error",
+            "message": "Forgotten" if gone else "Nothing to forget",
+            "history": store.recent(), "top_artists": store.top_artists()}
+
+
 @app.get("/api/liked")
 def api_liked(request: Request, _: bool = Auth):
     if not _owner_view(request):

@@ -292,6 +292,57 @@ class TasteEngine:
                             key=lambda kv: kv[1][0] - kv[1][1], reverse=True)
         return [{"artist": a, "plays": s[0]} for a, s in ranked[:limit] if s[0] > 0]
 
+    def forget(self, video_id: str = "", artist: str = "") -> bool:
+        """Take something out of the history, and out of the scoring with it.
+
+        Dropping the row and keeping the tally would be a lie: the list
+        stops mentioning them while they carry on being pushed at you, and
+        the only visible effect of the button is that the evidence goes
+        away. So the count goes too, and with an artist so do their tracks —
+        a chip that disappears above eight rows by the same band doesn't
+        look like anything has happened.
+
+        Not their likes. Liking something is a separate thing said
+        deliberately, and it isn't this button's to undo.
+        """
+        gone = False
+        with self._lock:
+            if video_id:
+                gone = self._drop_ids({video_id}) or gone
+            if artist:
+                who = Track(title="", artist=artist).primary_artist()
+                if who and self._artist.pop(who, None) is not None:
+                    gone = True
+                if who:
+                    theirs = {m.get("video_id") for m in self._recent_meta
+                              if Track(title="", artist=m.get("artist") or "")
+                              .primary_artist() == who}
+                    gone = self._drop_ids({v for v in theirs if v}) or gone
+        if gone:
+            self.save()
+        return gone
+
+    def _drop_ids(self, ids: set[str]) -> bool:
+        """Forget these recordings. Caller holds the lock."""
+        if not ids:
+            return False
+        before = len(self._recent_meta), len(self._history), len(self._song)
+        # played_at is keyed by name, so the names have to come off the rows
+        # before the rows go — otherwise dedupe keeps refusing to play again
+        # something you have just asked it to forget.
+        for m in self._recent_meta:
+            if m.get("video_id") in ids:
+                key = norm_title(m.get("title") or "", m.get("artist") or "")
+                if key:
+                    self._played_at.pop(key, None)
+        self._recent_meta = [m for m in self._recent_meta
+                             if m.get("video_id") not in ids]
+        self._history = [v for v in self._history if v not in ids]
+        for vid in ids:
+            self._song.pop(vid, None)
+        return before != (len(self._recent_meta), len(self._history),
+                          len(self._song))
+
     def preferred_artists(self) -> list[str]:
         """Artists to bias search toward when a title is ambiguous."""
         out = {(t.get("artist") or "").split(",")[0].strip().lower()
@@ -396,6 +447,9 @@ class NeutralTaste:
 
     def flush(self, *a, **k) -> None:
         pass
+
+    def forget(self, *a, **k) -> bool:
+        return False
 
 
 taste = TasteEngine()

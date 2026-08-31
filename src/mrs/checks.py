@@ -507,6 +507,25 @@ def run(verbose: bool = False) -> Result:
             c("flush writes what save_soon deferred",
               len(on_disk.get("recent", [])) == 2,
               str([r["title"] for r in on_disk.get("recent", [])]))
+            # Taking something back out again. Dropping the row and keeping
+            # the tally would mean the only visible effect of the button is
+            # that the evidence goes away while the radio carries on.
+            who.taste.record(_Tr(video_id="chk3", title="Three", artist="B",
+                                 duration=200, origin="request"), 199, 200)
+            c("the artist is a favourite to begin with",
+              any(a["artist"] == "b" for a in who.taste.top_artists()),
+              str(who.taste.top_artists()))
+            c("forgetting one song drops just that",
+              who.taste.forget(video_id="chk1")
+              and [r["video_id"] for r in who.taste.recent(10)] == ["chk3", "chk2"],
+              str([r["video_id"] for r in who.taste.recent(10)]))
+            c("forgetting an artist takes their tally",
+              who.taste.forget(artist="B")
+              and not any(a["artist"] == "b" for a in who.taste.top_artists()),
+              str(who.taste.top_artists()))
+            c("...and their tracks with it",
+              not who.taste.recent(10), str(who.taste.recent(10)))
+            c("forgetting nothing says so", not who.taste.forget(video_id="nope"))
             import shutil as _sh
             _sh.rmtree(who.home(), ignore_errors=True)
             say("a listener's own listening", c)

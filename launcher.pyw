@@ -61,7 +61,7 @@ from pystray import Icon as TrayIcon
 from pystray import Menu, MenuItem
 
 from mrs.config import config
-from mrs.logging_setup import get, log_path
+from mrs.logging_setup import get, log_path, mark, tail
 from mrs import server as srv
 
 log = get("launcher")
@@ -832,10 +832,12 @@ def main() -> None:
         from mrs.checks import main as checks
         sys.exit(checks())
 
+    mark("starting")
     if _singleton() is None:
+        mark("another copy already has the mutex — leaving it to that one")
         sys.exit(0)
 
-    srv.run_in_thread()
+    thread = srv.run_in_thread()
     # The server may move to a free port if something else holds the configured
     # one, so ask it where it actually landed.
     port = config.get("port", 5000)
@@ -844,7 +846,22 @@ def main() -> None:
             port = srv.runtime["port"]
             break
         time.sleep(0.5)
-    if not _wait_for_server(port):
+    mark(f"server thread is on port {port}")
+    # Slow is not the same as broken. Startup talks to four services and
+    # launches two mpv processes, and on a cold machine — or straight after a
+    # crash, when the caches are being rebuilt — it can take a good deal
+    # longer than a minute. Giving up on it and putting an error on screen,
+    # while the thing was still coming up behind the dialog, is most of what
+    # "it wouldn't start" has been.
+    ready = _wait_for_server(port)
+    rounds = 0
+    while (not ready and rounds < 4 and thread.is_alive()
+           and not srv.runtime.get("error")):
+        rounds += 1
+        mark(f"still starting after {rounds}m — the thread is alive, waiting")
+        ready = _wait_for_server(port)
+    if not ready:
+        mark("gave up waiting")
         # Opening a window onto a server that isn't there is how this used to
         # look like the app "just died". Say what's wrong instead — by now
         # startup has already tried to install anything missing, so if we're
@@ -863,9 +880,15 @@ def main() -> None:
                    f"{'them' if ',' in missing else 'it'}. Run setup.ps1 next "
                    f"to the app, then try again.")
         else:
+            # Put the end of the log in the box. "The log has the detail" is
+            # only true when the log has any, and the boots worth reporting
+            # are the ones that fell over before they had written a line —
+            # which is what you learn from seeing the last few.
+            last = tail(8)
             msg = ("Music Request Server couldn't start.\n\n"
-                   "Nothing obvious is missing, so the log has the detail:\n"
-                   f"{log_path()}")
+                   "Nothing obvious is missing. The last thing it managed:\n\n"
+                   f"{last or '(nothing — it stopped before it could log)'}"
+                   f"\n\nFull log: {log_path()}")
         try:
             U32.MessageBoxW(None, msg, TITLE, 0x10)   # MB_ICONERROR
         except Exception:

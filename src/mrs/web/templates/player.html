@@ -334,6 +334,19 @@ body.reordering .q{transition:transform .12s ease}
 .rrow .qn{font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rrow .qa{font-size:10px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .achip{font-size:10.5px;padding:3px 9px}
+/* Forgetting something. Kept quiet until you're on the row, because this
+   is a list you mostly read — but always there on a touchscreen, where
+   there is no hovering and an invisible control is no control. */
+.achip{display:inline-flex;align-items:center;gap:5px}
+.chipx{font-style:normal;font-size:10px;opacity:0;transition:opacity .15s,color .15s;
+  cursor:pointer;line-height:1}
+.achip:hover .chipx{opacity:.55}
+.chipx:hover{opacity:1;color:var(--bad,#e0645a)}
+.rrow .qt{flex:1;min-width:0}
+.rowx{opacity:0;transition:opacity .15s,color .15s;flex:0 0 auto}
+.rrow:hover .rowx{opacity:.55}
+.rowx:hover{opacity:1;color:var(--bad,#e0645a)}
+@media (hover:none){.chipx,.rowx{opacity:.5}}
 .plrow{display:flex;align-items:center;gap:8px;padding:8px 6px;border-radius:9px}
 .plrow:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}
 .plrow .pn{font-size:13px;font-weight:600;flex:1;white-space:nowrap;overflow:hidden;
@@ -1999,21 +2012,58 @@ async function loadRecent() {
   box.innerHTML = '<div class="muted">Loading…</div>';
   const r = await api("/api/history");
   if (!r) { box.innerHTML = '<div class="muted">Nothing yet.</div>'; return; }
+  drawRecent(r);
+}
+
+/* Drawn from a payload rather than a fetch, so forgetting something can
+   redraw from what the server just handed back instead of asking again. */
+function drawRecent(r) {
+  const box = $("panel-recent");
   let html = "";
   if (r.top_artists && r.top_artists.length) {
     html += '<div class="seclbl">Your top artists</div><div class="artistchips">' +
-      r.top_artists.map(a => `<span class="achip" data-a="${esc(a.artist)}">${esc(a.artist)}</span>`).join("") + "</div>";
+      r.top_artists.map(a =>
+        `<span class="achip" data-a="${esc(a.artist)}">${esc(a.artist)}` +
+        `<i class="chipx" data-fa="${esc(a.artist)}" title="Forget ${esc(a.artist)}">✕</i>` +
+        `</span>`).join("") + "</div>";
   }
   html += '<div class="seclbl">Recently played</div>';
   html += (r.history && r.history.length)
     ? r.history.map(t => {
         const art = t.art ? `<img class="qi" src="${t.art}" onerror="qiFail(this)">` : `<div class="qi"></div>`;
-        return `<div class="rrow" data-v="${t.video_id}" data-t="${esc(t.title)}" data-ar="${esc(t.artist||"")}">${art}<div class="qt"><div class="qn">${esc(t.title)}</div><div class="qa">${esc(t.artist||"")}</div></div></div>`;
+        return `<div class="rrow" data-v="${t.video_id}" data-t="${esc(t.title)}" data-ar="${esc(t.artist||"")}">${art}<div class="qt"><div class="qn">${esc(t.title)}</div><div class="qa">${esc(t.artist||"")}</div></div>` +
+          `<button class="pickx rowx" data-fv="${esc(t.video_id)}" title="Forget this">✕</button></div>`;
       }).join("")
     : '<div class="muted">Nothing played through yet.</div>';
   box.innerHTML = html;
 }
+
+/* Out of the list and out of the scoring together. Leaving the tally behind
+   would mean the only visible effect of the button is that the evidence
+   disappears while the radio carries on pushing them at you. */
+async function forgetRecent(params, what) {
+  const r = await api("/api/history/forget?" + params);
+  if (r && r.status === "ok") { drawRecent(r); toast("Forgot " + what); }
+  else toast((r && r.message) || "Couldn't forget that");
+}
 $("panel-recent").addEventListener("click", e => {
+  // The X's come first: they sit inside the things that play when tapped,
+  // so a click that lands on one must not also start the song.
+  const killArtist = e.target.closest(".chipx");
+  if (killArtist) {
+    e.stopPropagation();
+    const who = killArtist.dataset.fa;
+    forgetRecent("artist=" + encodeURIComponent(who), who);
+    return;
+  }
+  const killRow = e.target.closest(".rowx");
+  if (killRow) {
+    e.stopPropagation();
+    const row = killRow.closest(".rrow");
+    forgetRecent("video_id=" + encodeURIComponent(killRow.dataset.fv),
+                 (row && row.dataset.t) || "that");
+    return;
+  }
   const chip = e.target.closest(".achip");
   if (chip) { apiSay("/api/play?q=" + encodeURIComponent(chip.dataset.a), true)
       .then(r => { if (r) toast(r.message); }); return; }

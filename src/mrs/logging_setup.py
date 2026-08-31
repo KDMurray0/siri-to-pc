@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import os
 import sys
 import threading
+import time
 
 from .paths import data_dir
 
@@ -41,11 +43,27 @@ def setup(api_key: str = "", level: int = logging.INFO) -> logging.Logger:
 
     fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(name)-14s %(message)s",
                             datefmt="%H:%M:%S")
-    fh = logging.handlers.RotatingFileHandler(
-        _LOG, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
-    fh.setFormatter(fmt)
-    fh.addFilter(_RedactKey(api_key))
-    root.addHandler(fh)
+    # If the usual file can't be opened — another copy holding it, a rotation
+    # that couldn't rename, a permissions problem — fall back to one nobody
+    # else is using rather than starting up with no log at all. A boot that
+    # fails silently is a boot nobody can fix, and that is exactly the boot
+    # you most need to read about afterwards.
+    fh = None
+    for path in (_LOG, _LOG.with_name(f"server-{os.getpid()}.log")):
+        try:
+            fh = logging.handlers.RotatingFileHandler(
+                path, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+            break
+        except Exception:
+            continue
+    if fh is not None:
+        fh.setFormatter(fmt)
+        fh.addFilter(_RedactKey(api_key))
+        # A handler that throws while writing prints to stderr and gives up
+        # quietly, and a windowed build has no stderr — the log simply stops
+        # mid-run and everything after it is invisible.
+        fh.handleError = lambda record: None
+        root.addHandler(fh)
 
     # A frozen windowed build has no console; only add one when it works.
     if sys.stdout is not None and getattr(sys.stdout, "isatty", lambda: False)():
@@ -67,6 +85,33 @@ def get(name: str) -> logging.Logger:
 
 def log_path():
     return _LOG
+
+
+def mark(note: str) -> None:
+    """Write a line straight to the log, without the logging machinery.
+
+    Everything before setup() runs — and everything after it if the handler
+    ever breaks — is invisible. A boot that fails there leaves not one line
+    behind, which is how "it wouldn't start" ends up with an empty log and
+    nothing to go on. This is a plain append: no handler, no formatter, no
+    rotation, nothing that can be in a bad state.
+    """
+    try:
+        _LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(_LOG, "a", encoding="utf-8") as fh:
+            fh.write(f"{time.strftime('%H:%M:%S')} ----    boot"
+                     f"           {note} (pid {os.getpid()})\n")
+    except Exception:
+        pass
+
+
+def tail(lines: int = 12) -> str:
+    """The last of the log, for saying what went wrong where it'll be read."""
+    try:
+        with open(_LOG, "r", encoding="utf-8", errors="replace") as fh:
+            return "".join(fh.readlines()[-lines:]).strip()
+    except Exception:
+        return ""
 
 
 def spawn(fn, *args, name: str = "", on_error=None, **kw) -> threading.Thread:

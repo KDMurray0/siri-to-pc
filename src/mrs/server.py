@@ -16,7 +16,7 @@ from .core.downloader import downloader
 from .core.extras import scrobbler
 from .core.library import library
 from .events import bus
-from .logging_setup import get, spawn, setup
+from .logging_setup import get, mark, spawn, setup
 from .paths import data_dir, ensure_structure, migrate_legacy_data
 from .player import player
 from .resolve import catalog, llm
@@ -302,10 +302,16 @@ def startup() -> None:
 
 
 def run() -> None:
+    # These marks are the only trace of everything that happens before
+    # logging exists — the imports, and startup() up to the point it attaches
+    # a handler. A boot that stops in there used to leave the log completely
+    # empty, so the error box had nothing to say and neither did anyone else.
+    mark("loading")
     import uvicorn
 
     from .web.api import app
 
+    mark("loaded, starting up")
     startup()
     from .core import ddns
     ddns.start()
