@@ -807,6 +807,27 @@ def api_lyrics(request: Request, _: bool = Auth):
     return {"status": "ok", "lyrics": data}
 
 
+@app.get("/api/about")
+def api_about(request: Request, wait: int = 0, _: bool = Auth):
+    """Where this song came from, for whoever is listening to it.
+
+    `wait=0` answers from what's already looked up and starts the lookup if
+    it hasn't been — the panel opens instantly and fills itself a moment
+    later rather than staring at a spinner for eight seconds.
+    """
+    from ..resolve import insights
+
+    room = _session_for(request)
+    track = room.current() if room else player.queue.current_track()
+    if not track:
+        return {"status": "ok", "about": None}
+    mine = room.queue.taste if room else player.queue.taste
+    data = insights.about(track, taste=mine, fetch=bool(wait))
+    if not data.get("ready"):
+        insights.warm(track)
+    return {"status": "ok", "about": data}
+
+
 @app.get("/api/history")
 def api_history(request: Request, _: bool = Auth):
     """What's been played here. Yours, and only yours.

@@ -814,6 +814,57 @@ def run(verbose: bool = False) -> Result:
                 _sh2.rmtree(home, ignore_errors=True)
             say("spoken playlists", c)
 
+            # -- 9k. what a song is, past its name -------------------------
+            # No network here: the parsing is what breaks, and it broke
+            # twice — once stopping at a section's own first subheading, and
+            # once leaving the subheadings in the text it handed back.
+            c = _Checker("about")
+            from .resolve import insights as _ins
+
+            article = (
+                "\"Money for Nothing\" is a song by Dire Straits.\n\n"
+                "== Composition ==\n\n=== Music ===\nKnopfler came up with "
+                "the riff while improvising in the studio, and the guitar "
+                "sound was found by accident during the session.\n\n"
+                "=== Lyrics ===\nThe words came from a man complaining about "
+                "music videos in a New York appliance shop, which Knopfler "
+                "wrote down there and then on a spare piece of paper.\n\n"
+                "== Charts ==\nIt reached number one in the United States.\n")
+            story = _ins._story_from(article)
+            c("the background section is what gets read",
+              "improvising in the studio" in story, story[:60])
+            c("...including its subsections",
+              "appliance shop" in story, story[:60])
+            c("...and not the sections after it",
+              "number one" not in story)
+            c("the subheadings themselves don't come with it",
+              "===" not in story and "Music" not in story.split("riff")[0],
+              story[:40])
+            c("no background section falls back to the opening",
+              "is a song by Dire Straits" in
+              _ins._story_from("\"X\" is a song by Dire Straits. " + "y " * 80
+                               + "\n\n== Charts ==\nIt charted.\n"))
+            c("nothing in, nothing out", _ins._story_from("") == "")
+            c("a record with no title has no panel",
+              _ins.about(None)["ready"] is False)
+            c("two spellings of the same record are one entry",
+              _ins._key("Bring Me To Life", "Evanescence") ==
+              _ins._key("bring me to life", "evanescence"))
+            # An upload's decorations sent the search off to an article about
+            # a live album that merely mentions the song.
+            for raw, want in (("Money For Nothing (Remastered 1996)",
+                               "Money For Nothing"),
+                              ("Numb [Official Music Video]", "Numb"),
+                              ("Bring Me To Life - Official Video",
+                               "Bring Me To Life"),
+                              ("Everlong", "Everlong")):
+                c(f"{raw!r} looks up as {want!r}", _ins._plain(raw) == want,
+                  repr(_ins._plain(raw)))
+            c("and the remaster shares the original's entry",
+              _ins._key("Money For Nothing (Remastered 1996)", "Dire Straits")
+              == _ins._key("money for nothing", "dire straits"))
+            say("about this song", c)
+
             # -- 10. usage is recorded against the link --------------------
             c = _Checker("stats")
             rows = get("/api/passes").json().get("passes", [])

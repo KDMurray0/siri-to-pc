@@ -628,6 +628,13 @@ class QueueManager:
             self.sink.load(path, "replace")
             self.sink.set_paused(False)
             self._set_activity("playing", f"{track.title} — {track.artist}")
+            # Look the story up while the song plays, so opening the panel
+            # shows it rather than a spinner.
+            try:
+                from ..resolve import insights
+                insights.warm(track)
+            except Exception as exc:
+                log.debug("couldn't warm insights: %s", exc)
         elif item.mode == "next":
             pos = self.sink.pos() or 0
             count = self.sink.count()

@@ -103,6 +103,19 @@ Useful flags: `-SkipCookies` (tools only), `-CookieBrowser firefox` (skip auto-d
 
 ### Build the .exe yourself
 
+One command. Runs the checks, builds, closes the running copy, installs over
+`dist\MusicRequestServer`, and starts it again:
+
+```powershell
+.\build.ps1
+```
+
+`-NoRestart` leaves it closed, `-CheckOnly` just runs the checks, and
+`-SkipChecks` goes straight to building. It stages the build in `%TEMP%`
+first because a running exe holds a lock on its own folder.
+
+By hand, if you'd rather:
+
 ```bash
 pip install pyinstaller
 pyinstaller --noconfirm MusicRequestServer.spec
