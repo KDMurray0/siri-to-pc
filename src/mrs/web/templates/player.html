@@ -370,10 +370,29 @@ body.reordering .q{transition:transform .12s ease}
 .lyrics .lrow{font-size:14px;line-height:1.5;color:var(--sub);padding:5px 4px;
   opacity:.55;overflow-wrap:anywhere;transition:color .2s,opacity .2s}
 .lyrics .lrow.active{color:var(--fg);font-weight:700;opacity:1}
+/* The line you're on, the two either side of it, and then away. Fading by
+   distance rather than dimming everything that isn't current: a whole
+   screen held at one flat opacity reads as "greyed out" instead of as
+   somewhere in a song, and the line you want gets no help from it. */
+.lyrics .lrow.n1{opacity:.42}
+.lyrics .lrow.n2{opacity:.3}
+.lyrics .lrow.n3{opacity:.2}
+/* Words fill as the line is sung. The transition is what makes a position
+   sampled four times a second look continuous — each word takes a quarter
+   of a second to come up, so they overlap into a sweep rather than a
+   flicker of steps. */
+.lyrics .lrow .w{font-style:normal;transition:color .28s ease,opacity .28s ease}
+.lyrics .lrow.active .w{color:var(--sub);opacity:.5}
+.lyrics .lrow.active .w.lit{color:var(--fg);opacity:1}
 .lyrics:not(.plain) .lrow{cursor:pointer;border-radius:8px}
 .lyrics:not(.plain) .lrow:hover{color:var(--fg);opacity:.9;
   background:color-mix(in srgb,var(--accent) 10%,transparent)}
 .lyrics.plain .lrow{text-align:left;opacity:.85}
+
+/* Only the desktop layout has a sidebar to fold; on a phone the queue is a
+   tab, and a control for hiding a column that doesn't exist is worse than
+   no control. The wide rules turn it on. */
+.sidetoggle{display:none}
 
 /* collapse the art when a panel wants the room */
 .art-wrap{max-height:260px;overflow:hidden}
@@ -743,7 +762,10 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 @media (min-width:900px) and (min-height:520px){
   body:not(.mini) .stage{
     display:grid;
-    grid-template-columns:minmax(0,1fr) clamp(300px,20vw,520px);
+    /* One number for the sidebar, so the toggle can be placed against its
+       edge and collapsing it is a matter of setting that number to zero. */
+    --side:clamp(300px,20vw,520px);
+    grid-template-columns:minmax(0,1fr) var(--side);
     /* the cover's row takes the slack, so it floats centred in whatever
        height is left over instead of the controls doing so */
     grid-template-rows:auto minmax(0,1fr) auto auto auto auto;
@@ -805,6 +827,22 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
     max-height:min(420px,52vh)}
   body:not(.mini) .search:has(#qactions.show) .results{top:calc(100% + 42px)}
 
+  /* Lyrics get the room the desktop has without turning into a poster, and
+     stay in the app's own face — a serif in here reads as a different
+     program's window. */
+  body:not(.mini) .lyrics .lrow{font-size:clamp(15px,1.15vw,19px);
+    line-height:1.62;padding:6px 8px}
+  /* The fade belongs to the panel, not the rows. Dimming individual lines
+     steps: a line at 30% sits next to one at 30% and the list just stops at
+     the edge. A mask on the scroller is the real thing — text that thins
+     out as it leaves, and it moves with the scroll instead of with the
+     line numbering. */
+  body:not(.mini) #panel-lyrics{
+    -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 7%,
+      #000 93%,transparent 100%);
+    mask-image:linear-gradient(to bottom,transparent 0,#000 7%,
+      #000 93%,transparent 100%)}
+
   /* One card, outlined once: the nav's bottom border does double duty as
      the divider, so the two elements don't draw a seam where they meet. */
   body:not(.mini) .nav{margin-top:0;padding:11px 13px 9px;
@@ -836,64 +874,124 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   body:not(.mini) .sheet-tabs,
   body:not(.mini) .sheet-body{width:100%;max-width:720px;
     margin-left:auto;margin-right:auto}
+
+  /* ── the queue, out of the way ──────────────────────────────────────
+     Sometimes you want the record and not the list. Collapsing sets the
+     sidebar's width to nothing and takes the tabs and the panel out of
+     the grid, so everything else simply gets wider — the cover included,
+     since on an ultrawide it is sized from what's left over. */
+  body:not(.mini) .sidetoggle{
+    position:absolute;top:50%;translate:0 -50%;z-index:6;
+    right:calc(var(--side) + 15px);
+    width:20px;height:56px;padding:0;display:grid;place-items:center;
+    background:color-mix(in srgb,var(--panel) 88%,transparent);
+    border:1px solid var(--line);border-right:0;
+    border-radius:8px 0 0 8px;color:var(--sub);cursor:pointer;
+    font-size:15px;line-height:1;font-family:inherit;
+    transition:right .22s cubic-bezier(.4,0,.2,1),color .15s,background .15s}
+  body:not(.mini) .sidetoggle:hover{color:var(--accent);
+    background:color-mix(in srgb,var(--accent) 14%,var(--panel))}
+  body:not(.mini) .sidetoggle span{display:block;
+    transition:transform .22s cubic-bezier(.4,0,.2,1)}
+
+  body:not(.mini).sidehid .stage{--side:0px;
+    grid-template-columns:minmax(0,1fr)}
+  body:not(.mini).sidehid .nav,
+  body:not(.mini).sidehid .panel{display:none}
+  /* Room that opens up should be used, not left as margin. */
+  body:not(.mini).sidehid .meta,
+  body:not(.mini).sidehid .prog,
+  body:not(.mini).sidehid .controls,
+  body:not(.mini).sidehid .row2{max-width:1040px}
+  body:not(.mini).sidehid .sidetoggle{right:0;border-radius:8px 0 0 8px}
+  body:not(.mini).sidehid .sidetoggle span{transform:rotate(180deg)}
 }
 
-/* ── ultrawide ─────────────────────────────────────────────────────────
-   Stacking the cover above the controls spends height, and an ultrawide
-   hasn't got height to spend — it has width, which the stacked layout
-   leaves empty on both sides. Past about 2:1 the cover moves beside the
-   controls instead of above them: it stops being bounded by "whatever is
-   left after the transport" and gets the whole column, and the words and
-   buttons get the space to its right rather than a 1700px seek bar with a
-   title floating in the middle of it.
+/* ── three zones ───────────────────────────────────────────────────────
+   Past about 1250px there is room to stop making the lyrics wait their
+   turn behind a tab. The record and its controls go down the left, the
+   words take the middle for as long as the song lasts, and the queue
+   keeps the right — where it can still be folded away.
 
-   The cover's column is sized off the viewport height rather than left to
-   the grid, because a square whose width depends on its height inside a
-   column whose width depends on the square is a circle the layout can't
-   resolve. */
-@media (min-width:900px) and (min-height:520px) and (min-aspect-ratio:19/10){
+   The cover is the width of its column rather than a share of the height:
+   in a column of its own it is a portrait of the record, not the whole
+   view, and the transport reads better under it than beside it. */
+@media (min-width:1250px) and (min-height:520px){
   body:not(.mini) .stage{
-    /* Measured off what's actually left rather than a share of the window:
-       the cover has everything below the search box, so the only heights it
-       doesn't get are the padding top and bottom and that one row. 58vh was
-       a guess, and on a short ultrawide it left the bottom third of the
-       column empty underneath a cover that could have filled it. */
-    grid-template-columns:clamp(240px,calc(100vh - 150px),980px) minmax(0,1fr)
-                          clamp(320px,20vw,520px);
-    grid-template-rows:auto minmax(0,1fr) auto auto auto auto minmax(0,1fr);
-    column-gap:clamp(24px,3vw,56px)}
+    --side:clamp(300px,19vw,460px);
+    grid-template-columns:clamp(260px,24vw,430px) minmax(0,1fr) var(--side);
+    /* six content rows down the left, then slack, so the player sits at
+       the top of its column instead of drifting into the middle */
+    grid-template-rows:auto auto auto auto auto auto minmax(0,1fr);
+    column-gap:clamp(20px,2.2vw,44px)}
 
-  body:not(.mini) .search  {grid-area:1/1/2/3}
-  body:not(.mini) .art-wrap{grid-area:2/1/8/2;align-self:stretch;
-    justify-content:center}
-  body:not(.mini) .meta    {grid-area:3/2;margin-top:0}
-  body:not(.mini) .prog    {grid-area:4/2}
-  body:not(.mini) .controls{grid-area:5/2}
-  body:not(.mini) .row2    {grid-area:6/2}
-  body:not(.mini) .nav     {grid-area:1/3}
-  body:not(.mini) .panel   {grid-column:3;grid-row:2/-1}
+  body:not(.mini) .search  {grid-area:1/1/2/3;margin-top:0}
+  body:not(.mini) .art-wrap{grid-area:2/1;margin-top:0;align-items:start}
+  body:not(.mini) .meta    {grid-area:3/1;margin-top:18px;min-height:0;
+    text-align:left}
+  body:not(.mini) .prog    {grid-area:4/1;margin-top:14px}
+  body:not(.mini) .controls{grid-area:5/1;margin-top:14px;gap:10px;
+    justify-content:space-between}
+  body:not(.mini) .row2    {grid-area:6/1;margin-top:14px;padding-top:12px}
+  body:not(.mini) .nav     {grid-area:1/3;align-self:end}
+  body:not(.mini) .panel   {grid-column:3;grid-row:2/-1;margin-top:0;
+    min-height:0}
 
-  /* width-led here, so it fills the column the height decided on */
+  /* the cover fills its column and stops being the whole picture */
   body:not(.mini) .art,
-  body:not(.mini) .artnote{width:100%;height:auto;max-height:100%;
+  body:not(.mini) .artnote{width:100%;height:auto;max-height:none;
     aspect-ratio:1}
-  /* the stacked layout centred these under the cover; beside it they read
-     as a column of their own, so they stop pretending to be centred on
-     something that isn't above them */
-  body:not(.mini) .meta{text-align:left}
-  body:not(.mini) .controls{justify-content:flex-start}
-  /* Wide, but not the whole column. A seek bar the width of an ultrawide
-     is nearly 1200px of hairline: precise to about a fifth of a second,
-     which nobody needs, and a very long way for the eye to travel between
-     the time on the left and the time on the right. Capped generously and
-     kept against the cover rather than floating in the middle of the gap. */
+  body:not(.mini) .art{border-radius:20px}
+  body:not(.mini) .title{font-size:clamp(20px,1.5vw,27px)}
+  body:not(.mini) .artist{font-size:clamp(12.5px,.9vw,15px)}
+  /* they're a column now, so they stop pretending to be centred */
   body:not(.mini) .meta,
   body:not(.mini) .prog,
   body:not(.mini) .controls,
-  body:not(.mini) .row2{max-width:min(100%,880px);
-    margin-left:0;margin-right:auto}
-  body:not(.mini) .title{font-size:clamp(28px,3.2vw,44px)}
-  body:not(.mini) .artist{font-size:clamp(15px,1.2vw,19px)}
+  body:not(.mini) .row2{max-width:none;margin-left:0;margin-right:0}
+  body:not(.mini) .controls .ib{width:34px;height:34px}
+  body:not(.mini) .controls .ib svg{width:19px;height:19px}
+  body:not(.mini) .controls .play{width:48px;height:48px;border-radius:16px}
+  body:not(.mini) .controls .play svg{width:22px;height:22px}
+  body:not(.mini) .vol{flex:1 1 auto;margin-left:8px}
+
+  /* ── the words, given the middle ──────────────────────────────────
+     Not a tab any more: the panel is placed in the centre column and
+     shown whatever the sidebar happens to be on, so the sidebar's Lyrics
+     tab has nothing left to do and goes. */
+  body:not(.mini) #panel-lyrics{
+    display:block;grid-column:2;grid-row:2/-1;margin-top:0;min-height:0;
+    background:none;border:0;border-radius:0;
+    /* Half a panel of empty space top and bottom, so the first line and the
+       last one can both reach the middle. Without it the scroll clamps at
+       zero and the opening verse sits at the top of the column until the
+       song has run far enough to push it down. */
+    padding:42vh clamp(22px,3.4vw,78px);
+    align-self:stretch;scroll-behavior:smooth}
+  body:not(.mini) .navtab[data-panel="lyrics"]{display:none}
+  /* The rows are the panel's own children — .lyrics is a class on
+     #panel-lyrics, not a wrapper inside it. */
+  body:not(.mini) #panel-lyrics.lyrics{text-align:left}
+  /* Room to breathe. Tight leading and negative tracking are for headlines
+     you scan; these are read one line at a time against a clock, and the
+     gap between them is what makes it obvious which one you're on. */
+  body:not(.mini) #panel-lyrics .lrow{font-size:clamp(17px,1.45vw,26px);
+    line-height:1.8;padding:13px 0;font-weight:600;letter-spacing:.005em}
+  body:not(.mini) #panel-lyrics .lrow.active{font-weight:800}
+  /* the panel already carries the vertical room; the message shouldn't add
+     another half-screen on top of it */
+  body:not(.mini) #panel-lyrics .muted{padding:0}
+
+  /* Folding the queue leaves two zones, and the words take the room. */
+  body:not(.mini).sidehid .stage{--side:0px;
+    grid-template-columns:clamp(260px,24vw,430px) minmax(0,1fr)}
+  body:not(.mini).sidehid .nav,
+  body:not(.mini).sidehid .panel:not(#panel-lyrics){display:none}
+  body:not(.mini).sidehid #panel-lyrics{display:block}
+  body:not(.mini).sidehid .meta,
+  body:not(.mini).sidehid .prog,
+  body:not(.mini).sidehid .controls,
+  body:not(.mini).sidehid .row2{max-width:none}
 }
 
 /* A laptop is a desktop with about 640px of browser in it. Everything above
@@ -1001,6 +1099,10 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><path d="M19.14 12.94a7.5 7.5 0 000-1.88l2.03-1.58-2-3.46-2.39.96a7.4 7.4 0 00-1.62-.94L14.8 2.5h-4l-.39 2.54c-.58.23-1.13.55-1.62.94l-2.39-.96-2 3.46 2.03 1.58a7.5 7.5 0 000 1.88l-2.03 1.58 2 3.46 2.39-.96c.49.39 1.04.71 1.62.94l.39 2.54h4l.39-2.54c.58-.23 1.13-.55 1.62-.94l2.39.96 2-3.46-2.03-1.58zM12 15.5A3.5 3.5 0 1112 8.5a3.5 3.5 0 010 7z"/></svg>
       </button>
     </div>
+    <!-- Sits against the sidebar's edge and moves with it, so the control
+         that brings the queue back is where the queue used to be. -->
+    <button class="sidetoggle" id="sidetoggle" title="Hide the queue"
+            aria-label="Hide the queue"><span>‹</span></button>
     <div class="panel open" id="panel-queue"></div>
     <div class="panel" id="panel-lyrics"></div>
     <div class="panel" id="panel-recent"></div>
@@ -1351,6 +1453,24 @@ const ICON = {
 };
 
 let state = { volume: 70, position: 0, duration: 0, trackKey: "", playing: false };
+
+/* The queue folds away on the desktop layout. Remembered, because it's a
+   preference about how you like looking at it rather than a thing you'd
+   want to say again every time you open the page. */
+function setSide(hidden, remember) {
+  document.body.classList.toggle("sidehid", !!hidden);
+  const b = $("sidetoggle");
+  if (b) {
+    b.title = hidden ? "Show the queue" : "Hide the queue";
+    b.setAttribute("aria-label", b.title);
+  }
+  if (remember !== false) {
+    try { localStorage.setItem("sidehid", hidden ? "1" : "0"); } catch (e) {}
+  }
+}
+try { setSide(localStorage.getItem("sidehid") === "1", false); } catch (e) {}
+$("sidetoggle").onclick = () =>
+  setSide(!document.body.classList.contains("sidehid"));
 
 /* Is the desktop layout on? Asked of the stylesheet rather than tracked in
    a variable, so there is exactly one definition of the breakpoint and the
@@ -1846,7 +1966,7 @@ function showPanel(name, toggleExpand) {
     document.body.classList.toggle("expand",
       wasActive ? !document.body.classList.contains("expand") : activePanel === "lyrics");
   }
-  if (activePanel === "lyrics") loadLyrics(true);
+  if (activePanel === "lyrics" || lyricsPinned()) loadLyrics(true);
   if (activePanel === "recent") loadRecent();
   if (activePanel === "lists") loadLists();
 }
@@ -2037,7 +2157,16 @@ $("panel-queue").addEventListener("click", e => {
 });
 
 /* ── lyrics ────────────────────────────────────────────────────────── */
-let lyricData = null, lyricKey = "", lastLine = -1;
+let lyricData = null, lyricKey = "", lastLine = -1, lastLit = -1;
+
+/* Each word its own element, so the line can be lit a word at a time.
+   Spaces are kept as text between them — joining on a single space would
+   quietly reformat anybody's careful spacing, and " (Wake me up)" is not
+   the same line as "(Wake me up)". */
+function words(text) {
+  return (text || "").split(/(\s+)/).map(bit =>
+    /^\s*$/.test(bit) ? esc(bit) : `<i class="w">${esc(bit)}</i>`).join("");
+}
 async function loadLyrics(force) {
   if (!force && state.trackKey === lyricKey) return;
   lyricKey = state.trackKey; lyricData = null; lastLine = -1;
@@ -2050,22 +2179,75 @@ async function loadLyrics(force) {
   lyricData = L; box.classList.add("lyrics");
   if (L.synced && L.synced.length) {
     box.classList.remove("plain");
-    box.innerHTML = L.synced.map(ln => `<div class="lrow" data-t="${ln.t}">${esc(ln.text)||"♪"}</div>`).join("");
+    box.innerHTML = L.synced.map(ln =>
+      `<div class="lrow" data-t="${ln.t}">${words(ln.text) || "♪"}</div>`).join("");
   } else {
     box.classList.add("plain");
     box.innerHTML = (L.plain||"").split("\n").map(l => `<div class="lrow">${esc(l)||"&nbsp;"}</div>`).join("");
   }
-  box.scrollTop = 0;   // always open at the top
+  box.scrollTop = 0;
+  // Put it where the song actually is rather than at the top — opening at
+  // line one halfway through a track means the words you're hearing are
+  // somewhere off the bottom of the panel.
+  lastLine = -1; lastLit = -1;
+  syncLyrics(state.position);
 }
+/* On a wide screen the words have a column of their own and are on all the
+   time, so everything that used to wait for the Lyrics tab to be open has to
+   stop asking whether it is. */
+const lyricsPinned = () => window.matchMedia(
+  "(min-width:1250px) and (min-height:520px)").matches &&
+  !document.body.classList.contains("mini");
+
+/* Light the current line a word at a time.
+   Worth saying what this is and isn't: lrclib gives a timestamp per *line*,
+   not per word, so nothing here knows when a particular word was sung. The
+   words are spread evenly across the gap to the next line, which for sung
+   English is close enough to feel right and is honestly wrong on a long
+   held note. It's a reading aid, not a transcript. */
+function litWords(box, s, idx, pos) {
+  const row = box.querySelectorAll(".lrow")[idx];
+  if (!row) return;
+  const ws = row.querySelectorAll(".w");
+  if (!ws.length) return;
+  const start = s[idx].t;
+  const end = idx + 1 < s.length ? s[idx + 1].t : start + 4;
+  const span = Math.max(0.4, end - start);
+  const through = Math.max(0, Math.min(1, (pos - start) / span));
+  // One ahead of the strictly-elapsed count: singing leads the clock by a
+  // beat, and a word lighting just after you hear it reads as lag.
+  const upto = Math.min(ws.length, Math.floor(through * ws.length) + 1);
+  if (idx === lastLine && upto === lastLit) return;
+  lastLit = upto;
+  ws.forEach((w, i) => w.classList.toggle("lit", i < upto));
+  if (idx !== lastLine) {
+    // Leaving a line behind: it stays fully lit, and the one arriving
+    // starts dark rather than inheriting the last line's fill.
+    box.querySelectorAll(".lrow").forEach((r, i) => {
+      if (i === idx) return;
+      r.querySelectorAll(".w").forEach(w => w.classList.toggle("lit", i < idx));
+    });
+  }
+}
+
 function syncLyrics(pos) {
-  if (activePanel !== "lyrics" || !lyricData || !lyricData.synced || !lyricData.synced.length) return;
+  if ((activePanel !== "lyrics" && !lyricsPinned()) ||
+      !lyricData || !lyricData.synced || !lyricData.synced.length) return;
   const s = lyricData.synced;
   let idx = 0;
   for (let i = 0; i < s.length; i++) { if (s[i].t <= pos + 0.25) idx = i; else break; }
+  const box = $("panel-lyrics");
+  litWords(box, s, idx, pos);
   if (idx === lastLine) return;
   lastLine = idx;
-  const box = $("panel-lyrics"), rows = box.querySelectorAll(".lrow");
-  rows.forEach((r, i) => r.classList.toggle("active", i === idx));
+  const rows = box.querySelectorAll(".lrow");
+  rows.forEach((r, i) => {
+    const d = Math.abs(i - idx);
+    r.classList.toggle("active", d === 0);
+    r.classList.toggle("n1", d === 1);
+    r.classList.toggle("n2", d === 2);
+    r.classList.toggle("n3", d >= 3);
+  });
   // scroll the panel itself, never the window
   if (rows[idx]) {
     const top = box.scrollTop + rows[idx].getBoundingClientRect().top -
@@ -3922,7 +4104,7 @@ function applyStatus(d) {
     state.trackKey = key;
     env = null; envKey = key; envAsking = false;
     loadEnvelope();
-    if (activePanel === "lyrics") loadLyrics(true);
+    if (activePanel === "lyrics" || lyricsPinned()) loadLyrics(true);
   }
   syncLyrics(state.position);
   if (d.activity) applyActivity(d.activity);
@@ -4022,6 +4204,13 @@ loadWhoami().then(refreshToken).then(connect).catch(connect);
 setInterval(refreshToken, 60 * 60 * 1000);
 api("/api/settings").then(s => { if (s && s.theme) setTheme(s.theme, false); });
 api("/api/status").then(d => { if (d) { applyStatus(d); renderQueue(d.queue); } });
+/* The words are on screen from the start when they have a column, rather
+   than waiting for the first track change to notice. And if the sidebar was
+   left on Lyrics last time, it has nothing to show now the tab is gone. */
+if (lyricsPinned()) {
+  if (activePanel === "lyrics") showPanel("queue");
+  loadLyrics(true);
+}
 </script>
 </body>
 </html>
