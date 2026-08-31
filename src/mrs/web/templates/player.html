@@ -381,9 +381,17 @@ body.reordering .q{transition:transform .12s ease}
    sampled four times a second look continuous — each word takes a quarter
    of a second to come up, so they overlap into a sweep rather than a
    flicker of steps. */
-.lyrics .lrow .w{font-style:normal;transition:color .28s ease,opacity .28s ease}
+.lyrics .lrow .w{font-style:normal;transition:color .22s ease,opacity .22s ease}
 .lyrics .lrow.active .w{color:var(--sub);opacity:.5}
 .lyrics .lrow.active .w.lit{color:var(--fg);opacity:1}
+/* The word being sung, filling across itself. A hard stop between the two
+   colours moved along the word by --f: no transition on it, because the
+   position it's driven from already moves every frame, and a transition on
+   top of that would only make it lag. */
+.lyrics .lrow.active .w.now{opacity:1;color:transparent;transition:none;
+  background-image:linear-gradient(90deg,
+    var(--fg) var(--f,0%),var(--sub) var(--f,0%));
+  -webkit-background-clip:text;background-clip:text}
 .lyrics:not(.plain) .lrow{cursor:pointer;border-radius:8px}
 .lyrics:not(.plain) .lrow:hover{color:var(--fg);opacity:.9;
   background:color-mix(in srgb,var(--accent) 10%,transparent)}
@@ -919,7 +927,13 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 @media (min-width:1250px) and (min-height:520px){
   body:not(.mini) .stage{
     --side:clamp(300px,19vw,460px);
-    grid-template-columns:clamp(260px,24vw,430px) minmax(0,1fr) var(--side);
+    /* The player column is a square cover plus about 350px of chrome, so
+       it has to answer to the height as well as the width. Sized on width
+       alone it was stuck at 430px on a monitor with 900px of room going
+       spare underneath it — a postage stamp with an empty column beside
+       it, which is what "doesn't work on other monitors" looked like. */
+    --deck:clamp(240px,min(27vw,calc(100vh - 360px)),660px);
+    grid-template-columns:var(--deck) minmax(0,1fr) var(--side);
     /* six content rows down the left, then slack, so the player sits at
        the top of its column instead of drifting into the middle */
     grid-template-rows:auto auto auto auto auto auto minmax(0,1fr);
@@ -978,13 +992,15 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   body:not(.mini) #panel-lyrics .lrow{font-size:clamp(17px,1.45vw,26px);
     line-height:1.8;padding:13px 0;font-weight:600;letter-spacing:.005em}
   body:not(.mini) #panel-lyrics .lrow.active{font-weight:800}
-  /* the panel already carries the vertical room; the message shouldn't add
-     another half-screen on top of it */
-  body:not(.mini) #panel-lyrics .muted{padding:0}
+  /* The panel already carries the vertical room, so the message shouldn't
+     add another half-screen on top of it — and at 12px it read as a fault
+     rather than an answer in a column that size. */
+  body:not(.mini) #panel-lyrics .muted{padding:0;font-size:15px;
+    text-align:center;opacity:.5}
 
   /* Folding the queue leaves two zones, and the words take the room. */
   body:not(.mini).sidehid .stage{--side:0px;
-    grid-template-columns:clamp(260px,24vw,430px) minmax(0,1fr)}
+    grid-template-columns:var(--deck) minmax(0,1fr)}
   body:not(.mini).sidehid .nav,
   body:not(.mini).sidehid .panel:not(#panel-lyrics){display:none}
   body:not(.mini).sidehid #panel-lyrics{display:block}
@@ -2199,35 +2215,101 @@ const lyricsPinned = () => window.matchMedia(
   "(min-width:1250px) and (min-height:520px)").matches &&
   !document.body.classList.contains("mini");
 
-/* Light the current line a word at a time.
-   Worth saying what this is and isn't: lrclib gives a timestamp per *line*,
-   not per word, so nothing here knows when a particular word was sung. The
-   words are spread evenly across the gap to the next line, which for sung
-   English is close enough to feel right and is honestly wrong on a long
-   held note. It's a reading aid, not a transcript. */
+/* Roughly how long a word takes to sing.
+   Splitting a line's time equally between its words gives "I" and
+   "extraordinary" the same slice, which is exactly where the old fill
+   looked wrong. Syllables are a much better proxy for duration than either
+   word count or letter count: vowel groups, with a silent final e dropped,
+   and never less than one. */
+function syllables(word) {
+  const w = (word || "").toLowerCase().replace(/[^a-z]/g, "");
+  if (!w) return 0.4;                       // punctuation on its own
+  if (w.length <= 3) return 1;
+  const groups = w.replace(/e$/, "").match(/[aeiouy]+/g);
+  return Math.max(1, groups ? groups.length : 1);
+}
+
+/* Where each word of a line starts, as a fraction of the line. Worked out
+   once per line and kept on the element — this is asked for every frame. */
+/* Sung English runs about a third of a second a syllable, plus a beat
+   between words. Used to work out how long a line *ought* to take, which
+   is a different question from how long it is until the next one. */
+const SEC_PER_SYLLABLE = 0.3, SEC_PER_WORD = 0.08;
+
+function wordStarts(row) {
+  if (row._starts) return row._starts;
+  const ws = [...row.querySelectorAll(".w")];
+  // A flat amount per word on top of the syllables, for the gap between
+  // one word and the next. Without it a line of monosyllables races and a
+  // long word crawls.
+  const syl = ws.map(w => syllables(w.textContent));
+  const weight = syl.map(n => n + 0.55);
+  const total = weight.reduce((a, b) => a + b, 0) || 1;
+  let run = 0;
+  const starts = weight.map(x => {
+    const from = run / total;
+    run += x;
+    return { from, to: run / total };
+  });
+  starts.natural = syl.reduce((a, b) => a + b, 0) * SEC_PER_SYLLABLE +
+                   ws.length * SEC_PER_WORD;
+  row._starts = starts;
+  return starts;
+}
+
+/* Light the current line as it's sung: whole words behind the voice, and
+   the word being sung filling across itself.
+   What this can't be: lrclib timestamps *lines*, not words, so nothing here
+   knows when any particular word was sung. This shares the line's time out
+   by syllable count, which tracks sung English closely enough to feel right
+   and is still honestly wrong on a held note. A reading aid, not a
+   transcript. */
 function litWords(box, s, idx, pos) {
-  const row = box.querySelectorAll(".lrow")[idx];
+  const rows = box.querySelectorAll(".lrow");
+  const row = rows[idx];
   if (!row) return;
   const ws = row.querySelectorAll(".w");
   if (!ws.length) return;
   const start = s[idx].t;
   const end = idx + 1 < s.length ? s[idx + 1].t : start + 4;
-  const span = Math.max(0.4, end - start);
+  const gap = Math.max(0.4, end - start);
+  const starts = wordStarts(row);
+  // The gap to the next line is not how long the words take. Given Up holds
+  // one scream for the better part of twenty seconds; stretching two words
+  // across that crawled through them while he was plainly already done.
+  // So: sing the line at a speed a person could sing it, and if there is
+  // time left over, leave it lit and wait. The other way round — more words
+  // than there is room for — the gap wins and it simply goes faster.
+  const span = Math.max(0.35, Math.min(gap, starts.natural));
   const through = Math.max(0, Math.min(1, (pos - start) / span));
-  // One ahead of the strictly-elapsed count: singing leads the clock by a
-  // beat, and a word lighting just after you hear it reads as lag.
-  const upto = Math.min(ws.length, Math.floor(through * ws.length) + 1);
-  if (idx === lastLine && upto === lastLit) return;
-  lastLit = upto;
-  ws.forEach((w, i) => w.classList.toggle("lit", i < upto));
+
   if (idx !== lastLine) {
-    // Leaving a line behind: it stays fully lit, and the one arriving
-    // starts dark rather than inheriting the last line's fill.
-    box.querySelectorAll(".lrow").forEach((r, i) => {
+    // Everything before this line is sung, everything after it isn't.
+    rows.forEach((r, i) => {
       if (i === idx) return;
-      r.querySelectorAll(".w").forEach(w => w.classList.toggle("lit", i < idx));
+      r.querySelectorAll(".w").forEach(w => {
+        w.classList.toggle("lit", i < idx);
+        w.classList.remove("now");
+        w.style.removeProperty("--f");
+      });
     });
   }
+
+  ws.forEach((w, i) => {
+    const { from, to } = starts[i];
+    const done = through >= to;
+    const now = !done && through >= from;
+    w.classList.toggle("lit", done);
+    w.classList.toggle("now", now);
+    // The one being sung fills across itself rather than snapping on, which
+    // is what carries the eye between one word and the next.
+    if (now) {
+      const f = Math.max(0, Math.min(1, (through - from) / Math.max(1e-4, to - from)));
+      w.style.setProperty("--f", (f * 100).toFixed(1) + "%");
+    } else if (w.style.getPropertyValue("--f")) {
+      w.style.removeProperty("--f");
+    }
+  });
 }
 
 function syncLyrics(pos) {
@@ -4015,6 +4097,32 @@ function paintMeter() {
 buildMeters();
 requestAnimationFrame(paintMeter);
 
+/* The word fill needs a clock, and state.position only moves four times a
+   second — a fill stepping in quarter-second jumps looks worse than none.
+   When this page is the one playing the file, its element knows the time
+   exactly on every frame; when it isn't, run on from the last thing the
+   server said rather than sitting still between updates. */
+let posAt = 0;
+function livePos() {
+  if (typeof cast !== "undefined" && cast.on && clockMine()) {
+    try {
+      const el = castLive();
+      if (el && isFinite(el.currentTime) && el.currentTime > 0) return el.currentTime;
+    } catch (e) {}
+  }
+  if (!state.playing || !posAt) return state.position;
+  return state.position + Math.min(1.5, (performance.now() - posAt) / 1000);
+}
+(function fillLoop() {
+  requestAnimationFrame(fillLoop);
+  if (!lyricData || !lyricData.synced || !lyricData.synced.length) return;
+  if (activePanel !== "lyrics" && !lyricsPinned()) return;
+  const s = lyricData.synced, pos = livePos();
+  let idx = 0;
+  for (let i = 0; i < s.length; i++) { if (s[i].t <= pos + 0.25) idx = i; else break; }
+  litWords($("panel-lyrics"), s, idx, pos);
+})();
+
 /* ── live updates over SSE (no more polling) ───────────────────────── */
 
 /* "for twenty minutes" and "in ten minutes" both leave a clock running; show
@@ -4076,6 +4184,7 @@ function applyStatus(d) {
   // the server's echo of it — otherwise the bar snapped back to zero on
   // every tick, which is what "it keeps restarting" looked like on screen.
   state.position = nowAt(d);
+  posAt = performance.now();          // anchor for the between-tick fill
   state.playing = d.state === "playing";
   if (!seekDrag) {
     paintSeek(state.duration ? state.position / state.duration : 0, state.position);
@@ -4168,6 +4277,7 @@ function connect() {
 setInterval(() => {
   if (state.playing && !seekDrag && state.duration) {
     state.position = Math.min(state.duration, state.position + 0.25);
+    posAt = performance.now();          // so the fill can run on between ticks
     paintSeek(state.position / state.duration, state.position);
     syncLyrics(state.position);
   }
