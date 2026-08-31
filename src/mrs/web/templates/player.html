@@ -955,6 +955,23 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
      which pushed the scrollbar in off the edge of the column. */
   body:not(.mini) .nav{padding:9px 10px 8px}
   body:not(.mini) .panel{padding:6px 6px 8px}
+
+  /* ── the wash, kept behind the record ─────────────────────────────
+     The blurred cover is 25% wider than the window on each side, which
+     was right when the cover *was* the view. With it down to a square in
+     a column it became a 3400px smear of one album across everything,
+     and on a black and white theme that reads as a grey gradient nobody
+     asked for. Keep it as a glow behind the record it came from.
+
+     The scrim goes with it: a full-width fade to the background exists to
+     keep controls legible under a bright cover, and there is no longer a
+     bright cover anywhere near them. */
+  body:not(.mini) .ambient{
+    inset:0 auto auto 0;
+    width:calc(var(--deck) + var(--edge) * 2);
+    height:calc(var(--deck) * .8);
+    filter:blur(60px) saturate(1.2);opacity:.2;transform:none}
+  body:not(.mini) .frame::after{display:none}
   body:not(.mini).sidehid .sidetoggle span{transform:rotate(180deg)}
 }
 
@@ -1810,6 +1827,9 @@ function pushVolume(v) {
     try {
       const vol = Math.max(0, Math.min(1, v / volCeil()));
       castEls.forEach(el => { el.volume = vol; });   // both, or the handover jumps
+      // The voice too. It was left at full, so turning the music down on a
+      // phone left the announcements shouting over it.
+      try { $("castsay").volume = vol; } catch (e) {}
     } catch (e) {}
     return;
   }
@@ -2319,6 +2339,10 @@ $("panel-queue").addEventListener("click", e => {
 
 /* ── lyrics ────────────────────────────────────────────────────────── */
 let lyricData = null, lyricKey = "", lastLine = -1, lastLit = -1;
+/* The rows, held rather than looked up. syncLyrics runs four times a
+   second and litWords with it, and both were walking the panel for the
+   same forty elements every time. Rebuilt only when the lyrics are. */
+let lyricRows = [];
 
 /* Each word its own element, so the line can be lit a word at a time.
    Spaces are kept as text between them — joining on a single space would
@@ -2334,9 +2358,11 @@ async function loadLyrics(force) {
   const box = $("panel-lyrics");
   box.classList.remove("plain");
   box.innerHTML = '<div class="muted">Looking for lyrics…</div>';
+  lyricRows = [];
   const r = await api("/api/lyrics");
   const L = r && r.lyrics;
-  if (!L) { box.innerHTML = '<div class="muted">No lyrics for this one.</div>'; return; }
+  if (!L) { box.innerHTML = '<div class="muted">No lyrics for this one.</div>';
+            lyricRows = []; return; }
   lyricData = L; box.classList.add("lyrics");
   if (L.synced && L.synced.length) {
     box.classList.remove("plain");
@@ -2352,6 +2378,7 @@ async function loadLyrics(force) {
     box.classList.add("plain");
     box.innerHTML = (L.plain||"").split("\n").map(l => `<div class="lrow">${esc(l)||"&nbsp;"}</div>`).join("");
   }
+  lyricRows = [...box.querySelectorAll('.lrow')];
   box.scrollTop = 0;
   // Put it where the song actually is rather than at the top — opening at
   // line one halfway through a track means the words you're hearing are
@@ -2416,21 +2443,29 @@ function wordStarts(row) {
    and is still honestly wrong on a held note. A reading aid, not a
    transcript. */
 function litWords(box, s, idx, pos) {
-  const rows = box.querySelectorAll(".lrow");
+  const rows = lyricRows;
   const row = rows[idx];
   if (!row) return;
   if (idx !== lastLine) {
-    // Before anything else, and whether or not this line has words in it:
-    // an instrumental bar used to return early and leave the line before it
-    // still lit as though it were the one playing.
-    rows.forEach((r, i) => {
-      if (i === idx) return;
+    // Only the rows whose state actually changed. Walking all fifty-odd of
+    // them and every word inside on every line change was around eight
+    // hundred style writes a line, to leave all but one of them exactly as
+    // they already were. Going forwards that is the line just finished;
+    // going backwards, the ones being un-sung.
+    const settle = (r, lit) => {
       r._armAt = undefined; r._armWall = undefined;
       r.querySelectorAll(".w").forEach(w => {
-        w.className = i < idx ? "w lit" : "w";
+        w.className = lit ? "w lit" : "w";
         w.style.animation = "";
       });
-    });
+    };
+    if (lastLine < 0) {                       // first arm: everything
+      rows.forEach((r, i) => { if (i !== idx) settle(r, i < idx); });
+    } else if (idx > lastLine) {
+      for (let i = lastLine; i < idx; i++) settle(rows[i], true);
+    } else {
+      for (let i = idx + 1; i <= lastLine; i++) settle(rows[i], false);
+    }
   }
   const ws = row.querySelectorAll(".w");
   if (!ws.length) return;
@@ -2496,7 +2531,7 @@ function syncLyrics(pos) {
   litWords(box, s, idx, pos);
   if (idx === lastLine) return;
   lastLine = idx;
-  const rows = box.querySelectorAll(".lrow");
+  const rows = lyricRows;
   rows.forEach((r, i) => {
     const d = Math.abs(i - idx);
     r.classList.toggle("active", d === 0);
@@ -4292,11 +4327,20 @@ function paintMeter() {
     if (!live) { meterIdle = true; for (const s of meterBars) { s.v = 0; s.peak = 0; } }
   }
   if (playing) meterIdle = false;
-  for (const box of boxes) {
-    const bars = box.children;
-    for (let i = 0; i < bars.length && i < BARS; i++) {
-      bars[i].style.height = (Math.max(0.05, meterBars[i].v) * 100) + "%";
-      bars[i].style.opacity = 0.5 + 0.5 * meterBars[i].peak;
+  // Only what actually moved. A bar sitting on a steady note was being
+  // written twice a frame to say the same thing, and a tenth of a percent
+  // of height is not a thing anyone can see.
+  for (let i = 0; i < BARS; i++) {
+    const s = meterBars[i];
+    const h = Math.round(Math.max(0.05, s.v) * 1000) / 10;
+    const o = Math.round((0.5 + 0.5 * s.peak) * 100) / 100;
+    if (h === s.lastH && o === s.lastO) continue;
+    s.lastH = h; s.lastO = o;
+    for (const box of boxes) {
+      const bar = box.children[i];
+      if (!bar) continue;
+      bar.style.height = h + "%";
+      bar.style.opacity = o;
     }
   }
 }
@@ -4328,7 +4372,22 @@ function livePos() {
   return state.position + Math.min(0.5, (performance.now() - posAt) / 1000);
 }
 /* No loop. The line is armed when it changes — four times a second at the
-   most, from syncLyrics — and the browser runs the rest. */
+   most, from syncLyrics — and the browser runs the rest.
+
+   Except when the page has been away. The flyout hides itself the moment it
+   loses focus, and a hidden page has its timers throttled to about once a
+   second while the word animations carry on at full speed — so it comes back
+   with the words somewhere the song isn't. Coming back into view, throw away
+   what was armed and arm it again from the clock. */
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) return;
+  lastLine = -1;
+  document.querySelectorAll("#panel-lyrics .lrow").forEach(r => {
+    r._armAt = undefined; r._armWall = undefined;
+  });
+  syncLyrics(0);
+});
+addEventListener("focus", () => { lastLine = -1; syncLyrics(0); });
 
 /* ── live updates over SSE (no more polling) ───────────────────────── */
 

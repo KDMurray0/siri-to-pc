@@ -406,17 +406,51 @@ def _named_in(query: str, tracks: list[Track]) -> list[Track]:
             return 2
         return 3
 
-    def rank(t: Track) -> tuple[int, int, float, int]:
+    def asked_for(t: Track) -> bool:
+        """Did the query name this act *as the artist*, not by accident?
+
+        Naming somebody has to beat an exact title, or a cover wins every
+        time you ask for the original: "Creep Radiohead" gave a tribute band
+        whose track is called exactly Creep, ahead of Radiohead's, because
+        the title matched better and the name counted for nothing.
+
+        But it can only beat the title when the name is genuinely a *name* in
+        the query rather than part of what you called the song. Take the
+        artist's words out and something has to be left, and that something
+        has to be the title — which is what tells "Creep, by Radiohead" apart
+        from a band literally called Sweet Sacrifice matching the whole of
+        "sweet sacrifice".
+        """
         words = set(_WORDS.findall(_fold((t.artist or "").lower()))) - {"the", "and"}
         hit = words & asked
-        # Half the name has to be there to count as named at all.
         if not words or not hit or len(hit) / len(words) < 0.5:
-            return (title_tier(t), 1, 0.0, 0)
+            return False
+        awords = set(_WORDS.findall(_fold((t.artist or "").lower())))
+        rest = norm_title(" ".join(w for w in _WORDS.findall(_fold(query.lower()))
+                                   if w not in awords))
+        tn = norm_title(t.title or "")
+        return bool(rest) and bool(tn) and (rest == tn or tn.startswith(rest)
+                                            or rest in tn)
+
+    def rank(t: Track) -> tuple[int, int, int, float, int]:
+        words = set(_WORDS.findall(_fold((t.artist or "").lower()))) - {"the", "and"}
+        hit = words & asked
+        # Named as the artist, with a title to match: ahead of everything.
+        strong = 0 if asked_for(t) else 1
+        # Take the artist's words out of the query. If there is nothing left,
+        # the name only matched because it repeats the title — "Sweet
+        # Sacrifice" by a band called Sweet Sacrifice — and crediting that as
+        # "you asked for them" is how the cover got in front of Evanescence.
+        awords = set(_WORDS.findall(_fold((t.artist or "").lower())))
+        left = [w for w in _WORDS.findall(_fold(query.lower())) if w not in awords]
+        # Half the name has to be there to count as named at all.
+        if not words or not hit or len(hit) / len(words) < 0.5 or not left:
+            return (strong, title_tier(t), 1, 0.0, 0)
         # How much of the name matched, before how many words did. Counting
         # words first loses one-word bands: asking for Los Angeles by X, the
         # single letter scores one hit and Los Angeles De Charly scores two.
         # As a proportion X is a perfect match and Charly is half of one.
-        return (title_tier(t), 0, -len(hit) / len(words), -len(hit))
+        return (strong, title_tier(t), 0, -len(hit) / len(words), -len(hit))
 
     return sorted(tracks, key=rank)
 

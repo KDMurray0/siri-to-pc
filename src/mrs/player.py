@@ -856,7 +856,12 @@ class PlayerService:
             # Out of the speaker the music is using, not whatever Windows
             # calls default — picking a second sound card moved the songs and
             # left the announcements behind on the first one.
-            cmd = [shutil.which("mpv") or "mpv", "--no-video", "--really-quiet"]
+            cmd = [shutil.which("mpv") or "mpv", "--no-video", "--really-quiet",
+                   # At the volume the music is at. This is a second mpv, and
+                   # without being told it starts at full — so turning the
+                   # player down turned the songs down and left the voice
+                   # announcing them at whatever the machine could manage.
+                   f"--volume={max(0, min(150, original))}"]
             dev = config.get("audio_device", "auto")
             if dev and dev not in ("auto", CAST_DEVICE):
                 cmd.append(f"--audio-device={dev}")

@@ -576,6 +576,39 @@ def run(verbose: bool = False) -> Result:
               and not _same_act("Someone", _T(artist="")))
             say("the pool gets what it asked for", c)
 
+            # -- 9e. naming the band beats matching the title --------------
+            # A cover is titled exactly what the original is, so a title-first
+            # ranking hands you the tribute act every time you name the band.
+            c = _Checker("search order")
+            from .resolve.catalog import _named_in
+
+            def _pick(q, rows):
+                return _named_in(q, [_T(title=t, artist=a, video_id=t + a)
+                                     for t, a in rows])[0].artist
+
+            for q, rows, want in (
+                ("creep radiohead",
+                 [("Creep", "Vintage Tribute"), ("Creep", "Radiohead")], "Radiohead"),
+                ("zombie the cranberries",
+                 [("Zombie", "Bad Wolves"), ("Zombie", "The Cranberries")],
+                 "The Cranberries"),
+                ("hurt johnny cash",
+                 [("Hurt", "Nine Inch Nails"), ("Hurt", "Johnny Cash")], "Johnny Cash"),
+                ("take five dave brubeck",
+                 [("Take Five", "Sax Lounge"),
+                  ("Take Five", "The Dave Brubeck Quartet")],
+                 "The Dave Brubeck Quartet"),
+            ):
+                got = _pick(q, rows)
+                c(f"{q!r} finds {want}", got == want, f"got {got!r}")
+            # And a band whose name merely repeats the title doesn't get
+            # promoted for it — whatever order the search gave is kept.
+            c("a name that is only the title isn't a name",
+              _pick("sweet sacrifice",
+                    [("Sweet Sacrifice", "Evanescence"),
+                     ("Sweet Sacrifice", "WJ & Sweet Sacrifice")]) == "Evanescence")
+            say("naming the band", c)
+
             # -- 10. usage is recorded against the link --------------------
             c = _Checker("stats")
             rows = get("/api/passes").json().get("passes", [])
