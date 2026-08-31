@@ -1096,6 +1096,10 @@ class ContextBuilder:
             score -= stack_penalty * per_artist.get(track.primary_artist(), 0)
             score += random.random() * 0.8
 
+            # Told not to, in so many words. Before every other judgement,
+            # because this one isn't a judgement.
+            if self.taste.is_blocked(track):
+                continue
             if is_channel_act(track.artist, track.title):
                 continue
             # An act whose name is somebody else's with words bolted on.

@@ -609,6 +609,49 @@ def run(verbose: bool = False) -> Result:
                      ("Sweet Sacrifice", "WJ & Sweet Sacrifice")]) == "Evanescence")
             say("naming the band", c)
 
+            # -- 9g. blocking is an answer, not a nudge --------------------
+            c = _Checker("blocks")
+            from .core.taste import NeutralTaste as _NeutralTaste, TasteEngine
+            import tempfile as _tf, pathlib as _pl, shutil as _sh2
+
+            home = _pl.Path(_tf.mkdtemp(prefix="mrs-block-"))
+            t9 = TasteEngine(root=home)
+            song = _T(video_id="blk1", title="One", artist="Someone")
+            other = _T(video_id="blk2", title="Two", artist="Someone")
+            c("nothing is blocked to begin with", not t9.is_blocked(song))
+            t9.block(track=song)
+            c("a blocked song is blocked", t9.is_blocked(song))
+            c("...and only that song", not t9.is_blocked(other))
+            t9.block(artist="Someone")
+            c("a blocked artist takes everything they did",
+              t9.is_blocked(other) and t9.is_blocked(song))
+            c("it survives being reloaded",
+              TasteEngine(root=home).is_blocked(other))
+            t9.block(artist="Someone", on=False)
+            t9.block(track=song, on=False)
+            c("and unblocking gives them back",
+              not t9.is_blocked(song) and not t9.is_blocked(other))
+            c("a link that expires blocks nothing",
+              not _NeutralTaste().is_blocked(song))
+            _sh2.rmtree(home, ignore_errors=True)
+            say("blocking", c)
+
+            # -- 9h. more than one thing asked for -------------------------
+            c = _Checker("several")
+            from .resolve.conjunction import looks_like_genre, split_seeds
+            c("two artists split", split_seeds("bon jovi and guns n roses") ==
+              ["bon jovi", "guns n roses"])
+            c("three do too",
+              len(split_seeds("evanescence and linkin park and korn")) == 3)
+            c("a band with 'and' in its name doesn't",
+              split_seeds("drum and bass") == ["drum and bass"])
+            c("genres are recognised as genres",
+              looks_like_genre("britpop") and looks_like_genre("grunge"))
+            c("...and people are not",
+              not looks_like_genre("bon jovi")
+              and not looks_like_genre("evanescence"))
+            say("more than one thing", c)
+
             # -- 10. usage is recorded against the link --------------------
             c = _Checker("stats")
             rows = get("/api/passes").json().get("passes", [])

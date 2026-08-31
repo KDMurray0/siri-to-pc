@@ -33,6 +33,8 @@ class TasteEngine:
         self._root = root
         self._lock = threading.RLock()
         self._liked: list[dict] = []
+        self._blocked_songs: dict[str, dict] = {}
+        self._blocked_artists: set[str] = set()
         self._song: dict[str, list[int]] = defaultdict(lambda: [0, 0])   # id -> [plays, skips]
         self._artist: dict[str, list[int]] = defaultdict(lambda: [0, 0])
         self._history: list[str] = []          # completed video ids, newest last
@@ -44,7 +46,7 @@ class TasteEngine:
         self._load()
 
     # -- persistence ---------------------------------------------------
-    def _file(self, name: str):
+    def _file(self, name: str, create: bool = False):
         if self._root is None:
             return state_file(name)
         self._root.mkdir(parents=True, exist_ok=True)
@@ -64,6 +66,12 @@ class TasteEngine:
             self._liked = json.loads(self._file("liked_songs.json").read_text("utf-8-sig"))
         except Exception:
             self._liked = []
+        try:
+            raw = json.loads(self._file("blocked_music.json").read_text("utf-8-sig"))
+            self._blocked_songs = dict(raw.get("songs") or {})
+            self._blocked_artists = set(raw.get("artists") or [])
+        except Exception:
+            self._blocked_songs, self._blocked_artists = {}, set()
 
     def _prune(self) -> None:
         """Drop the play times we can no longer act on.
@@ -259,6 +267,66 @@ class TasteEngine:
         self._save_liked()
         return liked
 
+    # -- never again -----------------------------------------------------
+    def is_blocked(self, track: Track | None) -> bool:
+        """Told, in so many words, not to play this.
+
+        Different from a skip, which is a nudge the scoring weighs up
+        against everything else. This is an answer, and the ranker doesn't
+        get a vote.
+        """
+        if not track:
+            return False
+        with self._lock:
+            if track.video_id and track.video_id in self._blocked_songs:
+                return True
+            who = track.primary_artist()
+            return bool(who) and who in self._blocked_artists
+
+    def block(self, track: Track | None = None, artist: str = "",
+              on: bool = True) -> bool:
+        """Block or unblock a recording, or everything by somebody."""
+        changed = False
+        with self._lock:
+            if artist:
+                who = Track(title="", artist=artist).primary_artist()
+                if who:
+                    if on and who not in self._blocked_artists:
+                        self._blocked_artists.add(who); changed = True
+                    elif not on and who in self._blocked_artists:
+                        self._blocked_artists.discard(who); changed = True
+            elif track and track.video_id:
+                vid = track.video_id
+                if on and vid not in self._blocked_songs:
+                    self._blocked_songs[vid] = {
+                        "video_id": vid, "title": track.title,
+                        "artist": track.artist, "art": track.art}
+                    changed = True
+                elif not on and vid in self._blocked_songs:
+                    self._blocked_songs.pop(vid, None); changed = True
+        if changed:
+            self._save_blocks()
+            # Blocking something you're being played is a request to stop
+            # hearing it, so it stops counting for anything as well.
+            if track and track.video_id:
+                self._drop_ids({track.video_id})
+        return changed
+
+    def blocks(self) -> dict:
+        with self._lock:
+            return {"songs": list(self._blocked_songs.values()),
+                    "artists": sorted(self._blocked_artists)}
+
+    def _save_blocks(self) -> None:
+        try:
+            with self._lock:
+                data = {"songs": self._blocked_songs,
+                        "artists": sorted(self._blocked_artists)}
+            self._file("blocked_music.json", create=True).write_text(
+                json.dumps(data), encoding="utf-8")
+        except Exception as exc:
+            log.warning("couldn't save what you blocked: %s", exc)
+
     def liked(self) -> list[dict]:
         return list(self._liked)
 
@@ -450,6 +518,15 @@ class NeutralTaste:
 
     def forget(self, *a, **k) -> bool:
         return False
+
+    def is_blocked(self, *a, **k) -> bool:
+        return False
+
+    def block(self, *a, **k) -> bool:
+        return False
+
+    def blocks(self, *a, **k) -> dict:
+        return {"songs": [], "artists": []}
 
 
 taste = TasteEngine()

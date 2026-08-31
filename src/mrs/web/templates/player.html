@@ -395,6 +395,9 @@ body.reordering .q{transition:transform .12s ease}
    is armed once, each word with its own delay, and then nothing runs: no
    timer, no rAF, no work at all between one line and the next. */
 @property --f { syntax:'<percentage>'; inherits:false; initial-value:0%; }
+/* A length, so the sidebar's column can be transitioned closed. An
+   unregistered custom property is a string and jumps. */
+@property --side { syntax:'<length>'; inherits:true; initial-value:0px; }
 @keyframes wordfill { from { --f:0%; } to { --f:100%; } }
 .lyrics .lrow.active .w.now{opacity:1;color:transparent;transition:none;
   background-image:linear-gradient(90deg,
@@ -941,10 +944,20 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   body:not(.mini) .sidetoggle span{display:block;
     transition:transform .22s cubic-bezier(.4,0,.2,1)}
 
-  body:not(.mini).sidehid .stage{--side:0px;
-    grid-template-columns:minmax(0,1fr)}
+  /* The column closes rather than the panel vanishing. --side is registered
+     as a length (below the theme block), so it can be transitioned — the
+     grid track shrinks with it and everything else widens into the space in
+     one movement. display:none can't be animated, which is why the first
+     attempt at this just blinked.
+     The right-hand padding goes with it, or collapsing would leave the gap
+     that used to be between the columns sitting there as a dead strip. */
+  body:not(.mini) .stage{
+    transition:--side .26s cubic-bezier(.4,0,.2,1),
+               padding-right .26s cubic-bezier(.4,0,.2,1)}
+  body:not(.mini) .nav{overflow:hidden}
+  body:not(.mini).sidehid .stage{--side:0px;padding-right:0}
   body:not(.mini).sidehid .nav,
-  body:not(.mini).sidehid .panel{display:none}
+  body:not(.mini).sidehid .panel{opacity:0;pointer-events:none}
   /* Room that opens up should be used, not left as margin. */
   body:not(.mini).sidehid .meta,
   body:not(.mini).sidehid .prog,
@@ -966,12 +979,20 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
      The scrim goes with it: a full-width fade to the background exists to
      keep controls legible under a bright cover, and there is no longer a
      bright cover anywhere near them. */
+  /* The record, very softly, behind the whole thing. Blurred hard enough
+     that it reads as a colour the room is lit by rather than a picture of
+     anything — which is the difference between a background and the smear
+     it was. The scrim underneath it goes: it exists to keep controls
+     legible below a bright cover, and there is no bright cover near them. */
   body:not(.mini) .ambient{
-    inset:0 auto auto 0;
-    width:calc(var(--deck) + var(--edge) * 2);
-    height:calc(var(--deck) * .8);
-    filter:blur(60px) saturate(1.2);opacity:.2;transform:none}
+    inset:0;width:100%;height:100%;
+    filter:blur(110px) saturate(1.5);opacity:.3;transform:scale(1.25)}
+  body:not(.mini) .ambient img{border-radius:0;object-fit:cover}
   body:not(.mini) .frame::after{display:none}
+  /* and a floor under it, so the words never sit on the brightest part */
+  body:not(.mini) .stage::before{content:"";position:absolute;inset:0;z-index:-1;
+    pointer-events:none;
+    background:radial-gradient(120% 90% at 18% 30%,transparent 0,var(--bg) 78%)}
   body:not(.mini).sidehid .sidetoggle span{transform:rotate(180deg)}
 }
 
@@ -1011,8 +1032,13 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
        same space. They were 30 and 122 — the lyrics carried a fat left
        padding of their own on top of the column gap. */
     --edge:clamp(34px,3.4vw,76px);
+    /* The queue doesn't need the same air as the walls. It's a bordered
+       card with its own inner padding, so the wide margin left the words
+       and their scrollbar stranded a long way short of it. The cover keeps
+       the full margin, since it has no edge of its own. */
+    --gap2:clamp(14px,1.3vw,26px);
     padding:46px var(--edge) 24px;
-    column-gap:var(--edge)}
+    column-gap:var(--gap2)}
 
   /* Room under the search box. It was sitting straight on top of the cover
      and the first line of the lyrics, which made the whole top edge read as
@@ -1065,6 +1091,9 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
     /* Nothing either side. The column gap is the space on the left, and on
        the right the scrollbar should sit on the column's edge rather than
        be held off it by a padding of its own. */
+    /* Makes up the difference between the narrow column gap and the wide
+       margin, so the space either side of the cover stays equal. */
+    margin-left:calc(var(--edge) - var(--gap2));
     padding-block:42vh;padding-inline:0;
     align-self:stretch;scroll-behavior:smooth}
   body:not(.mini) .navtab[data-panel="lyrics"]{display:none}
@@ -1086,11 +1115,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
     text-align:center;opacity:.5}
 
   /* Folding the queue leaves two zones, and the words take the room. */
-  body:not(.mini).sidehid .stage{--side:0px;
-    grid-template-columns:var(--deck) minmax(0,1fr)}
-  body:not(.mini).sidehid .nav,
-  body:not(.mini).sidehid .panel:not(#panel-lyrics){display:none}
-  body:not(.mini).sidehid #panel-lyrics{display:block}
+  body:not(.mini).sidehid .stage{--side:0px;padding-right:0}
+  body:not(.mini).sidehid #panel-lyrics{display:block;opacity:1}
   body:not(.mini).sidehid .meta,
   body:not(.mini).sidehid .prog,
   body:not(.mini).sidehid .controls,
@@ -1167,6 +1193,12 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
       <button class="ib small heart" id="like" title="Like"><svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54z"/></svg></button>
       <button class="ib small" id="download" title="Save to Music"><svg viewBox="0 0 24 24"><path d="M11 3h2v7h2.5l-3.5 4-3.5-4H11zM5 18h14v2H5z"/></svg></button>
       <button class="ib small" id="addlist" title="Add to a playlist"><svg viewBox="0 0 24 24"><path d="M3 6h12v2H3zm0 5h12v2H3zm0 5h8v2H3zm15-9h2v4h4v2h-4v4h-2v-4h-4v-2h4z"/></svg></button>
+      <!-- Never again: this recording, or this act at all. A skip is a nudge
+           the scoring weighs up; these two are answers. -->
+      <button class="ib small" id="blocksong" title="Never play this song again"
+              aria-label="Never play this song again"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 2a7.9 7.9 0 014.9 1.7L5.7 16.9A8 8 0 0112 4zm0 16a7.9 7.9 0 01-4.9-1.7L18.3 7.1A8 8 0 0112 20z"/></svg></button>
+      <button class="ib small" id="blockartist" title="Never play this artist again"
+              aria-label="Never play this artist again"><svg viewBox="0 0 24 24"><path d="M12 12a4 4 0 100-8 4 4 0 000 8zm-8 8a8 8 0 0113.4-5.9l-1.5 1.4A6 6 0 006.1 20H4zm14.7-.9l-1.8-1.8 1.8-1.8-1.4-1.4-1.8 1.8-1.8-1.8-1.4 1.4 1.8 1.8-1.8 1.8 1.4 1.4 1.8-1.8 1.8 1.8 1.4-1.4z"/></svg></button>
       <div class="vol">
         <button class="ib small" id="volicon" title="Choose output device"></button>
         <div class="slider" id="volslider">
@@ -1603,6 +1635,18 @@ function placeToggleSoon() {
   clearTimeout(placeLater);
   placeLater = setTimeout(placeToggle, 120);
 }
+
+/* Ride the column closed. The sidebar takes a quarter of a second to go, and
+   a tab that jumps to the end of that on the first frame has visibly left
+   before the thing it is attached to. Bounded, and over as soon as it is. */
+function placeToggleFor(ms) {
+  const until = performance.now() + ms;
+  const step = () => {
+    placeToggle();
+    if (performance.now() < until) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
 (function watchStage() {
   const st = document.querySelector(".stage"), nav = document.querySelector(".nav");
   if (!st) return;
@@ -1626,8 +1670,8 @@ function setSide(hidden, remember) {
     b.title = hidden ? "Show the queue" : "Hide the queue";
     b.setAttribute("aria-label", b.title);
   }
-  // After the class, so the sidebar is where it is going to be.
-  placeToggleSoon();
+  // After the class, and for as long as the column takes to close.
+  placeToggleFor(320);
   if (remember !== false) {
     try { localStorage.setItem("sidehid", hidden ? "1" : "0"); } catch (e) {}
   }
@@ -1879,10 +1923,45 @@ $("prev").onclick = () => api("/api/control/previous");
 $("shuffle").onclick = () => api("/api/control/shuffle");
 $("repeat").onclick = () => api("/api/control/repeat");
 $("like").onclick = () => api("/api/control/like");
+/* Never again. Blocking what's playing skips it too — being asked to stop
+   hearing something and then hearing the rest of it is silly — and that is
+   the server's job, since it owns the queue. */
+async function blockThis(byArtist) {
+  const who = byArtist ? ($("artist").textContent || "").trim() : "";
+  if (byArtist && !who) { toast("Nothing playing"); return; }
+  const r = await api("/api/block?on=1" +
+                      (byArtist ? "&artist=" + encodeURIComponent(who) : ""));
+  toast((r && r.message) || "That needs the key");
+}
+$("blocksong").onclick = () => blockThis(false);
+$("blockartist").onclick = () => blockThis(true);
+
 $("download").onclick = async () => {
   const r = await api("/api/download");
   toast(r && r.ok ? (r.message || "Saved") : "Nothing to save");
 };
+
+/* Move the song to a place.
+   When this page is the one playing the file, only this page can do it —
+   /api/seek on a browser session writes the number down and returns, because
+   the server holds a list and not a clock. That is fine for the lock screen,
+   which already knew, and was the whole of why dragging the bar or tapping a
+   lyric did nothing but move the bar: the sound carried on where it was and
+   the next status put the bar back. */
+function seekTo(secs) {
+  secs = Math.max(0, secs || 0);
+  if (typeof cast !== "undefined" && cast.on && clockMine()) {
+    try { castLive().currentTime = secs; } catch (e) {}
+    state.position = secs;
+    posAt = performance.now();
+    if (state.duration) paintSeek(secs / state.duration, secs);
+    lastLine = -1;                 // the words are somewhere else now
+    syncLyrics(0);
+    api("/api/session/progress?pos=" + Math.round(secs));
+    return;
+  }
+  api("/api/seek?pos=" + Math.round(secs));
+}
 
 let seekDrag = false;
 const bar = document.querySelector(".bar");
@@ -1915,7 +1994,7 @@ function endSeek(e) {
   if (!seekDrag) return;
   seekDrag = false;
   document.body.classList.remove("seeking");
-  if (state.duration) api("/api/seek?pos=" + Math.round(seekFrac(e) * state.duration));
+  if (state.duration) seekTo(seekFrac(e) * state.duration);
 }
 bar.addEventListener("pointerup", endSeek);
 bar.addEventListener("pointercancel", () => {
@@ -2549,7 +2628,7 @@ function syncLyrics(pos) {
 $("panel-lyrics").addEventListener("click", e => {
   const row = e.target.closest(".lrow[data-t]"); if (!row) return;
   const t = parseFloat(row.dataset.t);
-  if (!isNaN(t)) { api("/api/seek?pos=" + Math.max(0, t - 0.3)); lastLine = -1; }
+  if (!isNaN(t)) { seekTo(Math.max(0, t - 0.3)); lastLine = -1; }
 });
 
 /* ── recent + lists ────────────────────────────────────────────────── */
@@ -3550,7 +3629,7 @@ function castHandlers() {
       api("/api/seek?pos=" + Math.round(to));
       return;
     }
-    api("/api/seek?pos=" + Math.max(0, Math.round((state.position || 0) + by)));
+    seekTo((state.position || 0) + by);
   };
   set("seekforward", d => jump((d && d.seekOffset) || 10));
   set("seekbackward", d => jump(-((d && d.seekOffset) || 10)));
@@ -4559,8 +4638,8 @@ document.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT") return;
   const k = e.key.toLowerCase();
   if (k === " ") { e.preventDefault(); api("/api/control/playpause"); }
-  else if (k === "arrowright") api("/api/seek?pos=" + Math.round(state.position + 10));
-  else if (k === "arrowleft") api("/api/seek?pos=" + Math.max(0, Math.round(state.position - 10)));
+  else if (k === "arrowright") seekTo(state.position + 10);
+  else if (k === "arrowleft") seekTo(state.position - 10);
   else if (k === "arrowup") { setVol(state.volume + 5); sendVol(); }
   else if (k === "arrowdown") { setVol(state.volume - 5); sendVol(); }
   else if (k === "n") api("/api/control/next");

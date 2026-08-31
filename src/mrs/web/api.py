@@ -829,6 +829,65 @@ def api_history(request: Request, _: bool = Auth):
             "top_artists": taste.top_artists(), "mine": True}
 
 
+@app.get("/api/block")
+def api_block(request: Request, artist: str = "", on: int = 1,
+              _: bool = Auth):
+    """Never play this again — this recording, or this act at all.
+
+    Whosever radio it is. A skip is a nudge the scoring weighs against
+    everything else; this is an answer, and the ranker doesn't get a vote.
+    Blocking the thing that is playing skips it, because being asked to
+    stop hearing something and then hearing the rest of it is silly.
+    """
+    room = _session_for(request)
+    me = _profile_for(request)
+    store = (me.taste if me is not None else None) or (
+        room.queue.taste if room else taste)
+    if me is not None and not me.permanent:
+        return {"status": "error",
+                "message": "This link doesn't keep anything between songs"}
+    track = (room.current() if room else player.queue.current_track())
+    want = bool(on)
+    if artist:
+        done = store.block(artist=artist, on=want)
+        label = artist
+    else:
+        if not track:
+            return {"status": "error", "message": "Nothing playing to block"}
+        done = store.block(track=track, on=want)
+        label = track.title
+    if want and done and track and not artist:
+        _skip_current(room)
+    elif want and done and artist and track and store.is_blocked(track):
+        _skip_current(room)
+    return {"status": "ok", "blocked": want, "changed": done,
+            "message": (f"Blocked {label}" if want else f"Unblocked {label}"),
+            **store.blocks()}
+
+
+def _skip_current(room) -> None:
+    """Move past whatever is playing, whosever player it is."""
+    try:
+        if room:
+            room.sink.advance()
+            room.rewound()
+            room.queue.publish_queue(force=True)
+        else:
+            player.control("next")
+    except Exception as exc:
+        log.debug("couldn't skip the blocked track: %s", exc)
+
+
+@app.get("/api/blocks")
+def api_blocks(request: Request, _: bool = Auth):
+    """What's been blocked, so the settings page can show and undo it."""
+    me = _profile_for(request)
+    room = _session_for(request)
+    store = (me.taste if me is not None else None) or (
+        room.queue.taste if room else taste)
+    return {"status": "ok", **store.blocks()}
+
+
 @app.get("/api/history/forget")
 def api_history_forget(request: Request, video_id: str = "", artist: str = "",
                        _: bool = Auth):

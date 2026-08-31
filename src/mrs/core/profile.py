@@ -48,8 +48,10 @@ GUEST_SETTINGS: dict[str, object] = {
     "theme": "mono",
     "eq": "flat",
     "normalize": True,
-    "crossfade": 0,
-    "announce": False,        # off by default: it's a shared house
+    "crossfade": 3,
+    # On. It's their own device — the room isn't listening to it, and being
+    # told what came on is most of what makes somebody else's radio followable.
+    "announce": True,
     # how their queue behaves
     "shuffle": False,
     "repeat": "off",

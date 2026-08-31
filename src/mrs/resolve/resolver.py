@@ -78,9 +78,23 @@ def _several(plan: Plan, kind: str) -> "Resolution | None":
     if _one_act(plan.query):
         log.info("%r is one act, not %d", plan.query, len(plan.seeds))
         return None
+    from .conjunction import looks_like_genre
+
+    # "grunge and britpop" arrives as kind=auto, and resolving each half on
+    # its own asked YouTube for an *artist* called britpop — which came back
+    # with A. G. Cook, and the request then announced itself as "Alice In
+    # Chains and A. G. Cook". A seed that is plainly a genre is resolved as
+    # one. Only when every seed is: "bon jovi and shoegaze" is a person and
+    # a genre, and each half already handles itself correctly.
+    genres = [looks_like_genre(s) for s in plan.seeds[:4]]
+    as_genre = kind == "genre" or (kind == "auto" and all(genres) and genres)
+    if as_genre and kind != "genre":
+        log.info("%r is genres, not artists", plan.query)
+
     parts: list[Resolution] = []
     for seed in plan.seeds[:4]:          # four is already an odd request
-        sub = replace(plan, query=seed, artist="", seeds=[])
+        sub = replace(plan, query=seed, artist="", seeds=[],
+                      kind="genre" if as_genre else plan.kind)
         got = resolve(sub)
         if got and got.tracks:
             parts.append(got)
@@ -100,7 +114,7 @@ def _several(plan: Plan, kind: str) -> "Resolution | None":
     # Name a genre request after the genres, not after whoever happened to
     # come back first — "nu metal and rap rock" announcing itself as
     # "Deftones and Olivia Rodrigo" is both wrong and unhelpful.
-    names = (list(plan.seeds) if kind == "genre"
+    names = (list(plan.seeds) if as_genre
              else [p.tracks[0].artist or s for p, s in zip(parts, plan.seeds)])
     said = " and ".join(names[:2]) + ("…" if len(names) > 2 else "")
     return Resolution(dealt, f"Playing {said}",
