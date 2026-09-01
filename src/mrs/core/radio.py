@@ -143,6 +143,30 @@ def is_station(track: Track | None) -> bool:
     return bool(track and track.source == "radio" and track.url)
 
 
+def on_air(track: Track | None) -> Track | None:
+    """The record actually playing, as a track in its own right.
+
+    A station's Track describes the station: the title is its name and the
+    artist is the word "Radio". The song only exists in the ICY metadata
+    alongside it. So anything that wants the *song* — its words, the story
+    behind it, whether you've liked it — was reaching for a Track that
+    describes Radio 6 Music and looking up a record of that name.
+
+    Returns the track unchanged when it isn't a station, and None when a
+    station is on but isn't saying what: speech radio, an ad break, or the
+    first few seconds before the stream announces itself. None means "there
+    is no song here", which is the honest answer and reads better than the
+    station's name in a lyrics panel.
+    """
+    if not is_station(track):
+        return track
+    if not now_playing.song:
+        return None
+    return Track(title=now_playing.song, artist=now_playing.artist,
+                 art=track.art if track else "", source="radio",
+                 video_id=track.video_id if track else "")
+
+
 # ── what's playing on it ──────────────────────────────────────────────
 
 def _clean(title: str) -> str:
@@ -171,6 +195,14 @@ def split_title(text: str) -> tuple[str, str]:
     return "", ""
 
 
+# A pause on a live stream is the one case where the name we're showing
+# quietly stops being true. mpv advances the metadata as the *playback
+# position* passes each marker, so a paused stream freezes the title while
+# the station carries on without us — and after a couple of minutes the
+# screen is naming a song that finished long ago.
+STALE_AFTER = 45.0
+
+
 class NowPlaying:
     """Polls mpv for the stream's ICY title while a station is on.
 
@@ -181,8 +213,45 @@ class NowPlaying:
     def __init__(self) -> None:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._paused_since = 0.0
         self.title = ""
         self.station = ""
+        self.artist = ""
+        self.song = ""
+        # Called with (artist, song) each time the station moves on. A
+        # station is one file that plays for hours, so nothing downstream
+        # that watches the *track* ever fires — which is why an evening of
+        # radio scrobbled once, as a song called "Nation 80s" by "Radio".
+        self.on_song = None
+
+    def poke(self) -> None:
+        """Read it again now, rather than at the next tick.
+
+        The loop backs off to twenty seconds on a station that never sets a
+        title, which is right while nothing is happening and wrong the
+        instant somebody presses play — that is exactly the moment the name
+        is about to change and somebody is looking at it.
+        """
+        self._wake.set()
+
+    def paused_for(self) -> float:
+        """How long the stream has been stopped, as the watcher sees it.
+
+        The watcher notices a pause however it was caused — the page, a
+        media key, Siri, mpv's own keyboard — where the transport only knows
+        about the ones that came through it. So this is the answer that
+        holds when somebody pauses by a route nobody thought of.
+        """
+        return (time.monotonic() - self._paused_since
+                if self._paused_since else 0.0)
+
+    def forget(self) -> None:
+        """Stop claiming to know what's on, without stopping watching."""
+        if self.title or self.song:
+            log.info("%s: paused long enough that the song is a guess now",
+                     self.station)
+        self.title = ""
         self.artist = ""
         self.song = ""
 
@@ -192,13 +261,21 @@ class NowPlaying:
         self.title = ""
         self.artist = ""
         self.song = ""
+        self._paused_since = 0.0
         self._stop.clear()
+        self._wake.clear()
         self._thread = threading.Thread(target=self._loop, args=(mpv,),
                                         daemon=True, name="icy")
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
+        # The loop waits on _wake now, so stopping has to knock on that door
+        # too — otherwise tuning away from a station leaves its watcher
+        # sitting on a twenty second timer, still polling the mpv that is
+        # already playing something else.
+        self._wake.set()
+        self._paused_since = 0.0
         self.title = ""
         self.artist = ""
         self.song = ""
@@ -206,25 +283,55 @@ class NowPlaying:
     def _loop(self, mpv) -> None:
         misses = 0
         while not self._stop.is_set():
+            paused = False
             try:
-                meta = mpv.get("metadata", None) or {}
-                found = ""
-                if isinstance(meta, dict):
-                    for k, v in meta.items():
-                        if k.lower() in ("icy-title", "streamtitle", "title"):
-                            found = _clean(str(v))
-                            break
-                if found and found != self.title:
-                    self.title = found
-                    self.artist, self.song = split_title(found)
-                    log.info("%s: %s", self.station, found)
-                    misses = 0
-                elif not found:
-                    misses += 1
+                paused = bool(mpv.get("pause", False))
+                if paused:
+                    # Nothing new can arrive: the title only moves as the
+                    # playback position passes a marker, and the position
+                    # isn't moving. Hold what we have for about a song, then
+                    # admit we don't know.
+                    if not self._paused_since:
+                        self._paused_since = time.monotonic()
+                    elif time.monotonic() - self._paused_since > STALE_AFTER:
+                        self.forget()
+                else:
+                    if self._paused_since:
+                        # Just came back. Read it now rather than up to
+                        # twenty seconds from now, and give the stream the
+                        # benefit of the doubt on the back-off.
+                        self._paused_since = 0.0
+                        misses = 0
+                    meta = mpv.get("metadata", None) or {}
+                    found = ""
+                    if isinstance(meta, dict):
+                        for k, v in meta.items():
+                            if k.lower() in ("icy-title", "streamtitle",
+                                             "title"):
+                                found = _clean(str(v))
+                                break
+                    if found and found != self.title:
+                        self.title = found
+                        self.artist, self.song = split_title(found)
+                        log.info("%s: %s", self.station, found)
+                        misses = 0
+                        if self.song and self.on_song:
+                            try:
+                                self.on_song(self.artist, self.song)
+                            except Exception as exc:
+                                log.debug("on_song: %s", exc)
+                    elif not found:
+                        misses += 1
             except Exception:
                 misses += 1
-            # speech radio never sets it; stop asking rather than poll forever
-            self._stop.wait(20 if misses > 6 else 5)
+            # Paused, look often and cheaply — the only thing being watched
+            # for is the moment it comes back. Playing, speech radio never
+            # sets a title, so stop asking rather than poll forever.
+            wait = 1.0 if paused else (20 if misses > 6 else 5)
+            # A poke cuts the wait short: pressing play shouldn't leave the
+            # old song's name on screen while a timer runs down.
+            if self._wake.wait(wait):
+                self._wake.clear()
 
 
 now_playing = NowPlaying()

@@ -68,6 +68,7 @@ class PlayerService:
         self._start_at: float | None = None      # a "play in ten minutes" job
         self._ducking = False
         self._auto_volume = False
+        self._live_paused_at = 0.0
         self._alarms: AlarmClock | None = None
         self._announce_seq = 0
         self._announce_files: dict[str, str] = {}
@@ -113,7 +114,23 @@ class PlayerService:
             listener.start()
         threading.Thread(target=self._levels, daemon=True, name="levels").start()
         self._alarms = AlarmClock(self._on_alarm)
+        radio.now_playing.on_song = self._on_radio_song
         log.info("player ready")
+
+    def _on_radio_song(self, artist: str, song: str) -> None:
+        """The station moved on to a new record.
+
+        This is the only moment radio has that corresponds to a track
+        change anywhere else, so it is where the things that happen on a
+        track change belong: telling Last.fm what is on, and telling the
+        page, which otherwise waits for its next poll.
+        """
+        track = Track(title=song, artist=artist, source="radio")
+        try:
+            scrobbler.now_playing(track)
+        except Exception as exc:
+            log.debug("couldn't say what's on: %s", exc)
+        bus.publish(Ev.STATUS, self.status())
 
     def stop(self) -> None:
         self._stop.set()
@@ -315,7 +332,13 @@ class PlayerService:
                 if track:
                     played = self._watch.get("pos", 0)
                     length = self._watch.get("dur", 0)
-                    if taste.record(track, played, length):
+                    if radio.is_station(track):
+                        # Leaving a station after two hours is not "played a
+                        # song called Nation 80s for two hours", and letting
+                        # it into the taste store teaches the radio to
+                        # recommend station names.
+                        pass
+                    elif taste.record(track, played, length):
                         scrobbler.scrobble(track, played)
                     else:
                         # Didn't get far enough to count as played, so it was
@@ -325,9 +348,15 @@ class PlayerService:
                     catalog.set_preferences(taste.preferred_artists())
             self._watch = {"path": path, "pos": pos, "dur": dur}
             cur = self.queue.track_for(path)
-            if cur:
+            if cur and not radio.is_station(cur):
                 scrobbler.now_playing(cur)
                 log.info("now playing: %s — %s", cur.artist, cur.title)
+            elif cur:
+                # A station is one file for hours, so this fires once, at
+                # the moment you tune in — announcing the station as a song
+                # by an artist called Radio. What it's playing arrives later
+                # and repeatedly, through _on_radio_song.
+                log.info("tuned in: %s", cur.title)
         else:
             self._watch["pos"] = max(self._watch.get("pos", 0), pos)
             self._watch["dur"] = dur or self._watch.get("dur", 0)
@@ -611,6 +640,41 @@ class PlayerService:
     ON_AIR_BLOCKED = {"next", "skip", "previous", "prev", "back", "shuffle",
                       "repeat", "seek"}
 
+    # How long a station can be paused before coming back means rejoining
+    # rather than carrying on. Under this, mpv resumes out of its own buffer
+    # and what you hear is continuous, which is what you want when you
+    # paused to answer the door. Over it, carrying on means listening to a
+    # news bulletin that finished five minutes ago with the clock on screen
+    # saying otherwise — so the stream is reloaded and you rejoin live.
+    LIVE_REJOIN_AFTER = 20.0
+
+    def _resume_live(self) -> None:
+        """Coming back to a station after a long pause: rejoin the present."""
+        track = self.queue.current_track()
+        if not radio.is_station(track):
+            self._live_paused_at = 0.0
+            return
+        # Whichever noticed the pause. The transport only knows about pauses
+        # that came through it; the watcher polls mpv and so catches the
+        # media keys, mpv's own keyboard and anything else.
+        paused_for = max(
+            time.monotonic() - self._live_paused_at if self._live_paused_at
+            else 0.0,
+            radio.now_playing.paused_for())
+        self._live_paused_at = 0.0
+        if paused_for < self.LIVE_REJOIN_AFTER:
+            return
+        log.info("paused on %s for %.0fs — rejoining live rather than "
+                 "playing the past", track.title, paused_for)
+        # The name we were showing belonged to whatever was on when it
+        # stopped. Say nothing until the stream tells us again, rather than
+        # naming a song that finished while the machine was quiet.
+        radio.now_playing.forget()
+        try:
+            self.mpv.command("loadfile", track.url, "replace", wait=False)
+        except Exception as exc:
+            log.warning("couldn't rejoin %s: %s", track.title, exc)
+
     def control(self, action: str, value=None) -> dict:
         a = (action or "").lower()
         # Live radio has no next track, nothing to shuffle and nothing to like.
@@ -621,12 +685,27 @@ class PlayerService:
             return {"message": f"{station} is live", "ignored": True}
         if a in ("pause", "stop"):
             self.mpv.set("pause", True)
+            self._live_paused_at = time.monotonic()
+            # So the watcher starts its own clock now rather than up to
+            # twenty seconds from now. Its clock is the one that decides
+            # when the name on screen stops being believed.
+            radio.now_playing.poke()
             return {"message": "Paused"}
         if a in ("resume", "unpause"):
+            self._resume_live()
             self.mpv.set("pause", False)
+            radio.now_playing.poke()
             return {"message": "Playing"}
         if a in ("playpause", "toggle"):
+            was = bool(self.mpv.get("pause", False))
+            if was:
+                self._resume_live()
             self.mpv.command("cycle", "pause", wait=False)
+            if was:
+                radio.now_playing.poke()
+            else:
+                self._live_paused_at = time.monotonic()
+                radio.now_playing.poke()
             return {"message": "Toggled"}
         if a in ("next", "skip"):
             self.audio.crossfade_skip("playlist-next")

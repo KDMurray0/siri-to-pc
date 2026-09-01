@@ -18,6 +18,7 @@ whose queue a request lands in. Playback is checked by playing something.
 from __future__ import annotations
 
 import time
+import time as _t
 from dataclasses import dataclass, field
 
 
@@ -994,6 +995,116 @@ def run(verbose: bool = False) -> Result:
                     except Exception:
                         pass
             say("a list the house shares", c)
+
+            # -- 9n. a paused station stops naming a song ------------------
+            # Pausing live radio is the one case where the name on screen
+            # quietly stops being true: mpv advances the ICY title as the
+            # playback position passes a marker, so a paused stream freezes
+            # it while the station carries on without us.
+            c = _Checker("radio pause")
+            from .core import radio as _radio
+
+            class _FakeMpv:
+                """Enough mpv to drive the watcher: a pause flag and a title."""
+                def __init__(self):
+                    self.paused = False
+                    self.title = "Bill Withers - Lovely Day"
+                def get(self, key, default=None):
+                    if key == "pause":
+                        return self.paused
+                    if key == "metadata":
+                        return {"icy-title": self.title}
+                    return default
+
+            np = _radio.NowPlaying()
+            fake = _FakeMpv()
+            was_stale = _radio.STALE_AFTER
+            try:
+                np.start(fake, "Test FM")
+                for _ in range(60):
+                    if np.song:
+                        break
+                    _t.sleep(0.05)
+                c("a playing station names the song",
+                  np.song == "Lovely Day" and np.artist == "Bill Withers",
+                  f"{np.artist!r} / {np.song!r}")
+
+                # Paused, the title is held for about a song and then let go.
+                _radio.STALE_AFTER = 0.4
+                fake.paused = True
+                fake.title = "Nina Simone - Feeling Good"   # the station moved on
+                # Poked, exactly as the transport does, so the watcher starts
+                # its clock now instead of at the end of a five second wait.
+                np.poke()
+                _t.sleep(0.3)
+                c("a short pause keeps the name it had",
+                  np.song == "Lovely Day", np.song)
+                for _ in range(40):
+                    if not np.song:
+                        break
+                    _t.sleep(0.05)
+                c("a long pause stops claiming to know", not np.song, np.song)
+                c("...and says so rather than showing the wrong one",
+                  not np.title and not np.artist)
+                c("the watcher knows how long it's been stopped",
+                  np.paused_for() > 1.0, str(round(np.paused_for(), 1)))
+
+                # Coming back picks the new title up promptly, not at the
+                # next twenty second tick.
+                fake.paused = False
+                np.poke()
+                for _ in range(40):
+                    if np.song:
+                        break
+                    _t.sleep(0.05)
+                c("play again and the new song appears",
+                  np.song == "Feeling Good", np.song)
+                c("...and the pause clock is reset", np.paused_for() == 0.0)
+            finally:
+                _radio.STALE_AFTER = was_stale
+                np.stop()
+            c("stopping clears it", not np.song and not np.title)
+            # stop() has to knock on the wake event too, or tuning away
+            # leaves the old watcher sitting on a twenty second timer.
+            joined = np._thread is None or not np._thread.is_alive() or True
+            for _ in range(30):
+                if not (np._thread and np._thread.is_alive()):
+                    break
+                _t.sleep(0.05)
+            c("...and the thread actually goes away",
+              not (np._thread and np._thread.is_alive()))
+            # And everything downstream of a station wants the song, not
+            # the station: the words of a record called "BBC Radio 6 Music"
+            # do not exist, and neither does its history.
+            c2 = _Checker("on air")
+            song_track = _T(video_id="st1", title="Radio Six", artist="Radio",
+                            url="http://example/stream", source="radio")
+            plain = _T(video_id="p1", title="Lovely Day", artist="Bill Withers")
+            c2("an ordinary track is itself",
+               _radio.on_air(plain) is plain)
+            c2("nothing is nothing", _radio.on_air(None) is None)
+            was_np = _radio.now_playing
+            try:
+                _radio.now_playing = _radio.NowPlaying()
+                c2("a station announcing nothing has no song",
+                   _radio.on_air(song_track) is None)
+                _radio.now_playing.artist = "Bill Withers"
+                _radio.now_playing.song = "Lovely Day"
+                _radio.now_playing.title = "Bill Withers - Lovely Day"
+                got = _radio.on_air(song_track)
+                c2("a station announcing one gives the song",
+                   got is not None and got.title == "Lovely Day",
+                   got.title if got else "None")
+                c2("...with the artist, not the word Radio",
+                   got is not None and got.artist == "Bill Withers",
+                   got.artist if got else "None")
+                c2("...and not the station's name",
+                   got is not None and got.title != "Radio Six")
+            finally:
+                _radio.now_playing = was_np
+            say("the song on air", c2)
+
+            say("a paused station", c)
 
             # -- 10. usage is recorded against the link --------------------
             c = _Checker("stats")

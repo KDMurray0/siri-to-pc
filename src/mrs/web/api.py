@@ -799,8 +799,13 @@ def api_lyrics(request: Request, _: bool = Auth):
     computer's speakers weren't playing anything at all. It also meant a link
     could read what the owner was listening to.
     """
+    from ..core import radio
+
     room = _session_for(request)
-    track = room.current() if room else player.queue.current_track()
+    # The song, not the station. On radio these are different things and
+    # the words of a record called "BBC Radio 6 Music" do not exist.
+    track = radio.on_air(room.current() if room else
+                         player.queue.current_track())
     if not track:
         return {"status": "ok", "lyrics": None}
     data = lyrics_mod.get_lyrics(track.title, track.artist, track.duration)
@@ -815,10 +820,14 @@ def api_about(request: Request, wait: int = 0, _: bool = Auth):
     it hasn't been — the panel opens instantly and fills itself a moment
     later rather than staring at a spinner for eight seconds.
     """
+    from ..core import radio
     from ..resolve import insights
 
     room = _session_for(request)
-    track = room.current() if room else player.queue.current_track()
+    # Same again: a station's own track names the station, and the story
+    # behind Radio 6 Music is not what anybody opened this panel for.
+    track = radio.on_air(room.current() if room else
+                         player.queue.current_track())
     if not track:
         return {"status": "ok", "about": None}
     mine = room.queue.taste if room else player.queue.taste
