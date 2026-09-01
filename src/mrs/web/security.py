@@ -285,8 +285,6 @@ def read_token(key: str, token: str) -> dict | None:
         if not hmac.compare_digest(sig, _sign(key, body)):
             return None
         expires = int(expires)
-        if expires and expires < time.time():
-            return None
     except Exception:
         return None
 
@@ -296,6 +294,16 @@ def read_token(key: str, token: str) -> dict | None:
         # A pass with no registry entry is one whose record was deleted;
         # treat that as revoked rather than trusting the signature alone.
         if not row or row.get("revoked"):
+            return None
+        # The registry decides when a pass dies, not the token. The signature
+        # proves we issued this id with this scope and cannot be forged into
+        # a longer life — but the date baked into it is the date it was
+        # minted with, and the owner is allowed to change their mind. Reading
+        # it from the row is what lets Extend revive the link somebody
+        # already has, instead of making them send a new one.
+        if "expires" in row:
+            expires = int(row.get("expires") or 0)
+        if expires and expires < time.time():
             return None
         if row.get("last_seen", 0) < time.time() - 300:
             row["last_seen"] = int(time.time())
@@ -335,6 +343,13 @@ def reissue_token(key: str, tid: str) -> str:
     return f"{body}.{_sign(key, body)}"
 
 
+# How long a link stays on the list after it dies. A link that vanishes the
+# moment it expires takes its name and its history with it, and the first
+# you know is that somebody says "it stopped working" about a thing you can
+# no longer see. A day is long enough to notice and press Extend.
+GRACE = 86400
+
+
 def list_passes() -> list[dict]:
     now = time.time()
     with _held():
@@ -353,6 +368,10 @@ def list_passes() -> list[dict]:
             "expires": exp,
             "expired": bool(exp and exp < now),
             "hours_left": None if not exp else max(0, round((exp - now) / 3600, 1)),
+            # Only meaningful once it's dead: how long is left to change
+            # your mind before the row goes for good.
+            "removed_in_hours": (round((exp + GRACE - now) / 3600, 1)
+                                 if exp and exp < now else None),
             "created": r.get("created", 0),
             "last_seen": r.get("last_seen", 0),
             "last_ip": r.get("last_ip", ""),
@@ -360,6 +379,33 @@ def list_passes() -> list[dict]:
         })
     out.sort(key=lambda r: -(r["created"] or 0))
     return out
+
+
+def extend(tid: str, hours: float = 24) -> dict:
+    """Give a link more time. hours <= 0 makes it permanent.
+
+    Measured from now rather than from when it died, because "another day"
+    said about a link that expired yesterday means a day from now.
+    """
+    with _held():
+        rows = _load_passes()
+        row = rows.get(tid)
+        if not row or row.get("internal") or row.get("owner"):
+            return {"ok": False, "message": "No such link"}
+        was = int(row.get("expires") or 0)
+        row["expires"] = 0 if hours <= 0 else int(time.time() + hours * 3600)
+        # Extending something you had revoked is plainly meant to bring it
+        # back; leaving it revoked would be a button that does nothing.
+        row["revoked"] = False
+        _save_passes(rows)
+    log.info("extended %s: %s -> %s", tid,
+             "never" if not was else time.strftime("%Y-%m-%d %H:%M",
+                                                   time.localtime(was)),
+             "never" if not row["expires"] else
+             time.strftime("%Y-%m-%d %H:%M", time.localtime(row["expires"])))
+    return {"ok": True, "expires": row["expires"],
+            "message": ("That link no longer expires" if not row["expires"]
+                        else f"Another {hours:g} hours on that link")}
 
 
 def revoke(tid: str) -> bool:
@@ -419,10 +465,15 @@ def forget_pass(tid: str) -> bool:
 
 
 def tidy_passes() -> int:
-    """Drop expired passes that nobody has used in a fortnight.
+    """Drop expired passes once their grace day is up.
 
     Internal ones go as soon as they expire — the player mints a fresh one
     every time it loads, so keeping the dead ones only grows the file.
+
+    Everything else gets GRACE first. The point of the delay is that an
+    expired link is still worth looking at: whose it was, what they played,
+    and whether you meant to let it lapse. Extend is only reachable while
+    the row is still there.
     """
     now = time.time()
     with _held():
@@ -433,7 +484,7 @@ def tidy_passes() -> int:
             del rows[t]
         if spent:
             _save_passes(rows)
-    cutoff = time.time() - 14 * 86400
+    cutoff = time.time() - GRACE
     with _held():
         rows = _load_passes()
         dead = [t for t, r in rows.items()

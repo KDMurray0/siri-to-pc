@@ -97,6 +97,7 @@ def run(verbose: bool = False) -> Result:
 
     from .config import config
     from .web.api import app
+    from .web import security as sec
     from .web.security import forget_pass, issue
 
     out = Result()
@@ -1197,6 +1198,95 @@ def run(verbose: bool = False) -> Result:
             c("nor does an empty one",
               _yt.video_id("") == "" and _yt.find_url("") == "")
             say("a YouTube link", c)
+
+            # -- 9p. a lapsed link, and changing your mind ----------------
+            # A link that vanishes the moment it expires takes its name and
+            # its history with it, and the first you know is somebody saying
+            # "it stopped working" about a thing you can no longer see.
+            c = _Checker("expiry")
+            import time as _tm
+
+            dying = issue(now_key(), name="check-lapsing", hours=1,
+                          scope="full")
+            minted.append(dying["id"])
+            did = dying["id"]
+
+            def row_for(pid):
+                return next((r for r in sec.list_passes() if r["id"] == pid),
+                            None)
+
+            c("a live link works", sec.check_token(now_key(), dying["token"]))
+            r = row_for(did)
+            c("...and is listed as alive", r and not r["expired"], str(r))
+            c("...with nothing said about removal",
+              r and r.get("removed_in_hours") is None)
+
+            # Push it into the past, the way an hour going by would.
+            with sec._held():
+                store = sec._load_passes()
+                store[did]["expires"] = int(_tm.time()) - 60
+                sec._save_passes(store)
+
+            c("an expired link stops working",
+              not sec.check_token(now_key(), dying["token"]))
+            r = row_for(did)
+            c("...but is still on the list", r is not None)
+            c("...marked expired", r and r["expired"])
+            c("...and says how long before it goes",
+              r and 23 < (r.get("removed_in_hours") or 0) <= 24,
+              str(r and r.get("removed_in_hours")))
+            c("a tidy-up leaves it alone during its grace day",
+              (sec.tidy_passes() or True) and row_for(did) is not None)
+
+            # Extend, from the owner, over http.
+            got = get(f"/api/passes/extend?id={did}&hours=24").json()
+            c("extending says it worked", got.get("status") == "ok", str(got))
+            c("...and the link somebody already has works again",
+              sec.check_token(now_key(), dying["token"]),
+              "the token they hold should not need replacing")
+            r = row_for(did)
+            c("...and it is no longer expired", r and not r["expired"])
+            c("...with about a day on it",
+              r and 23 < (r.get("hours_left") or 0) <= 24,
+              str(r and r.get("hours_left")))
+
+            # Past the grace day it goes for good.
+            with sec._held():
+                store = sec._load_passes()
+                store[did]["expires"] = int(_tm.time()) - (sec.GRACE + 60)
+                sec._save_passes(store)
+            r = row_for(did)
+            c("past the grace day it reads as going now",
+              r and (r.get("removed_in_hours") or 0) <= 0,
+              str(r and r.get("removed_in_hours")))
+            sec.tidy_passes()
+            c("...and a tidy-up removes it", row_for(did) is None)
+            c("...and its token is dead for good",
+              not sec.check_token(now_key(), dying["token"]))
+
+            # Who may extend. This hands somebody back a working credential,
+            # so it is the owner's alone.
+            other = issue(now_key(), name="check-extend-guard", hours=1)
+            minted.append(other["id"])
+            for who, tok in (("a full link", full), ("a phone link", phone)):
+                code = get(f"/api/passes/extend?id={other['id']}&hours=99",
+                           tok, here).status_code
+                c(f"{who} cannot extend anything", code in (401, 403),
+                  str(code))
+            c("...and the guarded one is untouched",
+              (row_for(other["id"]) or {}).get("hours_left", 0) <= 1.1)
+            c("extending nothing is refused, not a crash",
+              get("/api/passes/extend?id=&hours=24").json().get("status")
+              == "error")
+            c("extending an unknown id says so",
+              get("/api/passes/extend?id=nosuchid&hours=24").json().get("status")
+              == "error")
+            # hours <= 0 is how the rest of the app spells "permanent".
+            get(f"/api/passes/extend?id={other['id']}&hours=0")
+            r = row_for(other["id"])
+            c("nought hours makes it permanent",
+              r and not r["expires"] and r["hours_left"] is None, str(r))
+            say("a lapsed link", c)
 
             # -- 10. usage is recorded against the link --------------------
             c = _Checker("stats")

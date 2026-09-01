@@ -3409,7 +3409,16 @@ const PASS_SCOPE = { full: "any speaker", phone: "their phone" };
 
 function passLife(p) {
   if (!p.expires) return "permanent";
-  if (p.expired) return "expired";
+  if (p.expired) {
+    // An expired link stays on the list for a day so you can see whose it
+    // was and change your mind. Saying how long is left to change it is the
+    // whole point of keeping it.
+    const r = p.removed_in_hours;
+    if (r == null) return "expired";
+    return r <= 0 ? "expired, going now"
+         : r < 1 ? "expired, gone in " + Math.round(r * 60) + "m"
+                 : "expired, gone in " + Math.round(r) + "h";
+  }
   const h = p.hours_left;
   return h < 1 ? Math.round(h * 60) + "m left"
        : h < 48 ? Math.round(h) + "h left"
@@ -3464,6 +3473,14 @@ async function loadPasses() {
         ? (p.revoked ? `<button class="btn passundo" data-i="${esc(p.id)}">Unban</button>` : "")
         : `<button class="btn passcopy" data-i="${esc(p.id)}">Copy</button>` +
           `<button class="btn passqr" data-i="${esc(p.id)}">QR</button>`) +
+      // On anything that can lapse, not only on the ones that have. The
+      // link somebody already holds starts working again, so there is
+      // nothing to re-send.
+      (p.expires
+        ? `<button class="btn passmore" data-i="${esc(p.id)}" ` +
+          `title="Another day on this link — they can keep the one they have"` +
+          `>${p.expired ? "Restore" : "+1 day"}</button>`
+        : "") +
       `<button class="pickx passkill" data-i="${esc(p.id)}" ` +
       `title="${p.revoked ? "Forget this one" : "Ban this link"}">✕</button>` +
       `</span><div class="qrbox" id="pq-${esc(p.id)}"></div></div>`;
@@ -3533,6 +3550,12 @@ $("passlist").addEventListener("click", async e => {
   if (btn.classList.contains("passcopy")) {
     const url = await passUrl(id);
     toast(url && await copyText(url) ? "Link copied" : "Couldn't copy that");
+    return;
+  }
+  if (btn.classList.contains("passmore")) {
+    const r = await api("/api/passes/extend?hours=24&id=" + encodeURIComponent(id));
+    toast((r && r.message) || "Couldn't extend that");
+    await loadPasses();
     return;
   }
   if (btn.classList.contains("passqr")) {

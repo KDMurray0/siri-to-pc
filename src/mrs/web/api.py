@@ -1600,6 +1600,21 @@ def api_profiles(_: bool = Owner):
     return {"status": "ok", "profiles": profiles.listing()}
 
 
+@app.get("/api/passes/extend")
+def api_pass_extend(id: str = "", hours: float = 24, _: bool = Owner):
+    """Give a link more time — including one that has already lapsed.
+
+    The link the person already has starts working again. Nothing new needs
+    sending, because the registry decides when a pass dies rather than the
+    date signed into the token; see read_token.
+    """
+    if not id:
+        return {"status": "error", "message": "Which one?"}
+    got = sec.extend(id, hours)
+    return {"status": "ok" if got.get("ok") else "error",
+            **got, "passes": sec.list_passes()}
+
+
 @app.get("/api/passes/revoke")
 def api_pass_revoke(id: str = "", restore: int = 0, forget: int = 0,
                     wipe: int = 0, _: bool = Owner):
