@@ -799,10 +799,23 @@ class PlayerService:
                 "message": "Liked" if liked else "Unliked"}
 
     def queue_similar(self, count: int = 5) -> dict:
+        # Two things go wrong here on a station, and only one of them is
+        # visible. A station's own track has no video id, so asking YouTube
+        # what resembles an empty one returns an armful of whatever it felt
+        # like — that is the queue filling up with strangers. The other is
+        # that a stream never ends, so anything put behind it never plays:
+        # the same reason liking a song on air doesn't line three up, a few
+        # lines above. Both say the answer is to decline and explain.
+        if radio.is_station(self.queue.current_track()):
+            return {"ok": False, "ignored": True,
+                    "message": "Radio doesn't have a next track to queue "
+                               "behind — ask for the song by name instead"}
         track = self.queue.current_track()
-        if not track:
+        if not track or not track.video_id:
             return {"ok": False, "message": "Nothing playing"}
         similar = catalog.related(track.video_id, limit=count)
+        if not similar:
+            return {"ok": False, "message": f"Nothing similar to {track.title}"}
         self.queue.enqueue(similar)
         return {"ok": True, "added": len(similar),
                 "message": f"Queued {len(similar)} more like this"}

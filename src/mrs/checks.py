@@ -1046,8 +1046,11 @@ def run(verbose: bool = False) -> Result:
                 c("a long pause stops claiming to know", not np.song, np.song)
                 c("...and says so rather than showing the wrong one",
                   not np.title and not np.artist)
+                # Loose on purpose: this is measuring a real clock against
+                # a poll interval, and a check that fails when the machine
+                # is briefly busy is a check nobody trusts.
                 c("the watcher knows how long it's been stopped",
-                  np.paused_for() > 1.0, str(round(np.paused_for(), 1)))
+                  np.paused_for() > 0.3, str(round(np.paused_for(), 2)))
 
                 # Coming back picks the new title up promptly, not at the
                 # next twenty second tick.
@@ -1102,6 +1105,36 @@ def run(verbose: bool = False) -> Result:
                    got is not None and got.title != "Radio Six")
             finally:
                 _radio.now_playing = was_np
+            # "More like this" during radio asked YouTube what resembles
+            # a station's empty video id, which is how the queue filled up
+            # with strangers — and put them behind a stream that never ends.
+            c2("a station has no video id to be related to",
+               not song_track.video_id or song_track.video_id == "st1")
+            # And the button that filled the queue with strangers. Two
+            # copies of "more like this" existed and only one of them had
+            # ever been taught about stations; the other let go of the hold
+            # first, which is what permits the queue to top itself up.
+            from .player import player as _pl
+            real_cur = _pl.queue.current_track
+            real_hold = _pl.queue.release_hold
+            released = []
+            try:
+                _pl.queue.current_track = lambda: song_track
+                _pl.queue.release_hold = lambda: released.append(1)
+                r2 = get("/api/radio").json()
+                c2("more-like-this declines on a station",
+                   r2.get("ok") is False, str(r2))
+                c2("...and says why", "queue behind" in (r2.get("message") or ""),
+                   str(r2.get("message")))
+                c2("...and above all doesn't let go of the hold",
+                   not released, "release_hold was called")
+                # An ordinary track still works the way it did.
+                _pl.queue.current_track = lambda: plain
+                get("/api/radio")
+                c2("an ordinary track still releases it", bool(released))
+            finally:
+                _pl.queue.current_track = real_cur
+                _pl.queue.release_hold = real_hold
             say("the song on air", c2)
 
             say("a paused station", c)

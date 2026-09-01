@@ -727,12 +727,25 @@ def api_cancel(request: Request, _: bool = Auth):
 @app.get("/api/radio")
 def api_radio(request: Request, count: int = 8, _: bool = Auth):
     """More like this one — into whichever queue asked."""
+    from ..core import radio as radio_mod
+
     room = _session_for(request)
     q = room.queue if room else player.queue
-    q.release_hold()
     track = q.current_track()
+    # Not during a stream, and above all not before letting go of the hold.
+    # Two things went wrong here and the second is the loud one. A station's
+    # own track has no video id, so asking YouTube what resembles an empty
+    # one returns an armful of whatever it felt like; and release_hold is
+    # what permits the queue to start topping itself up, so pressing this on
+    # air handed a stream that never ends a growing queue of strangers
+    # behind it. Neither of them could ever play.
+    if radio_mod.is_station(track):
+        return {"status": "ok", "ok": False, "ignored": True,
+                "message": "Radio has no next track to queue behind — ask "
+                           "for the song by name and you'll get a queue"}
     if not track:
         return {"status": "ok", "ok": False, "message": "Nothing playing"}
+    q.release_hold()
     similar = catalog.related(track.video_id, limit=count)
     q.enqueue(similar)
     return {"status": "ok", "ok": True, "added": len(similar),
