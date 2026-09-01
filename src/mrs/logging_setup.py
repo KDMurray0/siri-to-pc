@@ -96,13 +96,24 @@ def mark(note: str) -> None:
     nothing to go on. This is a plain append: no handler, no formatter, no
     rotation, nothing that can be in a bad state.
     """
-    try:
-        _LOG.parent.mkdir(parents=True, exist_ok=True)
-        with open(_LOG, "a", encoding="utf-8") as fh:
-            fh.write(f"{time.strftime('%H:%M:%S')} ----    boot"
-                     f"           {note} (pid {os.getpid()})\n")
-    except Exception:
-        pass
+    line = (f"{time.strftime('%H:%M:%S')} ----    boot"
+            f"           {note} (pid {os.getpid()})\n")
+    # Two places, and the second is why. A copy started before sign-in ran
+    # for half a minute, bound the port and wrote not one line anywhere —
+    # so the one boot that most needed explaining was the one with no
+    # evidence at all. Whatever stopped it writing to the shared file, a
+    # file of its own in the same folder is a different enough thing to be
+    # worth trying before giving up and staying silent.
+    for path in (_LOG, _LOG.with_name(f"boot-{os.getpid()}.log")):
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(line)
+                fh.flush()
+                os.fsync(fh.fileno())
+            return
+        except Exception:
+            continue
 
 
 def tail(lines: int = 12) -> str:

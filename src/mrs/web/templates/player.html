@@ -1574,6 +1574,13 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         <div class="srow"><span class="slabel">Start with Windows<em>When you sign in</em></span><div class="toggle" id="boot"></div></div>
         <div class="srow"><span class="slabel">Start before sign-in<em>Serves links from the moment the machine is on. Windows asks permission once. This computer's own speakers stay silent until you sign in — nothing running that early is given an audio device</em></span>
           <div class="toggle" id="bootearly"></div></div>
+        <!-- Whether it will actually come back, asked of Windows rather
+             than of our own checkbox. Those are different questions and
+             the gap between them is where this feature has lived. -->
+        <div class="srow" style="border:0;padding-top:2px">
+          <span class="slabel" style="flex:1"><span id="bootcheck"
+            class="hint">Checking what happens at boot…</span></span>
+          <button class="btn" id="bootrecheck">Re-check</button></div>
         <div class="srow"><span class="slabel">Only my devices<em>Rejects other machines on the network</em></span>
           <div class="toggle" id="lockips"></div></div>
 
@@ -3602,6 +3609,31 @@ $("normalize").onclick = () => {
   setPref("normalize", on ? 1 : 0, () => api("/api/audio?normalize=" + (on ? 1 : 0)));
 };
 
+async function checkBoot() {
+  const el = $("bootcheck");
+  if (!el) return;
+  el.textContent = "Checking what happens at boot…";
+  const b = await api("/api/boot/status");
+  if (!b || b.status !== "ok") { el.textContent = "Couldn't check."; return; }
+  const bits = [];
+  bits.push(b.at_signin ? "starts when you sign in"
+                        : "does NOT start when you sign in");
+  if (b.task) {
+    bits.push(b.task.enabled
+      ? "and before sign-in (task " + esc(b.task.state).toLowerCase() + ")"
+      : "before-sign-in task is DISABLED");
+    if (b.task.last_run) bits.push("last ran " + esc(b.task.last_run));
+  } else {
+    bits.push("nothing set to run before sign-in");
+  }
+  el.innerHTML = esc(bits.join(" · "))
+    + (b.warnings && b.warnings.length
+        ? '<br><b style="color:var(--bad,#e0645a)">' +
+          b.warnings.map(w => esc(w)).join("<br>") + "</b>"
+        : "");
+}
+$("bootrecheck").onclick = checkBoot;
+
 $("autovol").onclick = () => {
   const on = !$("autovol").classList.contains("on");
   $("autovol").classList.toggle("on", on);
@@ -4540,6 +4572,7 @@ async function loadSettings() {
   $("normalize").classList.toggle("on", !!s.normalize);
   $("announce").classList.toggle("on", s.announce !== false);
   $("autovol").classList.toggle("on", s.auto_volume !== false);
+  checkBoot();
   $("boot").classList.toggle("on", !!s.start_on_boot);
   $("bootearly").classList.toggle("on", !!s.start_before_signin);
   $("lockips").classList.toggle("on", !!s.lock_ips);

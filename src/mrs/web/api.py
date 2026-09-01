@@ -1964,11 +1964,21 @@ def _set_run_before_signin(enable: bool) -> tuple[bool, str]:
 $ErrorActionPreference = 'Stop'
 $a = New-ScheduledTaskAction -Execute '{exe}' -Argument '{args.strip()}'
 $t = New-ScheduledTaskTrigger -AtStartup
+# Half a minute of grace. The task fires the moment Windows will let it,
+# which is before the network has an address — and the app now retries on
+# its own, but not starting into a broken machine is cheaper than
+# recovering from one.
+$t.Delay = 'PT30S'
 $p = New-ScheduledTaskPrincipal -UserId '{user}' -LogonType S4U -RunLevel Limited
 $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries -StartWhenAvailable `
+        -DontStopOnIdleEnd `
         -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 `
         -RestartInterval (New-TimeSpan -Minutes 1)
+# A server is meant to still be running tomorrow. Left at the default the
+# task is killed after three days, which is the sort of thing you discover
+# by finding the music off on a Thursday.
+$s.MultipleInstances = 2          # IgnoreNew: never two of these at once
 Register-ScheduledTask -TaskName '{TASK_NAME}' -Action $a -Trigger $t `
         -Principal $p -Settings $s -Force | Out-Null
 """
@@ -1986,6 +1996,101 @@ Register-ScheduledTask -TaskName '{TASK_NAME}' -Action $a -Trigger $t `
                     "install" if enable else "remove")
     return ok, "" if ok else (
         "Windows refused, or the permission prompt was declined")
+
+
+def boot_state() -> dict:
+    """Everything about whether this will actually come back after a reboot.
+
+    Written because "is the checkbox ticked" and "will it start" are not the
+    same question, and the gap between them is where this feature has lived.
+    A task can be registered and disabled, or registered against an exe that
+    has since moved, or have failed its last run — and the settings page
+    reported all three as a tick.
+    """
+    import os as _os
+    import sys as _sys
+    import winreg
+
+    exe = _headless_command().partition('" ')[0].strip('"')
+    # Comparing paths only means something in a build. Run from source the
+    # command is the interpreter, so every registration correctly points
+    # somewhere else and saying so is crying wolf.
+    packaged = bool(getattr(_sys, "frozen", False))
+    out = {"exe": exe, "exe_exists": _os.path.isfile(exe),
+           "packaged": packaged, "warnings": []}
+
+    # Sign-in: a plain Run entry.
+    want = _os.path.abspath(exe).lower()
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Run") as k:
+            value, _ = winreg.QueryValueEx(k, "MusicRequestServer")
+        out["at_signin"] = True
+        out["signin_command"] = value
+        out["signin_matches"] = want in (value or "").lower()
+    except FileNotFoundError:
+        out["at_signin"] = False
+        out["signin_matches"] = False
+    except Exception as exc:
+        out["at_signin"] = None
+        out["signin_matches"] = None
+        out["warnings"].append(f"couldn't read the sign-in entry: {exc}")
+
+    # Before sign-in: the scheduled task, asked in detail.
+    ok, raw = _run_ps(
+        f"$t = Get-ScheduledTask -TaskName '{TASK_NAME}' -ErrorAction "
+        f"SilentlyContinue; if (-not $t) {{ 'none' }} else {{ "
+        f"$i = Get-ScheduledTaskInfo -TaskName '{TASK_NAME}'; "
+        f"@($t.State, $t.Settings.Enabled, $i.LastTaskResult, "
+        f"$i.LastRunTime, $t.Actions[0].Execute) -join '|' }}")
+    out["task"] = None
+    if ok and raw.strip() and raw.strip() != "none":
+        bits = (raw.strip().split("|") + [""] * 5)[:5]
+        try:
+            result = int(bits[2] or 0)
+        except ValueError:
+            result = 0
+        out["task"] = {
+            "state": bits[0], "enabled": bits[1].strip().lower() == "true",
+            "last_result": result, "last_result_hex": f"0x{result & 0xFFFFFFFF:X}",
+            "last_run": bits[3], "exe": bits[4],
+            "exe_matches": want in (bits[4] or "").lower(),
+        }
+        t = out["task"]
+        if not t["enabled"] or t["state"] == "Disabled":
+            out["warnings"].append("the before-sign-in task is registered but "
+                                   "disabled")
+        if packaged and not t["exe_matches"]:
+            out["warnings"].append("the task points at a different copy of "
+                                   f"the program: {t['exe']}")
+        if not _os.path.isfile(t["exe"] or ""):
+            out["warnings"].append("the task points at a program that isn't "
+                                   f"there any more: {t['exe']}")
+        # 0x41306 is "terminated", which is what a clean handover used to
+        # look like. Worth naming rather than showing as a raw number.
+        if result not in (0, 267009, 267014):
+            out["warnings"].append(
+                f"its last run ended with {t['last_result_hex']}")
+    elif config.get("start_before_signin"):
+        out["warnings"].append("start-before-sign-in is switched on here but "
+                               "Windows has no such task")
+
+    if config.get("start_on_boot") and out.get("at_signin") is False:
+        out["warnings"].append("start-at-sign-in is switched on here but "
+                               "there's no entry for it in Windows")
+    if packaged and out["at_signin"] and not out.get("signin_matches", True):
+        out["warnings"].append("the sign-in entry points at a different copy: "
+                               + str(out.get("signin_command"))[:120])
+    if not out["exe_exists"]:
+        out["warnings"].append(f"the program isn't where boot expects it: {exe}")
+    out["ok"] = not out["warnings"]
+    return out
+
+
+@app.get("/api/boot/status")
+def api_boot_status(_: bool = Owner):
+    """Whether this will really come back after a restart."""
+    return {"status": "ok", **boot_state()}
 
 
 def _before_signin_installed() -> bool:

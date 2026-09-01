@@ -756,6 +756,44 @@ def _headless_marker():
     return data_dir() / "headless.pid"
 
 
+def _port_busy(port: int) -> bool:
+    """Is anything at all holding this port?
+
+    Asked by trying to bind it, not by asking it a question. A server part
+    way through starting answers a connection and closes it, which is
+    indistinguishable from an empty port to anything that expects a reply —
+    and getting that wrong means starting a second copy on a different port.
+    """
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        # No SO_REUSEADDR: the question is "could the server have this",
+        # and the server does not set it either.
+        try:
+            sock.bind(("0.0.0.0", int(port)))
+            return False
+        except OSError:
+            return True
+
+
+def _standdown_flag():
+    """The file that asks a headless copy to bow out.
+
+    Watched rather than signalled: the two copies are in different Windows
+    sessions, and a limited scheduled task cannot create the Global event
+    that would cross one. A file in a folder both can already write is the
+    thing that works everywhere without asking for a privilege.
+    """
+    from mrs.paths import data_dir
+    return data_dir() / "standdown"
+
+
+def _clear_standdown() -> None:
+    try:
+        _standdown_flag().unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def _stand_down_headless() -> bool:
     """Stop a copy that's been serving since before anyone signed in.
 
@@ -773,6 +811,59 @@ def _stand_down_headless() -> bool:
         return False
     if pid == os.getpid():
         return False
+
+    port = config.get("port", 5000)
+
+    # Ask first. Killing it works and costs something: Windows records the
+    # task as terminated (0x41306), and a task with RestartCount set treats
+    # that as a failure and starts it again a minute later — so the copy we
+    # just got rid of comes back, finds the port taken, exits, and is
+    # counted as having failed again. A file it watches for lets it shut
+    # down and exit cleanly, which Windows records as a task that finished.
+    #
+    # A file rather than an event because the two live in different
+    # sessions and a limited task cannot create a Global\ object.
+    try:
+        _standdown_flag().write_text(str(os.getpid()), encoding="utf-8")
+        mark(f"asked the headless copy (pid {pid}) to stand down")
+    except Exception as exc:
+        log.debug("couldn't write the stand-down flag: %s", exc)
+
+    for _ in range(60):                       # fifteen seconds of asking
+        if not _port_busy(port):
+            mark("the headless copy stood down on its own")
+            _clear_standdown()
+            try:
+                marker.unlink()
+            except Exception:
+                pass
+            return True
+        time.sleep(0.25)
+
+    # It didn't go. Take the port anyway — an unattended machine that never
+    # gets its speakers back is worse than a task marked as terminated.
+    mark(f"headless copy didn't stand down; stopping it (pid {pid})")
+    _clear_standdown()
+    # End the task properly first. Killing its process leaves Windows
+    # thinking the task failed, and a task with RestartCount set answers a
+    # failure by starting it again a minute later — so the copy just got
+    # rid of comes back and takes the port a second time.
+    try:
+        subprocess.run(["schtasks", "/End", "/TN",
+                        "MusicRequestServer-BeforeSignIn"],
+                       capture_output=True, timeout=20,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        for _ in range(20):
+            if not _port_busy(port):
+                mark("the task ended and let the port go")
+                try:
+                    marker.unlink()
+                except Exception:
+                    pass
+                return True
+            time.sleep(0.25)
+    except Exception as exc:
+        log.debug("couldn't end the task: %s", exc)
     try:
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
                        capture_output=True, timeout=20,
@@ -788,13 +879,48 @@ def _stand_down_headless() -> bool:
     # mutex. Probing with _singleton() *takes* the mutex, so the caller's
     # next check found the handle this process had just made for itself and
     # concluded somebody else had it.
-    port = config.get("port", 5000)
-    for _ in range(60):
-        if not srv._is_ours(port):
+    for _ in range(80):
+        if not _port_busy(port):
             break
         time.sleep(0.25)
     mark(f"took over from the headless copy (pid {pid})")
-    return True
+    return not _port_busy(port)
+
+
+def _serve_with_retry(tries: int = 6, gap: float = 20.0):
+    """Start the server, and keep trying if the machine wasn't ready.
+
+    Boot is the hostile case. The task fires the moment Windows will let it,
+    which is before the network stack has an address, before DNS answers and
+    before half the services this talks to exist. A single attempt that
+    lands in that window fails for a reason that has stopped being true
+    thirty seconds later — and the old behaviour was to put an error on
+    screen and stay broken until somebody noticed.
+
+    Returns (thread, port, ready).
+    """
+    port = config.get("port", 5000)
+    thread = None
+    for attempt in range(1, tries + 1):
+        if thread is None or not thread.is_alive():
+            srv.runtime.pop("error", None)
+            thread = srv.run_in_thread()
+        for _ in range(60):
+            if srv.runtime.get("port"):
+                port = srv.runtime["port"]
+                break
+            time.sleep(0.5)
+        if _wait_for_server(port):
+            if attempt > 1:
+                mark(f"came up on attempt {attempt}, port {port}")
+            return thread, port, True
+        why = srv.runtime.get("error") or "no reason recorded"
+        if attempt >= tries:
+            mark(f"gave up after {attempt} attempts: {why}")
+            return thread, port, False
+        mark(f"attempt {attempt} didn't come up ({why}) — again in {gap:g}s")
+        time.sleep(gap)
+    return thread, port, False
 
 
 def _run_headless() -> None:
@@ -805,7 +931,12 @@ def _run_headless() -> None:
     computer's own speakers do not, because session 0 has no audio device to
     give mpv. Signing in starts the normal copy, which takes over.
     """
-    mark("headless: starting")
+    mark(f"headless: starting, exe={sys.executable}")
+    try:
+        from mrs.paths import data_dir
+        mark(f"headless: data dir {data_dir()}")
+    except Exception as exc:
+        mark(f"headless: no data dir — {exc}")
     if _singleton() is None:
         mark("headless: something else already holds the mutex — stopping")
         sys.exit(0)
@@ -813,14 +944,8 @@ def _run_headless() -> None:
         _headless_marker().write_text(str(os.getpid()), encoding="utf-8")
     except Exception as exc:
         log.warning("couldn't write the headless marker: %s", exc)
-    thread = srv.run_in_thread()
-    port = config.get("port", 5000)
-    for _ in range(60):
-        if srv.runtime.get("port"):
-            port = srv.runtime["port"]
-            break
-        time.sleep(0.5)
-    if _wait_for_server(port):
+    thread, port, ready = _serve_with_retry()
+    if ready:
         mark(f"headless: serving on {port}")
         log.info("running headless on port %s — no desktop, so no tray and "
                  "no sound out of this computer; links play on their own "
@@ -829,14 +954,29 @@ def _run_headless() -> None:
         mark("headless: the server never came up")
         log.error("headless: server did not come up — %s",
                   srv.runtime.get("error") or "no reason recorded")
+    # Somebody signing in means a copy that can reach the speakers is
+    # starting. Going quietly, and exiting zero, is what stops Windows
+    # counting the handover as the task failing and starting it again.
+    _clear_standdown()
     try:
         while thread.is_alive():
-            thread.join(timeout=3600)
+            if _standdown_flag().exists():
+                mark("headless: asked to stand down — shutting down cleanly")
+                break
+            thread.join(timeout=1.0)
     finally:
         try:
             _headless_marker().unlink()
         except Exception:
             pass
+        _clear_standdown()
+        try:
+            from mrs.player import player as _p
+            _p.stop()          # let go of mpv and the pipes before exiting
+        except Exception:
+            pass
+    mark("headless: stopped")
+    sys.exit(0)
 
 
 def _singleton():
@@ -935,27 +1075,51 @@ def main() -> None:
         return
 
     mark("starting")
+    # The port, before the mutex, because the mutex cannot see across a
+    # session boundary and this is exactly where one is.
+    #
+    # Windows puts an unprefixed kernel object name in the caller's own
+    # session namespace. The before-sign-in task runs in session 0 and the
+    # desktop copy in session 1, so each was creating a *different* mutex of
+    # the same name, each was satisfied it was the only one, and the copy
+    # that had been serving since boot went on holding the port. The desktop
+    # copy then moved to a free one — which is every link anybody has been
+    # given pointing at the wrong number. A Global\ name would collide
+    # properly and a limited task may not create one, so the thing that
+    # actually answers across sessions is the port itself.
+    port = config.get("port", 5000)
+    if _port_busy(port):
+        # Busy, not necessarily answering. _is_ours asks the port a question
+        # and a copy still starting up accepts the connection and closes it
+        # without replying — which reads exactly like "nobody there", so the
+        # desktop copy concluded the port was free, failed to bind it, and
+        # quietly moved to the next one. Every link anybody has been given
+        # carries the port in it, so that is all of them broken at once.
+        #
+        # Anything holding this port is treated as a copy to be relieved. It
+        # is our port; nothing else on this machine should have it.
+        mark(f"port {port} is taken — trying to get it back")
+        if _stand_down_headless():
+            mark(f"got {port} back")
+        elif _port_busy(port):
+            mark(f"couldn't free {port} — leaving it to whatever has it")
+            sys.exit(0)
+
     # Taken exactly once. Every call to _singleton() that succeeds creates a
     # handle, so asking twice means the second answer is about the first ask.
     holder = _singleton()
     if holder is None:
-        # Probably the copy that has been serving since before sign-in. That
-        # one can't reach the speakers, and this one can, so it stands aside.
+        # Same session as another copy — the mutex does catch that one.
         if _stand_down_headless():
             holder = _singleton()
     if holder is None:
         mark("another copy already has the mutex — leaving it to that one")
         sys.exit(0)
 
-    thread = srv.run_in_thread()
-    # The server may move to a free port if something else holds the configured
-    # one, so ask it where it actually landed.
-    port = config.get("port", 5000)
-    for _ in range(60):
-        if srv.runtime.get("port"):
-            port = srv.runtime["port"]
-            break
-        time.sleep(0.5)
+    # The same patient startup the headless copy uses. Signing in straight
+    # after a cold boot lands in the same unready machine, so this is not a
+    # boot-only problem.
+    thread, port, ready = _serve_with_retry()
     mark(f"server thread is on port {port}")
     # Slow is not the same as broken. Startup talks to four services and
     # launches two mpv processes, and on a cold machine — or straight after a
@@ -963,13 +1127,14 @@ def main() -> None:
     # longer than a minute. Giving up on it and putting an error on screen,
     # while the thing was still coming up behind the dialog, is most of what
     # "it wouldn't start" has been.
-    ready = _wait_for_server(port)
     rounds = 0
     while (not ready and rounds < 4 and thread.is_alive()
            and not srv.runtime.get("error")):
         rounds += 1
         mark(f"still starting after {rounds}m — the thread is alive, waiting")
         ready = _wait_for_server(port)
+    if ready:
+        mark(f"ready on port {port}")
     if not ready:
         mark("gave up waiting")
         # Opening a window onto a server that isn't there is how this used to

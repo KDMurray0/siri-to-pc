@@ -1288,6 +1288,44 @@ def run(verbose: bool = False) -> Result:
               r and not r["expires"] and r["hours_left"] is None, str(r))
             say("a lapsed link", c)
 
+            # -- 9q. will it come back after a restart --------------------
+            # "The checkbox is ticked" and "it will start" are different
+            # questions, and the gap between them is where this feature has
+            # lived: a task can be registered and disabled, or point at an
+            # exe that has since moved, and the page called all of it a tick.
+            c = _Checker("boot")
+            from .web.api import boot_state
+
+            st = boot_state()
+            for key in ("exe", "exe_exists", "packaged", "warnings", "ok",
+                        "at_signin"):
+                c(f"the report says something about {key}", key in st,
+                  str(sorted(st))[:90])
+            c("warnings is a list", isinstance(st["warnings"], list))
+            c("ok agrees with the warnings",
+              st["ok"] == (not st["warnings"]))
+            c("the task block is a dict or plainly absent",
+              st["task"] is None or isinstance(st["task"], dict))
+            if st["task"]:
+                for key in ("state", "enabled", "last_result",
+                            "last_result_hex", "exe", "exe_matches"):
+                    c(f"the task block has {key}", key in st["task"])
+                c("a clean handover isn't reported as a failure",
+                  not [w for w in st["warnings"] if "0x41306" in w],
+                  str(st["warnings"]))
+            # Run from source every registration correctly points elsewhere,
+            # so path complaints have to be a build-only thing or the report
+            # is noise every time a developer looks at it.
+            if not st["packaged"]:
+                c("a source run doesn't complain about paths",
+                  not [w for w in st["warnings"] if "different copy" in w],
+                  str(st["warnings"]))
+            c("owner only",
+              get("/api/boot/status", phone, here).status_code in (401, 403))
+            c("...and the owner can read it",
+              get("/api/boot/status").json().get("status") == "ok")
+            say("what happens at boot", c)
+
             # -- 10. usage is recorded against the link --------------------
             c = _Checker("stats")
             rows = get("/api/passes").json().get("passes", [])
