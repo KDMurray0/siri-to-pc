@@ -15,7 +15,8 @@ from .events import Ev, bus
 from .logging_setup import get, spawn
 from .models import Track, _fold
 from .player import player
-from .resolve import applemusic, grammar, numbers, parser, resolver, spotify
+from .resolve import (applemusic, grammar, numbers, parser, resolver, spotify,
+                      youtube)
 from .resolve.conjunction import looks_like_genre
 
 log = get("request")
@@ -116,6 +117,16 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
         if applemusic.is_apple_url(text):
             return _import_apple(text, announce=announce, queue=queue,
                                  room=room, lists=lists)
+
+        # A YouTube link is not a search term. The id is right there, so
+        # play that video rather than asking YouTube what the text of its
+        # own url reminds it of.
+        link = youtube.find_url(text)
+        if link:
+            got = _play_youtube(link, mode=mode, queue=queue, room=room,
+                                announce=announce, lists=lists)
+            if got is not None:
+                return got
 
         # "make me a 30 minute grunge playlist" — build one and file it.
         # Ahead of the playlist match below, which would otherwise read the
@@ -238,6 +249,99 @@ def _match_playlist(text: str) -> str | None:
 # is a fifteen minute playlist all by itself. Songs get longer than you'd
 # think — Shine On You Crazy Diamond is thirteen — so the line is generous.
 _LONGEST_SONG = 15 * 60
+
+
+def _play_youtube(link: str, *, mode: str, queue, room: str, announce: bool,
+                  lists) -> dict | None:
+    """Play exactly what the link points at. None if it points at nothing.
+
+    Returning None rather than an error matters: a link this can't make
+    sense of — a channel, a search results page, a url with the id mangled
+    by whatever pasted it — should fall through to the ordinary request
+    path and be searched for, which is what used to happen to all of them.
+    """
+    vid = youtube.video_id(link)
+    if not vid:
+        listid = youtube.playlist_id(link)
+        if listid:
+            # A whole playlist is a different job — matching, downloading,
+            # somewhere to file it — and it is the one the import path
+            # already does. Say so rather than half-doing it.
+            msg = ("That's a YouTube playlist. Paste a link to one of its "
+                   "videos, or a Spotify or Apple Music playlist link")
+            say_to(room, msg)
+            return {"status": "error", "message": msg, "via": "link"}
+        return None
+
+    queue._set_activity("finding", "that link")
+    track = youtube.track_for(vid)
+    if not track:
+        return None
+    at = youtube.start_at(link)
+    log.info("link -> %s by %s (%s)%s", track.title, track.artist, vid,
+             f" from {at}s" if at else "")
+
+    if mode == "next":
+        queue.play_next(track)
+        msg = f"Playing {track.title} next"
+    elif mode == "queue":
+        queue.enqueue([track])
+        msg = f"Added {track.title}"
+    else:
+        # kind="song" so the radio afterwards wanders the way it does for
+        # any single track, rather than treating one link as a whole
+        # artist request.
+        queue.play_now([track], kind="song", anchors=[track])
+        msg = f"Playing {track.title}" + (f" by {track.artist}"
+                                          if track.artist else "")
+        if announce:
+            player.announce(msg, room)
+        if at:
+            # A shared link often points at a moment rather than a song.
+            # The file has to exist before anything can seek into it, so
+            # this waits for it to start rather than seeking into silence.
+            spawn(lambda: _seek_when_playing(queue, track, at),
+                  name="link seek")
+    return {"status": "played", "message": msg, "via": "link",
+            "video_id": vid, "start": at}
+
+
+def _seek_when_playing(queue, track: Track, seconds: int) -> None:
+    """Jump to the timestamp on the link, once there's something to jump in.
+
+    The wait is the point. play_now only queues the work — finding the
+    file, fetching it, handing it to mpv — and seeking into a track that
+    hasn't started yet goes nowhere at all, silently.
+    """
+    for _ in range(120):               # a minute of patience, then give up
+        time.sleep(0.5)
+        now = queue.current_track()
+        if not now or now.video_id != track.video_id:
+            continue
+        try:
+            if queue is player.queue:
+                # The same call the progress bar makes. wait=False matters:
+                # asking mpv for a reply here blocks this thread against a
+                # player that is busy starting a file, which is precisely
+                # when this runs.
+                player.seek(float(seconds))
+            else:
+                # A guest's own device does its own seeking, and the thing
+                # that knows where it is up to is the session rather than
+                # the queue — the queue is only the running order.
+                from .core.session import sessions
+                room = sessions.find(getattr(queue, "session_id", ""))
+                if not room:
+                    return
+                room.mark_position(float(seconds))
+            log.info("started %s at %ds, as the link asked", track.title,
+                     seconds)
+        except Exception as exc:
+            log.warning("couldn't start %s at %ds: %s", track.title, seconds,
+                        exc)
+        return
+    log.info("%s never started, so the link's timestamp went unused",
+             track.title)
 
 
 def _nice_name(subject: str, tracks: list[Track], seeds: list[str]) -> str:

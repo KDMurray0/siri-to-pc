@@ -1139,6 +1139,65 @@ def run(verbose: bool = False) -> Result:
 
             say("a paused station", c)
 
+            # -- 9o. a YouTube link means that video ----------------------
+            # Pasting a link and getting a search for the text of the link
+            # is the kind of wrong that makes a program feel like it isn't
+            # listening. The id is right there.
+            c = _Checker("youtube links")
+            from .resolve import youtube as _yt
+
+            ID = "dQw4w9WgXcQ"
+            for shape in (
+                f"https://www.youtube.com/watch?v={ID}",
+                f"https://youtu.be/{ID}",
+                f"https://m.youtube.com/watch?v={ID}&feature=share",
+                f"https://music.youtube.com/watch?v={ID}&list=RDAMVM{ID}",
+                f"https://www.youtube.com/shorts/{ID}",
+                f"https://www.youtube.com/embed/{ID}",
+                f"https://www.youtube-nocookie.com/embed/{ID}",
+                f"http://youtube.com/watch?v={ID}",
+            ):
+                c(f"{shape[:46]}", _yt.video_id(shape) == ID,
+                  repr(_yt.video_id(shape)))
+            # A link with words round it, because that is how people paste.
+            c("a link inside a sentence is found",
+              _yt.video_id(_yt.find_url(f"play this https://youtu.be/{ID} pls"))
+              == ID)
+            c("...and trailing punctuation isn't part of it",
+              _yt.video_id(_yt.find_url(f"try https://youtu.be/{ID}.")) == ID)
+            # Things that are not a video, and must fall through to a search
+            # rather than being refused.
+            for nope in ("bohemian rhapsody",
+                         "https://open.spotify.com/track/xyz",
+                         "https://www.youtube.com/@someuser",
+                         "https://www.youtube.com/results?search_query=abba",
+                         "https://example.com/watch?v=" + ID):
+                c(f"{nope[:40]!r} is not a video", not _yt.video_id(nope),
+                  repr(_yt.video_id(nope)))
+            c("a channel url isn't treated as a link at all",
+              not _yt.find_url("https://example.com/watch?v=" + ID))
+            # A watch url that happens to sit in a playlist is the video.
+            c("a video in a playlist is the video",
+              _yt.video_id(f"https://youtube.com/watch?v={ID}&list=PL123456789012")
+              == ID)
+            c("...and reports no playlist",
+              not _yt.playlist_id(f"https://youtube.com/watch?v={ID}&list=PL123456789012"))
+            c("a real playlist url does",
+              _yt.playlist_id("https://youtube.com/playlist?list=PL123456789012")
+              == "PL123456789012")
+            # Timestamps, in all the forms a share sheet writes them.
+            for link, want in ((f"https://youtu.be/{ID}?t=43", 43),
+                               (f"https://youtu.be/{ID}?t=1m30s", 90),
+                               (f"https://www.youtube.com/watch?v={ID}&t=2h1m5s",
+                                7265),
+                               (f"https://youtu.be/{ID}", 0)):
+                c(f"t={link.split('t=')[-1] if 't=' in link else 'none'}",
+                  _yt.start_at(link) == want, str(_yt.start_at(link)))
+            c("a malformed url doesn't raise", _yt.video_id("http://[::1") == "")
+            c("nor does an empty one",
+              _yt.video_id("") == "" and _yt.find_url("") == "")
+            say("a YouTube link", c)
+
             # -- 10. usage is recorded against the link --------------------
             c = _Checker("stats")
             rows = get("/api/passes").json().get("passes", [])
