@@ -1917,23 +1917,54 @@ def _run_ps_elevated(script: str) -> tuple[bool, str]:
     denied" however ordinary the program asking. So this raises the prompt
     once, and the answer is read back from Windows afterwards rather than
     from an exit code the elevated process can't easily hand back.
-    """
-    import base64
-    import subprocess
 
-    blob = base64.b64encode(script.encode("utf-16-le")).decode()
-    outer = ("Start-Process powershell -Verb RunAs -WindowStyle Hidden -Wait "
-             "-ArgumentList '-NoProfile','-ExecutionPolicy','Bypass',"
-             f"'-EncodedCommand','{blob}'")
+    A script file, run in a window you can see. It used to be base64 in
+    -EncodedCommand with -WindowStyle Hidden, which is a reasonable way to
+    survive quoting and an unreasonable thing to do on somebody's computer:
+    Windows Defender scores exactly that shape as Trojan:Win32/Commando.A
+    and kills it. Which means the one moment this program asks for
+    administrator — registering the task that starts it before sign-in —
+    was being blocked by the antivirus, silently, leaving a task that was
+    half registered or not registered at all. "I don't trust the on-boot to
+    work" was a correct read of it.
+
+    So: a plain .ps1 in the temp directory, and a visible window. Nothing
+    encoded, nothing hidden, and the file is there to be read afterwards if
+    anyone wants to know what was run as administrator.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    folder = Path(tempfile.mkdtemp(prefix="mrs-setup-"))
+    path = folder / "register-boot-task.ps1"
+    try:
+        path.write_text(script, encoding="utf-8")
+    except Exception as exc:
+        return False, str(exc)
     try:
         got = subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-             "-Command", outer],
+             "-Command",
+             "Start-Process powershell -Verb RunAs -Wait -ArgumentList "
+             "'-NoProfile','-ExecutionPolicy','Bypass','-File',"
+             f"'{path}'"],
             capture_output=True, text=True, timeout=300,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except Exception as exc:
         return False, str(exc)
+    finally:
+        # Left behind on failure, on purpose: if the task didn't register,
+        # the script that tried is the most useful thing to be able to look at.
+        try:
+            if got.returncode == 0:
+                path.unlink(missing_ok=True)
+                folder.rmdir()
+        except Exception:
+            pass
     out = (got.stderr or "").strip() or (got.stdout or "").strip()
+    if got.returncode != 0:
+        log.warning("elevated setup failed (script kept at %s): %s", path, out)
     return got.returncode == 0, out
 
 

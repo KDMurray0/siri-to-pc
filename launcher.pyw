@@ -951,19 +951,49 @@ def _run_headless() -> None:
                  "no sound out of this computer; links play on their own "
                  "devices as usual", port)
     else:
-        mark("headless: the server never came up")
-        log.error("headless: server did not come up — %s",
+        # Never squat. A copy that holds the port and answers nothing is
+        # worse than no copy at all: the desktop copy cannot bind, the
+        # links all point at a socket that accepts and closes, and from
+        # outside it is indistinguishable from the machine being broken.
+        # This is the state that produced "post json doesn't work", "it
+        # randomly crashed" and "boot doesn't work" — one wedged process,
+        # three symptoms.
+        mark("headless: the server never came up — letting go rather than "
+             "sitting on the port")
+        log.error("headless: server did not come up (%s) — exiting so the "
+                  "port is free for a copy that can serve",
                   srv.runtime.get("error") or "no reason recorded")
+        try:
+            _headless_marker().unlink(missing_ok=True)
+        except Exception:
+            pass
+        try:
+            from mrs.player import player as _p
+            _p.stop()
+        except Exception:
+            pass
+        sys.exit(1)
     # Somebody signing in means a copy that can reach the speakers is
     # starting. Going quietly, and exiting zero, is what stops Windows
     # counting the handover as the task failing and starting it again.
     _clear_standdown()
+    # And keep proving it. A server that stops answering while still
+    # holding the socket is the same wedge arriving later — the process is
+    # alive, the port is bound, and nothing is served. Checked against our
+    # own ping, which is the same question anyone else would ask.
+    missed = 0
     try:
         while thread.is_alive():
             if _standdown_flag().exists():
                 mark("headless: asked to stand down — shutting down cleanly")
                 break
-            thread.join(timeout=1.0)
+            missed = 0 if srv._is_ours(port) else missed + 1
+            if missed >= 5:
+                mark("headless: stopped answering for a minute — letting go")
+                log.error("headless: holding the port and serving nothing; "
+                          "exiting so something else can")
+                break
+            thread.join(timeout=12.0)
     finally:
         try:
             _headless_marker().unlink()
