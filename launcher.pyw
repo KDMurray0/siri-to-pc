@@ -17,6 +17,35 @@ if not FROZEN:
     sys.path.insert(0, os.path.join(_HERE, "src"))
 
 
+def _trace(note: str) -> None:
+    """A line in the log using nothing but the standard library.
+
+    mark() lives in mrs.logging_setup, which is imported after webview, PIL
+    and pystray — so a copy that dies or hangs while loading those writes
+    nothing at all, anywhere. That is precisely the copy that starts at
+    sign-in and never serves, and it is why four attempts to diagnose it
+    found an empty log and a bound port.
+
+    This runs before any of that. It computes the path by hand, uses no
+    logging machinery, and cannot fail in a way that matters.
+    """
+    try:
+        import time as _t
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        folder = os.path.join(base, "MusicRequestServer")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "server.log"), "a",
+                  encoding="utf-8") as fh:
+            fh.write(f"{_t.strftime('%H:%M:%S')} ----    trace"
+                     f"          {note} (pid {os.getpid()})\n")
+            fh.flush()
+    except Exception:
+        pass
+
+
+_trace(f"process start, argv={sys.argv[1:]}, frozen={FROZEN}")
+
+
 def _reexec_if_needed() -> bool:
     """Relaunch under the interpreter that actually has pywebview."""
     if FROZEN:
@@ -56,14 +85,19 @@ from ctypes import wintypes
 from urllib import request as urlrequest
 from urllib.parse import urlparse
 
+_trace("importing webview")
 import webview
+_trace("importing pillow")
 from PIL import Image, ImageDraw
+_trace("importing pystray")
 from pystray import Icon as TrayIcon
 from pystray import Menu, MenuItem
 
+_trace("importing mrs")
 from mrs.config import config
 from mrs.logging_setup import get, log_path, mark, tail
 from mrs import server as srv
+_trace("imports done")
 
 log = get("launcher")
 
@@ -887,6 +921,39 @@ def _stand_down_headless() -> bool:
     return not _port_busy(port)
 
 
+def _watch_serving(port: int) -> None:
+    """Never hold the port while serving nothing.
+
+    This is the state behind every report of the program being broken: a
+    process alive, the socket bound, and every request accepted and closed
+    without an answer. From outside it is indistinguishable from the machine
+    being off, and because the port is taken, the next copy to start cannot
+    fix it either.
+
+    So the copy that holds the port keeps asking itself the same question
+    anyone else would. Three minutes of no answer and it gets out of the
+    way — dying is recoverable, because start-at-sign-in and the tray both
+    bring it back, and squatting is not.
+    """
+    missed = 0
+    while True:
+        time.sleep(30)
+        if srv._is_ours(port):
+            missed = 0
+            continue
+        missed += 1
+        _trace(f"not answering on {port} ({missed}/6)")
+        if missed >= 6:
+            mark(f"holding {port} and serving nothing — standing down")
+            _trace("exiting so something that works can have the port")
+            try:
+                from mrs.player import player as _p
+                _p.stop()
+            except Exception:
+                pass
+            os._exit(1)
+
+
 def _serve_with_retry(tries: int = 6, gap: float = 20.0):
     """Start the server, and keep trying if the machine wasn't ready.
 
@@ -1105,6 +1172,7 @@ def main() -> None:
         return
 
     mark("starting")
+    _trace("main() reached")
     # The port, before the mutex, because the mutex cannot see across a
     # session boundary and this is exactly where one is.
     #
@@ -1165,6 +1233,9 @@ def main() -> None:
         ready = _wait_for_server(port)
     if ready:
         mark(f"ready on port {port}")
+        _trace(f"serving on {port}")
+        threading.Thread(target=_watch_serving, args=(port,), daemon=True,
+                         name="serving-watch").start()
     if not ready:
         mark("gave up waiting")
         # Opening a window onto a server that isn't there is how this used to

@@ -4170,8 +4170,44 @@ castEls.forEach(el => el.addEventListener("durationchange", () => {
 /* The phone finishing a track is what moves a session on — the server holds
    the queue and the index, never the position. Survives the phone sleeping,
    which a server-side timer would not. */
+/* Hand over to the already-loaded next track, right now, without asking
+   anybody. Returns whether it managed to.
+
+   This is the whole point of keeping two elements, and it used to be
+   undone by the order it happened in: the old code awaited
+   /api/session/ended and only switched once the answer came back. A round
+   trip is not long, but it is a stretch with no audio playing at all — and
+   a backgrounded tab that isn't playing audio is one the phone is entitled
+   to freeze. So the tab got suspended in the gap, the fetch never
+   finished, and the music stopped between tracks and never came back. It
+   looked like the server refusing to send the next song; it was the page
+   being asleep by the time the answer arrived.
+
+   Starting inside the `ended` handler is also what keeps iOS's permission:
+   the audio session is still live at that moment, so play() is allowed
+   without a fresh gesture. A moment later it isn't. */
+function castHandover() {
+  const next = cast.ready;
+  if (!next || !castIdle().src) return false;
+  const from = castLive();
+  castIx = 1 - castIx;
+  // Claimed before the server has said so, so the reconciliation that
+  // follows sees the track it expects and doesn't reload it underneath us.
+  cast.vid = next;
+  cast.ready = "";
+  const el = castLive();
+  try { el.currentTime = 0; } catch (e) {}
+  castPlay(el);
+  try { from.pause(); } catch (e) {}
+  return true;
+}
+
 castEls.forEach(el => el.addEventListener("ended", async () => {
   if (!cast.on || el !== castLive() || ME.owner) return;
+  // Audio first, paperwork second. If the guess turns out wrong — the queue
+  // was reordered, something was played next — castSync below corrects it,
+  // and correcting a track that is playing is cheap. Silence is not.
+  castHandover();
   const r = await api("/api/session/ended");
   if (r) { lastStatus = r; castSync(r); }
 }));
