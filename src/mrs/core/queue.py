@@ -9,6 +9,7 @@ download costs a candidate instead of killing the whole refill.
 from __future__ import annotations
 
 import random
+import json
 import threading
 import time
 from collections import deque
@@ -46,11 +47,63 @@ _KNOWN: dict[str, Track] = {}
 _KNOWN_ID: dict[str, Track] = {}
 _KNOWN_LOCK = threading.Lock()
 _KNOWN_MAX = 4000
+_LOADED = False
+_SAVE_DUE = 0.0
+# Ids already looked up, so an unknown file is asked about once
+# rather than on every queue publish — snapshot() calls recall()
+# for every row, several times a minute.
+_ASKED: set = set()
+
+
+def _known_file():
+    from ..paths import data_dir
+    return data_dir() / "known.json"
+
+
+def _load_known() -> None:
+    """Bring back what we knew about the files still on disk.
+
+    Both registries used to be memory only, so everything the program knew
+    about a downloaded file — its name, who it was by, its artwork — died
+    with the process. The file survived; the knowledge didn't. Play a
+    cached song after a restart and it came back with no cover, because the
+    only thing left was a filename that is a video id.
+    """
+    global _LOADED
+    if _LOADED:
+        return
+    _LOADED = True
+    try:
+        rows = json.loads(_known_file().read_text(encoding="utf-8-sig"))
+    except Exception:
+        return
+    with _KNOWN_LOCK:
+        for vid, row in list(rows.items())[-_KNOWN_MAX:]:
+            try:
+                _KNOWN_ID[vid] = Track.from_dict(row)
+            except Exception:
+                continue
+    log.info("remembered %d cached tracks from last time", len(_KNOWN_ID))
+
+
+def _save_known() -> None:
+    global _SAVE_DUE
+    if time.time() < _SAVE_DUE:
+        return
+    _SAVE_DUE = time.time() + 20        # a burst of downloads is one write
+    try:
+        from ..paths import write_atomic
+        with _KNOWN_LOCK:
+            rows = {v: t.to_dict() for v, t in list(_KNOWN_ID.items())[-_KNOWN_MAX:]}
+        write_atomic(_known_file(), json.dumps(rows, indent=0))
+    except Exception as exc:
+        log.debug("couldn't save what we know: %s", exc)
 
 
 def remember(path: str, track: Track) -> None:
     if not path or not track:
         return
+    _load_known()
     with _KNOWN_LOCK:
         _KNOWN[path] = track
         if track.video_id:
@@ -61,10 +114,12 @@ def remember(path: str, track: Track) -> None:
         if len(_KNOWN_ID) > _KNOWN_MAX:
             for old in list(_KNOWN_ID)[:len(_KNOWN_ID) - _KNOWN_MAX]:
                 _KNOWN_ID.pop(old, None)
+    _save_known()
 
 
 def recall(path: str) -> Track | None:
     """Whatever we know about this file, by path and then by id."""
+    _load_known()
     with _KNOWN_LOCK:
         got = _KNOWN.get(path)
         if got:
@@ -73,7 +128,32 @@ def recall(path: str) -> Track | None:
     if not vid:
         return None
     with _KNOWN_LOCK:
-        return _KNOWN_ID.get(vid)
+        got = _KNOWN_ID.get(vid)
+    if got:
+        return got
+    # A file we have never been introduced to — cached by a version that
+    # didn't write any of this down, or copied in. The id is in its name,
+    # so it can be looked up once and then remembered like anything else.
+    with _KNOWN_LOCK:
+        if vid in _ASKED:
+            return None
+        _ASKED.add(vid)
+    spawn(lambda: _learn(path, vid), name="learn cached")
+    return None
+
+
+def _learn(path: str, vid: str) -> None:
+    try:
+        from ..resolve.youtube import track_for
+        got = track_for(vid)
+    except Exception as exc:
+        log.debug("couldn't look up %s: %s", vid, exc)
+        return
+    if got and got.title and got.title != vid:
+        got.path = path
+        remember(path, got)
+        log.info("learned %s — %s for a file we already had", got.artist,
+                 got.title)
 
 
 def _vid_from(path: str) -> str:
