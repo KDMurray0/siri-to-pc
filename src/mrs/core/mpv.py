@@ -94,6 +94,15 @@ def is_pipe_dead(exc: Exception) -> bool:
     return isinstance(exc, OSError) and getattr(exc, "winerror", None) in _PIPE_DEAD
 
 
+# Clients whose reader thread would not stop when asked. Held here so that
+# neither they nor their buffers are ever collected: a pending overlapped
+# read means the kernel has pointers into them, and Python freeing memory
+# the kernel is still going to write to is not an error anyone gets to
+# catch. Nothing removes entries, deliberately — this only grows when an
+# mpv has already wedged, which is rare and worth the handful of bytes.
+_ABANDONED: list = []
+
+
 def _open_pipe(name: str):
     h = _K32.CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, None,
                          OPEN_EXISTING, FILE_FLAG_OVERLAPPED, None)
@@ -107,13 +116,35 @@ def _write(handle, payload: bytes) -> None:
     ov = _OVERLAPPED(); ov.hEvent = ev
     written = wintypes.DWORD(0)
     try:
-        ok = _K32.WriteFile(handle, payload, len(payload), ctypes.byref(written),
+        # NULL for the byte count. On an overlapped handle the kernel writes
+        # that number when the write *completes*, which can be long after this
+        # call returns — and everything here is a local. GetOverlappedResult
+        # reports it instead, at a moment we choose.
+        ok = _K32.WriteFile(handle, payload, len(payload), None,
                             ctypes.byref(ov))
         if not ok:
             err = ctypes.get_last_error()
             if err != ERROR_IO_PENDING:
                 raise OSError(err, "WriteFile failed")
             if _K32.WaitForSingleObject(ev, 4000) != 0:
+                # The dangerous moment, and the one this got wrong. Timing
+                # out does not cancel anything: the write is still pending,
+                # the kernel is still holding pointers to ov and to payload,
+                # and both are about to go out of scope — with the event
+                # closed on the way past by the finally below.
+                #
+                # A wedged mpv makes this happen on every status poll, once a
+                # second, for as long as it stays wedged. Each one hands the
+                # kernel another pointer into freed memory. What that looks
+                # like from outside is the program running perfectly for
+                # another hour and then vanishing mid-song with no traceback,
+                # because an access violation doesn't leave one.
+                #
+                # So cancel it, and *wait* for the cancellation to land,
+                # before anything here is allowed to die.
+                _K32.CancelIoEx(ctypes.c_void_p(handle), ctypes.byref(ov))
+                _K32.GetOverlappedResult(handle, ctypes.byref(ov),
+                                         ctypes.byref(written), True)
                 raise OSError(258, "WriteFile timed out")
             if not _K32.GetOverlappedResult(handle, ctypes.byref(ov),
                                             ctypes.byref(written), False):
@@ -274,8 +305,28 @@ class MpvClient:
             except Exception:
                 pass
         reader = self._reader
-        if reader and reader.is_alive() and reader is not threading.current_thread():
-            reader.join(timeout=2.0)
+        mine = reader is not threading.current_thread()
+        if reader and reader.is_alive() and mine:
+            reader.join(timeout=5.0)
+        if reader and reader.is_alive() and mine:
+            # It didn't stop, so a read is still outstanding and the kernel
+            # still holds pointers into this object's ov and chunk. Closing
+            # the handles now, or letting the object be collected — which is
+            # exactly what restart() does a line later, by rebinding
+            # self.mpv — hands those pointers at freed memory.
+            #
+            # A leaked handle and 64KB is not a problem. An access violation
+            # in the middle of somebody's evening is.
+            _ABANDONED.append((self, h, self._read_event))
+            log.warning("%s reader wouldn't stop — keeping its handles rather "
+                        "than closing them underneath it", self.pipe_name)
+            self._read_event = None
+            if self.proc:
+                try:
+                    self.proc.terminate()
+                except Exception:
+                    pass
+            return
         if h:
             try:
                 _K32.CloseHandle(ctypes.c_void_p(h))
@@ -337,9 +388,20 @@ class MpvClient:
                 ov.hEvent = self._read_event
                 _K32.ResetEvent(self._read_event)
                 read = wintypes.DWORD(0)
-                ok = _K32.ReadFile(handle, chunk, size, ctypes.byref(read),
+                # NULL again, for the reason _write gives at length: the old
+                # code pointed the kernel at a local DWORD that was rebound
+                # on the next go round, so a read still pending had somewhere
+                # freed to write its answer. ov and chunk were kept alive on
+                # purpose; this one was missed because it looks like an
+                # output parameter and is really a promise about lifetime.
+                ok = _K32.ReadFile(handle, chunk, size, None,
                                    ctypes.byref(ov))
-                if not ok:
+                if ok:
+                    # Finished immediately. The event is already signalled,
+                    # so let the collecting path below have it and keep one
+                    # way of reading the answer instead of two.
+                    pending = True
+                else:
                     err = ctypes.get_last_error()
                     if err == ERROR_IO_PENDING:
                         pending = True

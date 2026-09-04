@@ -76,6 +76,14 @@ class PlayerService:
         # How many times each file has taken the player down, and when it
         # last did. Two in quick succession is the file, not bad luck.
         self._crashes: dict[str, tuple[int, float]] = {}
+        # A player can be alive and not playing, and only the dying was
+        # being watched for. When each went wrong, by the clock — None for
+        # "not wrong". 0.0 is a real reading of a clock, so `x = x or now`
+        # would quietly never start counting at that one instant.
+        self._mute_since: float | None = None
+        self._frozen_since: float | None = None
+        self._last_pos = 0.0
+        self._monitor_errs = 0      # consecutive throws from the monitor loop
 
     # -- lifecycle -----------------------------------------------------
     def start(self) -> None:
@@ -196,6 +204,14 @@ class PlayerService:
                     self._recover()
                     continue
                 self._watch_track()
+                if self._mute_since:
+                    # mpv answered nothing that time. Everything below asks
+                    # it more questions, and each one waits out the full IPC
+                    # deadline to be told nothing again — which is why a mute
+                    # tick took the best part of a minute, and why a timeout
+                    # set at 45 seconds was noticing at a hundred. Go straight
+                    # back to sampling; there is nothing to report anyway.
+                    continue
                 self._persist_volume()
                 self._follow_the_clock()
                 # cheap when it's already there, and the audio capture keeps
@@ -207,7 +223,21 @@ class PlayerService:
                 bus.publish(Ev.STATUS, self.status())
                 self.queue.publish_queue()
             except Exception as exc:
-                log.debug("monitor: %s", exc)
+                # This ran at debug, which the app never enables, so a monitor
+                # throwing every second for an hour left no trace at all —
+                # and the monitor is the thing that advances the queue and
+                # notices the player has died. Say it once when it starts,
+                # then once a minute, so a persistent fault is visible without
+                # sixty lines a minute of the same sentence.
+                self._monitor_errs += 1
+                if self._monitor_errs % 60 == 1:
+                    log.warning("monitor: %s (%d in a row)", exc,
+                                self._monitor_errs)
+            else:
+                if self._monitor_errs:
+                    log.info("monitor recovered after %d errors",
+                             self._monitor_errs)
+                    self._monitor_errs = 0
 
     def _recover(self) -> None:
         """Bring mpv back, but slow down if it won't stay up.
@@ -319,8 +349,84 @@ class PlayerService:
                     pass
         threading.Thread(target=go, daemon=True, name="resume seek").start()
 
+    # A stall is not a crash, and only one of the two was being watched for.
+    #
+    # Seconds, not monitor ticks. The monitor's tick rate is not a constant:
+    # every unanswered property blocks for the four-second IPC deadline, so
+    # the loop slows to a fifth of its speed exactly when mpv goes quiet —
+    # which is exactly when the counting matters. Thirty ticks meant thirty
+    # seconds while everything was fine and two and a half minutes once it
+    # wasn't. The clock doesn't have that problem.
+    MUTE_SECONDS = 45.0        # answering nothing at all
+    FROZEN_SECONDS = 120.0     # playing something that never moves
+
+    def _check_progress(self, props: dict, now: float | None = None) -> None:
+        """Is it still going, as against still running?
+
+        alive() asks whether the process exists and the pipe is open, and
+        both are true of a player that stopped playing an hour ago. mpv
+        wedged behind a bad stream answers nothing inside the four-second
+        deadline, and get_many turns that into None for every property —
+        which reads exactly like an idle player with nothing on. mpv holding
+        a file it can't advance answers cheerfully with a position that never
+        changes. Neither marks the pipe broken, so alive() stays true.
+
+        And it self-locks: the end-of-file event is what moves the queue on,
+        so a player that can't reach the end of the file is never asked for
+        anything again. The log just stops mid-song, which is how this was
+        found — a track started at 08:24 and the next line was an hour later.
+
+        idle-active is the discriminator. mpv is spawned with --idle=yes so
+        it always has an answer, and None therefore means the reply never
+        came rather than that there is nothing to play.
+        """
+        now = time.monotonic() if now is None else now
+        idle = props.get("idle-active")
+        if idle is None:
+            self._frozen_since = None
+            if self._mute_since is None:
+                self._mute_since = now
+            quiet = now - self._mute_since
+            if quiet >= self.MUTE_SECONDS:
+                self._stalled(f"no answer for {quiet:.0f}s")
+            return
+        self._mute_since = None
+
+        pos = props.get("time-pos")
+        # Nothing on, deliberately still, or still opening the file.
+        if idle or props.get("pause") or pos is None:
+            self._frozen_since = None
+            self._last_pos = pos or 0.0
+            return
+        # A seek moves it backwards, which is still movement.
+        if abs(float(pos) - self._last_pos) > 0.25:
+            self._last_pos = float(pos)
+            self._frozen_since = None
+            return
+        # The first reading is where it is, not evidence it isn't moving.
+        if self._frozen_since is None:
+            self._frozen_since = now
+        held = now - self._frozen_since
+        if held >= self.FROZEN_SECONDS:
+            self._stalled(f"stuck at {float(pos):.0f}s for {held:.0f}s")
+
+    def _stalled(self, why: str) -> None:
+        """Treat a player that isn't playing as a player that has died.
+
+        Which it has, in every way that matters here. Marking the pipe broken
+        is the whole fix: the next monitor tick sees alive() go false and
+        _recover() does the rest, including putting the track back where it
+        was. That is the path a real crash already takes, tested by every
+        real crash, so this doesn't get one of its own.
+        """
+        self._mute_since = self._frozen_since = None
+        log.warning("player stalled (%s) — restarting it", why)
+        self.mpv._mark_broken()
+
     def _watch_track(self) -> None:
-        props = self.mpv.get_many(["path", "time-pos", "duration", "pause"])
+        props = self.mpv.get_many(["path", "time-pos", "duration", "pause",
+                                   "idle-active"])
+        self._check_progress(props)
         path = props.get("path") or ""
         pos = props.get("time-pos") or 0
         dur = props.get("duration") or 0

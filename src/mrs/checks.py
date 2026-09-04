@@ -1336,6 +1336,128 @@ def run(verbose: bool = False) -> Result:
                 c("and a scope", row.get("scope") == "full")
             say("link stats", c)
 
+            # -- 11. a player that stopped playing -------------------------
+            # The decision only, driven by hand. Wedging a real mpv on
+            # demand isn't something a check can do, and the part that was
+            # missing was never the restart — that works, every crash uses
+            # it — but noticing there was anything to restart.
+            c = _Checker("stalled player")
+            from .player import PlayerService as _PS
+
+            class _Stub:
+                MUTE_SECONDS = _PS.MUTE_SECONDS
+                FROZEN_SECONDS = _PS.FROZEN_SECONDS
+
+                def __init__(self):
+                    self._mute_since = None
+                    self._frozen_since = None
+                    self._last_pos = 0.0
+                    self.trips = []
+
+                def _stalled(self, why):
+                    self.trips.append(why)
+                    self._mute_since = self._frozen_since = None
+
+            def run_for(props, seconds, step=1.0, stub=None, start=0.0):
+                """Feed the same reading for a stretch of wall clock."""
+                s = stub or _Stub()
+                t = start
+                while t <= start + seconds:
+                    _PS._check_progress(s, props, now=t)
+                    t += step
+                return s
+
+            playing = {"idle-active": False, "pause": False}
+            hour = 3600.0
+
+            # Nothing on is not a fault, and this is the one that has to be
+            # right: an idle machine sits there all night untouched.
+            s = run_for({"idle-active": True, "pause": False, "time-pos": None}, hour)
+            c("an idle player is left alone", not s.trips, str(s.trips[:1]))
+
+            # Paused is deliberate stillness.
+            s = run_for({**playing, "pause": True, "time-pos": 42.0}, hour)
+            c("a paused player is not a stalled one", not s.trips, str(s.trips[:1]))
+
+            # Still opening the file — a path, but no position yet.
+            s = run_for({**playing, "time-pos": None}, hour)
+            c("a file still opening is not a stall", not s.trips, str(s.trips[:1]))
+
+            # Playing normally, for an hour.
+            s = _Stub()
+            for i in range(3600):
+                _PS._check_progress(s, {**playing, "time-pos": float(i)}, now=float(i))
+            c("a moving position never trips", not s.trips, str(s.trips[:1]))
+
+            # A seek is movement, backwards as well as forwards.
+            s = _Stub()
+            for i in range(600):
+                _PS._check_progress(s, {**playing, "time-pos": 10.0 if i % 2 else 3.0},
+                                    now=float(i))
+            c("seeking counts as movement", not s.trips, str(s.trips[:1]))
+
+            # The actual fault: playing, unpaused, and frozen.
+            stuck = {**playing, "time-pos": 91.0}
+            s = _Stub()
+            _PS._check_progress(s, stuck, now=0.0)
+            c("the first reading is a baseline, not a stall",
+              not s.trips and s._last_pos == 91.0 and s._frozen_since is None,
+              f"since={s._frozen_since} pos={s._last_pos}")
+            _PS._check_progress(s, stuck, now=1.0)
+            c("...and the clock starts on the second", s._frozen_since == 1.0,
+              str(s._frozen_since))
+            s = run_for(stuck, _PS.FROZEN_SECONDS - 2, stub=s, start=1.0)
+            c("it waits before calling it", not s.trips,
+              f"tripped inside {_PS.FROZEN_SECONDS}s")
+            _PS._check_progress(s, stuck, now=1.0 + _PS.FROZEN_SECONDS)
+            c("a frozen position trips", len(s.trips) == 1, str(s.trips))
+            c("...and says where it was stuck", "91" in (s.trips or [""])[0],
+              str(s.trips))
+
+            # Once, not once a tick, or it restarts mpv every second and
+            # fills the log with the reason.
+            s = run_for(stuck, _PS.FROZEN_SECONDS - 1, stub=s,
+                        start=1.0 + _PS.FROZEN_SECONDS)
+            c("it doesn't trip again immediately", len(s.trips) == 1, str(s.trips))
+
+            # mpv answering nothing reads as idle to get_many, which is the
+            # whole reason idle-active is asked for: None means no reply came.
+            silent = {"idle-active": None, "pause": None, "time-pos": None}
+            s = run_for(silent, _PS.MUTE_SECONDS - 2)
+            c("silence gets a grace period too", not s.trips, str(s.trips[:1]))
+            _PS._check_progress(s, silent, now=_PS.MUTE_SECONDS)
+            c("a player that answers nothing trips", len(s.trips) == 1, str(s.trips))
+
+            # One good answer clears it, so a single dropped reply on a busy
+            # second doesn't accumulate over an evening.
+            s = _Stub()
+            for i in range(6000):
+                if i % 20 == 19:
+                    _PS._check_progress(s, {**playing, "time-pos": float(i)}, now=float(i))
+                else:
+                    _PS._check_progress(s, silent, now=float(i))
+            c("one answer resets the silence", not s.trips, str(s.trips[:1]))
+
+            # Slow ticks are the point of using the clock: when mpv stops
+            # answering, every reading costs the IPC deadline, so the loop
+            # runs at a fifth of its speed. Counting ticks would have made
+            # the timeout five times longer exactly when it mattered.
+            s = _Stub()
+            t = 0.0
+            while t <= _PS.MUTE_SECONDS + 5:
+                _PS._check_progress(s, silent, now=t)
+                t += 5.0            # one reading every five seconds
+            c("a slow loop still trips on time", len(s.trips) == 1, str(s.trips))
+            c("...at roughly the stated timeout",
+              bool(s.trips) and _PS.MUTE_SECONDS <= float(
+                  s.trips[0].split("for ")[1].rstrip("s")) < _PS.MUTE_SECONDS + 6,
+              str(s.trips))
+
+            c("the timeouts are a sane length",
+              20 <= _PS.MUTE_SECONDS <= 180 and 60 <= _PS.FROZEN_SECONDS <= 600,
+              f"{_PS.MUTE_SECONDS}/{_PS.FROZEN_SECONDS}")
+            say("a player that stopped playing", c)
+
     except Exception as exc:            # a check suite must not be the thing
         out.failed.append(f"the checks themselves broke: {exc!r}")
     finally:

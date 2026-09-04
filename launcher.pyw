@@ -123,6 +123,9 @@ TITLE = "Music Request"
 # Set when Quit is chosen, so the tray keep-alive loop knows the icon
 # went away on purpose.
 _tray_quit = threading.Event()
+# Set when the flyout died on its own. The server carries on without it;
+# the tray has to stop offering to show a window that isn't there.
+_window_gone = threading.Event()
 
 
 class MONITORINFO(ctypes.Structure):
@@ -707,6 +710,12 @@ def _api(path: str) -> None:
 
 def _tray() -> None:
     def show(_i, _it):
+        # The window can go without the app going. Offering to show one that
+        # was destroyed is a dead menu item on a program that is otherwise
+        # working perfectly, so hand over to the browser instead.
+        if _window_gone.is_set():
+            desktop(_i, _it)
+            return
         flyout.show()
 
     def restart_player(_i, _it):
@@ -736,6 +745,7 @@ def _tray() -> None:
 
     def quit_(icon, _it):
         _tray_quit.set()          # so the keep-alive loop doesn't rebuild it
+        _trace("quit chosen from the tray")
         try:
             from mrs.player import player
             player.stop()
@@ -1265,6 +1275,7 @@ def main() -> None:
                    "Nothing obvious is missing. The last thing it managed:\n\n"
                    f"{last or '(nothing — it stopped before it could log)'}"
                    f"\n\nFull log: {log_path()}")
+        _trace(f"giving up before the window: {msg.splitlines()[-1][:120]}")
         try:
             U32.MessageBoxW(None, msg, TITLE, 0x10)   # MB_ICONERROR
         except Exception:
@@ -1294,6 +1305,28 @@ def main() -> None:
         min_size=(Flyout.MINI_W, Flyout.MINI_IDLE_H),
         background_color="#0e0f16", hidden=hidden)
     webview.start(_after_start)
+
+    # start() returns when the last window closes, and that used to end the
+    # process: player.stop(), os._exit(0), and not a line anywhere saying so.
+    #
+    # But a window closing is not the same as being asked to quit. A WebView2
+    # that falls over, the runtime updating underneath it, a driver reset
+    # taking the control with it — any of those destroy the window, and the
+    # answer was to stop the music for everyone in the house and leave a log
+    # that simply stops mid-song. Afterwards it is indistinguishable from a
+    # crash, which is exactly what it has been reported as, twice.
+    #
+    # The tray exists so this runs without a window. So run without one.
+    # start() cannot be called a second time in this process, so the flyout
+    # is gone until a restart — but the server, the queue and the tray are
+    # all still here, and that is the part anybody is actually using.
+    if not _tray_quit.is_set():
+        _window_gone.set()
+        mark("the player window closed on its own — still serving")
+        _trace("window gone; staying up, tray Quit to stop")
+        _tray_quit.wait()
+
+    _trace("exiting")
     try:
         from mrs.player import player
         player.stop()
