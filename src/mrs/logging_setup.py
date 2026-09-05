@@ -35,6 +35,72 @@ class _RedactKey(logging.Filter):
         return True
 
 
+class _SafeRotating(logging.handlers.RotatingFileHandler):
+    """Rotation that cannot take the log down with it.
+
+    doRollover() closes the stream and then renames the file. On Windows
+    the rename fails if anything else has that file open — a second copy of
+    this program, mark()'s plain appends, the launcher's trace, a tail from
+    the error dialog — and the exception leaves the stream at None with the
+    rotation half done. Every later emit tries the rollover again, fails
+    again, and hands the error to handleError, which this module had stubbed
+    out to keep a windowed build from writing to a stderr it hasn't got.
+
+    The result is a log that stops dead mid-run and never comes back, while
+    the program carries on perfectly well and completely invisibly. That is
+    not hypothetical: the log went quiet at 15:52:30 with the process still
+    starting mpv engines at 15:55:44, and the same shape — log stops, program
+    lives on, no explanation available afterwards — is how every crash this
+    week presented.
+
+    So rotation is best-effort and the log is not. If the rename fails, keep
+    the stream open and stop trying: a log that grows past a megabyte is a
+    far smaller problem than a log that stops saying anything.
+    """
+
+    def doRollover(self) -> None:
+        try:
+            super().doRollover()
+        except Exception as exc:
+            # Half-rotated: super() closes the stream before the rename.
+            if self.stream is None:
+                try:
+                    self.stream = self._open()
+                except Exception:
+                    return
+            # Once is enough. Retrying per line means one failed rename
+            # turns into a rollover attempt for every message logged.
+            self.maxBytes = 0
+            try:
+                self.stream.write(
+                    f"{time.strftime('%H:%M:%S')} ----    log"
+                    f"            couldn't rotate ({exc}); "
+                    f"still writing, rotation off for this run\n")
+                self.stream.flush()
+            except Exception:
+                pass
+
+    def emit(self, record: logging.LogRecord) -> None:
+        # A stream lost to a failed rotation, or to a disk that went away
+        # and came back, is worth one attempt to reopen before the line is
+        # dropped. Silence is the expensive outcome here.
+        if self.stream is None:
+            try:
+                self.stream = self._open()
+            except Exception:
+                return
+        super().emit(record)
+
+    def handleError(self, record: logging.LogRecord) -> None:
+        """Never raise, never write to a stderr that isn't there — but do
+        leave a mark somewhere, so a log that stops can be told apart from
+        a program that stopped."""
+        try:
+            mark(f"log handler failed on a {record.levelname} line")
+        except Exception:
+            pass
+
+
 def setup(api_key: str = "", level: int = logging.INFO) -> logging.Logger:
     root = logging.getLogger()
     root.setLevel(level)
@@ -51,19 +117,19 @@ def setup(api_key: str = "", level: int = logging.INFO) -> logging.Logger:
     fh = None
     for path in (_LOG, _LOG.with_name(f"server-{os.getpid()}.log")):
         try:
-            fh = logging.handlers.RotatingFileHandler(
-                path, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+            fh = _SafeRotating(path, maxBytes=1_000_000, backupCount=3,
+                               encoding="utf-8")
             break
         except Exception:
             continue
     if fh is not None:
         fh.setFormatter(fmt)
         fh.addFilter(_RedactKey(api_key))
-        # A handler that throws while writing prints to stderr and gives up
-        # quietly, and a windowed build has no stderr — the log simply stops
-        # mid-run and everything after it is invisible.
-        fh.handleError = lambda record: None
         root.addHandler(fh)
+    else:
+        # Both files refused to open. Say so in the one place that doesn't
+        # need a handler, or this run is invisible from its first line.
+        mark("could not open any log file — running with no log")
 
     # A frozen windowed build has no console; only add one when it works.
     if sys.stdout is not None and getattr(sys.stdout, "isatty", lambda: False)():
@@ -98,13 +164,17 @@ def mark(note: str) -> None:
     """
     line = (f"{time.strftime('%H:%M:%S')} ----    boot"
             f"           {note} (pid {os.getpid()})\n")
-    # Two places, and the second is why. A copy started before sign-in ran
-    # for half a minute, bound the port and wrote not one line anywhere —
-    # so the one boot that most needed explaining was the one with no
-    # evidence at all. Whatever stopped it writing to the shared file, a
-    # file of its own in the same folder is a different enough thing to be
-    # worth trying before giving up and staying silent.
-    for path in (_LOG, _LOG.with_name(f"boot-{os.getpid()}.log")):
+    # Three places, and the third is the point. The first two are the same
+    # folder, which is no fallback at all when the folder is what's wrong —
+    # and a copy started before sign-in bound the port and wrote nothing to
+    # either of them, so the one boot that most needed explaining produced
+    # no evidence anywhere. ProgramData is a genuinely different directory,
+    # writable by everyone, and resolved from an environment variable this
+    # one doesn't otherwise depend on.
+    import pathlib
+    spare = pathlib.Path(os.environ.get("ProgramData") or os.environ.get("TEMP")
+                         or ".") / f"mrs-boot-{os.getpid()}.log"
+    for path in (_LOG, _LOG.with_name(f"boot-{os.getpid()}.log"), spare):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "a", encoding="utf-8") as fh:

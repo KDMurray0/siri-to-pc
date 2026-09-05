@@ -819,6 +819,79 @@ def _port_busy(port: int) -> bool:
             return True
 
 
+def _port_owner(port: int) -> int:
+    """Which process is listening on this port, asked of Windows directly.
+
+    The stand-down handover identifies the other copy by a marker file it
+    writes about itself. Every boot failure so far has been a copy that
+    wrote no marker and no log — reproduced on demand: the before-sign-in
+    task starts a copy in session 0 that binds this port, serves nothing,
+    and leaves not one line anywhere. Against that, a marker is no way to
+    identify anything. The socket table always knows who has the port.
+    """
+    try:
+        out = subprocess.run(
+            ["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True,
+            timeout=20,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout or ""
+    except Exception as exc:
+        log.debug("couldn't read the socket table: %s", exc)
+        return 0
+    for line in out.splitlines():
+        bits = line.split()
+        if len(bits) >= 5 and bits[3].upper() == "LISTENING" \
+                and bits[1].rsplit(":", 1)[-1] == str(port):
+            try:
+                return int(bits[-1])
+            except ValueError:
+                continue
+    return 0
+
+
+def _seize_port(port: int) -> bool:
+    """Take the port off a copy that is holding it and answering nothing.
+
+    Being polite here is what has broken every boot since the app learned to
+    start before sign-in. The session-0 copy binds the port and wedges; the
+    copy that actually has a desktop, speakers and a tray finds the port
+    taken, cannot identify the squatter, and exits — so signing in produces
+    no player at all, and the only way back is to notice and start it by
+    hand. A copy that serves nothing has no claim on the port.
+    """
+    # End the task before killing anything. Killing its process leaves
+    # Windows counting the task as failed, and a task with a restart policy
+    # answers a failure by starting the squatter again a minute later.
+    try:
+        subprocess.run(["schtasks", "/End", "/TN",
+                        "MusicRequestServer-BeforeSignIn"],
+                       capture_output=True, timeout=20,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception as exc:
+        log.debug("couldn't end the boot task: %s", exc)
+    for _ in range(20):
+        if not _port_busy(port):
+            mark("the boot task ended and let the port go")
+            return True
+        time.sleep(0.25)
+
+    pid = _port_owner(port)
+    if not pid or pid == os.getpid():
+        return not _port_busy(port)
+    mark(f"pid {pid} is holding {port} and not answering — stopping it")
+    try:
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                       capture_output=True, timeout=20,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception as exc:
+        log.warning("couldn't stop pid %s: %s", pid, exc)
+        return False
+    for _ in range(80):
+        if not _port_busy(port):
+            return True
+        time.sleep(0.25)
+    return False
+
+
 def _standdown_flag():
     """The file that asks a headless copy to bow out.
 
@@ -848,15 +921,21 @@ def _stand_down_headless() -> bool:
     server: this is our own process, on this machine, and adding a way to ask
     an HTTP server to kill itself is a bigger thing to own than a pid file.
     """
+    port = config.get("port", 5000)
     marker = _headless_marker()
     try:
         pid = int(marker.read_text(encoding="utf-8").strip())
     except Exception:
-        return False
+        # No marker is not the same as nobody there. The copies that need
+        # displacing most are exactly the ones too broken to have written
+        # one — so ask the socket table who has the port instead of giving
+        # up, which is what used to happen, one line into the handover.
+        pid = _port_owner(port)
+        if not pid or pid == os.getpid():
+            return False
+        mark(f"no headless marker; the port is held by pid {pid}")
     if pid == os.getpid():
         return False
-
-    port = config.get("port", 5000)
 
     # Ask first. Killing it works and costs something: Windows records the
     # task as terminated (0x41306), and a task with RestartCount set treats
@@ -1008,6 +1087,24 @@ def _run_headless() -> None:
     computer's own speakers do not, because session 0 has no audio device to
     give mpv. Signing in starts the normal copy, which takes over.
     """
+    # A deadline nothing can talk its way out of. The rest of this function
+    # already refuses to squat — but only along the paths it reaches, and the
+    # copy that actually breaks boot reaches none of them: it binds the port,
+    # serves nothing, writes not one line anywhere, and sits there until
+    # somebody notices days later. This runs on its own thread and ends the
+    # process with os._exit, so it needs nothing else to be working.
+    def deadline() -> None:
+        end = time.monotonic() + 180.0
+        while time.monotonic() < end:
+            time.sleep(5.0)
+            if srv._is_ours(config.get("port", 5000)):
+                return                    # answering; it can look after itself
+        mark("headless: three minutes without answering — quitting so the "
+             "port is free for a copy that can serve")
+        os._exit(3)
+
+    threading.Thread(target=deadline, daemon=True,
+                     name="headless-deadline").start()
     mark(f"headless: starting, exe={sys.executable}")
     try:
         from mrs.paths import data_dir
@@ -1206,11 +1303,23 @@ def main() -> None:
         #
         # Anything holding this port is treated as a copy to be relieved. It
         # is our port; nothing else on this machine should have it.
-        mark(f"port {port} is taken — trying to get it back")
+        # Defer to a copy that is actually serving, and to nothing else.
+        # "Leaving it to whatever has it" reads as good manners and is the
+        # single line that has broken every boot since this app learned to
+        # start before anyone signs in: the session-0 copy binds the port
+        # and wedges, and the copy with a desktop, speakers and a tray backs
+        # out of its way. Answering our ping is the difference between a
+        # colleague and a squatter.
+        if srv._is_ours(port):
+            mark(f"a working copy is already serving on {port} — leaving it to that one")
+            sys.exit(0)
+        mark(f"port {port} is held by something that isn't answering — taking it back")
         if _stand_down_headless():
             mark(f"got {port} back")
+        elif _port_busy(port) and _seize_port(port):
+            mark(f"took {port} from the copy that wasn't answering")
         elif _port_busy(port):
-            mark(f"couldn't free {port} — leaving it to whatever has it")
+            mark(f"couldn't free {port} — it isn't answering and won't let go")
             sys.exit(0)
 
     # Taken exactly once. Every call to _singleton() that succeeds creates a
