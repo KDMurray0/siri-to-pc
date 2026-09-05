@@ -44,13 +44,49 @@ def _port_free(port: int) -> bool:
             pass
 
 
-def _is_ours(port: int) -> bool:
+def open_local(url: str, timeout: float = 1.5):
+    """Open one of our own URLs, TLS and all.
+
+    The certificate is one we issued to ourselves, so verifying it is both
+    impossible and pointless — this is a loopback call to a socket we own.
+    """
     from urllib import request as urlrequest
-    try:
-        with urlrequest.urlopen(f"http://127.0.0.1:{port}/api/ping", timeout=1.5) as r:
-            return b"music-request-server" in r.read(200)
-    except Exception:
-        return False
+    ctx = None
+    if url.startswith("https://"):
+        import ssl
+        ctx = ssl._create_unverified_context()
+    return urlrequest.urlopen(url, timeout=timeout, context=ctx)
+
+
+def local_url(port: int, path: str = "/api/ping") -> str:
+    """Our own address, in the scheme we are actually serving."""
+    scheme = "https" if config.get("https") else "http"
+    return f"{scheme}://127.0.0.1:{port}{path}"
+
+
+def _is_ours(port: int) -> bool:
+    """Is the thing holding this port us?
+
+    Asked in both schemes, always. Asking only in http is what turned
+    "switch HTTPS on" into "the app never finishes starting": the server
+    came up on TLS exactly as asked, every readiness check asked for http,
+    TLS answered a plaintext GET by closing the connection, and the launcher
+    concluded the server had never arrived. No window, no tray icon, and a
+    port held by a server that was working perfectly the whole time — which
+    from outside is indistinguishable from the program being broken.
+
+    Asking both ways also survives the case that made this so hard to find:
+    a server whose config is not the config the asking process is reading.
+    """
+    first = "https" if config.get("https") else "http"
+    for scheme in (first, "http" if first == "https" else "https"):
+        try:
+            with open_local(f"{scheme}://127.0.0.1:{port}/api/ping", 1.5) as r:
+                if b"music-request-server" in r.read(200):
+                    return True
+        except Exception:
+            continue
+    return False
 
 
 def pick_port(preferred: int) -> int:

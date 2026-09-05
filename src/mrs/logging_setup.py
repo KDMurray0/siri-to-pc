@@ -172,9 +172,36 @@ def mark(note: str) -> None:
     # writable by everyone, and resolved from an environment variable this
     # one doesn't otherwise depend on.
     import pathlib
+    from .paths import repo_root
+    # Beside the exe, always, as well as the data dir — not as a fallback.
+    # A boot started from a shell writes a full account of itself and a boot
+    # started by double-clicking the exe writes nothing, and reading the
+    # first file forever cannot explain the second. This one is not under
+    # AppData, so nothing that redirects a user profile can quietly send it
+    # somewhere else, and it sits next to the program where a person looking
+    # for it will actually find it.
+    try:
+        beside = repo_root() / "boot-trace.log"
+    except Exception:
+        beside = None
     spare = pathlib.Path(os.environ.get("ProgramData") or os.environ.get("TEMP")
                          or ".") / f"mrs-boot-{os.getpid()}.log"
-    for path in (_LOG, _LOG.with_name(f"boot-{os.getpid()}.log"), spare):
+    wrote = False
+    for path in (_LOG, beside):
+        if path is None:
+            continue
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(line)
+                fh.flush()
+                os.fsync(fh.fileno())
+            wrote = True
+        except Exception:
+            continue
+    if wrote:
+        return
+    for path in (_LOG.with_name(f"boot-{os.getpid()}.log"), spare):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "a", encoding="utf-8") as fh:

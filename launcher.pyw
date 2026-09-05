@@ -29,18 +29,27 @@ def _trace(note: str) -> None:
     This runs before any of that. It computes the path by hand, uses no
     logging machinery, and cannot fail in a way that matters.
     """
-    try:
-        import time as _t
-        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-        folder = os.path.join(base, "MusicRequestServer")
-        os.makedirs(folder, exist_ok=True)
-        with open(os.path.join(folder, "server.log"), "a",
-                  encoding="utf-8") as fh:
-            fh.write(f"{_t.strftime('%H:%M:%S')} ----    trace"
-                     f"          {note} (pid {os.getpid()})\n")
-            fh.flush()
-    except Exception:
-        pass
+    import time as _t
+    line = (f"{_t.strftime('%H:%M:%S')} ----    trace"
+            f"          {note} (pid {os.getpid()})\n")
+    # Two files, in two genuinely different places, every time — not one
+    # with a fallback. A boot launched from the shell writes a full trace
+    # and a boot launched by double-clicking the exe writes nothing at all,
+    # and no amount of reading the first file explains the second. The one
+    # beside the exe is the tie-breaker: it is not under AppData, so nothing
+    # that redirects a user profile — a packaged app's container, a roaming
+    # profile, a sandbox — can quietly send it somewhere else. Whichever of
+    # the two exists after a bad boot, one of them is the truth.
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    for target in (os.path.join(base, "MusicRequestServer", "server.log"),
+                   os.path.join(_HERE, "boot-trace.log")):
+        try:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "a", encoding="utf-8") as fh:
+                fh.write(line)
+                fh.flush()
+        except Exception:
+            continue
 
 
 _trace(f"process start, argv={sys.argv[1:]}, frozen={FROZEN}")
@@ -703,7 +712,7 @@ def _api(path: str) -> None:
     key = config.get("api_key", "")
     sep = "&" if "?" in path else "?"
     try:
-        urlrequest.urlopen(f"http://127.0.0.1:{port}{path}{sep}key={key}", timeout=5)
+        srv.open_local(srv.local_url(port, f"{path}{sep}key={key}"), timeout=5)
     except Exception:
         pass
 
@@ -740,8 +749,9 @@ def _tray() -> None:
         # The flyout is a fixed 400px window on purpose, so the wide layout
         # can't be reached by dragging it — a browser is the only way in.
         import webbrowser
-        webbrowser.open(f"http://127.0.0.1:{config.get('port',5000)}"
-                        f"/player?key={config.get('api_key','')}")
+        port = config.get("port", 5000)
+        webbrowser.open(srv.local_url(
+            port, f"/player?key={config.get('api_key', '')}"))
 
     def quit_(icon, _it):
         _tray_quit.set()          # so the keep-alive loop doesn't rebuild it
@@ -1209,14 +1219,15 @@ def _singleton():
 
 def _wait_for_server(port: int, timeout: int = 60) -> bool:
     """Wait for OUR server — a foreign one on the same port doesn't count."""
+    # srv._is_ours asks in both schemes. Asking only in http here is what
+    # made "turn HTTPS on" mean "the app never finishes starting" — the
+    # server was up and answering the whole time, in TLS, to a question
+    # always asked in plaintext.
     end = time.time() + timeout
     while time.time() < end:
-        try:
-            with urlrequest.urlopen(f"http://127.0.0.1:{port}/api/ping", timeout=1) as r:
-                if b"music-request-server" in r.read(200):
-                    return True
-        except Exception:
-            time.sleep(0.5)
+        if srv._is_ours(port):
+            return True
+        time.sleep(0.5)
     return False
 
 
@@ -1405,7 +1416,9 @@ def main() -> None:
     landing = "player" if config.get("setup_done") else "welcome"
     flyout.window = webview.create_window(
         TITLE,
-        url=f"http://127.0.0.1:{port}/{landing}?key={config.get('api_key','')}",
+        # The scheme the server is actually on. Pointed at http while
+        # serving TLS, the flyout is a blank window onto a working server.
+        url=srv.local_url(port, f"/{landing}?key={config.get('api_key', '')}"),
         js_api=Bridge(), frameless=True, easy_drag=False, on_top=True,
         resizable=False, width=Flyout.W, height=Flyout.H, x=x, y=y,
         # pywebview defaults this to (200, 100), so the 80px idle bar was
