@@ -1509,6 +1509,55 @@ def run(verbose: bool = False) -> Result:
                          headers={"X-Music-Key": "nope"}).status_code in (401, 403))
             say("asking by lyric", c)
 
+            # -- 13. shuffle as a standing preference ----------------------
+            c = _Checker("shuffle")
+            from .requests import _shuffle_wanted
+
+            class _Q:                      # a guest queue carries a profile
+                def __init__(self, prof=None):
+                    self.profile = prof
+
+            class _P:
+                def __init__(self, on):
+                    self._on = on
+
+                def get(self, key, default=None):
+                    return self._on if key == "shuffle" else default
+
+            house = _Q()                   # no profile: the owner's setting
+            was = _cfg.get("shuffle")
+            try:
+                _cfg.set("shuffle", False)
+                c("off, and nobody said otherwise",
+                  _shuffle_wanted("play nevermind", None, house) is False)
+                c("...but the word still wins",
+                  _shuffle_wanted("shuffle nevermind", None, house) is True)
+                c("...and so does the parser",
+                  _shuffle_wanted("play nevermind", True, house) is True)
+
+                _cfg.set("shuffle", True)
+                c("on, so an album shuffles without being asked",
+                  _shuffle_wanted("play nevermind", None, house) is True)
+                for said in ("play nevermind in order",
+                             "play the album in album order",
+                             "play nevermind start to finish",
+                             "dont shuffle nevermind",
+                             "no shuffle please"):
+                    c(f"{said[:32]!r} overrides the toggle",
+                      _shuffle_wanted(said, None, house) is False)
+                c("'reorder' is not a request to stop shuffling",
+                  _shuffle_wanted("reorder the queue", None, house) is True)
+
+                # Whose preference. The owner's is on; the guest's is off.
+                c("a guest gets their own answer, not the owner's",
+                  _shuffle_wanted("play nevermind", None, _Q(_P(False))) is False)
+                _cfg.set("shuffle", False)
+                c("...and that works the other way too",
+                  _shuffle_wanted("play nevermind", None, _Q(_P(True))) is True)
+            finally:
+                _cfg.set("shuffle", was)
+            say("shuffle as a preference", c)
+
     except Exception as exc:            # a check suite must not be the thing
         out.failed.append(f"the checks themselves broke: {exc!r}")
     finally:

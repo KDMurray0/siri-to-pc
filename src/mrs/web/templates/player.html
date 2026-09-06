@@ -3873,6 +3873,47 @@ function nowAt(d) {
 const castSrc = v => "/api/output/stream/" + encodeURIComponent(v) +
                      "?" + urlAuth();
 
+/* A moment of silence, played through both elements while a finger is still
+   on the screen.
+
+   iOS will only let an <audio> element start on its own once a person has
+   started that particular element by hand — and it counts elements, not
+   pages. Playback here runs through two, swapping at each boundary so the
+   next track is already loaded and the gap is nothing. Only the first of
+   them was ever touched by a tap. So the first handover after the screen
+   locked called play() on an element iOS had never seen a gesture for, was
+   refused, and the music stopped — in the background, silently, which is
+   exactly where nobody can tap anything to fix it.
+
+   Both are primed instead. Half a tenth of a second of an 8kHz silence,
+   muted, then wound back — inaudible, and afterwards both elements are
+   allowed to play whenever we ask. */
+const CAST_SILENCE = "data:audio/wav;base64,UklGRrQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YZABAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA";
+let castPrimed = false;
+function castPrime() {
+  if (castPrimed || !("mediaSession" in navigator)) return;
+  castPrimed = true;
+  castEls.forEach(el => {
+    // Never touch one that is already carrying real audio.
+    if (el.currentSrc || el.getAttribute("src")) return;
+    try {
+      const wasMuted = el.muted;
+      el.muted = true;
+      el.src = CAST_SILENCE;
+      const done = () => {
+        try {
+          el.pause();
+          el.removeAttribute("src");
+          el.load();
+          el.muted = wasMuted;
+        } catch (e) {}
+      };
+      const p = el.play();
+      if (p && p.then) p.then(done).catch(done); else done();
+    } catch (e) {}
+  });
+}
+
 /* play() is refused without a gesture. Say so rather than sitting silent. */
 function castPlay(el) {
   const p = el.play();
@@ -3899,6 +3940,7 @@ function castOn() {
   document.body.classList.toggle("sysvol", IOS);
   $("volicon").title = "Playing on this phone — volume is the phone's";
   if (!IOS) setVol(Math.round((castLive().volume ?? 1) * 100));
+  castPrime();
   castHandlers();
 }
 
@@ -3971,18 +4013,13 @@ function castHandlers() {
   });
   set("nexttrack", () => api("/api/control/next"));
   set("previoustrack", () => api("/api/control/previous"));
-  const jump = by => {
-    const el = castLive();
-    if (clockMine() && el && !isNaN(el.currentTime)) {
-      const to = Math.max(0, el.currentTime + by);
-      try { el.currentTime = to; } catch (e) {}
-      api("/api/seek?pos=" + Math.round(to));
-      return;
-    }
-    seekTo((state.position || 0) + by);
-  };
-  set("seekforward", d => jump((d && d.seekOffset) || 10));
-  set("seekbackward", d => jump(-((d && d.seekOffset) || 10)));
+  /* No seekforward/seekbackward, deliberately.
+     iOS has room for one pair of buttons beside play, and registering these
+     wins that room — so the lock screen offered "back 10 / forward 10" and
+     no way to change track, which is what a podcast looks like and not what
+     a music player does. Leaving them unregistered gives the pair back to
+     nexttrack and previoustrack, which are registered above. Scrubbing is
+     unaffected: that is seekto, and it still works. */
   set("seekto", d => {
     if (!d || d.seekTime == null) return;
     if (clockMine()) {
@@ -4151,6 +4188,11 @@ function applyAnnounce(d) {
 
 /* Audio really started, so whatever refused it earlier no longer applies. */
 castEls.forEach(el => el.addEventListener("playing", castUnblock));
+/* The first touch of the evening, whatever it lands on. castOn() also primes,
+   but casting can start from a server event — somebody else pressing play —
+   and by then there is no gesture left to borrow. */
+["pointerdown", "touchend", "keydown"].forEach(evt =>
+  window.addEventListener(evt, castPrime, {once: true, capture: true}));
 
 /* The length arrives with the file's metadata, which is usually after the
    status that named the track — so the bar has to be told again once it's

@@ -541,7 +541,18 @@ def api_control(request: Request, action: str, value: int | None = None,
         sink.set_paused(action == "pause" or
                         (action == "playpause" and not sink.paused))
     elif action == "shuffle":
-        q.shuffle_upcoming()
+        # A mode, not a one-shot. The owner's button has been a toggle for a
+        # while; this one shuffled the queue once and left the light on it
+        # lit by a setting it never wrote to, so it looked like a state and
+        # behaved like a button. It is the guest's own preference, kept in
+        # their profile, and it now decides how their albums and playlists
+        # arrive as well as reordering what is already waiting.
+        prof = getattr(room, "profile", None)
+        on = not bool(prof.get("shuffle") if prof is not None else False)
+        if prof is not None:
+            prof.set("shuffle", on)
+        if on:
+            q.shuffle_upcoming()
     elif action == "like":
         # Into their own liked list. There is one now, so the heart works.
         track = room.current()

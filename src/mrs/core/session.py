@@ -255,7 +255,12 @@ class Session:
             "playlist_pos": pos,
             "playlist_count": self.sink.count(),
             "volume": 100,             # the phone's own, not ours to set
-            "shuffle": False,
+            # Theirs, so the button they can see reflects the setting their
+            # own albums and playlists are actually ordered by. Hard-coded
+            # False meant a guest could turn shuffle on and watch the light
+            # go straight back off.
+            "shuffle": bool(self.profile.get("shuffle"))
+                       if self.profile is not None else False,
             "repeat": "off",
             "crossfade": 0,
             "activity": self.queue.activity.to_dict(),

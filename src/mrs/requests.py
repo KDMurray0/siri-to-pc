@@ -81,6 +81,37 @@ _COMMANDS = {
 }
 
 
+# "in order", and the other ways of saying don't.
+_IN_ORDER = re.compile(
+    r"\b(?:in (?:album |track |the )?order|in sequence|unshuffled|"
+    r"(?:do\s?n[o']?t|no)\s+shuffle|start to finish)\b", re.I)
+
+
+def _shuffle_wanted(text: str, asked, queue) -> bool:
+    """Shuffle this, or play it the way it was put together.
+
+    The toggle is a standing preference and a word in the request is an
+    instruction about this one thing, so the request wins whenever it says
+    anything at all — including when it says not to. The toggle decides only
+    the cases nobody mentioned, which is nearly all of them.
+
+    Whose toggle: the person who asked. A guest playing an album on their own
+    phone gets their own answer, not the owner's — the same rule the rest of
+    their settings already follow.
+    """
+    said = (text or "").lower()
+    if _IN_ORDER.search(said):
+        return False
+    if "shuffle" in said or asked:
+        return True
+    prof = getattr(queue, "profile", None)
+    try:
+        if prof is not None:
+            return bool(prof.get("shuffle"))
+    except Exception:
+        pass
+    return bool(config.get("shuffle"))
+
 
 def _play_from_lyric(text: str, *, mode: str, queue, room: str,
                      announce: bool, lists) -> dict | None:
@@ -116,6 +147,7 @@ def _play_from_lyric(text: str, *, mode: str, queue, room: str,
         got["from_lyric"] = fragment
         got["heard_as"] = named
     return got
+
 
 def handle_request(text: str, *, mode: str = "play", source: str | None = None,
                    announce: bool = True, cast: bool = False,
@@ -184,7 +216,8 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
         if not guest:
             hit = _match_playlist(text)
             if hit:
-                res = player.playlist_play(hit, shuffle="shuffle" in text.lower())
+                res = player.playlist_play(
+                    hit, shuffle=_shuffle_wanted(text, None, queue))
                 if res.get("ok"):
                     say(res["message"])
                 return {"status": "played" if res.get("ok") else "error",
@@ -242,7 +275,14 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
             queue._set_activity("idle")
             return {"status": "not_found", "message": res.spoken, "via": plan.via}
 
-        shuffle = bool(plan.shuffle) if plan.shuffle is not None else False
+        # An album and a playlist arrive with an order somebody chose,
+        # so they are the only things the standing toggle applies to.
+        # A genre mix is already in no particular order and shuffling
+        # it would mean nothing.
+        if plan.kind in ("album", "playlist"):
+            shuffle = _shuffle_wanted(text, plan.shuffle, queue)
+        else:
+            shuffle = bool(plan.shuffle) if plan.shuffle is not None else False
         if plan.mode == "next":
             queue.play_next(res.tracks[0])
         elif plan.mode == "queue":
