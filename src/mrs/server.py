@@ -59,27 +59,25 @@ def open_local(url: str, timeout: float = 1.5):
 
 
 def local_url(port: int, path: str = "/api/ping") -> str:
-    """Our own address, in the scheme we are actually serving."""
-    scheme = "https" if config.get("https") else "http"
-    return f"{scheme}://127.0.0.1:{port}{path}"
+    """Our own address. http — see the note in run() about why only http."""
+    return f"http://127.0.0.1:{port}{path}"
 
 
 def _is_ours(port: int) -> bool:
     """Is the thing holding this port us?
 
-    Asked in both schemes, always. Asking only in http is what turned
-    "switch HTTPS on" into "the app never finishes starting": the server
-    came up on TLS exactly as asked, every readiness check asked for http,
-    TLS answered a plaintext GET by closing the connection, and the launcher
-    concluded the server had never arrived. No window, no tray icon, and a
-    port held by a server that was working perfectly the whole time — which
-    from outside is indistinguishable from the program being broken.
+    Both schemes, though we now only ever serve one. A copy left running
+    from a build that served TLS still has to be recognisable as ours, or
+    the handover takes it for a stranger and refuses to displace it — and
+    the whole point of the handover is that a copy which cannot serve gets
+    out of the way of one that can.
 
-    Asking both ways also survives the case that made this so hard to find:
-    a server whose config is not the config the asking process is reading.
+    Asking a single way is what made "switch HTTPS on" mean "the program
+    never finishes starting": the server came up on TLS exactly as asked,
+    every readiness check asked in plaintext, TLS answered by closing the
+    connection, and the launcher concluded no server had ever arrived.
     """
-    first = "https" if config.get("https") else "http"
-    for scheme in (first, "http" if first == "https" else "https"):
+    for scheme in ("http", "https"):
         try:
             with open_local(f"{scheme}://127.0.0.1:{port}/api/ping", 1.5) as r:
                 if b"music-request-server" in r.read(200):
@@ -357,20 +355,17 @@ def run() -> None:
     asyncio.set_event_loop(loop)
     bus.bind_loop(loop)
 
-    ssl_args = {}
-    if config.get("https"):
-        from .web.security import ensure_cert
-        got = ensure_cert()
-        if got:
-            ssl_args = {"ssl_certfile": got[0], "ssl_keyfile": got[1]}
-            log.info("serving over https (self-signed — the browser will ask once)")
-        else:
-            log.warning("https asked for but no certificate — serving http")
-
+    # http, always. A certificate this machine signs for itself is one no
+    # client will accept without being told to: Safari refuses it outright
+    # with no way through, iOS offers no exception for a bare IP, and the
+    # flyout needed a Chromium flag to load its own player. What it bought
+    # in exchange was a program that never finished starting, because every
+    # readiness check in it asked in plaintext. The setting is gone rather
+    # than defaulted off, so a config left over from when it was on cannot
+    # bring any of that back.
     cfg = uvicorn.Config(app, host=config.get("host", "0.0.0.0"),
                          port=port,
-                         log_config=None, access_log=False, loop="asyncio",
-                         **ssl_args)
+                         log_config=None, access_log=False, loop="asyncio")
     server = uvicorn.Server(cfg)
     try:
         loop.run_until_complete(server.serve())

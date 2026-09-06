@@ -84,6 +84,8 @@ class PlayerService:
         self._frozen_since: float | None = None
         self._last_pos = 0.0
         self._monitor_errs = 0      # consecutive throws from the monitor loop
+        self._published = None      # path of the track last announced
+        self._had_watchers = False  # was anybody looking, last time round
 
     # -- lifecycle -----------------------------------------------------
     def start(self) -> None:
@@ -220,8 +222,24 @@ class PlayerService:
                 be_polite(quiet=True)
                 if int(config.get("crossfade", 0)) > 0:
                     self._maybe_crossfade()
-                bus.publish(Ev.STATUS, self.status())
-                self.queue.publish_queue()
+                # Both of these exist to be looked at. A progress bar moving
+                # a pixel and a queue that hasn't changed are worth nothing
+                # to an empty room, and building them costs a snapshot of
+                # every row and a json encode, once a second, all day.
+                #
+                # The sticky value still has to be true when somebody does
+                # open the page, so a track change is published either way —
+                # that is the only thing that goes stale. Position doesn't:
+                # it is wrong the moment it is sent regardless.
+                watching = bus.watchers > 0
+                if watching or self._watch.get("path") != self._published:
+                    bus.publish(Ev.STATUS, self.status())
+                    self._published = self._watch.get("path")
+                if watching:
+                    # Somebody just arrived: they have a sticky queue from
+                    # whenever one was last sent, which may be hours old.
+                    self.queue.publish_queue(force=not self._had_watchers)
+                self._had_watchers = watching
             except Exception as exc:
                 # This ran at debug, which the app never enables, so a monitor
                 # throwing every second for an hour left no trace at all —

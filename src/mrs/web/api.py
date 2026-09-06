@@ -825,6 +825,19 @@ def api_lyrics(request: Request, _: bool = Auth):
     return {"status": "ok", "lyrics": data}
 
 
+@app.get("/api/lyrics/search")
+def api_lyrics_search(q: str = "", _: bool = Auth):
+    """Which song has these words in it.
+
+    Search, not playback — the caller decides what to do with the answer, so
+    a phone can offer the three candidates rather than committing to the
+    first. `verified` says whether the words were actually found in that
+    recording's lyrics or whether it is the model's guess unchecked.
+    """
+    rows = lyrics_mod.hunt(q or "")
+    return {"status": "ok", "query": q, "results": rows}
+
+
 @app.get("/api/about")
 def api_about(request: Request, wait: int = 0, _: bool = Auth):
     """Where this song came from, for whoever is listening to it.
@@ -1249,7 +1262,7 @@ _SETTABLE = {
     "cookie_check_interval": int, "completion_ratio": float,
     "announce": bool, "tts_voice": str, "download_workers": int,
     "tailscale": str, "tailscale_exe": str, "cache_size_mb": int,
-    "allow_key_in_url": bool, "https": bool, "port": int,
+    "allow_key_in_url": bool, "port": int,
     "block_full_guests": bool, "lan_open": bool, "party_mode": bool,
     "ddns_provider": str, "ddns_hostname": str, "ddns_user": str,
     "max_downloads": int, "guest_requests_hour": int,

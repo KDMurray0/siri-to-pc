@@ -75,6 +75,28 @@ def _post(body: dict, timeout: float) -> dict:
         return json.loads(r.read().decode())
 
 
+def ask_json(system: str, user: str, timeout: float = 8.0) -> dict | None:
+    """One JSON answer, or None. For callers that aren't the request parser."""
+    if not available() or not user.strip():
+        return None
+    try:
+        payload = _post({
+            "model": _model(), "temperature": 0,
+            "response_format": {"type": "json_object"},
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user.strip()}],
+        }, timeout)
+        got = json.loads(payload["choices"][0]["message"]["content"])
+        _state["working"] = True
+        return got if isinstance(got, dict) else None
+    except urllib.error.HTTPError as e:
+        log.warning("HTTP %s asking the model", e.code)
+        _state.update(working=False, last_error=f"HTTP {e.code}")
+    except Exception as exc:
+        log.warning("couldn't ask the model: %s", exc)
+    return None
+
+
 def test(model: str | None = None) -> bool:
     """Cheap call to see whether the key+model actually work."""
     if not available():

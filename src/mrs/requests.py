@@ -15,8 +15,8 @@ from .events import Ev, bus
 from .logging_setup import get, spawn
 from .models import Track, _fold
 from .player import player
-from .resolve import (applemusic, grammar, numbers, parser, resolver, spotify,
-                      youtube)
+from .resolve import (applemusic, grammar, lyrics, numbers, parser, resolver,
+                      spotify, youtube)
 from .resolve.conjunction import looks_like_genre
 
 log = get("request")
@@ -81,6 +81,42 @@ _COMMANDS = {
 }
 
 
+
+def _play_from_lyric(text: str, *, mode: str, queue, room: str,
+                     announce: bool, lists) -> dict | None:
+    """A request made by quoting the song rather than naming it.
+
+    Returns None when this wasn't that kind of request, so the ordinary
+    resolver gets its turn untouched.
+
+    Once a song is identified, this hands the title and artist back through
+    the front door rather than reaching into the queue itself: the found
+    song then gets the same treatment as a typed one — the artist's spelling
+    from the catalogue, the download lane, the guest's own queue if that's
+    whose request it was. The recursion is safe because "Bohemian Rhapsody
+    by Queen" is not a question about lyrics.
+    """
+    fragment = grammar.lyric_hunt(text)
+    if not fragment:
+        return None
+    rows = lyrics.hunt(fragment)
+    if not rows:
+        return {"status": "error",
+                "message": f"I couldn't place “{fragment[:60]}”"}
+    top = rows[0]
+    named = f"{top['title']} by {top['artist']}" if top["artist"] else top["title"]
+    got = handle_request(named, mode=mode, source="lyrics", announce=announce,
+                         queue=queue, lists=lists)
+    if got.get("status") != "error":
+        # Say when we are guessing. A song found by checking the words against
+        # the recording and a song the model simply offered are not the same
+        # claim, and the second one should not be dressed as the first.
+        if not top["verified"]:
+            got["message"] = f"{got.get('message') or named} (I think)"
+        got["from_lyric"] = fragment
+        got["heard_as"] = named
+    return got
+
 def handle_request(text: str, *, mode: str = "play", source: str | None = None,
                    announce: bool = True, cast: bool = False,
                    queue=None, lists=OWN) -> dict:
@@ -127,6 +163,12 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
                                 announce=announce, lists=lists)
             if got is not None:
                 return got
+
+        # "what's the song that goes ..." — words, not a name.
+        found = _play_from_lyric(text, mode=mode, queue=queue, room=room,
+                                 announce=announce, lists=lists)
+        if found is not None:
+            return found
 
         # "make me a 30 minute grunge playlist" — build one and file it.
         # Ahead of the playlist match below, which would otherwise read the

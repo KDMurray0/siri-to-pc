@@ -40,6 +40,70 @@ def _parse_synced(text: str) -> list[dict]:
     return out
 
 
+_WORDS = re.compile(r"[^a-z0-9\s]+")
+
+
+def _flat(text: str) -> str:
+    """Lyrics with the punctuation and spacing arguments removed.
+
+    Nobody types the apostrophes, half the transcriptions disagree about
+    them anyway, and "dont" should find "don't".
+    """
+    return " ".join(_WORDS.sub(" ", (text or "").lower()).split())
+
+
+HUNT = (
+    "You identify songs from a fragment of their lyrics. Reply as JSON: "
+    '{"songs": [{"title": "...", "artist": "..."}]}. Up to four candidates, '
+    "most likely first. Use the exact recorded title and the main credited "
+    "artist. If the words are not from a song you recognise, reply "
+    '{"songs": []}. Never invent a song to fill the list.'
+)
+
+
+def hunt(fragment: str) -> list[dict]:
+    """Which song has these words in it.
+
+    Two steps, and the second is the one that matters. A language model will
+    name a song for any line you give it, confidently, including lines that
+    are not from a song at all — so every candidate it offers is checked
+    against the actual words of that recording before it is allowed to count
+    as an answer. LRCLIB holds the words; if the fragment is really in there,
+    we know rather than hope.
+
+    Candidates that fail the check are kept, last and marked, because a
+    verified miss is still often the right song — the lyric database simply
+    may not have that recording. The caller can say "probably" instead of
+    pretending to be sure.
+    """
+    want = _flat(fragment)
+    if len(want) < 6:
+        return []
+    from . import llm
+    got = llm.ask_json(HUNT, fragment.strip(), timeout=8.0) or {}
+    rows = got.get("songs") if isinstance(got.get("songs"), list) else []
+
+    sure, maybe = [], []
+    for row in rows[:4]:
+        if not isinstance(row, dict):
+            continue
+        title = (row.get("title") or "").strip()
+        artist = (row.get("artist") or "").strip()
+        if not title:
+            continue
+        found = get_lyrics(title, artist)
+        words = _flat((found or {}).get("plain") or "")
+        hit = {"title": title, "artist": artist, "verified": bool(words and want in words)}
+        (sure if hit["verified"] else maybe).append(hit)
+    if sure:
+        log.info("lyric %r -> %s — %s (in the words)", fragment[:40],
+                 sure[0]["artist"], sure[0]["title"])
+    elif maybe:
+        log.info("lyric %r -> %s — %s (unconfirmed)", fragment[:40],
+                 maybe[0]["artist"], maybe[0]["title"])
+    return sure + maybe
+
+
 def get_lyrics(title: str, artist: str, duration: int = 0) -> dict | None:
     if not title:
         return None

@@ -95,22 +95,6 @@ from urllib import request as urlrequest
 from urllib.parse import urlparse
 
 _trace("importing webview")
-# Our own certificate, on our own loopback socket, in our own window.
-#
-# With HTTPS on, the flyout points at https://127.0.0.1 and WebView2 does
-# what a browser should do with a certificate signed by nobody: refuses it
-# and shows "Your connection isn't private" where the player ought to be.
-# There is no click-through in a frameless 400px window, so the app looks
-# broken in a new and more confusing way than before.
-#
-# --allow-insecure-localhost is the narrowest answer: it relaxes exactly one
-# thing, on loopback only, for a certificate this program issued to itself
-# minutes earlier. It is not --ignore-certificate-errors, which would drop
-# verification for every host the window ever loads. Set before webview is
-# imported, because WebView2 reads it when it builds its environment.
-if os.environ.get("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") is None:
-    os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = \
-        "--allow-insecure-localhost"
 import webview
 _trace("importing pillow")
 from PIL import Image, ImageDraw

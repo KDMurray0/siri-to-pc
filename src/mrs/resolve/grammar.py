@@ -250,3 +250,35 @@ def parse(text: str) -> Plan:
     plan.query = body
     plan.seeds = _maybe_split(body)
     return plan
+
+
+# "what's the song that goes ...", and the half-dozen other ways people ask.
+# Quotes come off because a spoken request never has them and a typed one
+# usually does.
+_LYRIC_ASK = re.compile(
+    r"^\s*(?:hey\s+)?(?:what(?:'?s| is)?\s+)?(?:the\s+)?song\s+"
+    r"(?:that\s+|which\s+)?(?:goes|starts with|has the (?:lyrics?|words?|line))\s+"
+    r"|^\s*(?:what|which)\s+song\s+(?:is|has|contains)\s+"
+    r"(?:the\s+)?(?:lyrics?|words?|line)?\s*"
+    r"|^\s*(?:song|track)\s+with\s+the\s+(?:lyrics?|words?)\s+"
+    r"|^\s*lyrics?\s*[:\-]\s*"
+    r"|^\s*who\s+sings\s+", re.I)
+_LEAD_PLAY = re.compile(r"^\s*(?:play|find|search for|look up)\s+", re.I)
+
+
+def lyric_hunt(text: str) -> str:
+    """The words to look for, when someone is asking by lyric rather than name.
+
+    Only the explicit phrasings. A bare line of lyrics is indistinguishable
+    from a song title — "hello darkness my old friend" is both — and guessing
+    wrong turns a request to play a track into a search for a different one.
+    Asked properly, there is nothing to guess about.
+    """
+    said = clean(text or "")
+    said = _LEAD_PLAY.sub("", said, count=1)
+    m = _LYRIC_ASK.match(said)
+    if not m:
+        return ""
+    body = said[m.end():].strip().strip("?").strip()
+    body = body.strip("\"'“”‘’").strip()
+    return body if len(body) >= 6 else ""

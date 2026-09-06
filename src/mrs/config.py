@@ -55,7 +55,6 @@ DEFAULTS: dict[str, Any] = {
     # objects once and you accept it; after that nobody on the path can read
     # the key or what you're listening to. Worth having on before this is
     # reachable from the internet.
-    "https": False,
     # The player page opens without a key on the home network, as it always
     # has. Off means even your own wifi needs a link with one.
     "lan_open": True,

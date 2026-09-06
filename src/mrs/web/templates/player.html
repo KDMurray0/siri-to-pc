@@ -1587,8 +1587,6 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 
 
         <div class="seclbl">Security</div>
-        <div class="srow"><span class="slabel">Encrypt the connection<em>Self-signed, so the browser asks once. Needs a restart</em></span>
-          <div class="toggle" id="usehttps"></div></div>
         <div class="srow"><span class="slabel">Allow the key in a link<em>Turn off once nothing you use puts it in a URL</em></span>
           <div class="toggle" id="keyinurl"></div></div>
         <div class="srow"><span class="slabel">Move to an unusual port<em>Takes you out of the drive-by scanning</em></span>
@@ -3150,7 +3148,8 @@ async function loadNetwork() {
       `forward ${r.port} instead, or restart with the other port free.`;
   }
   $("nethint").textContent =
-    (r.https ? "Encrypted (https). " : "Not encrypted — turn https on before using this over the internet. ") +
+    "Traffic is not encrypted — anything reaching this over the internet " +
+    "should go through a VPN or a reverse proxy that terminates TLS. " +
     (wan ? `Forward port ${r.port} to this machine for the first one to work.`
          : "Couldn't work out your public address.");
 }
@@ -3272,7 +3271,6 @@ const settingRow = (id, key) => {
     else if (key === "https") toast("Restart the player for that to take effect");
   };
 };
-settingRow("usehttps", "https");
 settingRow("blockguests", "block_full_guests");
 settingRow("partymode", "party_mode");
 settingRow("keyinurl", "allow_key_in_url");
@@ -4612,7 +4610,6 @@ async function loadSettings() {
   $("boot").classList.toggle("on", !!s.start_on_boot);
   $("bootearly").classList.toggle("on", !!s.start_before_signin);
   $("lockips").classList.toggle("on", !!s.lock_ips);
-  $("usehttps").classList.toggle("on", !!s.https);
   $("blockguests").classList.toggle("on", !!s.block_full_guests);
   $("partymode").classList.toggle("on", !!s.party_mode);
   document.body.classList.toggle("party", !!s.party_mode);

@@ -38,6 +38,18 @@ class EventBus:
         with self._lock:
             self._subs.discard(q)
 
+    @property
+    def watchers(self) -> int:
+        """How many pages are actually open on this.
+
+        Worth knowing because a fair amount of what this program does exists
+        only to be looked at — a spectrum, a progress bar moving a pixel a
+        second — and it was doing all of it for an empty room, all day. This
+        machine has the player open for a few minutes an evening.
+        """
+        with self._lock:
+            return len(self._subs)
+
     def publish(self, kind: str, data: Any = None, *, sticky: bool = True) -> None:
         """Fan an event out to every subscriber. Safe from any thread."""
         if sticky:

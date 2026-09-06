@@ -45,7 +45,9 @@ _WAN_SOURCES = (
 
 
 def scheme() -> str:
-    return "https" if config.get("https") else "http"
+    """Always http. Self-signed TLS is refused by every client that mattered
+    here — Safari most of all — and cost a program that would start."""
+    return "http"
 
 
 def lan_ip() -> str:
@@ -107,11 +109,7 @@ def port_open(port: int, timeout: float = 4.0) -> bool | None:
     try:
         url = f"{scheme()}://{ip}:{int(port)}/api/ping"
         req = urllib.request.Request(url, headers={"User-Agent": "mrs"})
-        ctx = None
-        if scheme() == "https":
-            import ssl
-            ctx = ssl._create_unverified_context()   # our own self-signed cert
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             if b"music-request-server" in r.read(200):
                 log.debug("port %s answered on %s — the forward rule is live",
                           port, ip)
@@ -222,7 +220,7 @@ def addresses(pass_token: str = "") -> dict:
                  "url": player_url("127.0.0.1", pass_token), "host": "127.0.0.1"})
     wanted = int(config.get("port", 5000))
     return {"addresses": rows, "port": port, "scheme": scheme(),
-            "wan_ip": wan, "https": bool(config.get("https")),
+            "wan_ip": wan, "https": False,
             # If these disagree, a port-forward rule aimed at the configured
             # port points at nothing. Worth saying out loud rather than
             # letting it look like a firewall problem.

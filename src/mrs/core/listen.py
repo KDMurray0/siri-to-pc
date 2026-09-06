@@ -142,6 +142,12 @@ class Listener:
                 raw = stream.read(chunk, exception_on_overflow=False)
             except Exception:
                 return
+            # A spectrum nobody can see. The read has to keep happening or
+            # the capture device overruns and the stream dies, but the
+            # analysis below is a hundred thousand float operations a second
+            # in interpreted Python — and it ran all day for an empty room.
+            if not bus.watchers:
+                continue
             samples = array("h")
             samples.frombytes(raw)
             mono = samples[::channels * step][-WINDOW:]   # one channel, downsampled

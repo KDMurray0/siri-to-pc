@@ -1458,6 +1458,57 @@ def run(verbose: bool = False) -> Result:
               f"{_PS.MUTE_SECONDS}/{_PS.FROZEN_SECONDS}")
             say("a player that stopped playing", c)
 
+            # -- 12. asking by words instead of by name --------------------
+            # The grammar and the guard only. Identifying a song needs the
+            # model and the lyric database, and this suite deliberately
+            # touches neither — a fragment under six characters is answered
+            # without asking anybody, which is enough to check the shape.
+            c = _Checker("by lyric")
+            from .resolve.grammar import lyric_hunt
+
+            for said, want in (
+                    ("whats the song that goes is this the real life",
+                     "is this the real life"),
+                    ("play the song that goes hello darkness my old friend",
+                     "hello darkness my old friend"),
+                    ("what song has the lyrics purple haze all in my brain",
+                     "purple haze all in my brain"),
+                    ("song with the words never gonna give you up",
+                     "never gonna give you up"),
+                    ("lyrics: i see a little silhouetto of a man",
+                     "i see a little silhouetto of a man")):
+                c(f"heard {said[:34]!r}", lyric_hunt(said) == want,
+                  repr(lyric_hunt(said)))
+
+            # A bare title must not be read as a lyric, or asking for a song
+            # by name goes looking for a different one.
+            for said in ("play bohemian rhapsody", "bohemian rhapsody",
+                         "play some jazz", "make me a 30 minute grunge playlist",
+                         "skip", "turn it up"):
+                c(f"{said[:30]!r} is not a lyric ask", lyric_hunt(said) == "",
+                  repr(lyric_hunt(said)))
+
+            c("a fragment too short to place is declined",
+              lyric_hunt("the song that goes hi") == "")
+            c("quotes come off", lyric_hunt('the song that goes "let it be now"')
+              == "let it be now", repr(lyric_hunt('the song that goes "let it be now"')))
+
+            got = client.get("/api/lyrics/search?q=ab",
+                             headers={"X-Music-Key": now_key()})
+            c("the search route answers the owner", got.status_code == 200,
+              str(got.status_code))
+            body = got.json() if got.status_code == 200 else {}
+            c("...with a results list", isinstance(body.get("results"), list))
+            c("...and says nothing for a fragment too short",
+              body.get("results") == [], str(body.get("results"))[:60])
+            c("a phone link may search too",
+              client.get("/api/lyrics/search?q=ab",
+                         headers={"X-Music-Key": phone}, ).status_code == 200)
+            c("a stranger may not",
+              client.get("/api/lyrics/search?q=ab",
+                         headers={"X-Music-Key": "nope"}).status_code in (401, 403))
+            say("asking by lyric", c)
+
     except Exception as exc:            # a check suite must not be the thing
         out.failed.append(f"the checks themselves broke: {exc!r}")
     finally:
