@@ -3859,6 +3859,22 @@ let lastStatus = {};
  * the server is told, and never asked. */
 const clockMine = () => cast.on && !!ME && !ME.owner;
 
+/* Whether the sound coming out is this page's own element.
+ *
+ * clockMine() says "a guest whose phone is the speaker", and excludes the
+ * owner — which is right for the drift check, because mpv is still running
+ * on the computer and worth chasing. It is wrong for anything to do with the
+ * lock screen. Casting from the owner's own phone, the audio is here and
+ * mpv is silent, so the scrubber was reading the computer's position and
+ * sending drags to the computer's mpv: the bar moved and the music carried
+ * on where it was. */
+const castSpeaking = () => cast.on && !!castLive();
+const castDur = () => {
+  const el = castLive();
+  return (castSpeaking() && el && isFinite(el.duration) && el.duration > 0)
+    ? el.duration : 0;
+};
+
 /* How far into the song we actually are — this element when we're the clock,
  * the server's number when mpv is. Everything on screen reads from here so
  * the seek bar, the lock screen and the drift check can't disagree. */
@@ -4022,14 +4038,19 @@ function castHandlers() {
      unaffected: that is seekto, and it still works. */
   set("seekto", d => {
     if (!d || d.seekTime == null) return;
-    if (clockMine()) {
-      // The scrubber on a lock screen is this element's, and only this
-      // element can honour it — the server holds a list, not a clock.
-      try { castLive().currentTime = d.seekTime; } catch (e) {}
-      api("/api/session/progress?pos=" + Math.round(d.seekTime));
+    const to = Math.max(0, d.seekTime);
+    // Move the thing that is making the sound. When that is this page, only
+    // this element can honour a drag — the server holds a list, not a clock —
+    // and telling the server to seek instead moved mpv on the computer while
+    // the phone played straight on.
+    if (castSpeaking()) {
+      try { castLive().currentTime = to; } catch (e) {}
+      // Then say where we are, to whoever is keeping score for us.
+      api(clockMine() ? "/api/session/progress?pos=" + Math.round(to)
+                      : "/api/seek?pos=" + Math.round(to));
       return;
     }
-    api("/api/seek?pos=" + Math.round(d.seekTime));
+    api("/api/seek?pos=" + Math.round(to));
   });
 }
 
@@ -4040,8 +4061,12 @@ function castPosition(d) {
   const el = castLive();
   // The element's own duration when we're the clock: the server rounds, and
   // a scrubber that disagrees with the audio by a second jumps as you let go.
-  let dur = (d.track || {}).duration || 0;
-  if (clockMine() && el && isFinite(el.duration) && el.duration > 0) dur = el.duration;
+  let dur = castDur() || (d.track || {}).duration || 0;
+  // Where we actually are, which is this element when this element is the
+  // one making the sound. iOS will not offer a draggable bar at all without
+  // a duration, so an unknown one is worth more effort than a fallback of 0.
+  let at = (castSpeaking() && el && !isNaN(el.currentTime))
+    ? el.currentTime : nowAt(d);
   try {
     // Set before the position, so a browser that reads them together doesn't
     // see "playing" against a stale time.
@@ -4049,7 +4074,7 @@ function castPosition(d) {
     if (dur && ms.setPositionState) {
       ms.setPositionState({
         duration: dur, playbackRate: 1,
-        position: Math.min(dur, Math.max(0, nowAt(d)))
+        position: Math.min(dur, Math.max(0, at))
       });
     }
   } catch (e) {}
