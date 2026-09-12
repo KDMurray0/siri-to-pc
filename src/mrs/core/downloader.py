@@ -341,12 +341,22 @@ class Downloader:
             ev.set()
 
     def _client_chain(self) -> list[str]:
-        """Clients to try in order. YouTube breaks these periodically."""
-        chain = [str(config.get("player_client") or "")]
-        for alt in (config.get("player_client_fallbacks") or []):
-            alt = str(alt)
-            if alt not in chain:
-                chain.append(alt)
+        """Clients to try, the one that worked last time first.
+
+        YouTube breaks these periodically and the order here was fixed, so
+        every download in the house paid the same eight seconds to rediscover
+        the same breakage: 390 first-client failures in the current log and
+        390 rescues by mweb, a perfect correlation and about fifty minutes of
+        waiting. Remembering the answer costs one config write per change.
+        """
+        chain: list[str] = []
+        good = config.get("player_client_good")
+        if good is not None:
+            chain.append(str(good))
+        for name in ([str(config.get("player_client") or "")]
+                     + list(config.get("player_client_fallbacks") or [])):
+            if str(name) not in chain:
+                chain.append(str(name))
         return chain
 
     def _fetch_locked(self, track: Track, on_progress) -> str | None:
@@ -377,6 +387,12 @@ class Downloader:
                     if path:
                         if client != clients[0]:
                             log.info("%r needed the %s client", track.title,
+                                     client or "default")
+                        # Start here next time. Written only on a change, so
+                        # the steady state costs nothing.
+                        if config.get("player_client_good") != client:
+                            config.set("player_client_good", client)
+                            log.info("remembering %r as the client that works",
                                      client or "default")
                         return path
                     if "does not pass filter" in out:

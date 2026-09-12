@@ -56,7 +56,10 @@ for _pkg in ('pythonnet', 'clr_loader', 'edge_tts', 'certifi', 'pyaudiowpatch'):
 _EXCLUDES = [
     'torch', 'torchvision', 'torchaudio', 'tensorflow', 'scipy', 'pandas',
     'matplotlib', 'sklearn', 'scikit-learn', 'transformers', 'sympy', 'cv2',
-    'numpy', 'IPython', 'notebook', 'jupyter', 'jupyterlab', 'nbconvert',
+    'IPython', 'notebook', 'jupyter', 'jupyterlab', 'nbconvert',
+    # numpy is deliberately NOT excluded: the spectrum analysis is one
+    # matrix multiply with it and eight and a half million interpreted
+    # float operations without, and it was the app's largest CPU cost.
     'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'tkinter', 'test',
 ]
 

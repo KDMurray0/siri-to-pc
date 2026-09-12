@@ -106,6 +106,8 @@ DEFAULTS: dict[str, Any] = {
     # web_embedded gives audio-only opus and actually downloads; "tv" is dead
     "player_client": "web_embedded",
     "player_client_fallbacks": ["web", "mweb", ""],
+    # Whichever of the above last worked. None until one does.
+    "player_client_good": None,
     "cookies_file": "",
     "cookies_from_browser": "",
     "cookie_auto_refresh": True,
