@@ -238,6 +238,16 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
         plan = parser.parse(text, mode=mode)
         if source:
             plan.source = source
+        elif not getattr(plan, "source", None):
+            # A link chooses where its own songs come from. The resolver read
+            # the machine's setting, so a guest's choice changed nothing for
+            # them and the owner's applied to everybody. Only when nothing
+            # else has spoken: an explicit source ("radio", "lyrics") is the
+            # caller saying what this request is, not where to shop.
+            prof = getattr(queue, "profile", None)
+            want = (prof.get("source") or "").lower() if prof is not None else ""
+            if want in ("youtube", "soundcloud", "bandcamp"):
+                plan.source = want
 
         if plan.kind == "command":
             return _run_command(plan, queue=queue if guest else None)

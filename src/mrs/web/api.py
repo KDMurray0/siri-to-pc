@@ -7,6 +7,8 @@ stays on threads via plain def routes.
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 import json
 import shutil
 import time
@@ -773,6 +775,39 @@ def api_radio(request: Request, count: int = 8, _: bool = Auth):
 
 # ── search / metadata ─────────────────────────────────────────────────
 
+_ELSEWHERE = ThreadPoolExecutor(max_workers=2, thread_name_prefix="sc-search")
+
+
+def _elsewhere_start(q: str):
+    """Ask SoundCloud, and don't wait around for the answer yet.
+
+    It is a yt-dlp call — about two seconds, against milliseconds for the
+    rest — so it must run *beside* the other lookups rather than after them.
+    Started here and collected at the end, it costs whatever it has left over
+    when everything else is done, which is usually nothing.
+    """
+    try:
+        return _ELSEWHERE.submit(catalog.search_soundcloud, q, 4)
+    except Exception as exc:
+        log.debug("couldn't ask soundcloud: %s", exc)
+        return None
+
+
+def _elsewhere_collect(fut, seconds: float = 1.5) -> list[dict]:
+    """Whatever arrived in time. A slow answer is dropped, never waited on:
+    search staying quick matters more than search being complete, and the
+    next keystroke asks again anyway."""
+    if fut is None:
+        return []
+    try:
+        return [t.to_dict() for t in fut.result(timeout=seconds)]
+    except FuturesTimeout:
+        log.debug("soundcloud was too slow to make the cut")
+    except Exception as exc:
+        log.debug("soundcloud search failed: %s", exc)
+    return []
+
+
 @app.get("/api/search")
 def api_search(q: str, limit: int = 12, _: bool = Auth):
     """Songs, artists, albums, your playlists and your own files.
@@ -787,7 +822,10 @@ def api_search(q: str, limit: int = 12, _: bool = Auth):
         return {"status": "ok", "spotify": True, "results": [], "playlists": [],
                 "artists": [], "albums": [], "library": [],
                 "message": "Spotify link — press Enter to import it"}
-    return {
+    # Started before anything else, so its two seconds overlap the rest
+    # instead of being added to them.
+    elsewhere = _elsewhere_start(q)
+    body = {
         "status": "ok",
         "playlists": [{"kind": "playlist", **p}
                       for p in playlists.summary()
@@ -798,6 +836,8 @@ def api_search(q: str, limit: int = 12, _: bool = Auth):
         "stations": [t.to_dict() for t in radio_mod.search(q, limit=3)],
         "results": [t.to_dict() for t in catalog.search_candidates(q, limit=limit)],
     }
+    body["soundcloud"] = _elsewhere_collect(elsewhere)
+    return body
 
 
 @app.get("/api/play/artist")
@@ -1838,8 +1878,21 @@ def api_pin(_: bool = Auth):
 
 
 @app.get("/api/source")
-def api_source(value: str = "youtube", _: bool = Auth):
-    config.set("source", (value or "youtube").lower())
+def api_source(request: Request, value: str = "youtube", _: bool = Auth):
+    """Where this listener's songs come from.
+
+    The row is marked guestok and this has always accepted a link's token,
+    and it wrote to the machine's config — so a guest picking SoundCloud on
+    their own phone moved the whole house onto SoundCloud, and their own
+    profile's setting, which is the one their requests are resolved against,
+    was never written at all. Whoever asked, it is theirs.
+    """
+    want = (value or "youtube").lower()
+    me = None if is_owner(request) else _profile_for(request)
+    if me is not None:
+        me.set("source", want)           # coerce() rejects anything silly
+        return {"status": "ok", "source": me.get("source"), "mine": True}
+    config.set("source", want)
     return {"status": "ok", "source": config.get("source")}
 
 

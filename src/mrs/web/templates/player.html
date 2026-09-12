@@ -2242,6 +2242,16 @@ async function showResults(v) {
     `<div class="rt"><div class="rn">${esc2(t.title)}</div>` +
     `<div class="ra">${esc2(t.artist)}</div></div></div>`));
 
+  // Under the YouTube songs, because that is still where most things are —
+  // but present, which is the whole point: a record that isn't on YouTube,
+  // or is only there as an instrumental, is usually on SoundCloud properly.
+  (r.soundcloud || []).forEach((t, i) => push(0.7 - i * 0.001,
+    `<div class="rres" data-act="scsong" data-t="${esc2(t.title)}" ` +
+    `data-ar="${esc2(t.artist)}" data-img="${esc2(t.art)}">${art(t.art)}` +
+    `<div class="rt"><div class="rn">${esc2(t.title)}</div>` +
+    `<div class="ra">${esc2(t.artist)}</div></div>` +
+    label("soundcloud") + `</div>`));
+
   rows.sort((a, b) => b.score - a.score);
   const html = rows.map(x => x.html).join("");
 
@@ -2272,6 +2282,13 @@ $("results").addEventListener("mousedown", async e => {
                   "&artist=" + encodeURIComponent(row.dataset.ar || ""));
   } else if (act === "spotify") {
     r = await apiSay("/api/play?q=" + encodeURIComponent(q), true);
+  } else if (act === "scsong") {
+    // Named rather than by id: a SoundCloud track has no video id, and
+    // asking for it by name with the source pinned lands on the same
+    // record rather than on YouTube's version of it.
+    const named = [row.dataset.t, row.dataset.ar].filter(Boolean).join(" ");
+    r = await apiSay("/api/play?source=soundcloud&q=" +
+                     encodeURIComponent(named), true);
   } else {
     r = await apiSay("/api/play/video/" + encodeURIComponent(row.dataset.v) +
       "?title=" + encodeURIComponent(row.dataset.t || "") +
