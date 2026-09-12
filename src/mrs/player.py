@@ -474,7 +474,13 @@ class PlayerService:
             cur = self.queue.track_for(path)
             if cur and not radio.is_station(cur):
                 scrobbler.now_playing(cur)
-                log.info("now playing: %s — %s", cur.artist, cur.title)
+                # With the id. "Playing Blurry by Puddle Of Mudd" is what the
+                # metadata says, and the metadata was right — the upload
+                # behind it was an instrumental, and there was no way to tell
+                # afterwards which upload that had been. The id is the only
+                # thing that identifies what actually came out of the speaker.
+                log.info("now playing: %s — %s [%s]", cur.artist, cur.title,
+                         cur.video_id or "?")
             elif cur:
                 # A station is one file for hours, so this fires once, at
                 # the moment you tune in — announcing the station as a song
