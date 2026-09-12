@@ -215,9 +215,17 @@ async def index(request: Request, key: str = Query(default=""),
 
 
 @app.post("/")
-async def siri(request: Request, key: str = Query(default="")):
-    """The iOS Shortcut endpoint. Replies as soon as the request is understood."""
-    require_key(request, key)
+async def siri(request: Request, _: bool = Auth):
+    """The iOS Shortcut endpoint. Replies as soon as the request is understood.
+
+    Guarded by the same dependency as the other ninety-three routes, and for
+    the reason those exist: this one checked its credential by hand, and the
+    hand-written version declared `key` and not `token`. So a shared link —
+    the one you hand out, the one that carries a token rather than the key —
+    could GET anything and POST nothing, which is a 403 on the only route
+    Shortcuts uses. Nothing about the link was wrong; the door didn't have
+    that keyhole.
+    """
     try:
         body = await request.json()
     except Exception:

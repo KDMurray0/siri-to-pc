@@ -1558,6 +1558,57 @@ def run(verbose: bool = False) -> Result:
                 _cfg.set("shuffle", was)
             say("shuffle as a preference", c)
 
+            # -- 14. the Shortcut endpoint takes the same credentials -------
+            # It is the only POST in the app, and it checked its credential
+            # by hand instead of using the dependency — the hand-written
+            # version declared key and not token, so a shared link could GET
+            # anything and POST nothing. Nothing was wrong with the link.
+            c = _Checker("post")
+            body = {"input": "check-post-please-ignore"}
+
+            def post(tok=None, extra=None, as_json=True):
+                h = dict({"X-Music-Key": now_key()} if tok is None
+                         else {"X-Music-Key": tok})
+                h.update(extra or {})
+                if as_json:
+                    return client.post("/", json=body, headers=h)
+                return client.post("/", data=body, headers=h)
+
+            c("the owner's key posts", post().status_code == 200)
+            c("a full link posts", post(full).status_code == 200)
+            c("a phone link posts", post(phone).status_code == 200)
+            c("a form body still posts",
+              post(as_json=False).status_code == 200)
+            c("a stranger does not",
+              client.post("/", json=body,
+                          headers={"X-Music-Key": "nope"}).status_code in (401, 403))
+            c("and neither does nobody",
+              client.post("/", json=body).status_code in (401, 403))
+
+            # The part that actually broke: the credential in the query, in
+            # each of the three spellings a link can carry it.
+            c("?key= with the key",
+              client.post(f"/?key={now_key()}", json=body).status_code == 200)
+            c("?token= with a link token",
+              client.post(f"/?token={full}", json=body).status_code == 200)
+            c("?key= carrying a link token",
+              client.post(f"/?key={full}", json=body).status_code == 200)
+            c("?token= with a made-up token",
+              client.post("/?token=not-a-real-token",
+                          json=body).status_code in (401, 403))
+
+            # Whatever a GET accepts, the POST must accept. This is the rule
+            # that was broken, so it is the one worth stating.
+            for name, cred in (("the key", now_key()), ("a full link", full),
+                               ("a phone link", phone)):
+                g = client.get("/api/status", headers={"X-Music-Key": cred},
+                               params={"X-Play-Here": "1"})
+                p = post(cred)
+                c(f"{name}: GET and POST agree",
+                  (g.status_code == 200) == (p.status_code == 200),
+                  f"get={g.status_code} post={p.status_code}")
+            say("the shortcut endpoint", c)
+
     except Exception as exc:            # a check suite must not be the thing
         out.failed.append(f"the checks themselves broke: {exc!r}")
     finally:
