@@ -653,15 +653,17 @@ body.mini .controls .ib.small svg{width:14px;height:14px}
 .miniwave{display:none}
 /* The meter sits across the bottom of the cover, big and mini alike. It used
    to be a row of specks in the queue, where you'd never look. */
+/* No backing. It had a dark fade in a 152px tab with rounded bottom corners,
+   which on any light cover read as a sticker slapped on the art. The bars
+   carry their own thin shadow instead, so they still show on white. */
 .miniwave{display:flex;position:absolute;bottom:0;left:50%;width:152px;
   transform:translateX(-50%);height:34px;
-  align-items:flex-end;justify-content:center;gap:2.5px;padding:0 10px 7px;
-  border-radius:0 0 18px 18px;pointer-events:none;
-  background:linear-gradient(to top,rgba(0,0,0,.5),transparent)}
+  align-items:flex-end;justify-content:center;gap:2.5px;padding:0 10px 8px;
+  pointer-events:none}
 .miniwave i{width:3px;height:8%;background:var(--accent);border-radius:1.5px;
-  box-shadow:0 0 5px color-mix(in srgb,var(--accent) 55%,transparent)}
+  box-shadow:0 0 0 .5px rgba(0,0,0,.28),0 1px 3px rgba(0,0,0,.35)}
 body.mini .miniwave{height:22px;gap:1.5px;padding:0 5px 4px;width:auto;
-  left:0;right:0;transform:none;border-radius:0 0 12px 12px}
+  left:0;right:0;transform:none}
 body.mini .miniwave i{width:2px;border-radius:1px}
 /* flat when it's paused, gone when it's switched off */
 .miniwave{transition:opacity .3s}
@@ -689,6 +691,14 @@ body.casting #volicon{color:var(--accent);opacity:1}
   box-shadow:0 1px 3px rgba(0,0,0,.25)}
 .seg-b:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .ph-note{font-size:10.5px;color:var(--sub);text-align:center}
+/* Speaker tuning. Only when this device is the speaker and we know what it is. */
+.tunerow{display:none;align-items:center;justify-content:center;gap:6px;
+  font-size:10.5px;color:var(--sub)}
+body.casting.tunable .tunerow{display:flex}
+.tunerow button{border:1px solid var(--line);background:none;color:var(--sub);
+  font:inherit;font-size:11px;font-weight:600;padding:4px 10px;
+  border-radius:999px;cursor:pointer}
+.tunerow button.on{border-color:var(--accent);color:var(--fg)}
 /* A phone can't choose a PC speaker, so it isn't offered the half that would
    do nothing. */
 body.nopc .seg-b#segpc{display:none}
@@ -1360,6 +1370,11 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
                 role="tab" aria-selected="{{ 'false' if is_guest == '1' else 'true' }}">PC Speaker</button>
       </div>
       <div class="ph-note" id="ph-note">Your own queue, out of this device</div>
+      <div class="tunerow" id="tunerow">
+        <span>Tuned for</span>
+        <button id="tunespk" class="on"></button>
+        <button id="tuneoff">Headphones</button>
+      </div>
     </div>
     <div class="picker-head">Play through
       <button class="pickx" id="devclose" aria-label="Close">✕</button></div>
@@ -1589,6 +1604,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         <div class="seclbl">Security</div>
         <div class="srow"><span class="slabel">Allow the key in a link<em>Turn off once nothing you use puts it in a URL</em></span>
           <div class="toggle" id="keyinurl"></div></div>
+        <div class="srow"><span class="slabel">Allow old GET requests<em>Shortcuts and remotes from before POST. Off once they're rebuilt</em></span>
+          <div class="toggle" id="legacyget"></div></div>
         <div class="srow"><span class="slabel">Move to an unusual port<em>Takes you out of the drive-by scanning</em></span>
           <button class="btn" id="portshuffle">Shuffle</button></div>
         <div class="srow"><span class="slabel">Shut out<em id="blockedwho">nobody</em></span>
@@ -1629,17 +1646,46 @@ const KEY = "{{ api_key }}";
  * The server already knows; it says so in the html. */
 const GUEST = "{{ is_guest }}" === "1";
 const SCOPE = "{{ scope }}";
-const ANNOUNCE_DUCK_DB = Number("{{ announce_duck_db }}") || -12;
-const ANNOUNCE_VOICE_GAIN_DB = Number("{{ announce_voice_gain_db }}") || 0;
+const _announceDuck = Number("{{ announce_duck_db }}");
+const ANNOUNCE_DUCK_DB = Number.isFinite(_announceDuck)
+  ? Math.max(-60, Math.min(0, _announceDuck)) : -12;
+const _announceVoice = Number("{{ announce_voice_gain_db }}");
+const ANNOUNCE_VOICE_GAIN_DB = Number.isFinite(_announceVoice)
+  ? Math.max(-24, Math.min(12, _announceVoice)) : 0;
 const $ = id => document.getElementById(id);
 /* Every ordinary call sends the key as a header, where it stays out of
    browser history, access logs and Referer. */
 /* Every call says which queue it means. "Play here" on and the server routes
    it to this listener's own session; off and it's the shared player. */
-const api = (path) => fetch(path, { headers: {
+const API_READ_ONLY = new Set({{ api_read_only|tojson }});
+function apiMethod(url) {
+  const path = url.pathname;
+  const args = url.searchParams;
+  if (API_READ_ONLY.has(path)) return "GET";
+  if (path === "/api/playlist/tracks") return "GET";
+  if (["/api/sessions", "/api/cache", "/api/blocked",
+       "/api/ddns", "/api/library/paths", "/api/lastfm",
+       "/api/alarms", "/api/cast", "/api/audio"].includes(path))
+    return args.size ? "POST" : "GET";
+  return "POST";
+}
+function apiFetch(path) {
+  const url = new URL(path, location.href);
+  const method = apiMethod(url);
+  const headers = {
     "X-Music-Key": KEY,
     "X-Play-Here": (typeof cast !== "undefined" && cast.on) ? "1" : "0",
-  } }).then(r => r.ok ? r.json() : null).catch(() => null);
+  };
+  const options = { method, headers };
+  if (method === "POST") {
+    headers["Content-Type"] = "application/json";
+    options.body = JSON.stringify(Object.fromEntries(url.searchParams.entries()));
+    return fetch(url.pathname, options);
+  }
+  return fetch(url.pathname + url.search, options);
+}
+const api = (path) => apiFetch(path)
+  .then(r => r.ok ? r.json() : null).catch(() => null);
 
 /* A refusal the user should hear about, rather than a request that silently
    does nothing. 429 is the rate limiter; 403 is a link that's been revoked or
@@ -1661,10 +1707,7 @@ async function apiSay(path, quiet) {
 /* Same headers, but the caller wants to know *why* it failed. */
 async function apiTry(path) {
   try {
-    const r = await fetch(path, { headers: {
-      "X-Music-Key": KEY,
-      "X-Play-Here": (typeof cast !== "undefined" && cast.on) ? "1" : "0",
-    } });
+    const r = await apiFetch(path);
     const body = await r.json().catch(() => ({}));
     return { ok: r.ok, status: r.status, body };
   } catch (e) { return { ok: false, status: 0, body: {} }; }
@@ -2027,8 +2070,15 @@ $("play").onclick = () => {
   // is the one playing, its own element fires pause and does it properly.
   if (!(typeof cast !== "undefined" && cast.on)) {
     document.body.classList.toggle("paused");
+    api("/api/control/playpause");
+    return;
   }
-  api("/api/control/playpause");
+  // This page is the speaker: toggle what can be heard, not what the last
+  // status claimed. A refused autoplay reads "playing" on the server and
+  // silent here, and a toggle then paused the server instead of starting.
+  const el = castLive();
+  if (el.paused) { castUnblock(); castPlay(el); castWants(true); }
+  else { castWants(false); try { el.pause(); } catch (e) {} }
 };
 $("next").onclick = () => api("/api/control/next");
 $("prev").onclick = () => api("/api/control/previous");
@@ -2687,7 +2737,11 @@ async function loadLyrics(force) {
   box.classList.remove("plain");
   box.innerHTML = '<div class="muted">Looking for lyrics…</div>';
   lyricRows = [];
+  // Skip twice quickly and the first answer can land after the second
+  // track started: the old song's words, timed against the new one.
+  const want = state.trackKey;
   const r = await api("/api/lyrics");
+  if (state.trackKey !== want || lyricKey !== want) return;
   const L = r && r.lyrics;
   if (!L) { box.innerHTML = '<div class="muted">No lyrics for this one.</div>';
             lyricRows = []; return; }
@@ -3293,6 +3347,7 @@ const settingRow = (id, key) => {
 settingRow("blockguests", "block_full_guests");
 settingRow("partymode", "party_mode");
 settingRow("keyinurl", "allow_key_in_url");
+settingRow("legacyget", "allow_legacy_get_mutations");
 async function loadDdns() {
   const r = await api("/api/ddns");
   if (!r) return;
@@ -3861,7 +3916,8 @@ const CAST_DEV = "cast:browser";
 /* A shared link is on the device it was opened on: that is what the link
    is for. Set here rather than after /api/whoami comes back, so the very
    first request this page makes already says so. */
-const cast = { on: GUEST, vid: "", tries: 0, ready: "", blocked: false };
+const cast = { on: GUEST, vid: "", tries: 0, ready: "", blocked: false,
+               intent: null, hush: 0 };
 let lastStatus = {};
 
 /* Who holds the clock.
@@ -3905,8 +3961,51 @@ function nowAt(d) {
   return (d && d.position) || 0;
 }
 
+/* Which speaker this is, so the server can tune the file for it (cast.TUNES).
+   A guess from the device, because Safari won't say whether AirPods are in —
+   hence the Headphones button, which is remembered per device. */
+const UA = navigator.userAgent;
+const TUNE_GUESS = /iPhone|iPod/.test(UA) ? "iphone"
+  : IOS ? "ipad"
+  : (/Android/.test(UA) && /Mobile/.test(UA)) ? "phone" : "";
+const TUNE_LABEL = { iphone: "iPhone speaker", ipad: "iPad speakers",
+                     phone: "Phone speaker" };
+function tuneNow() {
+  let off = false;
+  try { off = localStorage.getItem("tuneoff") === "1"; } catch (e) {}
+  return off ? "" : TUNE_GUESS;
+}
+function tunePaint() {
+  document.body.classList.toggle("tunable", !!TUNE_GUESS);
+  $("tunespk").textContent = TUNE_LABEL[TUNE_GUESS] || "";
+  $("tunespk").classList.toggle("on", !!tuneNow());
+  $("tuneoff").classList.toggle("on", !tuneNow());
+}
+function tuneSet(on) {
+  if (!!tuneNow() === on) return;
+  try { localStorage.setItem("tuneoff", on ? "0" : "1"); } catch (e) {}
+  tunePaint();
+  if (!cast.on || !cast.vid) return;
+  // Reload what's playing from the other file, from where it is. Tuning is
+  // made in the background, so this may be the untuned one until next time.
+  const el = castLive(), at = el.currentTime || 0, going = !el.paused;
+  cast.ready = "";
+  castHush();
+  el.src = castSrc(cast.vid);
+  el.addEventListener("loadedmetadata", () => {
+    try { el.currentTime = at; } catch (e) {}
+  }, { once: true });
+  el.load();
+  if (going) castPlay(el);
+  toast(on ? "Tuned for the " + (TUNE_LABEL[TUNE_GUESS] || "speaker").toLowerCase()
+           : "Tuning off");
+}
+$("tunespk").onclick = () => tuneSet(true);
+$("tuneoff").onclick = () => tuneSet(false);
+tunePaint();
+
 const castSrc = v => "/api/output/stream/" + encodeURIComponent(v) +
-                     "?" + urlAuth();
+                     "?" + urlAuth() + (tuneNow() ? "&tune=" + tuneNow() : "");
 
 /* A moment of silence, played through both elements while a finger is still
    on the screen.
@@ -3937,6 +4036,7 @@ function castPrime() {
       el.src = CAST_SILENCE;
       const done = () => {
         try {
+          castHush();
           el.pause();
           el.removeAttribute("src");
           el.load();
@@ -3962,6 +4062,45 @@ function castUnblock() {
   cast.blocked = false;
   document.body.classList.remove("castblocked");
 }
+
+/* Play or pause, said as the one word, and held until the server agrees.
+ *
+ * Lock-screen pause stopped the audio and then sent playpause. Two faults:
+ * the status already on its way still said "playing", castSync obeyed it
+ * and started the music again; and a toggle from a button that means one
+ * thing inverts if the server already heard — pause meant play. So the
+ * word is explicit, and for a few seconds the page believes the person over
+ * a status that predates them. Sent again if the server still disagrees,
+ * because a phone that has just gone quiet is one iOS may freeze mid-fetch. */
+const INTENT_HOLD = 8000, INTENT_RESEND = 2500, INTENT_SETTLE = 2000;
+function castWants(playing) {
+  const now = Date.now();
+  cast.intent = { playing, at: now, sent: now, tries: 1 };
+  try { navigator.mediaSession.playbackState = playing ? "playing" : "paused"; }
+  catch (e) {}
+  api(playing ? "/api/control/resume" : "/api/control/pause");
+}
+function castPlayingNow(d) {
+  const said = !!d && d.state === "playing";
+  const i = cast.intent;
+  if (!i) return said;
+  const now = Date.now();
+  if (i.playing === said) i.agreed = true;
+  // Held a moment even once the server agrees: the answer to a status fetch
+  // sent before the tap can land after the event that agrees with it.
+  if ((i.agreed && now - i.at > INTENT_SETTLE) || now - i.at > INTENT_HOLD) {
+    cast.intent = null;
+    return said;
+  }
+  if (!i.agreed && now - i.sent > INTENT_RESEND && i.tries < 3) {
+    i.sent = now; i.tries++;
+    api(i.playing ? "/api/control/resume" : "/api/control/pause");
+  }
+  return i.playing;
+}
+/* Our own pause() and load() calls, so the pause listener can tell them from
+   the phone pausing us. */
+const castHush = () => { cast.hush = Date.now(); };
 
 function castOn() {
   cast.on = true;
@@ -4038,15 +4177,16 @@ function castHandlers() {
   set("play", () => {
     castUnblock();
     if (local()) { castPlay(castLive()); reportProgress(); }
-    api("/api/control/playpause");
+    castWants(true);
   });
   set("pause", () => {
+    // Intent first, so the pause event this fires knows it was asked for.
+    castWants(false);
     if (local()) { try { castLive().pause(); } catch (e) {} reportProgress(); }
-    api("/api/control/playpause");
   });
   set("stop", () => {
+    castWants(false);
     if (local()) { try { castLive().pause(); } catch (e) {} }
-    api("/api/control/pause");
   });
   set("nexttrack", () => api("/api/control/next"));
   set("previoustrack", () => api("/api/control/previous"));
@@ -4091,7 +4231,7 @@ function castPosition(d) {
   try {
     // Set before the position, so a browser that reads them together doesn't
     // see "playing" against a stale time.
-    ms.playbackState = d.state === "playing" ? "playing" : "paused";
+    ms.playbackState = castPlayingNow(d) ? "playing" : "paused";
     if (dur && ms.setPositionState) {
       ms.setPositionState({
         duration: dur, playbackRate: 1,
@@ -4108,7 +4248,8 @@ function castPreload(d) {
   const next = at >= 0 ? (lastQ[at + 1] || {}).video_id : "";
   if (!next || next === cast.ready || next === cast.vid) return;
   cast.ready = next;
-  api("/api/output/prepare/" + encodeURIComponent(next));
+  api("/api/output/prepare/" + encodeURIComponent(next) +
+      (tuneNow() ? "?tune=" + tuneNow() : ""));
   const el = castIdle();
   try { el.src = castSrc(next); el.load(); } catch (e) {}
 }
@@ -4124,7 +4265,7 @@ function castSync(d) {
   }
   const t = d.track || {};
   const vid = t.video_id || "";
-  if (!vid) { try { castLive().pause(); } catch (e) {} return; }
+  if (!vid) { castHush(); try { castLive().pause(); } catch (e) {} return; }
 
   // Nothing was playing here a moment ago — this is a page that just loaded,
   // or one coming back off the computer's speakers. Then the server's
@@ -4151,6 +4292,7 @@ function castSync(d) {
       try { from.pause(); } catch (e) {}
     } else {
       const el = castLive();
+      castHush();
       el.src = castSrc(vid);
       el.addEventListener("loadedmetadata", () => {
         try { el.currentTime = at; } catch (e) {}
@@ -4161,9 +4303,9 @@ function castSync(d) {
   }
 
   const el = castLive();
-  const playing = d.state === "playing";
+  const playing = castPlayingNow(d);
   if (playing && el.paused) castPlay(el);
-  else if (!playing && !el.paused) el.pause();
+  else if (!playing && !el.paused) { castHush(); el.pause(); }
 
   // Only chase mpv's clock. Chasing our own echo is what produced the loop:
   // status says 0, we're four seconds in, "drift" says seek back to 0, and
@@ -4221,8 +4363,11 @@ function applyAnnounce(d) {
   // names the single tab that's acting as the speaker.
   if (!d.session && d.client !== CLIENT_ID) return;
   const el = castLive();
-  const wasVol = el.volume;
   restoreCastDuck();
+  // Read the base only after undoing an older announcement's duck. Sampling
+  // first made overlapping clips compound the attenuation and restore the
+  // music to the already-ducked level.
+  const wasVol = el.volume;
   const generation = ++duckGeneration;
   duckState = { generation, el, volume: wasVol };
   try {
@@ -4341,6 +4486,15 @@ castEls.forEach(el => el.addEventListener("pause", () => {
   // fill is a CSS animation now and it holds on body.paused, so a second of
   // lag here is a second of words carrying on without any music.
   document.body.classList.add("paused");
+  // The phone paused us: headphones out, a call, Siri, Control Center with
+  // no handler. Nobody told the server, so the next status said "playing"
+  // and castSync put it straight back on — out of the speaker, in the case
+  // of headphones. A track ending fires pause too (el.ended), and so do our
+  // own pause()/load() calls (hush); neither is a request.
+  if (!cast.on || el.ended || Date.now() - cast.hush < 800) return;
+  if (cast.intent && !cast.intent.playing) return;
+  if ((lastStatus || {}).state !== "playing") return;
+  castWants(false);
 }));
 
 /* A .webm still being transcoded answers 503. Retry instead of going silent. */
@@ -4356,6 +4510,7 @@ castEls.forEach(el => el.addEventListener("error", () => {
   document.body.classList.add("waiting");
   setTimeout(() => {
     if (!cast.on || cast.vid !== want) return;
+    castHush();
     el.src = castSrc(want);
     el.load();
   }, wait);
@@ -4719,7 +4874,8 @@ async function loadSettings() {
   $("blockguests").classList.toggle("on", !!s.block_full_guests);
   $("partymode").classList.toggle("on", !!s.party_mode);
   document.body.classList.toggle("party", !!s.party_mode);
-  $("keyinurl").classList.toggle("on", s.allow_key_in_url !== false);
+  $("keyinurl").classList.toggle("on", !!s.allow_key_in_url);
+  $("legacyget").classList.toggle("on", !!s.allow_legacy_get_mutations);
   $("ckauto").classList.toggle("on", s.cookie_auto_refresh !== false);
   $("pldl").classList.toggle("on", !!s.playlist_download);
   markChips("crossfade", s.crossfade || 0);
@@ -5141,7 +5297,7 @@ setInterval(() => {
 document.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT") return;
   const k = e.key.toLowerCase();
-  if (k === " ") { e.preventDefault(); api("/api/control/playpause"); }
+  if (k === " ") { e.preventDefault(); $("play").onclick(); }
   else if (k === "arrowright") seekTo(state.position + 10);
   else if (k === "arrowleft") seekTo(state.position - 10);
   else if (k === "arrowup") { setVol(state.volume + 5); sendVol(); }

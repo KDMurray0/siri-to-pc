@@ -238,8 +238,20 @@ li b{color:var(--fg)}
 <script>
 const KEY = "{{ api_key }}";
 const $ = id => document.getElementById(id);
-const api = p => fetch(p, { headers: { "X-Music-Key": KEY } })
-  .then(r => r.json()).catch(() => null);
+// Reads GET; anything that changes something POSTs JSON (a strict install
+// refuses a GET that does).
+const API_READ_ONLY = new Set({{ api_read_only|tojson }});
+const api = p => {
+  const url = new URL(p, location.href);
+  const headers = { "X-Music-Key": KEY };
+  if (API_READ_ONLY.has(url.pathname))
+    return fetch(url.pathname + url.search, { headers })
+      .then(r => r.json()).catch(() => null);
+  headers["Content-Type"] = "application/json";
+  return fetch(url.pathname, { method: "POST", headers,
+    body: JSON.stringify(Object.fromEntries(url.searchParams)) })
+    .then(r => r.json()).catch(() => null);
+};
 
 const STEPS = document.querySelectorAll(".step");
 const LAST = STEPS.length - 1;

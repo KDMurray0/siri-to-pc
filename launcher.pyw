@@ -718,11 +718,18 @@ def _icon_image():
 
 
 def _api(path: str) -> None:
+    """Tell our own server to do something. POST, key in the header: a GET
+    that changes state is refused on a strict install."""
+    from urllib.parse import parse_qsl, urlsplit
     port = int(srv.runtime.get("port") or config.get("port", 7420))
-    key = config.get("api_key", "")
-    sep = "&" if "?" in path else "?"
+    parts = urlsplit(path)
+    body = json.dumps(dict(parse_qsl(parts.query))).encode()
+    req = urlrequest.Request(
+        srv.local_url(port, parts.path), data=body, method="POST",
+        headers={"X-Music-Key": config.get("api_key", ""),
+                 "Content-Type": "application/json"})
     try:
-        srv.open_local(srv.local_url(port, f"{path}{sep}key={key}"), timeout=5)
+        urlrequest.urlopen(req, timeout=5).close()
     except Exception:
         pass
 

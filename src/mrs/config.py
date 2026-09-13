@@ -52,15 +52,13 @@ DEFAULTS: dict[str, Any] = {
     "audio_device_label": "",
     "cast_client": "",         # the one browser acting as the speaker
 
-    # Security. The key belongs in the X-Music-Key header; URLs that can't
-    # carry one (audio elements, EventSource, links you send people) get a
-    # signed token instead. Turn allow_key_in_url off once nothing you use
-    # still puts the raw key in a query string.
-    # Stays True. Flipping the default was half of a change: the other half
-    # -- moving mutations off GET, so nothing needs the key in a URL -- was
-    # never written, and a fresh install with this False has a tray, a
-    # Shortcut and a flyout that all still put the key in a query string.
-    "allow_key_in_url": True,
+    # Security. The key belongs in X-Music-Key; browser-only URLs carry a
+    # signed pass. Both legacy raw-key URLs and state-changing GET requests
+    # are opt-in compatibility switches, off for new installs.
+    "allow_key_in_url": False,
+    "allow_legacy_get_mutations": False,
+    "audit_log_days": 30,
+    "library_monitor_minutes": 0,
     # Encrypt the connection with a self-signed certificate. The browser
     # objects once and you accept it; after that nobody on the path can read
     # the key or what you're listening to. Worth having on before this is
@@ -208,6 +206,16 @@ class Config:
                     self._keep_wreckage()
             merged = dict(DEFAULTS)
             merged.update({k: v for k, v in raw.items() if v is not None})
+
+            # Strict for new installs, unchanged for existing ones. An install
+            # from before these settings has Shortcuts, remotes and peers that
+            # GET with ?key=, and failing closed on upgrade breaks all of them
+            # with nothing on the phone saying why. They stay in compatibility
+            # mode until the owner turns it off in Settings.
+            if raw and "allow_legacy_get_mutations" not in raw:
+                merged["allow_legacy_get_mutations"] = True
+                if "allow_key_in_url" not in raw:
+                    merged["allow_key_in_url"] = True     # the old default
 
             # The key is this server's identity, not a setting. Every pass is
             # signed with it, so minting a new one silently revokes every link

@@ -143,10 +143,25 @@ def _run(verbose: bool = False) -> Result:
             phone = link("check-phone", "phone")
             here = {"X-Play-Here": "1"}
 
+            from urllib.parse import parse_qsl, urlsplit
+            from .web.policy import changing, matching_route
+
             def get(path, tok=None, extra=None):
                 h = dict({"X-Music-Key": now_key()} if tok is None
                          else {"X-Music-Key": tok})
                 h.update(extra or {})
+                # Writes go the way the pages send them: POST, JSON body. This
+                # is a fresh install, so a GET that changes something is 405.
+                parts = urlsplit(path)
+                route, child = matching_route(app, {
+                    "type": "http", "path": parts.path, "root_path": "",
+                    "method": "GET"})
+                params = dict(parse_qsl(parts.query, keep_blank_values=True))
+                if route and changing(route.path, params,
+                                      (child or {}).get("path_params", {})):
+                    token = params.pop("token", None)
+                    url = parts.path + (f"?token={token}" if token else "")
+                    return client.post(url, json=params, headers=h)
                 return client.get(path, headers=h)
 
             # -- 1. everyone's listening is their own ---------------------
@@ -1605,9 +1620,10 @@ def _run(verbose: bool = False) -> Result:
               client.post("/", json=body).status_code in (401, 403))
 
             # The part that actually broke: the credential in the query, in
-            # each of the three spellings a link can carry it.
-            c("?key= with the key",
-              client.post(f"/?key={now_key()}", json=body).status_code == 200)
+            # the spellings a link can carry it. A link token belongs there —
+            # that's what a link is.
+            from .web.security import bans as _bans
+            _bans.forgive("testclient")        # the two refusals above count
             c("?token= with a link token",
               client.post(f"/?token={full}", json=body).status_code == 200)
             c("?key= carrying a link token",
@@ -1615,6 +1631,25 @@ def _run(verbose: bool = False) -> Result:
             c("?token= with a made-up token",
               client.post("/?token=not-a-real-token",
                           json=body).status_code in (401, 403))
+            # The raw key does not, on a new install (SEC-003). An install from
+            # before it keeps compatibility mode, so its Shortcut still works.
+            got = client.post(f"/?key={now_key()}", json=body).status_code
+            c("?key= with the raw key is refused on a new install",
+              got in (401, 403), str(got))
+            _bans.forgive("testclient")
+            _cfg.set("allow_key_in_url", True)
+            try:
+                got = client.post(f"/?key={now_key()}", json=body).status_code
+                c("...and still taken in compatibility mode", got == 200, str(got))
+            finally:
+                _cfg.set("allow_key_in_url", False)
+            c("other parameters in a POST url are refused",
+              client.post(f"/?token={full}&input=hi", json=body).status_code == 400)
+            c("a cross-site POST is refused",
+              client.post("/", json=body, headers={
+                  "X-Music-Key": now_key(),
+                  "Origin": "http://evil.example"}).status_code == 403)
+            _bans.forgive("testclient")
 
             # Whatever a GET accepts, the POST must accept. This is the rule
             # that was broken, so it is the one worth stating.
@@ -1728,6 +1763,214 @@ def _run(verbose: bool = False) -> Result:
                     c(f"README's port matches the default ({_D['port']})",
                       ":5000" not in rd and "LocalPort 5000" not in rd)
             say("the install instructions match the code", c)
+
+            # -- 17. a write is a POST (SEC-003) ---------------------------
+            c = _Checker("writes")
+            from pathlib import Path
+            from .paths import cache_dir
+            owner_h = {"X-Music-Key": now_key()}
+            r = client.get("/api/control/next", headers=owner_h)
+            c("a GET that changes something is refused on a new install",
+              r.status_code == 405, str(r.status_code))
+            r = client.post("/api/control/next", json={}, headers=owner_h)
+            c("...and the same thing as a POST works", r.status_code == 200,
+              str(r.status_code))
+            c("a read is still a GET",
+              client.get("/api/status", headers=owner_h).status_code == 200)
+            c("a read-or-write route reads by GET",
+              client.get("/api/sessions", headers=owner_h).status_code == 200)
+            c("...and refuses to write by GET",
+              client.get("/api/sessions?close=nobody",
+                         headers=owner_h).status_code == 405)
+            _cfg.set("allow_legacy_get_mutations", True)
+            try:
+                c("compatibility mode still takes the old GET",
+                  client.get("/api/control/next", headers=owner_h).status_code == 200)
+            finally:
+                _cfg.set("allow_legacy_get_mutations", False)
+            r = client.post("/api/control/next", json={}, headers=dict(
+                owner_h, Origin="http://evil.example"))
+            c("a cross-site POST is refused", r.status_code == 403, str(r.status_code))
+            r = client.post("/api/control/next?value=3", json={}, headers=owner_h)
+            c("parameters in a POST url are refused", r.status_code == 400,
+              str(r.status_code))
+
+            # The pages learn which calls are reads from the server's table.
+            page = client.get("/remote", headers=owner_h).text
+            c("the remote no longer puts the key in its urls",
+              'key=" + encodeURIComponent(KEY)' not in page)
+            c("...and its read list is the server's",
+              '"/api/status"' in page and '"/api/control/{action}"' not in page)
+            ppage = client.get("/player", headers=owner_h).text
+            c("the player's read list is the server's",
+              "API_READ_ONLY = new Set([" in ppage and '"/api/status"' in ppage)
+
+            # The owner's trail records machine changes, not every skip.
+            from .core.audit import entries as _audit
+            before = len(_audit())
+            client.post("/api/control/next", json={}, headers=owner_h)
+            c("a skip doesn't write the audit trail", len(_audit()) == before)
+            client.post("/api/audio", json={"crossfade": 0}, headers=owner_h)
+            c("a settings change does", len(_audit()) == before + 1,
+              f"{before} -> {len(_audit())}")
+
+            # Upgrades keep working; new installs are strict.
+            import json as _json
+            import tempfile as _tf
+            from unittest.mock import patch as _patch
+            from . import config as _config_mod
+            with _tf.TemporaryDirectory() as tmp:
+                def make(contents):
+                    p = Path(tmp) / "config.json"
+                    for f in Path(tmp).iterdir():
+                        f.unlink()
+                    if contents is not None:
+                        p.write_text(_json.dumps(contents), "utf-8")
+                    with _patch.object(_config_mod, "config_path", lambda: p), \
+                         _patch.object(_config_mod, "migrate_legacy_data", lambda: None):
+                        return _config_mod.Config()
+                k = "k" * 32
+                fresh = make(None)
+                c("a new install is strict",
+                  fresh.get("allow_legacy_get_mutations") is False
+                  and fresh.get("allow_key_in_url") is False)
+                old = make({"api_key": k, "port": 7420})
+                c("an upgrade keeps its old GETs",
+                  old.get("allow_legacy_get_mutations") is True)
+                c("...and its ?key= Shortcut",
+                  old.get("allow_key_in_url") is True)
+                again = make(_json.loads((Path(tmp) / "config.json").read_text("utf-8"))
+                             if (Path(tmp) / "config.json").exists() else None)
+                c("...and says so on the next start too",
+                  again.get("allow_legacy_get_mutations") is True)
+                chose = make({"api_key": k, "allow_key_in_url": False})
+                c("an owner who had turned ?key= off keeps it off",
+                  chose.get("allow_key_in_url") is False)
+                strict = make({"api_key": k, "allow_key_in_url": False,
+                               "allow_legacy_get_mutations": False})
+                c("an owner who turned compatibility off keeps it off",
+                  strict.get("allow_legacy_get_mutations") is False)
+            say("a write is a POST", c)
+
+            # -- 18. speaker tuning ----------------------------------------
+            c = _Checker("tune")
+            from .core import cast as _cast
+            c("known tunes pass", _cast.tune_name("iPhone") == "iphone")
+            c("anything else is no tuning",
+              _cast.tune_name("../../x") == "" and _cast.tune_name(None) == "")
+            c("an unknown tune processes like none",
+              _cast.filter_chain("bogus") == _cast.filter_chain(""))
+            c("a tuned file is a different file",
+              _cast._converted("v", "iphone") != _cast._converted("v", ""))
+            c("a missing track says so", _cast.serve("chk-nope", "iphone")[1] == "missing")
+            import shutil as _sh
+            import subprocess as _sp
+            if _sh.which("ffmpeg"):
+                vid = "chk-tune-src"
+                src = cache_dir() / f"{vid}.m4a"
+                _sp.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                         "-f", "lavfi", "-i", "sine=f=60:d=4",
+                         "-f", "lavfi", "-i", "sine=f=1000:d=4",
+                         "-filter_complex", "amix=inputs=2", "-ac", "2",
+                         "-c:a", "aac", str(src)], capture_output=True, timeout=60)
+                first, st = _cast.serve(vid, "iphone")
+                c("the phone isn't kept waiting for tuning",
+                  st == "ready" and first == src, f"{st} {first}")
+                for _ in range(100):
+                    if _cast.playable(vid, "iphone")[1] == "ready":
+                        break
+                    time.sleep(0.1)
+                tuned, st = _cast.playable(vid, "iphone")
+                c("the tuning chain runs in ffmpeg", st == "ready" and tuned
+                  and tuned.stat().st_size > 10_000, st)
+                again, _ = _cast.serve(vid, "iphone")
+                c("a url keeps its file once it's being read", again == first)
+                _cast._held.clear()
+                later, _ = _cast.serve(vid, "iphone")
+                c("...and gets the tuned one next time", later == tuned)
+                _cast.prune()
+                c("prune keeps a tuned file", tuned.is_file())
+                if tuned and tuned.is_file():
+                    import re as _re
+
+                    def rms(path, af):
+                        out = _sp.run(["ffmpeg", "-hide_banner", "-i", str(path),
+                                       "-af", af + "astats=metadata=0",
+                                       "-f", "null", "-"],
+                                      capture_output=True, text=True).stderr
+                        got = _re.findall(r"RMS level dB:\s*(-?[\d.]+|-inf)", out)
+                        return float(got[-1]) if got and got[-1] != "-inf" else -200.0
+
+                    # Relative to the whole: the chain also adds level on
+                    # purpose, so the absolute 60Hz figure undersells the cut.
+                    def share(path):
+                        return rms(path, "lowpass=f=80,lowpass=f=80,") - rms(path, "")
+                    before, after = share(src), share(tuned)
+                    c("the sub-bass a phone can't play is taken out",
+                      after < before - 15, f"{before:.1f} -> {after:.1f} dB of the whole")
+            say("speaker tuning", c)
+
+            # -- 19. lyrics for the recording that's playing ----------------
+            c = _Checker("lyrics")
+            from .resolve import lyrics as _ly
+            edit = {"duration": 230, "syncedLyrics": "[00:01.00]radio edit"}
+            album = {"duration": 310, "syncedLyrics": "[00:01.00]album"}
+            plain = {"duration": 309, "plainLyrics": "words"}
+            row, trust = _ly._pick([edit, album, plain], 310)
+            c("Plush: the 310s album take, not the 230s edit listed first",
+              row is album and trust)
+            row, trust = _ly._pick([{"duration": 261, "syncedLyrics": "x"},
+                                    {"duration": 304, "syncedLyrics": "y"}], 303)
+            c("Blurry: 304 for a 303s track", row["duration"] == 304 and trust)
+            row, trust = _ly._pick([edit], 310)
+            c("nothing close: the words, but not the timings", row is edit and not trust)
+            row, trust = _ly._pick([plain, album], 0)
+            c("no length to go on: a timed one", row is album and trust)
+            c("nothing at all is nothing", _ly._pick([], 300) == (None, False))
+
+            calls = []
+
+            def fake(url):
+                calls.append(url)
+                return None if "/get" in url else [edit]
+            _ly._cache.clear()
+            with _patch.object(_ly, "_fetch", fake), _patch.object(_ly.time, "sleep", lambda s: None):
+                got = _ly.get_lyrics("Plush", "Stone Temple Pilots", 310)
+            c("an exact-match failure is retried before searching",
+              sum("/get" in u for u in calls) == 2, str(len(calls)))
+            c("untrusted timings aren't shown as synced",
+              got and got["synced"] == [] and "radio edit" in got["plain"], str(got)[:80])
+            with _patch.object(_ly, "_fetch", lambda u: None if "/get" in u else [album]), \
+                 _patch.object(_ly.time, "sleep", lambda s: None):
+                other = _ly.get_lyrics("Plush", "Stone Temple Pilots", 230)
+            c("a different length is a different answer, not the cached one",
+              other is not got)
+            _ly._cache.clear()
+            say("lyrics for the recording that's playing", c)
+
+            # -- 20. what the phone page does with its buttons -------------
+            c = _Checker("transport")
+            src_html = (Path(__file__).parent / "web" / "templates" /
+                        "player.html").read_text("utf-8")
+            import re as _re2
+
+            def handler(name):
+                m = _re2.search(r'set\("' + name + r'", (.*?)\n  \}\);', src_html, _re2.S)
+                return m.group(1) if m else ""
+            c("lock-screen pause says pause, not toggle",
+              "castWants(false)" in handler("pause") and "playpause" not in handler("pause"))
+            c("lock-screen play says play, not toggle",
+              "castWants(true)" in handler("play") and "playpause" not in handler("play"))
+            c("a stale status can't restart what was just paused",
+              "const playing = castPlayingNow(d);" in src_html)
+            c("the phone pausing us is passed on",
+              "if (!cast.on || el.ended || Date.now() - cast.hush < 800) return;" in src_html)
+            c("a late lyrics answer for the last track is dropped",
+              "if (state.trackKey !== want || lyricKey !== want) return;" in src_html)
+            wave = _re2.search(r"\.miniwave\{display:flex[^}]*\}", src_html)
+            c("no dark tab behind the level meter",
+              wave and "gradient" not in wave.group(0))
+            say("the phone's buttons", c)
 
     except Exception as exc:            # a check suite must not be the thing
         out.failed.append(f"the checks themselves broke: {exc!r}")

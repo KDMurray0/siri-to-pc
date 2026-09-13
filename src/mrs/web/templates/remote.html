@@ -295,8 +295,21 @@ function phFail(el) {
 }
 const KEY = "{{ api_key }}";
 const $ = id => document.getElementById(id);
-const api = p => fetch(p + (p.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(KEY))
-  .then(r => r.ok ? r.json() : null).catch(() => null);
+/* Credential in the header, never the URL. Reads GET; anything else POSTs its
+   parameters as JSON, because a strict install refuses a GET that changes
+   something. */
+const API_READ_ONLY = new Set({{ api_read_only|tojson }});
+const api = p => {
+  const url = new URL(p, location.href);
+  const headers = { "X-Music-Key": KEY };
+  if (API_READ_ONLY.has(url.pathname))
+    return fetch(url.pathname + url.search, { headers })
+      .then(r => r.ok ? r.json() : null).catch(() => null);
+  headers["Content-Type"] = "application/json";
+  return fetch(url.pathname, { method: "POST", headers,
+    body: JSON.stringify(Object.fromEntries(url.searchParams)) })
+    .then(r => r.ok ? r.json() : null).catch(() => null);
+};
 const esc = s => (s || "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const fmt = s => { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s/60) + ":" + String(s%60).padStart(2,"0"); };
 const ICON = {
@@ -564,10 +577,13 @@ function apply(d) {
     : "";
 }
 
-let es;
-function connect() {
+let es, pass = "";
+async function connect() {
   if (es) es.close();
-  es = new EventSource("/api/events?key=" + encodeURIComponent(KEY));
+  // EventSource can't send a header. The owner swaps the key for a pass
+  // first; a shared link already is one.
+  if (!pass) pass = ((await api("/api/token")) || {}).token || KEY;
+  es = new EventSource("/api/events?token=" + encodeURIComponent(pass));
   es.onmessage = ev => {
     let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
     if (m.type === "status") apply(m.data);
@@ -575,7 +591,7 @@ function connect() {
     else if (m.type === "toast")
       toast(typeof m.data === "string" ? m.data : (m.data || {}).text);
   };
-  es.onerror = () => { es.close(); setTimeout(connect, 3000); };
+  es.onerror = () => { es.close(); pass = ""; setTimeout(connect, 3000); };
 }
 
 setInterval(() => {

@@ -131,8 +131,10 @@ def _run() -> int:
                 tok = minted["token"]
                 if c.get(f"/api/status?token={tok}").status_code != 200:
                     bad.append("token can't listen")
-                if c.get(f"/api/setting?key=volume&value=70&token={tok}"
-                         ).status_code != 403:
+                # POST: that is how a write arrives now, so it is the one
+                # that has to be refused for the right reason.
+                if c.post("/api/setting", json={"key": "volume", "value": "70"},
+                          headers={"X-Music-Key": tok}).status_code != 403:
                     bad.append("token reached a settings write")
                 forget_pass(minted["id"])
         if bad:
@@ -164,6 +166,9 @@ def _run() -> int:
                                                 text, re.S)):
                 if not body.strip():
                     continue
+                # A value the server fills in as JSON is an expression, not a
+                # string, so it needs standing in for before node reads it.
+                body = re.sub(r"\{\{[^}]*\|\s*tojson\s*\}\}", "null", body)
                 tmp = Path(tempfile.gettempdir()) / f"mrs_{page.stem}_{i}.js"
                 tmp.write_text(body, encoding="utf-8")
                 try:

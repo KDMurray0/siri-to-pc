@@ -32,14 +32,14 @@ a{color:var(--accent)}
   <div class="card" style="border-color:var(--accent)">
     <div class="muted">Control it from this phone</div>
     <div class="row" style="margin-top:10px">
-      <button onclick="location.href='/remote?key={{ api_key }}'">Open the remote</button>
+      <button onclick="location.href='/remote{% if key_in_url %}?key={{ api_key }}{% endif %}'">Open the remote</button>
       <span class="muted">Play, pause, skip, search, queue, playlists</span>
     </div>
   </div>
 
   <div class="card">
     <div class="muted">Your endpoint</div>
-    <code id="url">http://{{ host }}:{{ port }}/?key={{ api_key }}</code>
+    <code id="url">http://{{ host }}:{{ port }}/{% if key_in_url %}?key={{ api_key }}{% endif %}</code>
     <div class="row">
       <button id="copy">Copy</button>
       <span class="muted" id="copied"></span>
@@ -52,7 +52,9 @@ a{color:var(--accent)}
     <li>Add <strong>Dictate Text</strong>.</li>
     <li>Add <strong>Get Contents of URL</strong> and paste the endpoint above.</li>
     <li>Set <strong>Method</strong> to <strong>POST</strong>, <strong>Request Body</strong> to <strong>JSON</strong>.</li>
-    <li>Add one field: key <code>input</code>, type Text, value = <strong>Dictated Text</strong>.</li>
+    {% if not key_in_url %}<li>Under <strong>Headers</strong>, add <code>X-Music-Key</code> with the value
+      <code>{{ api_key }}</code>. It goes in a header so it never sits in a URL.</li>
+    {% endif %}    <li>Add one field: key <code>input</code>, type Text, value = <strong>Dictated Text</strong>.</li>
     <li>Name it something you'd say out loud, like “Play music”.</li>
   </ol>
   <p class="muted">Then: “Hey Siri, Play music” → “play something by Fleetwood Mac”.</p>

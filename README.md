@@ -306,11 +306,15 @@ This separation means search results have accurate metadata immediately, and pla
 
 ## API Endpoints
 
-All endpoints return JSON and require authentication via `key` query parameter or `X-Api-Key` header.
+All endpoints return JSON and take the key in the `X-Music-Key` header. Anything that changes something is a `POST` with its parameters as a JSON body; reads are `GET`. A shared link's token may also ride in the URL as `?token=`, because a link has nowhere else to put it.
+
+**Compatibility mode.** Installs from before this change keep working exactly as they did — `GET` for everything and `?key=SECRET` in the URL — until you turn off *Allow old GET requests* (`allow_legacy_get_mutations`) and *Allow the key in a link* (`allow_key_in_url`) under Settings → Security. New installs start with both off. The examples below are the new form.
 
 ### Play a request
 ```
-GET /api/play?key=SECRET&q=Yellow+by+Coldplay&type=auto&shuffle=0&mode=play
+POST /api/play
+X-Music-Key: SECRET
+{"q": "Yellow by Coldplay", "type": "auto", "shuffle": 0, "mode": "play"}
 ```
 
 Parameters:
@@ -322,28 +326,29 @@ Parameters:
 
 ### Play a specific video
 ```
-GET /api/play/video/YOUTUBE_VIDEO_ID?key=SECRET
+POST /api/play/video/YOUTUBE_VIDEO_ID      (X-Music-Key: SECRET, body {})
 ```
 
 ### Status
 ```
-GET /api/status?key=SECRET
+GET /api/status                            (X-Music-Key: SECRET)
 ```
 
 Returns current track, player state, playlist position, and recent requests.
 
 ### Transport controls
 ```
-GET /api/control/pause?key=SECRET
-GET /api/control/next?key=SECRET
-GET /api/control/previous?key=SECRET
-GET /api/control/volume?value=75&key=SECRET
-GET /api/control/shuffle_toggle?key=SECRET
+POST /api/control/pause                    body {}
+POST /api/control/resume                   body {}
+POST /api/control/next                     body {}
+POST /api/control/previous                 body {}
+POST /api/control/volume                   body {"value": 75}
+POST /api/control/shuffle                  body {}
 ```
 
 ### Health check
 ```
-GET /api/ping?key=SECRET
+GET /api/ping
 ```
 
 Returns `{"status": "ok"}` instantly.
@@ -440,12 +445,7 @@ internet") instead of claiming the song doesn't exist. It notices within
 about three failed calls and stops making them, so a refill costs nothing
 instead of eleven seconds of timeouts.
 
-Toggle the whole thing live from the music bar, or with:
-
-```
-GET /api/autoqueue?key=SECRET            # toggle
-GET /api/autoqueue?key=SECRET&enabled=0  # off
-```
+Toggle the whole thing live from the music bar.
 
 ## Windows Media Integration
 
@@ -473,25 +473,22 @@ YouTube's 2026 anti-bot stack (SABR, PO tokens, session-bound URLs) means a stre
 2. Tap **+** to create a new shortcut
 3. Name it something Siri hears clearly, e.g., "Play Music" or "Request Song"
 4. Add **"Dictate Text"** action
-5. Add **"URL Encode"** action (input: Dictated Text)
-6. Add **"Get Contents of URL"** action with this URL:
-   ```
-   http://192.168.1.XXX:7420/api/play?key=YOUR_SECRET&q=[URL_ENCODED_TEXT]&auto=1
-   ```
-   Replace `192.168.1.XXX` with your PC's IP and `YOUR_SECRET` with your API key.
-7. Add **"Get Dictionary Item"** action (input: URL response, key: `message`)
-8. Add **"Speak Text"** action (input: the message value)
-9. Optionally add **"Show Notification"** for visual feedback
+5. Add **"Get Contents of URL"** action with the URL `http://192.168.1.XXX:7420/`
+   - **Method:** POST
+   - **Headers:** `X-Music-Key` = your API key
+   - **Request Body:** JSON, one field `input` = Dictated Text
+
+   Replace `192.168.1.XXX` with your PC's IP. The player's *Set up the Shortcut* page shows the exact address and key. A shared link's token can go in the URL instead (`http://…:7420/?token=TOKEN`), which is what the links you hand out do.
+6. Add **"Get Dictionary Item"** action (input: URL response, key: `message`)
+7. Add **"Speak Text"** action (input: the message value)
+8. Optionally add **"Show Notification"** for visual feedback
 
 ### Pre-named shortcut (one phrase to Siri)
 
 Create a shortcut named "Play Some Fleetwood Mac":
 
 1. Name the Shortcut exactly what you'll say to Siri
-2. Add **"Get Contents of URL"** with a hardcoded URL:
-   ```
-   http://192.168.1.XXX:7420/api/play?key=YOUR_SECRET&q=Fleetwood+Mac&auto=1&type=artist
-   ```
+2. Add **"Get Contents of URL"**, set up as above, with `input` fixed to `play some Fleetwood Mac`
 3. Add **"Get Dictionary Item"** for `message`
 4. Add **"Speak Text"** or **"Show Notification"**
 

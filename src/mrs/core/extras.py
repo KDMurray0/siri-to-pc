@@ -6,6 +6,7 @@ import hashlib
 import json
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -245,21 +246,39 @@ class Caster:
                 out.append(entry)
         return out
 
+    @staticmethod
+    def _send(peer: dict, path: str, params: dict, timeout: float) -> bool:
+        """POST with the key in a header; a peer on an older build only
+        knows GET with ?key=, so a 404/405 falls back to that."""
+        base = f"http://{peer['host']}{path}"
+        headers = dict(UA, **{"Content-Type": "application/json"})
+        if peer.get("key"):
+            headers["X-Music-Key"] = peer["key"]
+        req = urllib.request.Request(base, data=json.dumps(params).encode(),
+                                     headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.status == 200
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (404, 405):
+                return False
+        query = dict(params)
+        if peer.get("key"):
+            query["key"] = peer["key"]
+        url = base + ("?" + urllib.parse.urlencode(query) if query else "")
+        with urllib.request.urlopen(urllib.request.Request(url, headers=UA),
+                                    timeout=timeout) as r:
+            return r.status == 200
+
     def broadcast(self, text: str) -> list[str]:
         """Send a request to every peer. Returns the ones that accepted."""
         good = []
         for peer in self.peers():
-            host = peer["host"]
-            url = f"http://{host}/api/play?q={urllib.parse.quote(text)}"
-            if peer.get("key"):
-                url += f"&key={urllib.parse.quote(peer['key'])}"
             try:
-                req = urllib.request.Request(url, headers=UA)
-                with urllib.request.urlopen(req, timeout=6) as r:
-                    if r.status == 200:
-                        good.append(host)
+                if self._send(peer, "/api/play", {"q": text}, 6):
+                    good.append(peer["host"])
             except Exception as exc:
-                log.debug("cast to %s failed: %s", host, exc)
+                log.debug("cast to %s failed: %s", peer["host"], exc)
         if good:
             log.info("cast to %s", ", ".join(good))
         return good
@@ -267,14 +286,9 @@ class Caster:
     def control(self, action: str) -> list[str]:
         good = []
         for peer in self.peers():
-            url = f"http://{peer['host']}/api/control/{action}"
-            if peer.get("key"):
-                url += f"?key={urllib.parse.quote(peer['key'])}"
             try:
-                with urllib.request.urlopen(urllib.request.Request(url, headers=UA),
-                                            timeout=5) as r:
-                    if r.status == 200:
-                        good.append(peer["host"])
+                if self._send(peer, f"/api/control/{urllib.parse.quote(action)}", {}, 5):
+                    good.append(peer["host"])
             except Exception:
                 pass
         return good

@@ -33,6 +33,9 @@ from ..core.taste import taste
 from ..events import Ev, bus
 from . import security as sec
 from .security import bans, same_key
+from .policy import (OWNER as OWNER_ROUTES, READ_ONLY as READ_ONLY_ROUTES,
+                     changing as api_changes, install as install_api_policy,
+                     matching_route)
 from ..logging_setup import get, log_path, spawn
 from ..paths import resource_dir
 from ..player import CAST_DEVICE, player
@@ -53,12 +56,53 @@ _start = time.time()
 
 @app.middleware("http")
 async def _door(request: Request, call_next):
-    """Turn away known-bad addresses before any route runs, and make sure
-    nothing this serves can leak a key onward through a Referer header."""
+    """Enforce safe API verbs before handlers run and harden every response."""
     ip = (request.client.host if request.client else "") or ""
     if bans.blocked(ip):
         return JSONResponse({"detail": "Blocked"}, status_code=403)
+
+    route = child = None
+    if request.url.path.startswith("/api/"):
+        route, child = matching_route(app, request.scope)
+        if route:
+            if request.method == "GET" and api_changes(
+                    route.path, request.query_params,
+                    (child or {}).get("path_params", {})) and not config.get(
+                        "allow_legacy_get_mutations", False):
+                return JSONResponse(
+                    {"detail": "Use POST with a JSON body; GET does not change state"},
+                    status_code=405, headers={"Allow": "POST"})
+
+    if request.method == "POST" and (route or request.url.path == "/"):
+        origin = request.headers.get("origin")
+        if origin and not _same_origin(origin, request):
+            return JSONResponse({"detail": "Cross-origin request refused"},
+                                status_code=403)
+        # Parameters go in the body. A credential may still ride in the URL:
+        # a Shortcut or a shared link has nowhere else to put one, and
+        # require_key decides whether that spelling is accepted.
+        if set(request.query_params) - {"key", "token"}:
+            return JSONResponse(
+                {"detail": "POST parameters belong in the JSON body"},
+                status_code=400)
+
     resp = await call_next(request)
+    # The owner's trail: changes to the machine, not every skip and progress
+    # tick — those arrive every few seconds per listener and would rewrite
+    # the file each time.
+    if (route and route.path[5:] in OWNER_ROUTES
+            and (route.path[5:] not in READ_ONLY_ROUTES
+                 if request.method == "POST" else
+                 api_changes(route.path, request.query_params,
+                             (child or {}).get("path_params", {})))):
+        try:
+            from ..core.audit import record
+            row = getattr(request.state, "pass_row", None) or {}
+            actor = ("owner" if not row or row.get("owner") else
+                     "guest:" + str(row.get("name") or "shared link")[:30])
+            record(f"{request.method} {route.path}", actor, resp.status_code)
+        except Exception as exc:
+            log.warning("couldn't write the owner audit trail: %s", exc)
     # A page fetched with ?key= or ?token= in its URL would otherwise hand
     # that URL to every third-party it links to.
     resp.headers["Referrer-Policy"] = "no-referrer"
@@ -67,10 +111,38 @@ async def _door(request: Request, call_next):
     return resp
 
 
+def _same_origin(origin: str, request: Request) -> bool:
+    """Compare normalized origins, including effective default ports."""
+    from urllib.parse import urlsplit
+
+    def parts(value):
+        got = urlsplit(value)
+        if got.scheme not in ("http", "https") or not got.hostname:
+            return None
+        try:
+            port = got.port or (443 if got.scheme == "https" else 80)
+        except ValueError:
+            return None
+        return got.scheme.lower(), got.hostname.lower(), port
+
+    return parts(origin) is not None and parts(origin) == parts(str(request.base_url))
+
+
 # ── auth ──────────────────────────────────────────────────────────────
 
 def _client_ip(request: Request) -> str:
     return (request.client.host if request.client else "") or ""
+
+
+def _key_in_url_ok(request: Request) -> bool:
+    """Raw key in a query string: only if allowed, or from this machine.
+
+    The tray and the window open their pages with ?key=, and a loopback URL
+    goes nowhere a network log or a Referer can see. Without this a strict
+    install couldn't open its own window.
+    """
+    return (bool(config.get("allow_key_in_url", False))
+            or _client_ip(request) in ("127.0.0.1", "::1"))
 
 
 def _refuse(ip: str) -> None:
@@ -120,7 +192,7 @@ def require_key(request: Request, key: str = Query(default=""),
 
     # The raw key in a URL still works until it's switched off, so an iOS
     # Shortcut built against the old scheme doesn't break on upgrade.
-    if key and config.get("allow_key_in_url", True) and same_key(key, expected):
+    if key and _key_in_url_ok(request) and same_key(key, expected):
         bans.good_key(ip)
         return _check_ip_lock(ip)
 
@@ -137,7 +209,7 @@ def is_owner(request: Request, key: str = "") -> bool:
               or request.headers.get("X-API-Key") or "")
     if header and same_key(header, expected):
         return True
-    if key and config.get("allow_key_in_url", True) and same_key(key, expected):
+    if key and _key_in_url_ok(request) and same_key(key, expected):
         return True
     # The owner's own pass, for their phone. Deliberately as powerful as the
     # key — it exists because the key can't safely travel in a link.
@@ -214,7 +286,8 @@ async def index(request: Request, key: str = Query(default=""),
     from ..core import net
     return templates.TemplateResponse(request, "setup.html", {
         "host": host, "port": net.live_port(),
-        "api_key": config.get("api_key", "")})
+        "api_key": config.get("api_key", ""),
+        "key_in_url": bool(config.get("allow_key_in_url", False))})
 
 
 @app.post("/")
@@ -309,6 +382,10 @@ def _serve_page(request: Request, name: str, key: str, token: str):
     # capsule showing whatever the markup happened to say.
     return templates.TemplateResponse(request, name, {
         "api_key": creds,
+        # Which calls are reads, from the same table the server enforces, so
+        # the pages can't drift from it.
+        "api_read_only": sorted(f"/api/{k}" for k in READ_ONLY_ROUTES
+                                if "{" not in k),
         "is_guest": "0" if owner else "1",
         "scope": "owner" if owner else (row.get("scope") or "full"),
         "announce_duck_db": config.get("announce_duck_db", -12.0),
@@ -1302,14 +1379,16 @@ def api_settings(request: Request, _: bool = Auth):
 @app.get("/api/audio")
 def api_audio(eq: str = "", normalize: int | None = None,
               crossfade: int | None = None, _: bool = Owner):
+    changed = bool(eq) or normalize is not None or crossfade is not None
     if eq:
         config.set("eq", eq)
     if normalize is not None:
         config.set("normalize", bool(normalize))
     if crossfade is not None:
         config.set("crossfade", max(0, min(12, int(crossfade))))
-    player.audio.apply()
-    bus.publish(Ev.SETTINGS, player.settings())
+    if changed:
+        player.audio.apply()
+        bus.publish(Ev.SETTINGS, player.settings())
     return {"status": "ok", "eq": config.get("eq"),
             "normalize": config.get("normalize"),
             "crossfade": config.get("crossfade")}
@@ -1324,6 +1403,9 @@ _SETTABLE = {
     "cast_all": bool, "queue_minutes": int,
     "cookie_check_interval": int, "completion_ratio": float,
     "announce": bool, "tts_voice": str, "download_workers": int,
+    "announce_duck_db": float, "announce_voice_gain_db": float,
+    "allow_legacy_get_mutations": bool, "audit_log_days": int,
+    "library_monitor_minutes": int,
     "tailscale": str, "tailscale_exe": str, "cache_size_mb": int,
     "allow_key_in_url": bool, "port": int,
     "block_full_guests": bool, "lan_open": bool, "party_mode": bool,
@@ -1369,6 +1451,14 @@ def api_setting(request: Request, key: str, value: str = "", _: bool = Auth):
             parsed = caster_type(value)
     except Exception:
         raise HTTPException(400, f"bad value for {key}")
+    if key == "announce_duck_db":
+        parsed = max(-60.0, min(0.0, float(parsed)))
+    elif key == "announce_voice_gain_db":
+        parsed = max(-24.0, min(12.0, float(parsed)))
+    elif key == "audit_log_days":
+        parsed = max(1, min(365, int(parsed)))
+    elif key == "library_monitor_minutes":
+        parsed = max(0, min(10080, int(parsed)))
     config.set(key, parsed)
     bus.publish(Ev.SETTINGS, player.settings())
     return {"status": "ok", "key": key, "value": parsed}
@@ -1644,13 +1734,15 @@ def _range_response(request: Request, path: Path):
 
 
 @app.get("/api/output/stream/{video_id}")
-def api_output_stream(request: Request, video_id: str, _: bool = Auth):
+def api_output_stream(request: Request, video_id: str, tune: str = "",
+                      _: bool = Auth):
     """The track mpv is playing, as bytes a phone will accept.
 
     FileResponse handles Range itself, which is what gives the phone a
-    draggable timeline instead of a take-it-or-leave-it download.
+    draggable timeline instead of a take-it-or-leave-it download. `tune`
+    names the speaker it's playing out of; see cast.TUNES.
     """
-    path, state = cast_mod.playable(video_id)
+    path, state = cast_mod.serve(video_id, tune)
     if state in ("partial", "arriving"):
         return JSONResponse({"status": "arriving", "detail": "still fetching"},
                             status_code=503, headers={"Retry-After": "1"})
@@ -1660,21 +1752,21 @@ def api_output_stream(request: Request, video_id: str, _: bool = Auth):
         # coming back is right, because it will be here shortly.
         return JSONResponse({"status": "not ready", "detail": "still fetching"},
                             status_code=503, headers={"Retry-After": "3"})
-    if state != "ready":
-        path, state = cast_mod.convert(video_id)
-        if state != "ready" or not path:
-            # 503 rather than an error: the client retries, it isn't broken.
-            return JSONResponse({"status": "converting", "detail": state},
-                                status_code=503)
+    if state != "ready" or not path:
+        # 503 rather than an error: the client retries, it isn't broken.
+        return JSONResponse({"status": "converting", "detail": state},
+                            status_code=503)
     return _range_response(request, Path(path))
 
 
 @app.get("/api/output/prepare/{video_id}")
-def api_output_prepare(video_id: str, _: bool = Auth):
+def api_output_prepare(video_id: str, tune: str = "", _: bool = Auth):
     """Warm the next track so the handover isn't audible."""
-    _, state = cast_mod.playable(video_id)
+    # Only the file that will be asked for. Warming the untuned one as well
+    # ran two encodes side by side for a fallback a warmed track never needs.
+    _, state = cast_mod.playable(video_id, tune)
     if state == "needs conversion":
-        cast_mod.warm(video_id)
+        cast_mod.warm(video_id, tune)
         state = "converting"
     return {"status": "ok", "state": state}
 
@@ -2441,11 +2533,17 @@ def api_library_scan(_: bool = Owner):
 @app.get("/api/library/paths")
 def api_library_paths(add: str = "", remove: str = "", _: bool = Owner):
     paths = list(config.get("library_paths") or [])
+    changed = False
     if add and add not in paths:
         paths.append(add)
+        changed = True
     if remove and remove in paths:
         paths.remove(remove)
-    config.set("library_paths", paths)
+        changed = True
+    if changed:
+        config.set("library_paths", paths)
+        if paths and config.get("library_monitor_minutes"):
+            library.start_monitor()
     return {"status": "ok", "paths": paths, "count": library.count()}
 
 
@@ -2468,23 +2566,31 @@ def api_lastfm(step: str = "", api_key: str = "", secret: str = "", _: bool = Ow
 def api_alarms(add: str = "", time_: str = Query(default="", alias="time"),
                days: str = "", remove: int = -1, _: bool = Owner):
     alarms = list(config.get("alarms") or [])
+    changed = False
     if remove >= 0 and remove < len(alarms):
         alarms.pop(remove)
+        changed = True
     if add and time_:
         alarms.append({"query": add, "time": time_, "enabled": True,
                        "days": [int(d) for d in days.split(",") if d.strip().isdigit()]})
-    config.set("alarms", alarms)
+        changed = True
+    if changed:
+        config.set("alarms", alarms)
     return {"status": "ok", "alarms": alarms}
 
 
 @app.get("/api/cast")
 def api_cast(add: str = "", remove: str = "", text: str = "", _: bool = Owner):
     peers = list(config.get("cast_peers") or [])
+    changed = False
     if add and add not in peers:
         peers.append(add)
+        changed = True
     if remove and remove in peers:
         peers.remove(remove)
-    config.set("cast_peers", peers)
+        changed = True
+    if changed:
+        config.set("cast_peers", peers)
     sent = caster.broadcast(text) if text else []
     return {"status": "ok", "peers": peers, "sent": sent}
 
@@ -2517,3 +2623,15 @@ def api_diag(_: bool = Owner):
         "log": str(log_path()),
         "uptime": round(time.time() - _start, 1),
     }
+
+
+@app.get("/api/audit")
+def api_audit(_: bool = Owner):
+    """Recent changes, without request bodies, URLs, tokens or secret values."""
+    from ..core.audit import entries
+    return {"status": "ok", "entries": list(reversed(entries()))}
+
+
+# The install step validates the route inventory and creates the POST surface
+# only after every endpoint has been registered.
+install_api_policy(app, require_admin)

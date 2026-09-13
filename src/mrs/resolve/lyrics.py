@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import urllib.parse
+import time
 import urllib.request
 
 from ..logging_setup import get
@@ -104,29 +105,89 @@ def hunt(fragment: str) -> list[dict]:
     return sure + maybe
 
 
+# How far a transcription's length may be from the song's before its timings
+# can't be trusted. YouTube uploads run a few seconds long with silence at the
+# ends; a radio edit or a live take is out by thirty to eighty.
+_SAME_RECORDING = 5.0
+
+
+def _pick(rows, duration: float) -> tuple[dict | None, bool]:
+    """The transcription of the recording that is actually playing.
+
+    Returns (row, trust_timings). A search for a song returns every recording
+    of it anyone has transcribed, and they are not interchangeable: a radio
+    edit has the verses cut, so its first lines agree with the album version
+    to a tenth of a second and everything after the first cut drifts. Taking
+    the first result -- which this did -- gave Plush a 230-second edit
+    against a 310-second track: right for the first verse, eighty seconds
+    wrong by the end. Lyrics that start in time and fall apart is exactly the
+    fault, and it only happened on the fallback, which is why it came and went.
+
+    So match on length. If nothing is close enough, the words are still worth
+    showing, but not timed: highlighting the wrong line with confidence is
+    worse than not highlighting at all.
+    """
+    rows = [r for r in (rows or []) if isinstance(r, dict)
+            and (r.get("syncedLyrics") or r.get("plainLyrics"))]
+    if not rows:
+        return None, False
+    if not duration:
+        # Nothing to compare against; prefer a timed one and hope.
+        synced = [r for r in rows if r.get("syncedLyrics")]
+        return (synced or rows)[0], True
+
+    def off(r):
+        d = r.get("duration") or 0
+        return abs(float(d) - float(duration)) if d else float("inf")
+
+    close = [r for r in rows if off(r) <= _SAME_RECORDING]
+    if close:
+        # Timed beats untimed; among those, the nearest length.
+        best = min(close, key=lambda r: (0 if r.get("syncedLyrics") else 1, off(r)))
+        return best, True
+    return min(rows, key=off), False
+
+
 def get_lyrics(title: str, artist: str, duration: int = 0) -> dict | None:
     if not title:
         return None
-    key = f"{artist}|{title}"
+    # The length is part of what a result is *for*: the same title by the
+    # same artist in two recordings needs two answers, not whichever was
+    # looked up first.
+    key = f"{artist}|{title}|{int(round(duration or 0))}"
     if key in _cache:
         return _cache[key]
 
     params = {"track_name": title, "artist_name": artist or ""}
     if duration:
         params["duration"] = str(int(duration))
-    data = _fetch(f"{API}?{urllib.parse.urlencode(params)}")
+    get_url = f"{API}?{urllib.parse.urlencode(params)}"
+    data = _fetch(get_url)
+    if not data:
+        # Once more before giving up on the exact match. It 503'd on two of
+        # twelve real tracks in a row, both answered straight away on retry,
+        # and the exact match -- which is duration-checked on LRCLIB's side --
+        # is always better than choosing among search results ourselves.
+        time.sleep(0.25)
+        data = _fetch(get_url)
+    trust = True
     if not data:
         rows = _fetch(f"{SEARCH}?{urllib.parse.urlencode({'q': f'{artist} {title}'})}")
-        data = rows[0] if isinstance(rows, list) and rows else None
+        data, trust = _pick(rows if isinstance(rows, list) else [], duration or 0)
     if not data:
         return None
 
     result = {
-        "synced": _parse_synced(data.get("syncedLyrics") or ""),
+        "synced": _parse_synced(data.get("syncedLyrics") or "") if trust else [],
         "plain": data.get("plainLyrics") or "",
         "title": data.get("trackName") or title,
         "artist": data.get("artistName") or artist,
     }
+    # Untrusted timings, no plain text: the words are only in the timed
+    # version. Keep them, as plain lines, rather than lose them altogether.
+    if not trust and not result["plain"] and data.get("syncedLyrics"):
+        result["plain"] = "\n".join(r["text"] for r in
+                                    _parse_synced(data["syncedLyrics"]))
     if not result["synced"] and not result["plain"]:
         return None
     if len(_cache) > 100:

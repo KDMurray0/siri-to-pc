@@ -18,7 +18,8 @@ Three things make that work:
 
   Processing. mpv applies EQ and normalisation as live filters, which a file
   handed to a phone never sees. filter_chain() bakes the same settings into
-  the transcode so the phone hears what the speakers would.
+  the transcode so the phone hears what the speakers would — plus, when the
+  page says what it is playing out of, tuning for that speaker.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from ..config import config
@@ -43,6 +45,51 @@ CREATE_NO_WINDOW = 0x08000000
 
 _converting: set[str] = set()
 _lock = threading.Lock()
+
+
+def _speaker(cut: int, harmonics: float, body: float, bite: float,
+             level: float) -> str:
+    """ffmpeg chain for a small built-in speaker.
+
+    Below `cut` the driver can't move air, but the bass is still in the
+    signal eating excursion, so the phone's protection limiter pumps on
+    every kick and the whole track comes out quieter. So: cut it, put back
+    its harmonics (the speaker can play those, and the ear fills in the
+    fundamental), a little body at 280Hz, take the edge off 2.8kHz where
+    small speakers shout, then spend the freed headroom on level.
+    """
+    source = round(cut * 1.45)      # the bass being dropped
+    above = round(cut * 1.73)       # keep only the harmonics of it
+    return (
+        "highpass=f=45:poles=2,asplit=2[m][b];"
+        f"[b]lowpass=f={source}:poles=2,lowpass=f={source}:poles=2,"
+        "volume=12dB,asoftclip=type=tanh:threshold=0.5,"
+        f"highpass=f={above}:poles=2,highpass=f={above}:poles=2,"
+        "lowpass=f=900,volume=-6dB[h];"
+        f"[m]highpass=f={cut}:poles=2,highpass=f={cut}:poles=2[mh];"
+        f"[mh][h]amix=inputs=2:weights=1 {harmonics}:normalize=0,"
+        f"equalizer=f=280:width_type=q:width=0.9:g={body},"
+        f"equalizer=f=2800:width_type=q:width=1.2:g={bite},"
+        "acompressor=threshold=-22dB:ratio=3:attack=10:release=220:"
+        "makeup=4dB:knee=6,"
+        f"volume={level}dB,"
+        "alimiter=limit=0.75:attack=8:release=120:level=false"
+    )
+
+
+# Per kind of device. Headphones and anything unknown get nothing: this cuts
+# real bass, which on AirPods is just worse. The page picks one from what it
+# is running on and the listener can switch it off.
+TUNES: dict[str, dict] = {
+    "iphone": {"label": "iPhone speaker", "chain": _speaker(110, 0.6, 2, -2.5, 6)},
+    "phone": {"label": "Phone speaker", "chain": _speaker(130, 0.7, 2, -3, 6)},
+    "ipad": {"label": "iPad speakers", "chain": _speaker(75, 0.4, 1, -1.5, 5)},
+}
+
+
+def tune_name(raw: str | None) -> str:
+    raw = (raw or "").strip().lower()
+    return raw if raw in TUNES else ""
 
 
 def work_dir() -> Path:
@@ -66,7 +113,7 @@ def source_for(video_id: str) -> Path | None:
     return None
 
 
-def filter_chain() -> str:
+def filter_chain(tune: str = "") -> str:
     """The processing the PC gets, as an ffmpeg filter string.
 
     mpv applies EQ and normalisation live, as filters on playback. The phone
@@ -80,17 +127,21 @@ def filter_chain() -> str:
     if config.get("normalize"):
         # the same settings audio.build_chain uses, so both ears agree
         parts.append("dynaudnorm=f=150:g=15:p=0.9:m=15:r=0.9")
+    tune = tune_name(tune)
+    if tune:
+        # Last: the speaker is the last thing the sound goes through.
+        parts.append(TUNES[tune]["chain"])
     return ",".join(parts)
 
 
-def _stamp() -> str:
-    """Short hash of the current processing, so changing the EQ rebuilds."""
-    chain = filter_chain()
+def _stamp(tune: str = "") -> str:
+    """Short hash of the processing, so changing the EQ rebuilds."""
+    chain = filter_chain(tune)
     return hashlib.sha1(chain.encode()).hexdigest()[:8] if chain else ""
 
 
-def _converted(video_id: str) -> Path:
-    stamp = _stamp()
+def _converted(video_id: str, tune: str = "") -> Path:
+    stamp = _stamp(tune)
     return work_dir() / (f"{video_id}~{stamp}.m4a" if stamp
                          else f"{video_id}.m4a")
 
@@ -100,7 +151,7 @@ def _vid_of(path: Path) -> str:
     return path.stem.split("~", 1)[0]
 
 
-def playable(video_id: str) -> tuple[Path | None, str]:
+def playable(video_id: str, tune: str = "") -> tuple[Path | None, str]:
     """(path, state): ready | arriving | needs conversion | converting | missing.
 
     Downloads are private until yt-dlp publishes the completed final name.
@@ -117,34 +168,40 @@ def playable(video_id: str) -> tuple[Path | None, str]:
         return None, "arriving"
     # With EQ or normalisation on, even an already-playable file has to be
     # rebuilt — there's no filter chain between the file and the phone.
-    if src.suffix.lower() in NATIVE and not filter_chain():
+    if src.suffix.lower() in NATIVE and not filter_chain(tune):
         return src, "ready"
-    out = _converted(video_id)
+    out = _converted(video_id, tune)
     if out.is_file() and out.stat().st_size > 10_000:
         return out, "ready"
     with _lock:
-        if video_id in _converting:
+        if _job(video_id, tune) in _converting:
             return None, "converting"
     return None, "needs conversion"
 
 
-def convert(video_id: str, timeout: int = 300) -> tuple[Path | None, str]:
-    """Blocking transcode. Runs about 60x realtime, so a few seconds a track."""
+def _job(video_id: str, tune: str) -> str:
+    return f"{video_id}~{_stamp(tune)}"
+
+
+def convert(video_id: str, tune: str = "",
+            timeout: int = 300) -> tuple[Path | None, str]:
+    """Blocking transcode. ~350x realtime plain, ~90x tuned."""
     src = source_for(video_id)
     if not src:
         return None, "missing"
-    chain = filter_chain()
+    chain = filter_chain(tune)
     if src.suffix.lower() in NATIVE and not chain:
         return src, "ready"
+    job = _job(video_id, tune)
     with _lock:
-        if video_id in _converting:
+        if job in _converting:
             return None, "converting"
-        _converting.add(video_id)
+        _converting.add(job)
     try:
         ff = shutil.which("ffmpeg")
         if not ff:
             return None, "no ffmpeg"
-        out = _converted(video_id)
+        out = _converted(video_id, tune)
         tmp = out.with_suffix(".part.m4a")
         # faststart puts the index at the front, which is what lets the phone
         # seek without pulling the whole file first.
@@ -161,24 +218,60 @@ def convert(video_id: str, timeout: int = 300) -> tuple[Path | None, str]:
             return None, (p.stderr or "ffmpeg failed")[:200]
         tmp.replace(out)
         log.info("transcoded %s for casting%s", video_id,
-                 " (processed)" if chain else "")
+                 f" (tuned: {tune_name(tune)})" if tune_name(tune)
+                 else " (processed)" if chain else "")
         return out, "ready"
     except subprocess.TimeoutExpired:
         return None, "transcode timed out"
     finally:
         with _lock:
-            _converting.discard(video_id)
+            _converting.discard(job)
 
 
-def warm(video_id: str) -> None:
+def warm(video_id: str, tune: str = "") -> None:
     """Get the next track ready in the background, so the gap isn't audible."""
     if not video_id:
         return
-    _, state = playable(video_id)
+    _, state = playable(video_id, tune)
     if state != "needs conversion":
         return
-    threading.Thread(target=convert, args=(video_id,), daemon=True,
+    threading.Thread(target=convert, args=(video_id, tune), daemon=True,
                      name=f"cast-warm {video_id}").start()
+
+
+# Which file a stream url is being answered with. Safari reads one url as
+# dozens of range requests; if the tuned file lands halfway through, the
+# later ranges would come from a different file and the audio is garbage.
+# So once a url has been answered, it keeps its file while it's in use.
+_held: dict[str, tuple[Path, float]] = {}
+_HOLD = 1800.0
+
+
+def serve(video_id: str, tune: str = "") -> tuple[Path | None, str]:
+    """What the stream route hands out, without ever making the phone wait
+    for tuning: untuned now, tuned from the next time it's asked for."""
+    tune = tune_name(tune)
+    key = _job(video_id, tune)
+    now = time.monotonic()
+    with _lock:
+        held = _held.get(key)
+        if held and now - held[1] < _HOLD and held[0].is_file():
+            _held[key] = (held[0], now)
+            return held[0], "ready"
+    path, state = playable(video_id, tune)
+    if state != "ready" and state not in ("arriving", "missing") and tune:
+        plain, plain_state = playable(video_id)
+        if plain_state == "ready" and plain:
+            warm(video_id, tune)
+            path, state = plain, "ready"
+    if state in ("needs conversion", "converting"):
+        path, state = convert(video_id, tune)
+    if state == "ready" and path:
+        with _lock:
+            for k in [k for k, (_, at) in _held.items() if now - at >= _HOLD]:
+                del _held[k]
+            _held[key] = (Path(path), now)
+    return path, state
 
 
 def prune() -> int:
@@ -188,11 +281,21 @@ def prune() -> int:
     EQ changed and the processing baked into it is no longer what the PC is
     playing.
     """
-    live = _stamp()
+    live = {_stamp(t) for t in ("", *TUNES)}
+    with _lock:
+        busy = {Path(p).name for p, _ in _held.values()}
     gone = 0
     for path in work_dir().glob("*.m4a"):
         vid = _vid_of(path)
-        stale = path.name != (f"{vid}~{live}.m4a" if live else f"{vid}.m4a")
+        stamp = path.stem.split("~", 1)[1] if "~" in path.stem else ""
+        stale = stamp not in live
+        if path.name in busy:
+            continue
+        if path.name.endswith(".part.m4a"):
+            # Mid-transcode, unless it's been sitting there an hour.
+            stale = time.time() - path.stat().st_mtime > 3600
+            if not stale:
+                continue
         if stale or not source_for(vid):
             try:
                 path.unlink()
@@ -208,4 +311,5 @@ def stats() -> dict:
         busy = len(_converting)
     return {"transcoded": ready, "converting": busy,
             "ffmpeg": bool(shutil.which("ffmpeg")),
-            "processing": filter_chain() or "none"}
+            "processing": filter_chain() or "none",
+            "tunes": {k: v["label"] for k, v in TUNES.items()}}
