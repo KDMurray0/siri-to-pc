@@ -10,7 +10,9 @@ The page indexes the result by playback position, so it costs nothing to draw.
 from __future__ import annotations
 
 import array
+import hashlib
 import math
+import os
 import queue
 import subprocess
 import threading
@@ -40,8 +42,53 @@ def _dir() -> Path:
     return p
 
 
+_SWEPT = False
+
+
+def _sweep_old_names() -> None:
+    """Delete caches named by the old scheme, once per run.
+
+    They were named after the file's stem, so two tracks called
+    "01 Intro.mp3" in different folders shared one spectrum. The names are
+    content hashes now -- 64 hex characters -- which strands every cache
+    written before, and nothing else would ever remove them. An old name is
+    anything that isn't a 64-character hex stem.
+    """
+    global _SWEPT
+    if _SWEPT:
+        return
+    _SWEPT = True
+    removed = 0
+    try:
+        for f in _dir().glob("*.bin"):
+            stem = f.stem
+            if len(stem) == 64 and all(ch in "0123456789abcdef" for ch in stem):
+                continue
+            try:
+                f.unlink()
+                removed += 1
+            except OSError:
+                pass
+    except Exception as exc:
+        log.debug("couldn't sweep old spectrum caches: %s", exc)
+    if removed:
+        log.info("removed %d spectrum caches from the old naming scheme",
+                 removed)
+
+
 def _cache_file(path: str) -> Path:
-    return _dir() / (Path(path).stem + ".bin")
+    _sweep_old_names()
+    try:
+        p = Path(path)
+        st = p.stat()
+        version = f"{st.st_size}:{st.st_mtime_ns}"
+        normal = os.path.normcase(os.path.abspath(os.path.normpath(str(p))))
+    except OSError:
+        version = "missing"
+        normal = str(path)
+    key = f"{normal.replace(chr(92), '/') }|{version}".encode(
+        "utf-8", "surrogatepass")
+    return _dir() / (hashlib.sha256(key).hexdigest() + ".bin")
 
 
 def _decode(path: str) -> array.array:

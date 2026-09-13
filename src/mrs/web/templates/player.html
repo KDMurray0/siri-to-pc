@@ -1629,6 +1629,8 @@ const KEY = "{{ api_key }}";
  * The server already knows; it says so in the html. */
 const GUEST = "{{ is_guest }}" === "1";
 const SCOPE = "{{ scope }}";
+const ANNOUNCE_DUCK_DB = Number("{{ announce_duck_db }}") || -12;
+const ANNOUNCE_VOICE_GAIN_DB = Number("{{ announce_voice_gain_db }}") || 0;
 const $ = id => document.getElementById(id);
 /* Every ordinary call sends the key as a header, where it stays out of
    browser history, access logs and Referer. */
@@ -3978,6 +3980,8 @@ function castOn() {
 }
 
 function castOff() {
+  restoreCastDuck();
+  ++duckGeneration;
   cast.on = false; cast.vid = ""; cast.tries = 0; cast.ready = "";
   if (ME.scope !== "phone") segShow(false);
   document.body.classList.remove("sysvol", "casting", "castblocked");
@@ -4196,6 +4200,19 @@ function applyOutput(d) {
    pausing here would only have to be seeked back into line afterwards. */
 const castSay = $("castsay");
 let duckTimer = null;
+let duckGeneration = 0;
+let duckState = null;
+
+const dbLinear = db => Math.pow(10, Number(db || 0) / 20);
+
+function restoreCastDuck(generation = 0) {
+  if (!duckState || (generation && duckState.generation !== generation)) return;
+  const old = duckState;
+  duckState = null;
+  clearTimeout(duckTimer);
+  duckTimer = null;
+  try { old.el.volume = old.volume; } catch (e) {}
+}
 
 function applyAnnounce(d) {
   if (!d || !cast.on) return;
@@ -4205,16 +4222,21 @@ function applyAnnounce(d) {
   if (!d.session && d.client !== CLIENT_ID) return;
   const el = castLive();
   const wasVol = el.volume;
+  restoreCastDuck();
+  const generation = ++duckGeneration;
+  duckState = { generation, el, volume: wasVol };
   try {
     castSay.src = "/api/announce/" + encodeURIComponent(d.id) + ".mp3?" +
                   urlAuth();
     castSay.load();
-    // iOS keeps volume read-only, so there the announcement simply plays over
-    // the top — still audible, just not ducked.
-    try { el.volume = Math.max(0, wasVol * 0.25); } catch (e) {}
+    // Use the same dB policy as local mpv playback. iOS keeps volume
+    // read-only, so this remains best effort there, but the voice still uses
+    // the current music level rather than starting at an unrelated full
+    // volume.
+    try { el.volume = Math.max(0, Math.min(1, wasVol * dbLinear(ANNOUNCE_DUCK_DB))); } catch (e) {}
+    try { castSay.volume = Math.max(0, Math.min(1, wasVol * dbLinear(ANNOUNCE_VOICE_GAIN_DB))); } catch (e) {}
     const restore = () => {
-      clearTimeout(duckTimer);
-      try { el.volume = wasVol; } catch (e) {}
+      restoreCastDuck(generation);
     };
     castSay.onended = restore;
     castSay.onerror = restore;
@@ -4224,7 +4246,7 @@ function applyAnnounce(d) {
     duckTimer = setTimeout(restore, 15000);
     castSay.play().catch(restore);
   } catch (e) {
-    try { el.volume = wasVol; } catch (err) {}
+    restoreCastDuck(generation);
   }
 }
 

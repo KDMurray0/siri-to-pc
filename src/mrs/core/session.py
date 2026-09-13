@@ -318,12 +318,30 @@ class Sessions:
 
     def for_pass(self, pass_id: str, name: str = "", scope: str = "full",
                  profile=None) -> Session:
+        stale = None
         with self._lock:
             room = self._rooms.get(pass_id)
+            if room is not None and profile is not None and room.profile is not profile:
+                # The profile's persistence policy changed while this room
+                # was alive. A queue built with the old TasteEngine cannot be
+                # safely converted in place, so close it and let the next
+                # request receive a clean session.
+                stale = self._rooms.pop(pass_id)
+                room = None
             if room is None:
                 room = Session(pass_id, name, scope, profile)
                 self._rooms[pass_id] = room
                 log.info("opened a session for %r (%s)", room.name, room.scope)
+        if stale is not None:
+            stale.stop()
+            try:
+                bus.publish(Ev.STATUS,
+                            blank_status(pass_id, closed=True,
+                                         reason="profile policy changed"))
+                bus.publish(Ev.QUEUE, {"rows": [], "session": pass_id})
+            except Exception as exc:
+                log.debug("couldn't reset %s after profile change: %s",
+                          pass_id, exc)
         room.start()
         room.touch()
         return room

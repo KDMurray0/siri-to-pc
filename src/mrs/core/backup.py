@@ -15,6 +15,7 @@ themselves.
 from __future__ import annotations
 
 import time
+import stat
 import zipfile
 from pathlib import Path
 
@@ -37,6 +38,9 @@ WANTED_DIRS = ("playlists",)
 NEVER = ("youtube_cookies.txt", "cookies_session.txt")
 
 MAX_MB = 200
+MAX_UNPACK_MB = 200
+MAX_MEMBER_MB = 25
+MAX_MEMBERS = 5000
 
 
 def _members(root: Path):
@@ -96,27 +100,56 @@ def restore(zip_path: str) -> dict:
     root = data_dir()
     allowed = set(WANTED)
     try:
-        with zipfile.ZipFile(src) as z:
-            names = [n for n in z.namelist() if not n.endswith("/")]
-        # Only things we'd have written, and nothing that climbs out of the
-        # folder — a zip is a file somebody else may have made.
+        root_resolved = root.resolve()
         safe = []
-        for n in names:
-            if ".." in n.split("/") or Path(n).is_absolute():
-                continue
-            if n in allowed or n.split("/")[0] in WANTED_DIRS:
-                if Path(n).name not in NEVER:
-                    safe.append(n)
+        total_unpacked = 0
+        seen: set[str] = set()
+        with zipfile.ZipFile(src) as z:
+            infos = [i for i in z.infolist() if not i.is_dir()]
+            if len(infos) > MAX_MEMBERS:
+                return {"ok": False, "message": "Too many files in that backup"}
+            for info in infos:
+                # ZIP permits both slash styles even on Windows. Normalize
+                # before checking traversal, drives, and the final resolved
+                # path; checking only '/' allowed `..\\config.json` out.
+                name = (info.filename or "").replace("\\", "/")
+                parts = [p for p in name.split("/") if p not in ("", ".")]
+                if (not parts or name.startswith("/") or name.startswith("//")
+                        or (len(parts[0]) >= 2 and parts[0][1] == ":")
+                        or any(p == ".." for p in parts)):
+                    continue
+                norm = "/".join(parts)
+                if norm in seen:
+                    return {"ok": False, "message": "Duplicate file in backup"}
+                seen.add(norm)
+                if norm not in allowed and parts[0] not in WANTED_DIRS:
+                    continue
+                if parts[-1] in NEVER:
+                    continue
+                if info.file_size > MAX_MEMBER_MB * 1048576:
+                    return {"ok": False, "message": "A file in that backup is too large"}
+                total_unpacked += info.file_size
+                if total_unpacked > MAX_UNPACK_MB * 1048576:
+                    return {"ok": False, "message": "That backup expands too far"}
+                mode = (info.external_attr >> 16) & 0o170000
+                if mode == stat.S_IFLNK:
+                    return {"ok": False, "message": "Symlinks are not allowed"}
+                candidate = (root / Path(*parts)).resolve()
+                try:
+                    candidate.relative_to(root_resolved)
+                except ValueError:
+                    continue
+                safe.append((info, norm, parts))
         if not safe:
             return {"ok": False, "message": "Nothing recognisable in there"}
         # Copy what's here now — with the source closed, so the copy can't
         # land on the file we're about to read.
         keep = make_backup()
         with zipfile.ZipFile(src) as z:
-            for n in safe:
-                out = root / n
+            for info, norm, parts in safe:
+                out = root.joinpath(*parts)
                 out.parent.mkdir(parents=True, exist_ok=True)
-                with z.open(n) as fh:
+                with z.open(info) as fh:
                     out.write_bytes(fh.read())
     except zipfile.BadZipFile:
         return {"ok": False, "message": "That isn't a zip"}

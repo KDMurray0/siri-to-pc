@@ -7,6 +7,7 @@ handed the file.
 from __future__ import annotations
 
 import os
+import queue as queue_mod
 import re
 import shutil
 import subprocess
@@ -102,6 +103,40 @@ lanes = Lanes()
 _lane_of = threading.local()
 
 
+# What is arriving right now. This is progress metadata only: the file stays
+# private until yt-dlp has atomically published its final name.
+_INFLIGHT: dict[str, dict] = {}
+_INFLIGHT_LOCK = threading.Lock()
+# "[download]  12.3% of  3.69MiB at ..." — the size it will end up.
+_TOTAL = re.compile(r"of\s+~?([\d.]+)\s*([KMG])iB", re.I)
+_UNIT = {"K": 1024, "M": 1024 ** 2, "G": 1024 ** 3}
+
+
+def _note_inflight(vid: str, **kw) -> None:
+    if not vid:
+        return
+    with _INFLIGHT_LOCK:
+        row = _INFLIGHT.setdefault(vid, {"total": 0, "started": time.time()})
+        row.update(kw)
+
+
+def _drop_inflight(vid: str) -> None:
+    with _INFLIGHT_LOCK:
+        _INFLIGHT.pop(vid, None)
+
+
+def arriving(vid: str) -> dict | None:
+    """{'total': bytes} while this id is downloading, else None.
+
+    The point of knowing the final size is that it lets the partial file be
+    served with a truthful Content-Range — which is what a phone needs before
+    it will show a duration or let anyone scrub.
+    """
+    with _INFLIGHT_LOCK:
+        row = _INFLIGHT.get(vid)
+        return dict(row) if row else None
+
+
 class Downloader:
     def __init__(self) -> None:
         self.exe = shutil.which("yt-dlp")
@@ -110,6 +145,28 @@ class Downloader:
         # running yt-dlp processes -> whose queue asked for them
         self._procs: dict = {}
         self._cancelled = False
+        self._remove_stale_partials()
+
+    @staticmethod
+    def _remove_stale_partials() -> int:
+        """Remove abandoned yt-dlp temporary files from an older run."""
+        removed = 0
+        try:
+            age = max(3600, int(config.get("download_timeout", 240)) * 2)
+            cutoff = time.time() - age
+            root = cache_dir()
+            for path in root.glob("*.part"):
+                try:
+                    if path.is_file() and path.stat().st_mtime < cutoff:
+                        path.unlink()
+                        removed += 1
+                except OSError:
+                    pass
+        except Exception as exc:
+            log.debug("couldn't clean stale download parts: %s", exc)
+        if removed:
+            log.info("removed %d abandoned download part(s)", removed)
+        return removed
 
     @staticmethod
     def claim_lane(tag: str) -> None:
@@ -152,8 +209,22 @@ class Downloader:
         sid = self._safe_id(video_id)
         for folder in (pinned_dir(), cache_dir()):
             for f in folder.glob(f"{sid}.*"):
-                if f.is_file() and f.stat().st_size > 100_000:
+                # `.part` and `.ytdl` are downloader-owned temporary state,
+                # never a playable cache hit. A short legitimate file should
+                # not be rejected merely because it is under 100 KB.
+                if (f.is_file() and f.stat().st_size > 0
+                        and not f.name.endswith((".part", ".ytdl", ".complete"))):
                     return str(f)
+
+    @staticmethod
+    def _mark_complete(path: str | None) -> None:
+        if not path:
+            return
+        try:
+            Path(path).with_name(Path(path).name + ".complete").write_text(
+                "1", encoding="ascii")
+        except OSError:
+            pass
         return None
 
     def pin(self, path: str) -> str | None:
@@ -165,6 +236,9 @@ class Downloader:
             dst = pinned_dir() / src.name
             if not dst.exists():
                 shutil.copy2(src, dst)
+            marker = src.with_name(src.name + ".complete")
+            if marker.is_file():
+                shutil.copy2(marker, dst.with_name(dst.name + ".complete"))
             return str(dst)
         except Exception as exc:
             log.warning("pin failed: %s", exc)
@@ -202,9 +276,14 @@ class Downloader:
             return 0
 
         spare = {os.path.normcase(os.path.abspath(p)) for p in (keep or ())}
+        with _INFLIGHT_LOCK:
+            active_ids = set(_INFLIGHT)
         plays, liked = taste.play_counts(), taste.liked_ids()
         files = [f for f in every
                  if f.parent == root
+                 and not f.name.endswith((".part", ".ytdl", ".complete"))
+                 and not any(f.name.startswith(f"{self._safe_id(vid)}.")
+                             for vid in active_ids)
                  and os.path.normcase(str(f.resolve())) not in spare]
 
         def worth(f: Path) -> tuple:
@@ -224,6 +303,10 @@ class Downloader:
                 f.unlink()
             except Exception:
                 continue
+            try:
+                f.with_name(f.name + ".complete").unlink(missing_ok=True)
+            except OSError:
+                pass
             total -= size
             removed += 1
             # Its transcode is dead weight the moment the source goes.
@@ -252,7 +335,8 @@ class Downloader:
                            if limit else 0.0}
 
     # -- fetching ------------------------------------------------------
-    def _run(self, args: list[str], on_progress=None, timeout: int | None = None) -> tuple[int, str]:
+    def _run(self, args: list[str], on_progress=None, timeout: int | None = None,
+             vid: str = "") -> tuple[int, str]:
         timeout = timeout or int(config.get("download_timeout", 240))
         proc = subprocess.Popen(args, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True,
@@ -261,10 +345,52 @@ class Downloader:
         with self._lock:
             self._procs[proc] = self._lane()
         out_lines: list[str] = []
-        deadline = time.time() + timeout
+        deadline = time.monotonic() + timeout
+
+        # Iterating directly over a pipe blocks until yt-dlp emits a line.
+        # A network stall is exactly the case where it emits nothing, so read
+        # on a helper thread and let this thread own the deadline.
+        lines: "queue_mod.Queue[str | None]" = queue_mod.Queue()
+
+        def reader() -> None:
+            try:
+                for line in proc.stdout:  # type: ignore[union-attr]
+                    lines.put(line)
+            except Exception as exc:
+                lines.put(f"\nOUTPUT ERROR: {exc}\n")
+            finally:
+                lines.put(None)
+
+        reader_thread = threading.Thread(target=reader, daemon=True,
+                                         name=f"yt-dlp output {vid or 'job'}")
+        reader_thread.start()
         try:
-            for line in proc.stdout:  # type: ignore[union-attr]
+            eof = False
+            timed_out = False
+            while not eof:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                try:
+                    line = lines.get(timeout=min(0.2, remaining))
+                except queue_mod.Empty:
+                    if proc.poll() is not None:
+                        # The reader may still have a final buffered line.
+                        continue
+                    continue
+                if line is None:
+                    eof = True
+                    continue
                 out_lines.append(line)
+                if vid:
+                    t = _TOTAL.search(line)
+                    if t:
+                        try:
+                            _note_inflight(vid, total=int(
+                                float(t.group(1)) * _UNIT[t.group(2).upper()]))
+                        except Exception:
+                            pass
                 if on_progress:
                     m = _PCT.search(line)
                     if m:
@@ -272,22 +398,50 @@ class Downloader:
                             on_progress(float(m.group(1)) / 100.0)
                         except Exception:
                             pass
-                if time.time() > deadline:
-                    proc.kill()
-                    return 1, "".join(out_lines) + "\nTIMEOUT"
+            if timed_out:
+                self._stop_process(proc)
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._stop_process(proc, force=True)
+                    proc.wait(timeout=5)
+                return 1, "".join(out_lines) + "\nTIMEOUT"
             proc.wait(timeout=20)
+            # Drain anything the reader queued between process exit and EOF.
+            while True:
+                try:
+                    line = lines.get_nowait()
+                except queue_mod.Empty:
+                    break
+                if line is None:
+                    break
+                out_lines.append(line)
         except Exception as exc:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            self._stop_process(proc, force=True)
             return 1, "".join(out_lines) + f"\n{exc}"
         finally:
+            reader_thread.join(timeout=2)
             # Finished processes used to stay in the list forever, so the
             # cancel count was the number of downloads since boot.
             with self._lock:
                 self._procs.pop(proc, None)
         return proc.returncode, "".join(out_lines[-40:])
+
+    @staticmethod
+    def _stop_process(proc, force: bool = False) -> None:
+        """Stop yt-dlp and its ffmpeg children, then let the pipe close."""
+        try:
+            if os.name == "nt" and proc.poll() is None:
+                subprocess.run(["taskkill", "/PID", str(proc.pid), "/T",
+                                "/F"], capture_output=True, timeout=10,
+                               creationflags=CREATE_NO_WINDOW)
+            elif proc.poll() is None:
+                (proc.kill if force else proc.terminate)()
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
     def cancel_all(self, lane: str | None = None) -> int:
         """Stop running fetches (the X next to the progress bar).
@@ -336,9 +490,31 @@ class Downloader:
         try:
             return self._fetch_locked(track, on_progress)
         finally:
+            # This is the one cleanup boundary that also covers an exception
+            # from config, argument construction, logging, or a mocked
+            # process. No caller can be left permanently marked arriving.
+            _drop_inflight(track.video_id)
             with self._lock:
                 self._inflight.pop(track.video_id, None)
             ev.set()
+
+    def _format(self) -> str:
+        """What to ask YouTube for.
+
+        bestaudio picks opus over m4a on a five-kilobit difference — 135k
+        against 130k — and that five kilobits costs two to four seconds of
+        transcoding every time a phone plays the track, because no iPhone
+        will play opus in a webm. Worse, the transcode is opus decoded and
+        re-encoded to AAC: a second lossy pass, which is a worse record than
+        the AAC that was sitting there all along.
+
+        So prefer the one phones can play. The PC loses about five kilobits
+        of a more efficient codec; the phones lose the wait entirely.
+        """
+        if config.get("prefer_native_audio", True):
+            return ("bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/"
+                    "bestaudio/best")
+        return "bestaudio/best"
 
     def _client_chain(self) -> list[str]:
         """Clients to try, the one that worked last time first.
@@ -368,8 +544,9 @@ class Downloader:
         clients = self._client_chain() if track.source == "youtube" else [""]
         last = ""
 
+        _note_inflight(track.video_id, total=0)
         for client in clients:
-            args = [self.exe, "-f", "bestaudio/best", "--no-playlist", "--no-part",
+            args = [self.exe, "-f", self._format(), "--no-playlist", "--part",
                     "--newline", "--no-warnings", "-o", out_tmpl]
             # no 30-second preview uploads
             if min_dur > 0 and track.source == "youtube":
@@ -380,11 +557,13 @@ class Downloader:
             for attempt in range(retries + 1):
                 if attempt:
                     time.sleep(min(8, 2 ** attempt))
-                code, out = self._run(args, on_progress=on_progress)
+                code, out = self._run(args, on_progress=on_progress,
+                                      vid=track.video_id)
                 last = out
                 if code == 0:
                     path = self.cached(track.video_id)
                     if path:
+                        self._mark_complete(path)
                         if client != clients[0]:
                             log.info("%r needed the %s client", track.title,
                                      client or "default")

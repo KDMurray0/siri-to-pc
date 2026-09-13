@@ -340,11 +340,24 @@ def run(verbose: bool = False) -> Result:
 
             # -- 5. scope: a phone link stays on its own phone -------------
             c = _Checker("scope")
-            code = get("/api/audio/device?name=auto", phone, here).status_code
-            c("a phone link can't move the PC's output", code == 403,
-              f"HTTP {code}")
-            code = get("/api/audio/device?name=auto", full).status_code
-            c("a full link can", code == 200, f"HTTP {code}")
+            # This used to assert that a full link *could* move the output.
+            # set_audio_device acts on the shared player with no guest branch,
+            # so a link that can call it can route the house's music wherever
+            # it likes — and a phone link was explicitly allowed the one value
+            # that does the most damage, cast:browser, which hands the shared
+            # player to that phone and silences the room. A guest playing on
+            # their own device never needed this: session/here moves their own
+            # session, and the page ignores this call's answer for guests.
+            for who, cred in (("a phone link", phone), ("a full link", full)):
+                for name in ("auto", "cast:browser"):
+                    code = get(f"/api/audio/device?name={name}", cred, here).status_code
+                    c(f"{who} can't move the shared player to {name}",
+                      code in (401, 403), f"HTTP {code}")
+                code = get("/api/audio/devices", cred, here).status_code
+                c(f"{who} can't list the PC's devices", code in (401, 403),
+                  f"HTTP {code}")
+            code = get("/api/audio/device?name=auto").status_code
+            c("the owner still can", code == 200, f"HTTP {code}")
             say("scope", c)
 
             # -- 6. the player page hands over the right credential --------

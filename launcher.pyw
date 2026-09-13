@@ -708,7 +708,7 @@ def _icon_image():
 
 
 def _api(path: str) -> None:
-    port = config.get("port", 5000)
+    port = int(srv.runtime.get("port") or config.get("port", 7420))
     key = config.get("api_key", "")
     sep = "&" if "?" in path else "?"
     try:
@@ -743,13 +743,14 @@ def _tray() -> None:
             s.close()
         except Exception:
             host = "127.0.0.1"
-        webbrowser.open(f"http://{host}:{config.get('port',5000)}/?key={config.get('api_key','')}")
+        port = int(srv.runtime.get("port") or config.get("port", 7420))
+        webbrowser.open(f"http://{host}:{port}/?key={config.get('api_key','')}")
 
     def desktop(_i, _it):
         # The flyout is a fixed 400px window on purpose, so the wide layout
         # can't be reached by dragging it — a browser is the only way in.
         import webbrowser
-        port = config.get("port", 5000)
+        port = int(srv.runtime.get("port") or config.get("port", 7420))
         webbrowser.open(srv.local_url(
             port, f"/player?key={config.get('api_key', '')}"))
 

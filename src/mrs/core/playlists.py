@@ -103,7 +103,21 @@ class Playlists:
             rows = json.loads(self._index(name).read_text("utf-8-sig"))
         except Exception:
             return []
-        return [Track.from_dict(r) for r in rows]
+        if not isinstance(rows, list):
+            log.warning("playlist %r has a non-list tracks.json", name)
+            return []
+        out: list[Track] = []
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                log.warning("skipping malformed row %d in playlist %r",
+                            index, name)
+                continue
+            try:
+                out.append(Track.from_dict(row))
+            except Exception as exc:
+                log.warning("skipping malformed row %d in playlist %r: %s",
+                            index, name, exc)
+        return out
 
     def summary(self) -> list[dict]:
         out = []

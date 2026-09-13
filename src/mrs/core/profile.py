@@ -266,17 +266,35 @@ class Profiles:
     def for_row(self, row: dict) -> Profile:
         """The profile for a pass row from security.read_token()."""
         pid = row.get("id", "")
+        want_permanent = not row.get("expires")
         with self._lock:
             got = self._by_id.get(pid)
             if got is None:
                 # expires == 0 means it never does, which is what makes this
                 # a person rather than an evening.
                 got = Profile(pid, row.get("name", ""),
-                              permanent=not row.get("expires"))
+                              permanent=want_permanent)
                 self._by_id[pid] = got
                 log.info("profile for %r (%s)", got.name,
                          "permanent" if got.permanent else "temporary")
+            elif got.permanent != want_permanent:
+                # A pass can be extended from temporary to permanent (or
+                # shortened again) while a session is still alive. Reusing
+                # the old object would retain the wrong TasteEngine and
+                # playlist persistence policy forever.
+                got = Profile(pid, row.get("name", got.name),
+                              permanent=want_permanent)
+                self._by_id[pid] = got
+                log.info("reloaded profile %r after permanence change (%s)",
+                         got.name,
+                         "permanent" if got.permanent else "temporary")
+            elif row.get("name") and row.get("name") != got.name:
+                got.name = str(row.get("name"))[:40]
         return got
+
+    def sync_row(self, row: dict) -> Profile:
+        """Refresh a cached profile after its pass policy changes."""
+        return self.for_row(row)
 
     def find(self, pass_id: str) -> Profile | None:
         with self._lock:

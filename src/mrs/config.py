@@ -41,6 +41,12 @@ DEFAULTS: dict[str, Any] = {
     "shuffle": False,
     "announce": True,
     "tts_voice": "en-US-AriaNeural",
+    # mpv's volume is a mixer percentage, not a useful perceptual loudness
+    # scale. Keep speech tied to that same base and express the changes that
+    # matter here in dB instead of multiplying the percentage by a magic
+    # number.
+    "announce_duck_db": -12.0,
+    "announce_voice_gain_db": 0.0,
     "theme": "mono",
     "audio_device": "auto",
     "audio_device_label": "",
@@ -50,6 +56,10 @@ DEFAULTS: dict[str, Any] = {
     # carry one (audio elements, EventSource, links you send people) get a
     # signed token instead. Turn allow_key_in_url off once nothing you use
     # still puts the raw key in a query string.
+    # Stays True. Flipping the default was half of a change: the other half
+    # -- moving mutations off GET, so nothing needs the key in a URL -- was
+    # never written, and a fresh install with this False has a tray, a
+    # Shortcut and a flyout that all still put the key in a query string.
     "allow_key_in_url": True,
     # Encrypt the connection with a self-signed certificate. The browser
     # objects once and you accept it; after that nobody on the path can read
@@ -104,6 +114,9 @@ DEFAULTS: dict[str, Any] = {
     # fetching
     "js_runtime": "node",
     # web_embedded gives audio-only opus and actually downloads; "tv" is dead
+    # Ask for audio a phone can play without conversion. Costs about five
+    # kilobits against opus; saves a 2-4s transcode on every cast.
+    "prefer_native_audio": True,
     "player_client": "web_embedded",
     "player_client_fallbacks": ["web", "mweb", ""],
     # Whichever of the above last worked. None until one does.

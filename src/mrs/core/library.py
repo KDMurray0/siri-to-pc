@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 import threading
 from pathlib import Path
 
@@ -66,12 +68,31 @@ class LocalLibrary:
             artist, title = left.strip(), right.strip()
         return title, artist, album, length
 
+    @staticmethod
+    def _path_key(path: Path) -> str:
+        """Stable path identity across interpreter processes and restarts."""
+        try:
+            raw = os.path.normcase(os.path.abspath(os.path.normpath(str(path))))
+        except Exception:
+            raw = str(path)
+        return raw.replace("\\", "/")
+
+    @classmethod
+    def _stable_id(cls, path: Path) -> str:
+        return "local:v2:" + hashlib.sha256(
+            cls._path_key(path).encode("utf-8", "surrogatepass")).hexdigest()[:32]
+
     def scan(self, folders: list[str] | None = None) -> int:
         if self._scanning:
             return 0
         self._scanning = True
         found: list[Track] = []
         roots = folders or config.get("library_paths") or []
+        # Built once. Looking each file up by walking every known track was
+        # quadratic, and a library is exactly the thing that gets large.
+        with self._lock:
+            known = {self._path_key(Path(t.path)): t.video_id
+                     for t in self._tracks if t.path}
         try:
             for root in roots:
                 base = Path(root)
@@ -81,8 +102,13 @@ class LocalLibrary:
                     if not path.is_file() or path.suffix.lower() not in AUDIO_EXT:
                         continue
                     title, artist, album, length = self._read_tags(path)
+                    stable = self._stable_id(path)
+                    # Preserve a previously persisted local id for the same
+                    # path once, so old history/likes survive the v2 scheme.
+                    # New files and rebuilt rows use the deterministic id.
+                    old_id = known.get(self._path_key(path), "")
                     found.append(Track(
-                        video_id=f"local:{abs(hash(str(path))) & 0xFFFFFFFF:x}",
+                        video_id=(old_id if old_id.startswith("local:") else stable),
                         title=title, artist=artist, album=album, duration=length,
                         path=str(path), url=str(path), source="local",
                         origin="library"))

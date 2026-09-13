@@ -24,6 +24,7 @@ Three things make that work:
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 import subprocess
 import threading
@@ -56,9 +57,11 @@ def source_for(video_id: str) -> Path | None:
     """The file the downloader already fetched, whatever extension it got."""
     if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
         return None
+    sid = re.sub(r"[^A-Za-z0-9_.-]", "_", video_id or "unknown")[:100]
     for folder in (pinned_dir(), cache_dir()):
-        for path in folder.glob(f"{video_id}.*"):
-            if path.is_file() and path.stat().st_size > 100_000:
+        for path in folder.glob(f"{sid}.*"):
+            if (path.is_file() and path.stat().st_size > 0
+                    and not path.name.endswith((".part", ".ytdl", ".complete"))):
                 return path
     return None
 
@@ -98,10 +101,20 @@ def _vid_of(path: Path) -> str:
 
 
 def playable(video_id: str) -> tuple[Path | None, str]:
-    """(path, state) where state is ready | needs conversion | converting | missing."""
+    """(path, state): ready | arriving | needs conversion | converting | missing.
+
+    Downloads are private until yt-dlp publishes the completed final name.
+    There is intentionally no growing-file state here: a byte prefix is not
+    a valid progressive media container merely because a guessed total exists.
+    """
+    from .downloader import arriving
+    coming = arriving(video_id)
     src = source_for(video_id)
     if not src:
-        return None, "missing"
+        # Known to be on its way, just not far enough along to have a path.
+        return None, "arriving" if coming else "missing"
+    if coming:
+        return None, "arriving"
     # With EQ or normalisation on, even an already-playable file has to be
     # rebuilt — there's no filter chain between the file and the phone.
     if src.suffix.lower() in NATIVE and not filter_chain():

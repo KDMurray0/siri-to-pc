@@ -73,6 +73,10 @@ class PlayerService:
         self._announce_seq = 0
         self._announce_files: dict[str, str] = {}
         self._announce_lock = threading.Lock()
+        # TTS generation can happen in parallel, but only one clip may own
+        # the music duck at a time. Without this, clip A could restore the
+        # level saved by clip B while B was still speaking.
+        self._announce_play_lock = threading.Lock()
         # How many times each file has taken the player down, and when it
         # last did. Two in quick succession is the file, not bad luck.
         self._crashes: dict[str, tuple[int, float]] = {}
@@ -1072,6 +1076,8 @@ class PlayerService:
             return self._announce_files.get(aid)
 
     def _speak(self, text: str, session: str = "") -> None:
+        offered = False
+        path = ""
         try:
             import asyncio
             import tempfile
@@ -1098,30 +1104,59 @@ class PlayerService:
                 # the song to an empty room. Same for a guest, except the
                 # room is theirs and mpv was never involved.
                 self._offer_announcement(aid, path, text, session)
+                offered = True
                 return
 
-            self._ducking = True
-            original = int(self.mpv.get("volume", config.get("volume", 70)))
-            self.mpv.set("volume", max(8, int(original * 0.25)))
-            # Out of the speaker the music is using, not whatever Windows
-            # calls default — picking a second sound card moved the songs and
-            # left the announcements behind on the first one.
-            cmd = [shutil.which("mpv") or "mpv", "--no-video", "--really-quiet",
-                   # At the volume the music is at. This is a second mpv, and
-                   # without being told it starts at full — so turning the
-                   # player down turned the songs down and left the voice
-                   # announcing them at whatever the machine could manage.
-                   f"--volume={max(0, min(150, original))}"]
-            dev = config.get("audio_device", "auto")
-            if dev and dev not in ("auto", CAST_DEVICE):
-                cmd.append(f"--audio-device={dev}")
-            cmd.append(path)
-            subprocess.run(cmd, timeout=30, creationflags=CREATE_NO_WINDOW)
-            self.mpv.set("volume", original)
+            # mpv's `volume` is the shared mixer percentage. `volume-gain` is
+            # the dB control, so duck only that property and leave the user's
+            # chosen mixer level alone. The narration process receives the
+            # same mixer percentage and any existing music gain, plus the
+            # separately configurable speech correction.
+            with self._announce_play_lock:
+                self._ducking = True
+                original_volume = self.mpv.get(
+                    "volume", config.get("volume", 70))
+                original_gain = self.mpv.get("volume-gain", 0.0)
+                try:
+                    try:
+                        original_volume = float(original_volume)
+                    except (TypeError, ValueError):
+                        original_volume = float(config.get("volume", 70) or 0)
+                    try:
+                        original_gain = float(original_gain)
+                    except (TypeError, ValueError):
+                        original_gain = 0.0
+                    duck_db = float(config.get("announce_duck_db", -12.0))
+                    voice_db = float(config.get("announce_voice_gain_db", 0.0))
+                    self.mpv.set("volume-gain", original_gain + duck_db)
+
+                    # Out of the speaker the music is using, not whatever
+                    # Windows calls default — picking a second sound card
+                    # moved the songs and left the announcements behind.
+                    cmd = [shutil.which("mpv") or "mpv", "--no-video",
+                           "--really-quiet",
+                           f"--volume={max(0, min(150, original_volume)):g}",
+                           f"--volume-gain={original_gain + voice_db:g}"]
+                    dev = config.get("audio_device", "auto")
+                    if dev and dev not in ("auto", CAST_DEVICE):
+                        cmd.append(f"--audio-device={dev}")
+                    cmd.append(path)
+                    subprocess.run(cmd, timeout=30,
+                                   creationflags=CREATE_NO_WINDOW)
+                finally:
+                    # Restoration must happen for timeout, missing mpv,
+                    # malformed config, and a user closing the player too.
+                    self.mpv.set("volume-gain", original_gain)
+                    self._ducking = False
         except Exception as exc:
             log.debug("announce failed: %s", exc)
         finally:
             self._ducking = False
+            if path and not offered:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
     def _offer_announcement(self, aid: str, path: str, text: str,
                             session: str = "") -> None:

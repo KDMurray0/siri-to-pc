@@ -10,6 +10,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
 import json
+import mimetypes
 import shutil
 import time
 from pathlib import Path
@@ -309,7 +310,10 @@ def _serve_page(request: Request, name: str, key: str, token: str):
     return templates.TemplateResponse(request, name, {
         "api_key": creds,
         "is_guest": "0" if owner else "1",
-        "scope": "owner" if owner else (row.get("scope") or "full")})
+        "scope": "owner" if owner else (row.get("scope") or "full"),
+        "announce_duck_db": config.get("announce_duck_db", -12.0),
+        "announce_voice_gain_db": config.get("announce_voice_gain_db", 0.0),
+    })
 
 
 # ── health + events ───────────────────────────────────────────────────
@@ -440,13 +444,13 @@ def api_restore(path: str = "", _: bool = Owner):
 
 
 @app.get("/api/unskip")
-def api_unskip(_: bool = Auth):
+def api_unskip(_: bool = Owner):
     """Bring back the last skipped track and unlearn the skip."""
     return player.queue.unskip()
 
 
 @app.get("/api/health")
-def health(_: bool = Auth):
+def health(_: bool = Owner):
     """What the outside services are actually doing.
 
     Every queue bug worth the name this year was one of these quietly
@@ -705,7 +709,7 @@ def api_seek(request: Request, pos: float, _: bool = Auth):
 
 
 @app.get("/api/restart")
-def api_restart(_: bool = Auth):
+def api_restart(_: bool = Owner):
     player.restart()
     return {"status": "ok", "message": "Player restarted"}
 
@@ -1297,7 +1301,7 @@ def api_settings(request: Request, _: bool = Auth):
 
 @app.get("/api/audio")
 def api_audio(eq: str = "", normalize: int | None = None,
-              crossfade: int | None = None, _: bool = Auth):
+              crossfade: int | None = None, _: bool = Owner):
     if eq:
         config.set("eq", eq)
     if normalize is not None:
@@ -1371,7 +1375,7 @@ def api_setting(request: Request, key: str, value: str = "", _: bool = Auth):
 
 
 @app.get("/api/audio/devices")
-def api_audio_devices(_: bool = Auth):
+def api_audio_devices(_: bool = Owner):
     """Output devices mpv can see, plus which one we're using."""
     return {"status": "ok", **player.audio_devices()}
 
@@ -1452,7 +1456,7 @@ def _pass_scope(request: Request) -> str:
 
 @app.get("/api/audio/device")
 def api_audio_device(request: Request, name: str = "auto", client: str = "",
-                     _: bool = Auth):
+                     _: bool = Owner):
     """Which PC speaker the shared player uses.
 
     A phone-scoped guest has no business here — refused outright rather than
@@ -1555,14 +1559,101 @@ def api_whoami(request: Request, _: bool = Auth):
 
 
 # ── casting the audio to whichever browser is asking ─────────────────────
+
+# Written down rather than asked of `mimetypes`, which on Windows reads the
+# registry. This machine's registry says .m4a is "audio/m4a" -- not a
+# registered type -- and .aac is "audio/vnd.dlna.adts"; the answer changes
+# with whatever software last claimed the extension. The old code hard-coded
+# audio/mp4 for m4a, which is correct, and .m4a is now the usual cast format.
+_AUDIO_TYPES = {
+    ".m4a": "audio/mp4", ".m4b": "audio/mp4", ".mp4": "audio/mp4",
+    ".aac": "audio/aac", ".mp3": "audio/mpeg", ".wav": "audio/wav",
+    ".flac": "audio/flac", ".ogg": "audio/ogg", ".opus": "audio/ogg",
+    ".webm": "audio/webm",
+}
+
+
+def _media_type(path: Path) -> str:
+    """The standard type for an audio file, independent of the machine."""
+    return (_AUDIO_TYPES.get(path.suffix.lower())
+            or mimetypes.guess_type(path.name)[0]
+            or "application/octet-stream")
+
+
+def _range_response(request: Request, path: Path):
+    """Serve one completed file with correct single-range semantics.
+
+    Multi-range requests are deliberately answered with the complete file;
+    that is allowed when a server does not implement multipart ranges and is
+    more interoperable than pretending a partial prefix is a valid container.
+    """
+    size = path.stat().st_size
+    media = _media_type(path)
+    common = {"Accept-Ranges": "bytes",
+              "Cache-Control": "private, max-age=3600"}
+    raw = (request.headers.get("range") or "").strip()
+    if not raw or not raw.lower().startswith("bytes="):
+        return FileResponse(path, media_type=media, headers=common)
+    if size <= 0:
+        return Response(status_code=416,
+                        headers={**common, "Content-Range": "bytes */0"})
+
+    spec = raw[6:]
+    if "," in spec:
+        # We do not implement multipart/byteranges; ignoring Range and
+        # returning 200 is explicitly preferable to a malformed 206.
+        return FileResponse(path, media_type=media, headers=common)
+    first, sep, last = spec.partition("-")
+    if not sep:
+        return Response(status_code=416,
+                        headers={**common, "Content-Range": f"bytes */{size}"})
+    try:
+        if not first:
+            suffix = int(last)
+            if suffix <= 0:
+                raise ValueError
+            start = max(0, size - suffix)
+            end = size - 1
+        else:
+            start = int(first)
+            end = size - 1 if not last else int(last)
+            if start < 0 or start >= size or end < start:
+                raise ValueError
+            end = min(end, size - 1)
+    except (TypeError, ValueError):
+        return Response(status_code=416,
+                        headers={**common, "Content-Range": f"bytes */{size}"})
+
+    length = end - start + 1
+
+    def body():
+        with path.open("rb") as fh:
+            fh.seek(start)
+            remaining = length
+            while remaining:
+                chunk = fh.read(min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    return StreamingResponse(
+        body(), status_code=206, media_type=media,
+        headers={**common, "Content-Range": f"bytes {start}-{end}/{size}",
+                 "Content-Length": str(length)})
+
+
 @app.get("/api/output/stream/{video_id}")
-def api_output_stream(video_id: str, _: bool = Auth):
+def api_output_stream(request: Request, video_id: str, _: bool = Auth):
     """The track mpv is playing, as bytes a phone will accept.
 
     FileResponse handles Range itself, which is what gives the phone a
     draggable timeline instead of a take-it-or-leave-it download.
     """
     path, state = cast_mod.playable(video_id)
+    if state in ("partial", "arriving"):
+        return JSONResponse({"status": "arriving", "detail": "still fetching"},
+                            status_code=503, headers={"Retry-After": "1"})
     if state == "missing":
         # Not "no such track" — almost always "the download hasn't finished".
         # A 404 tells the player to give up; a 503 tells it to come back, and
@@ -1575,10 +1666,7 @@ def api_output_stream(video_id: str, _: bool = Auth):
             # 503 rather than an error: the client retries, it isn't broken.
             return JSONResponse({"status": "converting", "detail": state},
                                 status_code=503)
-    media = "audio/mp4" if path.suffix.lower() in (".m4a", ".mp4") else None
-    return FileResponse(path, media_type=media or "application/octet-stream",
-                        headers={"Accept-Ranges": "bytes",
-                                 "Cache-Control": "private, max-age=3600"})
+    return _range_response(request, Path(path))
 
 
 @app.get("/api/output/prepare/{video_id}")
@@ -1858,29 +1946,29 @@ def api_cache(prune: int = 0, _: bool = Owner):
 
 
 @app.get("/api/theme")
-def api_theme(value: str = "default", _: bool = Auth):
+def api_theme(value: str = "default", _: bool = Owner):
     config.set("theme", value or "default")
     return {"status": "ok", "theme": config.get("theme")}
 
 
 @app.get("/api/announce")
-def api_announce(enabled: int = 1, _: bool = Auth):
+def api_announce(enabled: int = 1, _: bool = Owner):
     config.set("announce", bool(enabled))
     return {"status": "ok", "announce": config.get("announce")}
 
 
 @app.get("/api/sleep")
-def api_sleep(minutes: int = 0, _: bool = Auth):
+def api_sleep(minutes: int = 0, _: bool = Owner):
     return {"status": "ok", **player.set_sleep(minutes)}
 
 
 @app.get("/api/download")
-def api_download(_: bool = Auth):
+def api_download(_: bool = Owner):
     return {"status": "ok", **player.export_current()}
 
 
 @app.get("/api/pin")
-def api_pin(_: bool = Auth):
+def api_pin(_: bool = Owner):
     return {"status": "ok", **player.pin_current()}
 
 
@@ -1918,7 +2006,7 @@ def api_groqkey(value: str = "", _: bool = Owner):
 
 
 @app.get("/api/groqmodels")
-def api_groqmodels(refresh: int = 0, _: bool = Auth):
+def api_groqmodels(refresh: int = 0, _: bool = Owner):
     """What Groq will serve, so the picker can't offer a retired model."""
     return {"status": "ok", "models": llm.models(force=bool(refresh)),
             "current": config.get("groq_model") or llm.DEFAULT_MODEL,
@@ -1926,7 +2014,7 @@ def api_groqmodels(refresh: int = 0, _: bool = Auth):
 
 
 @app.get("/api/groqmodel")
-def api_groqmodel(value: str = "", _: bool = Auth):
+def api_groqmodel(value: str = "", _: bool = Owner):
     """Pick the model. Tested before it's kept, so a bad choice can't quietly
     turn request parsing off — that failure looks exactly like a bad key."""
     want = (value or "").strip()
@@ -2259,7 +2347,7 @@ def api_boot_early(enabled: int = 0, _: bool = Owner):
 # ── cookies ───────────────────────────────────────────────────────────
 
 @app.get("/api/cookies")
-def api_cookies(_: bool = Auth):
+def api_cookies(_: bool = Owner):
     return {"status": "ok", **cookie_mod.state,
             "path": str(cookie_mod.cookie_path()),
             "file": cookie_mod.inspect(),
@@ -2267,21 +2355,21 @@ def api_cookies(_: bool = Auth):
 
 
 @app.get("/api/cookies/find")
-def api_cookies_find(close: int = 0, _: bool = Auth):
+def api_cookies_find(close: int = 0, _: bool = Owner):
     """Test the cookies; only closes a browser if explicitly asked (close=1)."""
     return {"status": "ok", **cookie_mod.find_now(close_browsers=bool(close)),
             "path": str(cookie_mod.cookie_path())}
 
 
 @app.get("/api/cookies/extension")
-def api_cookies_extension(_: bool = Auth):
+def api_cookies_extension(_: bool = Owner):
     """Chrome can't be decrypted, so use the export extension instead: this
     tells the user what to install and watches Downloads for the result."""
     return {"status": "ok", **cookie_mod.extension_flow()}
 
 
 @app.get("/api/cookies/signedin")
-def api_cookies_signedin(saved: int = 0, _: bool = Auth):
+def api_cookies_signedin(saved: int = 0, _: bool = Owner):
     """The sign-in window finished. Say so, rather than just vanishing.
 
     Checks, and only checks. This used to call find_now(), which on a failed
@@ -2306,7 +2394,7 @@ def api_cookies_signedin(saved: int = 0, _: bool = Auth):
 
 
 @app.get("/api/cookies/import")
-def api_cookies_import(path: str = "", _: bool = Auth):
+def api_cookies_import(path: str = "", _: bool = Owner):
     """Import a cookies.txt the user points at (or the newest in Downloads)."""
     from pathlib import Path as _P
     src = _P(path) if path else cookie_mod.scan_downloads(max_age=86400)
@@ -2317,7 +2405,7 @@ def api_cookies_import(path: str = "", _: bool = Auth):
 
 
 @app.get("/api/cookies/grab")
-def api_cookies_grab(browser: str, close: int = 0, _: bool = Auth):
+def api_cookies_grab(browser: str, close: int = 0, _: bool = Owner):
     """Opt-in: wait for a browser to close (or close it) and take its cookies."""
     import threading
     if close:
@@ -2333,7 +2421,7 @@ def api_cookies_grab(browser: str, close: int = 0, _: bool = Auth):
 # ── library ───────────────────────────────────────────────────────────
 
 @app.get("/api/openfolder")
-def api_open_folder(_: bool = Auth):
+def api_open_folder(_: bool = Owner):
     """Open the data folder in Explorer."""
     import subprocess
     from ..paths import data_dir
@@ -2345,7 +2433,7 @@ def api_open_folder(_: bool = Auth):
 
 
 @app.get("/api/library/scan")
-def api_library_scan(_: bool = Auth):
+def api_library_scan(_: bool = Owner):
     library.scan_async()
     return {"status": "ok", "message": "Scanning your library"}
 
@@ -2364,7 +2452,7 @@ def api_library_paths(add: str = "", remove: str = "", _: bool = Owner):
 # ── last.fm / alarms / cast ───────────────────────────────────────────
 
 @app.get("/api/lastfm")
-def api_lastfm(step: str = "", api_key: str = "", secret: str = "", _: bool = Auth):
+def api_lastfm(step: str = "", api_key: str = "", secret: str = "", _: bool = Owner):
     if api_key:
         config.set("lastfm_api_key", api_key.strip())
     if secret:
@@ -2378,7 +2466,7 @@ def api_lastfm(step: str = "", api_key: str = "", secret: str = "", _: bool = Au
 
 @app.get("/api/alarms")
 def api_alarms(add: str = "", time_: str = Query(default="", alias="time"),
-               days: str = "", remove: int = -1, _: bool = Auth):
+               days: str = "", remove: int = -1, _: bool = Owner):
     alarms = list(config.get("alarms") or [])
     if remove >= 0 and remove < len(alarms):
         alarms.pop(remove)
@@ -2390,7 +2478,7 @@ def api_alarms(add: str = "", time_: str = Query(default="", alias="time"),
 
 
 @app.get("/api/cast")
-def api_cast(add: str = "", remove: str = "", text: str = "", _: bool = Auth):
+def api_cast(add: str = "", remove: str = "", text: str = "", _: bool = Owner):
     peers = list(config.get("cast_peers") or [])
     if add and add not in peers:
         peers.append(add)
@@ -2413,7 +2501,7 @@ def api_stream(video_id: str, _: bool = Auth):
 # ── diagnostics ───────────────────────────────────────────────────────
 
 @app.get("/api/diag")
-def api_diag(_: bool = Auth):
+def api_diag(_: bool = Owner):
     return {
         "status": "ok",
         "mpv": bool(shutil.which("mpv")),
