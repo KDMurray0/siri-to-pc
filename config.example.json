@@ -1,21 +1,24 @@
 {
-  "api_key": "CHANGE-THIS-TO-A-LONG-RANDOM-SECRET",
-  "allowed_ips": [
-    "127.0.0.1"
-  ],
+  "api_key": "leave blank to have one generated on first run",
+  "allowed_ips": [],
   "lock_ips": false,
   "host": "0.0.0.0",
-  "port": 5000,
+  "port": 7420,
   "cookies_from_browser": "",
-  "cookies_file": "C:\\Path\\To\\itunes_request_server\\youtube_cookies.txt",
+  "cookies_file": "",
   "js_runtime": "node",
-  "player_client": "tv",
+  "player_client": "web_embedded",
+  "player_client_fallbacks": [
+    "web",
+    "mweb",
+    ""
+  ],
   "announce": true,
   "tts_voice": "en-US-AriaNeural",
   "use_groq": true,
   "groq_api_key": "",
-  "groq_model": "llama-3.1-8b-instant",
-  "history_size": 100,
+  "groq_model": "openai/gpt-oss-20b",
+  "history_size": 200,
   "source": "youtube",
-  "artist_track_count": 20
+  "artist_track_count": 60
 }

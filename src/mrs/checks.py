@@ -92,6 +92,12 @@ def _unguarded_routes(app) -> list[str]:
 
 
 def run(verbose: bool = False) -> Result:
+    from .testing import isolated, offline
+    with isolated(), offline():
+        return _run(verbose)
+
+
+def _run(verbose: bool = False) -> Result:
     """Every rule, against a real app instance. Never raises."""
     from fastapi.testclient import TestClient
 
@@ -1672,6 +1678,57 @@ def run(verbose: bool = False) -> Result:
                 c("...as an svg", "svg" in (ok.headers.get("content-type") or ""))
             say("the QR code is the owner's", c)
 
+            # -- 16. the install instructions agree with the code ----------
+            # They didn't: the example config and setup.ps1 said port 5000 and
+            # player client "tv" -- a client the app had stopped using -- and the
+            # README ran a file that doesn't exist. Each was fine the day it was
+            # written. This is what notices the day after.
+            c = _Checker("drift")
+            import json as _json
+            from .config import DEFAULTS as _D
+            from .paths import repo_root as _root
+            here_dir = _root()
+            example = here_dir / "config.example.json"
+            if not example.is_file():
+                c("(no source tree beside this build; nothing to compare)", True)
+            else:
+                ex = _json.loads(example.read_text(encoding="utf-8-sig"))
+                # Values a person is meant to replace, so not defaults.
+                placeholders = {"api_key", "cookies_file", "groq_api_key"}
+                for k, v in ex.items():
+                    if k in placeholders:
+                        continue
+                    c(f"example {k} is a real setting", k in _D, "not in DEFAULTS")
+                    if k in _D:
+                        c(f"example {k} matches the code's default", v == _D[k],
+                          f"example={v!r} code={_D[k]!r}")
+                setup = here_dir / "setup.ps1"
+                if setup.is_file():
+                    text = setup.read_text(encoding="utf-8-sig")
+                    code_lines = [ln for ln in text.splitlines()
+                                  if not ln.lstrip().startswith("#")]
+                    body = "\n".join(code_lines)
+                    import re as _re
+                    # Assigning a literal is the bug -- `player_client = "tv"`.
+                    # Passing `player_client=$client` to yt-dlp to *test* each
+                    # client is the fix, and must not trip this.
+                    c("setup doesn't write a player client",
+                      not _re.search(r'player_client\s*=\s*"', body),
+                      str(_re.findall(r'player_client\s*=\s*"[^"]*"', body)))
+                    c("setup doesn't hard-code a port",
+                      not _re.search(r'\bport\s*=\s*\d', body),
+                      str(_re.findall(r'\bport\s*=\s*\d+', body)))
+                readme = here_dir / "README.md"
+                if readme.is_file():
+                    rd = readme.read_text(encoding="utf-8-sig")
+                    c("README doesn't run app.py, which doesn't exist",
+                      "app.py" not in rd)
+                    c("README names the entry point that does",
+                      "launcher.pyw" in rd)
+                    c(f"README's port matches the default ({_D['port']})",
+                      ":5000" not in rd and "LocalPort 5000" not in rd)
+            say("the install instructions match the code", c)
+
     except Exception as exc:            # a check suite must not be the thing
         out.failed.append(f"the checks themselves broke: {exc!r}")
     finally:
@@ -1694,3 +1751,7 @@ def main() -> int:
     for f in got.failed:
         print(f"  - {f}")
     return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

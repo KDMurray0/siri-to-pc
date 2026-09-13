@@ -10,3 +10,12 @@ mutagen>=1.47,<2.0
 pywebview>=5.0,<6.0
 edge-tts>=6.1
 PyAudioWPatch>=0.2.12; sys_platform == 'win32'
+# The QR code on the Sharing tab.
+qrcode>=7.4,<9.0
+# FastAPI can't read a form body without it, and the Shortcut endpoint
+# accepts one: a clean install without this throws on every form POST.
+python-multipart>=0.0.9
+# Spectrum analysis in one matrix multiply instead of 8.45M float
+# operations. There is a slow fallback, so this is performance, not
+# correctness -- but the build bundles it and it should be the default.
+numpy>=1.26

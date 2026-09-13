@@ -44,7 +44,8 @@ def config_path() -> Path:
 
 
 def cache_dir() -> Path:
-    p = Path(os.environ.get("TEMP", "/tmp")) / "mrs_audio_cache"
+    p = (Path(os.environ["MRS_CACHE_DIR"]) if os.environ.get("MRS_CACHE_DIR")
+         else Path(os.environ.get("TEMP", "/tmp")) / "mrs_audio_cache")
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -104,6 +105,8 @@ def _legacy_dirs() -> list[Path]:
 
 def migrate_legacy_data() -> list[str]:
     """Pull old side-by-side data into the single data dir. Never overwrites."""
+    if os.environ.get("MRS_TESTING") == "1":
+        return []
     moved = []
     target = data_dir()
     for d in _legacy_dirs():

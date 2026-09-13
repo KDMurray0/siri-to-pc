@@ -16,6 +16,16 @@ _HERE = os.path.dirname(sys.executable if FROZEN else os.path.abspath(__file__))
 if not FROZEN:
     sys.path.insert(0, os.path.join(_HERE, "src"))
 
+# Test entry points must precede config, GUI, logging and player imports.
+if __name__ == "__main__" and any(x in sys.argv for x in ("--check", "--selftest")):
+    from mrs.testing import isolated
+    with isolated():
+        if "--selftest" in sys.argv:
+            from mrs.selftest import main as test_main
+        else:
+            from mrs.checks import main as test_main
+        raise SystemExit(test_main())
+
 
 def _trace(note: str) -> None:
     """A line in the log using nothing but the standard library.

@@ -178,11 +178,12 @@ if (-not (Test-Path $srcCfg) -and -not (Test-Path $localCfg)) {
         Copy-Item $example $localCfg
         Ok "created $localCfg from the example"
     } else {
-        # Minimal config; the app generates api_key on first run.
+        # Only what setup genuinely decides. Port, player client and the
+        # rest come from the app's own defaults: every value copied in here
+        # is one that can drift, and these had -- port 5000 and a player
+        # client ("tv") the app had long since stopped using.
         $seed = [ordered]@{
-            host = "0.0.0.0"; port = 5000; api_key = ""
-            js_runtime = "node"; player_client = "tv"
-            cookies_file = ""; cookies_from_browser = ""
+            api_key = ""; cookies_file = ""; cookies_from_browser = ""
         }
         $json = $seed | ConvertTo-Json -Depth 5
         [System.IO.File]::WriteAllText($localCfg, $json, (New-Object System.Text.UTF8Encoding($false)))
@@ -212,10 +213,15 @@ function Set-ConfigValues([hashtable]$values) {
     }
 }
 
-$base = @{ js_runtime = "node"; player_client = "tv" }
+# python_path is the one runtime setting setup actually determines. It used
+# to write player_client=tv over whatever was there, which put every install
+# it touched onto a client YouTube no longer serves.
+$base = @{}
 if (Have "python") { $base["python_path"] = (Get-Command python).Source }
-Set-ConfigValues $base
-Ok "runtime settings written (js_runtime=node, player_client=tv)"
+if ($base.Count) {
+    Set-ConfigValues $base
+    Ok "python_path written"
+}
 
 # -- 4. cookies -------------------------------------------------------
 if ($SkipCookies) {
@@ -356,13 +362,34 @@ if (Have "yt-dlp") {
         if ($c.cookies_from_browser) { $authArgs += @("--cookies-from-browser", $c.cookies_from_browser) }
         elseif ($c.cookies_file -and (Test-Path $c.cookies_file)) { $authArgs += @("--cookies", $c.cookies_file) }
         if ($c.js_runtime)    { $authArgs += @("--js-runtimes", $c.js_runtime) }
-        if ($c.player_client) { $authArgs += @("--extractor-args", "youtube:player_client=$($c.player_client)") }
     }
+    # The same client chain the app uses, asked of the app itself rather than
+    # copied here. Testing only one client reported "download failed" on
+    # machines where the app would have worked fine on the next one.
+    $chain = @()
+    try {
+        $py = "import sys, json; sys.path.insert(0, r'$PSScriptRoot\src'); " +
+              "from mrs.config import config as c; " +
+              "print(json.dumps([c.get('player_client') or ''] + list(c.get('player_client_fallbacks') or [])))"
+        $chain = & python -c $py 2>$null | ConvertFrom-Json
+    } catch { }
+    if (-not $chain) { $chain = @("web_embedded", "web", "mweb", "") }
     $tmp = Join-Path $env:TEMP "mrs_setup_check"
-    $dl = @("-f","bestaudio/best","--no-part","--no-warnings","-o","$tmp.%(ext)s") + $authArgs + @($TESTVIDEO)
-    $out = & yt-dlp @dl 2>&1 | Out-String
-    Log $out
-    $got = Get-ChildItem "$tmp.*" -ErrorAction SilentlyContinue
+    $out = ""
+    $got = $null
+    foreach ($client in ($chain | Select-Object -Unique)) {
+        $clientArgs = @()
+        if ($client) { $clientArgs = @("--extractor-args", "youtube:player_client=$client") }
+        $dl = @("-f","bestaudio/best","--no-warnings","-o","$tmp.%(ext)s") + $authArgs + $clientArgs + @($TESTVIDEO)
+        $out = & yt-dlp @dl 2>&1 | Out-String
+        Log $out
+        $got = Get-ChildItem "$tmp.*" -ErrorAction SilentlyContinue |
+               Where-Object { $_.Extension -ne ".part" }
+        if ($got) {
+            if ($client -ne $chain[0]) { Info "worked on the '$client' client" }
+            break
+        }
+    }
     if ($got) {
         Ok ("download works ({0:N1} MB)" -f ($got[0].Length / 1MB))
         $got | Remove-Item -Force -ErrorAction SilentlyContinue

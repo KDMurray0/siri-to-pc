@@ -104,17 +104,18 @@ cd siri-to-pc
 powershell -ExecutionPolicy Bypass -File setup.ps1
 ```
 
-`setup.ps1` also installs the Python packages and writes `src\config.json` for
-you. Then double-click **`launcher.pyw`** (server + tray player), or run the
-server on its own:
+`setup.ps1` also installs the Python packages. Then double-click
+**`launcher.pyw`** (server + tray player), or run it from a terminal:
 
 ```bash
-python src/app.py
+python launcher.pyw              # server, tray icon and player window
+python launcher.pyw --headless   # server only, no window
+python launcher.pyw --check      # the access checks
 ```
 
-If `api_key` is blank or missing, a random secret is generated on first run.
-Open `http://<pc-ip>:5000/` to see the endpoint URL (with the key) and the Siri
-Shortcut steps.
+Settings live in `%LOCALAPPDATA%\MusicRequestServer\config.json`, created on
+first run. If `api_key` is blank a random secret is generated. Open
+`http://<pc-ip>:7420/` for the endpoint URL and the Siri Shortcut steps.
 
 ### What setup.ps1 does
 
@@ -122,9 +123,9 @@ Shortcut steps.
 |------|--------|
 | Prerequisites | Installs `mpv`, `yt-dlp`, `Node.js` via winget; skips anything already present |
 | Python packages | `pip install -r requirements.txt` (source runs only — the .exe bundles them) |
-| Config | Creates `src\config.json` from the example, sets `python_path`, `js_runtime`, `player_client` |
+| Config | Creates your config if there isn't one, and sets `python_path`. Everything else comes from the app's own defaults |
 | Cookies | Tries `--cookies-from-browser` against each installed browser, falls back to a cookies file |
-| Verify | Runs a real YouTube fetch and reports exactly what failed if anything did |
+| Verify | Runs a real YouTube fetch through the same client fallback chain the app uses, and reports exactly what failed |
 
 Useful flags: `-SkipCookies` (tools only), `-CookieBrowser firefox` (skip auto-detection).
 
@@ -180,44 +181,27 @@ machine to handle that.
 - Python 3.10+ with packages from `requirements.txt` *(source runs only — the .exe bundles them)*
 - A **logged-in YouTube session**, either read live from your browser or exported to a cookies file — YouTube blocks unauthenticated requests with a "confirm you're not a bot" error. See [YouTube Authentication](#youtube-authentication) below.
 
-> **Important — use the same Python for everything.** All packages must be installed into the interpreter set in `config.json` → `python_path`. On this machine that is Python 3.12 (`C:\Users\<you>\AppData\Local\Programs\Python\Python312\python.exe`). The tray launcher itself may run under a different Python, so it launches `app.py` with `python_path` explicitly to avoid `ModuleNotFoundError`.
+> **Important — use the same Python for everything.** All packages must be installed into the interpreter set in `config.json` → `python_path`. On this machine that is Python 3.12 (`C:\Users\<you>\AppData\Local\Programs\Python\Python312\python.exe`). If `launcher.pyw` is started by a Python that lacks them, it relaunches itself under `python_path` to avoid `ModuleNotFoundError`.
 
 ## Configuration
 
-Edit `config.json` before first run:
-
-```json
-{
-  "host": "0.0.0.0",
-  "port": 5000,
-  "api_key": "",
-  "python_path": "",
-  "cookies_file": "C:\\path\\to\\youtube_cookies.txt",
-  "js_runtime": "node",
-  "player_client": "tv",
-  "allowed_ips": [],
-  "lock_ips": false,
-  "announce": true,
-  "tts_voice": "en-US-AriaNeural",
-  "use_groq": false,
-  "groq_api_key": "",
-  "auto_queue": true
-}
-```
-
-See `config.example.json` for the full list. `api_key` blank ⇒ auto-generated on first run.
+Most settings are changed from the player's Settings tab. To edit the file
+directly, close the app first and open
+`%LOCALAPPDATA%\MusicRequestServer\config.json`. Anything you leave out takes
+the app's default; `config.example.json` shows the commonly changed ones with
+their real default values. `api_key` blank ⇒ generated on first run.
 
 | Field | Description |
 |-------|-------------|
 | `host` | Bind address. Use `0.0.0.0` for network access, `127.0.0.1` for local only |
-| `port` | TCP port the server listens on |
+| `port` | TCP port the server listens on (default `7420`) |
 | `api_key` | Secret key for authentication. **Change this from the default** |
-| `python_path` | Explicit path to the Python interpreter that has all dependencies installed (e.g. `C:\...\Python312\python.exe`). The tray launcher runs `app.py` with this. **Must not be empty if the launcher's own Python lacks the packages.** |
+| `python_path` | Explicit path to the Python interpreter that has all dependencies installed (e.g. `C:\...\Python312\python.exe`). `launcher.pyw` relaunches under this if its own Python lacks the packages. |
 | `cookies_file` | Path to a Netscape-format `youtube_cookies.txt` exported from a logged-in YouTube session. Required for playback. If the file is missing it is ignored (with a warning). |
 | `cookies_from_browser` | Alternative to `cookies_file`: a browser name yt-dlp reads live cookies from, e.g. `firefox`. **Chrome/Edge do not work on Windows** (App-Bound Encryption). Leave empty if using `cookies_file`. |
 | `js_runtime` | JavaScript runtime yt-dlp uses to solve the signature challenge. Set to `node` (yt-dlp only auto-enables Deno otherwise). Required for audio to resolve. |
-| `player_client` | YouTube player client for yt-dlp. **Default `tv`** — it returns a progressive stream (itag 18) that downloads without a PO token. Leaving it empty lets yt-dlp pick `android_vr`, whose audio format currently 403s. |
-| `use_groq` / `groq_api_key` / `groq_model` | Optional. With a free [Groq](https://console.groq.com) key, requests are parsed by an LLM (far better at casual phrasing than the regex grammar). Empty key = local parser. Model defaults to `llama-3.3-70b-versatile`. |
+| `player_client` / `player_client_fallbacks` | YouTube player clients for yt-dlp, tried in order: default `web_embedded`, then `web`, `mweb` and yt-dlp's own choice. YouTube breaks these periodically; the app remembers whichever last worked and starts there. |
+| `use_groq` / `groq_api_key` / `groq_model` | Optional. With a free [Groq](https://console.groq.com) key, requests are parsed by an LLM (far better at casual phrasing than the regex grammar). Empty key = local parser. Model defaults to `openai/gpt-oss-20b`; the Settings tab lists the models your key can use. |
 | `announce` / `tts_voice` | `announce` speaks the song when *you* request one (auto-queued ones stay silent). `tts_voice` is an [edge-tts](https://github.com/rany2/edge-tts) neural voice (default `en-US-AriaNeural`); falls back to the offline Windows voice if edge-tts/network is unavailable. |
 | `lock_ips` | `false` (default) lets any LAN device connect. `true` enforces the `allowed_ips` whitelist. Toggle live from the player's Settings. |
 | `auto_queue` | `true` (default) keeps playing forever, Spotify-style: when the queue is nearly empty it appends songs seeded from the recent listening *context* (several songs you didn't skip), ranked toward your taste. |
@@ -369,14 +353,14 @@ Returns `{"status": "ok"}` instantly.
 Allow the server port on **private networks only**:
 
 ```powershell
-New-NetFirewallRule -DisplayName "Music Request Server" -Direction Inbound -LocalPort 5000 -Protocol TCP -Action Allow -Profile Private -RemoteAddress 192.168.1.0/24
+New-NetFirewallRule -DisplayName "Music Request Server" -Direction Inbound -LocalPort 7420 -Protocol TCP -Action Allow -Profile Private -RemoteAddress 192.168.1.0/24
 ```
 
 **Never** allow on Public profile. Replace `192.168.1.0/24` with your subnet or your phone's specific IP.
 
 For maximum security, scope to just your phone:
 ```powershell
-New-NetFirewallRule -DisplayName "Music Request Server" -Direction Inbound -LocalPort 5000 -Protocol TCP -Action Allow -Profile Private -RemoteAddress 192.168.1.50
+New-NetFirewallRule -DisplayName "Music Request Server" -Direction Inbound -LocalPort 7420 -Protocol TCP -Action Allow -Profile Private -RemoteAddress 192.168.1.50
 ```
 
 ## Network Setup
@@ -392,7 +376,7 @@ Also assign a static IP to your phone so the `allowed_ips` list stays valid.
 Create a scheduled task that runs at logon:
 
 ```powershell
-$action = New-ScheduledTaskAction -Execute "python" -Argument "C:\path\to\music_request_server\app.py"
+$action = New-ScheduledTaskAction -Execute "pythonw" -Argument "C:\path\to\siri-to-pc\launcher.pyw --headless"
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 Register-ScheduledTask -TaskName "Music Request Server" -Action $action -Trigger $trigger -User "$env:USERNAME" -RunLevel Limited
 ```
@@ -492,7 +476,7 @@ YouTube's 2026 anti-bot stack (SABR, PO tokens, session-bound URLs) means a stre
 5. Add **"URL Encode"** action (input: Dictated Text)
 6. Add **"Get Contents of URL"** action with this URL:
    ```
-   http://192.168.1.XXX:5000/api/play?key=YOUR_SECRET&q=[URL_ENCODED_TEXT]&auto=1
+   http://192.168.1.XXX:7420/api/play?key=YOUR_SECRET&q=[URL_ENCODED_TEXT]&auto=1
    ```
    Replace `192.168.1.XXX` with your PC's IP and `YOUR_SECRET` with your API key.
 7. Add **"Get Dictionary Item"** action (input: URL response, key: `message`)
@@ -506,7 +490,7 @@ Create a shortcut named "Play Some Fleetwood Mac":
 1. Name the Shortcut exactly what you'll say to Siri
 2. Add **"Get Contents of URL"** with a hardcoded URL:
    ```
-   http://192.168.1.XXX:5000/api/play?key=YOUR_SECRET&q=Fleetwood+Mac&auto=1&type=artist
+   http://192.168.1.XXX:7420/api/play?key=YOUR_SECRET&q=Fleetwood+Mac&auto=1&type=artist
    ```
 3. Add **"Get Dictionary Item"** for `message`
 4. Add **"Speak Text"** or **"Show Notification"**
@@ -596,11 +580,11 @@ whether you run the .exe or from source.
 | Any missing prerequisite | mpv / yt-dlp / Node not installed or not on PATH | Run `setup.ps1` — it installs all three and verifies them |
 | "mpv not found on PATH" | mpv is not installed or not on system PATH | `winget install --id shinchiro.mpv -e`, then restart the terminal |
 | "yt-dlp not found on PATH" | yt-dlp is not installed | `winget install --id yt-dlp.yt-dlp -e` |
-| `ModuleNotFoundError: No module named 'flask'` at launch | Launcher ran `app.py` under a Python that lacks the deps | Set `config.json` → `python_path` to the interpreter where you `pip install`ed everything |
+| `ModuleNotFoundError` (e.g. `fastapi`) at launch | `launcher.pyw` ran under a Python that lacks the deps | Set `config.json` → `python_path` to the interpreter where you `pip install`ed everything |
 | "Sign in to confirm you're not a bot" / nothing plays | No/expired cookies, or IP rate-limited | Re-run `setup.ps1`, or export fresh cookies (see [YouTube Authentication](#youtube-authentication)); if it was working, wait for the rate limit to clear |
 | "Could not copy ... cookie database" | The browser is running and holds a lock on it | Close the browser fully, then re-run `setup.ps1` |
 | "Failed to decrypt with DPAPI" | Chrome v127+ App-Bound Encryption | Use Firefox for `cookies_from_browser`, or switch to an exported cookies file |
-| Player window shows a bare **"Not Found"** | Another server (often a stale copy) holds port 5000 — a `127.0.0.1` bind wins over ours | `Get-NetTCPConnection -LocalPort 5000 -State Listen`; close the extra instance. Current builds detect this and move to a free port |
+| Player window shows a bare **"Not Found"** | Another server (often a stale copy) holds the port — a `127.0.0.1` bind wins over ours | `Get-NetTCPConnection -LocalPort 7420 -State Listen` (or your configured port); close the extra instance. Current builds detect this and move to a free port |
 | Requests ignore Groq and use the basic parser | Bad key, or the model is blocked/rate-limited at your Groq org | Check `server.log` for `[groq] HTTP ...`; enable a model at console.groq.com/settings/limits |
 | Track starts then instantly stops / "only images available" | Node not installed or `js_runtime` not set | Install Node.js and set `config.json` → `js_runtime: "node"` |
 | Every download fails with "the page needs to be reloaded" | The YouTube player client in your config stopped working | Set `player_client` to `web_embedded`. The app also falls through to the clients in `player_client_fallbacks` automatically |

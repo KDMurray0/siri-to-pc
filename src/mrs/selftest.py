@@ -32,6 +32,12 @@ def _check(name: str, fn) -> tuple[bool, str]:
 
 
 def run() -> int:
+    from .testing import isolated, offline
+    with isolated(), offline():
+        return _run()
+
+
+def _run() -> int:
     from .config import config
     from .paths import data_dir, resource_dir
 
@@ -115,7 +121,7 @@ def run() -> int:
                 bad.append("/player status")
             for path in ("/api/ping", "/api/status", "/api/settings",
                          "/api/health", "/api/history", "/api/liked",
-                         "/api/playlists", "/api/theme", "/api/audio"):
+                         "/api/playlists", "/api/audio/devices"):
                 if c.get(path, headers=head).status_code != 200:
                     bad.append(path)
             # A shared link must be able to listen and nothing more.
@@ -213,3 +219,7 @@ def main() -> int:
     except Exception:
         traceback.print_exc()
         return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
