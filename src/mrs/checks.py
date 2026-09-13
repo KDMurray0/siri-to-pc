@@ -1609,6 +1609,56 @@ def run(verbose: bool = False) -> Result:
                   f"get={g.status_code} post={p.status_code}")
             say("the shortcut endpoint", c)
 
+            # -- 15. the QR code carries a credential, so it is the owner's -
+            # It was Auth, and its body renders the owner's own pass — or, with
+            # a pass_id, reissues that pass's token. Any shared link could read
+            # the owner's credential out of an SVG or re-mint someone else's
+            # link. Found by an audit, not by a user, which is the bad way round.
+            c = _Checker("qr")
+
+            def owner_rows():
+                with sec._held():
+                    return sorted(k for k, v in sec._load_passes().items()
+                                  if v.get("owner"))
+
+            def all_rows():
+                with sec._held():
+                    return {k: dict(v) for k, v in sec._load_passes().items()}
+
+            lapsed = issue(now_key(), name="check-qr-lapsed", hours=1)
+            minted.append(lapsed["id"])
+            with sec._held():
+                store = sec._load_passes()
+                store[lapsed["id"]]["expires"] = int(_t.time()) - (sec.GRACE + 60)
+                sec._save_passes(store)
+
+            victim = issue(now_key(), name="check-qr-victim", hours=1)
+            minted.append(victim["id"])
+
+            for who, cred in (("a full link", full), ("a phone link", phone),
+                              ("a lapsed link", lapsed["token"])):
+                before_owner, before_all = owner_rows(), all_rows()
+                r1 = get("/api/qr?kind=lan", cred, here)
+                r2 = get(f"/api/qr?kind=wan&pass_id={victim['id']}", cred, here)
+                c(f"{who} is refused the owner's code",
+                  r1.status_code in (401, 403), str(r1.status_code))
+                c(f"{who} can't reissue another link's code",
+                  r2.status_code in (401, 403), str(r2.status_code))
+                c(f"{who} asking mints no owner pass",
+                  owner_rows() == before_owner,
+                  f"{before_owner} -> {owner_rows()}")
+                c(f"{who} asking rewrites no pass at all",
+                  all_rows() == before_all)
+                c(f"{who} is not handed an svg",
+                  "svg" not in (r1.headers.get("content-type") or ""))
+
+            ok = get("/api/qr?kind=lan")
+            c("the owner still gets their code", ok.status_code in (200, 404),
+              str(ok.status_code))
+            if ok.status_code == 200:
+                c("...as an svg", "svg" in (ok.headers.get("content-type") or ""))
+            say("the QR code is the owner's", c)
+
     except Exception as exc:            # a check suite must not be the thing
         out.failed.append(f"the checks themselves broke: {exc!r}")
     finally:

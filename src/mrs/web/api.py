@@ -1824,11 +1824,18 @@ def api_network(pass_id: str = "", check: int = 0, _: bool = Owner):
 
 
 @app.get("/api/qr")
-def api_qr(kind: str = "lan", pass_id: str = "", _: bool = Auth):
+def api_qr(kind: str = "lan", pass_id: str = "", _: bool = Owner):
     """A scannable code for one of our own addresses.
 
     Takes a kind, not a url: an endpoint that renders any string handed to it
     is a QR generator for whoever finds it, and these carry the api key.
+
+    Owner only. It was Auth, and the body hands out credentials: with no
+    pass_id it renders the owner's own pass, and with one it reissues that
+    pass's token. So any shared link could read the owner's credential out
+    of an SVG, or re-mint anybody else's link by id — every other scope in
+    the app was decoration while this was open. The only screens that call
+    it are the owner's Sharing tab and the link they just made.
     """
     from ..core import net
     key = config.get("api_key") or ""
