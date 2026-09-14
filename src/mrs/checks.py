@@ -2122,6 +2122,70 @@ def _run(verbose: bool = False) -> Result:
               isinstance(got.get("name"), str) and isinstance(got.get("id"), str))
             say("headphone correction", c)
 
+            # -- 22. the format a browser plays, and where the sound goes ---
+            c = _Checker("formats")
+            from .core import cast as _cf
+            c("an unknown format is AAC", _cf.fmt_name("flac!") == "aac"
+              and _cf.fmt_name("WebM") == "webm")
+            if _sh.which("ffmpeg"):
+                vid = "chk-opus-src"
+                src = cache_dir() / f"{vid}.webm"
+                _sp.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                         "-f", "lavfi", "-i", "sine=f=440:d=3", "-ac", "2",
+                         "-c:a", "libopus", "-b:a", "96k", str(src)],
+                        capture_output=True, timeout=60)
+                plain = not _cf.filter_chain("")
+                c("(this config processes nothing, so pass-through applies)", plain)
+                _cf._held.clear()
+                got, st = _cf.serve(vid, "", "webm")
+                c("a browser that plays WebM Opus gets the download itself",
+                  st == "ready" and got == src, f"{st} {got}")
+                t0 = time.monotonic()
+                got, st = _cf.serve(vid, "", "ogg")
+                took = time.monotonic() - t0
+
+                def codec_of(p):
+                    return _sp.run(["ffprobe", "-v", "error", "-select_streams", "a:0",
+                                    "-show_entries", "stream=codec_name", "-of", "csv=p=0",
+                                    str(p)], capture_output=True, text=True).stdout.strip()
+                c("an Ogg Opus browser gets the same packets, repackaged",
+                  st == "ready" and got and got.suffix == ".ogg"
+                  and codec_of(got) == "opus", f"{st} {got}")
+                c("...which is a copy, not an encode", took < 2.0, f"{took:.2f}s")
+                got, st = _cf.serve(vid, "", "aac")
+                c("everything else gets AAC", st == "ready" and got
+                  and got.suffix == ".m4a" and codec_of(got) == "aac", f"{st} {got}")
+                _cf._held.clear()
+                got, st = _cf.convert(vid, "iphone", "webm")
+                c("tuned for an Opus browser, it's encoded as Opus",
+                  st == "ready" and got and got != src and codec_of(got) == "opus")
+                r = client.get(f"/api/output/stream/{vid}?fmt=ogg",
+                               headers=dict(owner_h, Range="bytes=0-99"))
+                c("the stream route takes the format and still serves ranges",
+                  r.status_code == 206 and r.headers.get("content-type", "").startswith("audio/ogg"),
+                  f"{r.status_code} {r.headers.get('content-type')}")
+                junk = _cf.work_dir() / f"{vid}~deadbeef.ogg"
+                junk.write_bytes(b"x" * 20000)
+                _cf._held.clear()
+                _cf.prune()
+                c("prune drops a file for processing nobody uses",
+                  not junk.exists())
+                c("...and keeps the ones in use",
+                  _cf._converted(vid, "", "ogg").exists())
+            page = (Path(__file__).parent / "web" / "templates" / "player.html").read_text("utf-8")
+            c("the page names its format in every stream url",
+              '"&fmt=" + FMT' in page and '"?fmt=" + FMT' in page)
+            c("only a 'probably' counts as playing a format",
+              'probe.canPlayType(type) === "probably"' in page)
+            c("a format is only written off when the server had the file",
+              "had = r.ok" in page and "(code === 3 || code === 4)" in page)
+            c("Safari's made-up latency is treated as not knowing",
+              "Math.abs(lat - 512 / ctx.sampleRate) < 1e-6" in page)
+            c("a listener's choice holds while the route stays the same",
+              'if (pin === route || pin === "pending") return;' in page
+              and 'tuneStore("tunepin", "pending");' in page)
+            say("formats and where the sound goes", c)
+
     except Exception as exc:            # a check suite must not be the thing
         out.failed.append(f"the checks themselves broke: {exc!r}")
     finally:

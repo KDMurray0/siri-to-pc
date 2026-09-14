@@ -6,20 +6,24 @@ let go of the sound card entirely rather than playing silence into it. The
 phone pulls the same file mpv is playing and seeks to mpv's clock, so
 everything upstream of the speaker carries on exactly as it did.
 
-Three things make that work:
+Four things make that work:
 
   Range requests. Safari asks for a few bytes to read the container header,
   then asks for ranges as it goes. Answer with a 200 and the whole file and
   it either refuses to play or gives you a timeline you can't drag.
 
-  Transcoding. 450 of the cached files are .webm holding Opus, which iOS
-  won't play in any container. Those get an .m4a made once and kept beside
-  them.
+  Format. The page says which of AAC, WebM Opus, Ogg Opus and MP4 Opus its
+  browser plays (FORMATS). A browser that plays YouTube's Opus gets the
+  download itself, or the same packets in a container it takes; the rest get
+  an AAC encode made once and kept.
 
   Processing. mpv applies EQ and normalisation as live filters, which a file
   handed to a phone never sees. filter_chain() bakes the same settings into
-  the transcode so the phone hears what the speakers would — plus, when the
-  page says what it is playing out of, tuning for that speaker.
+  the file so the phone hears what the speakers would — plus, when the page
+  says what it is playing out of, tuning for that speaker or headphone.
+
+  Holding. A url keeps the file it was first answered with, so a transcode
+  landing mid-song can't swap the bytes under a range request.
 """
 
 from __future__ import annotations
@@ -38,7 +42,7 @@ from ..paths import cache_dir, pinned_dir
 
 log = get("cast")
 
-# What Safari on iOS takes as-is.
+# What every phone and browser takes as-is.
 NATIVE = {".m4a", ".mp3", ".aac", ".mp4", ".m4b", ".wav"}
 CONVERT = {".webm", ".opus", ".ogg", ".flac", ".mkv"}
 CREATE_NO_WINDOW = 0x08000000
@@ -109,6 +113,26 @@ def _tune_chain(tune: str) -> str:
     return TUNES[tune]["chain"]
 
 
+# What the page says its browser plays. "aac" plays on every phone and
+# browser there is, so it's the default and the fallback; the Opus ones are
+# only asked for when the browser has said "probably" to that exact type.
+FORMATS: dict[str, dict] = {
+    "aac": {"ext": ".m4a", "encode": ["-c:a", "aac", "-b:a", "256k"],
+            "mux": ["-movflags", "+faststart"]},
+    "webm": {"ext": ".webm", "encode": ["-c:a", "libopus", "-b:a", "160k"], "mux": []},
+    "ogg": {"ext": ".ogg", "encode": ["-c:a", "libopus", "-b:a", "160k"], "mux": []},
+    "mp4opus": {"ext": ".mp4", "encode": ["-c:a", "libopus", "-b:a", "160k"],
+                "mux": ["-movflags", "+faststart"]},
+}
+_OUT_EXTS = {f["ext"] for f in FORMATS.values()}
+_codecs: dict[tuple[str, float], str] = {}
+
+
+def fmt_name(raw: str | None) -> str:
+    raw = (raw or "").strip().lower()
+    return raw if raw in FORMATS else "aac"
+
+
 def work_dir() -> Path:
     # A subdirectory of the cache, so the downloader's prune skips it
     # (it only looks at files) but it still gets cleared with the cache.
@@ -128,6 +152,28 @@ def source_for(video_id: str) -> Path | None:
                     and not path.name.endswith((".part", ".ytdl", ".complete"))):
                 return path
     return None
+
+
+def _codec(src: Path) -> str:
+    """The audio codec inside a download. Asked of ffprobe once per file."""
+    key = (str(src), src.stat().st_mtime)
+    if key in _codecs:
+        return _codecs[key]
+    guess = "opus" if src.suffix.lower() in (".webm", ".opus", ".ogg") else ""
+    probe = shutil.which("ffprobe")
+    if probe:
+        try:
+            p = subprocess.run([probe, "-v", "error", "-select_streams", "a:0",
+                                "-show_entries", "stream=codec_name", "-of", "csv=p=0",
+                                str(src)], capture_output=True, text=True, timeout=15,
+                               creationflags=CREATE_NO_WINDOW)
+            lines = (p.stdout or "").strip().splitlines()
+            if p.returncode == 0 and lines:
+                guess = lines[0].strip()
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    _codecs[key] = guess
+    return guess
 
 
 def filter_chain(tune: str = "") -> str:
@@ -151,16 +197,33 @@ def filter_chain(tune: str = "") -> str:
     return ",".join(p for p in parts if p)
 
 
-def _stamp(tune: str = "") -> str:
-    """Short hash of the processing, so changing the EQ rebuilds."""
+def _as_is(src: Path, chain: str, fmt: str) -> bool:
+    """Whether the download itself can go to this browser, untouched.
+
+    AAC and MP3 play everywhere. An Opus .webm is what YouTube sends, and a
+    browser that plays WebM Opus gets exactly those bytes: no second lossy
+    encode on top of the first, and no seconds of transcoding before the
+    first note.
+    """
+    if chain:
+        return False
+    if src.suffix.lower() in NATIVE:
+        return True
+    return fmt == "webm" and src.suffix.lower() == ".webm" and _codec(src) == "opus"
+
+
+def _stamp(tune: str = "", fmt: str = "aac") -> str:
+    """Short hash of the processing and format, so changing either rebuilds."""
     chain = filter_chain(tune)
-    return hashlib.sha1(chain.encode()).hexdigest()[:8] if chain else ""
+    key = chain if fmt_name(fmt) == "aac" else f"{chain}|{fmt_name(fmt)}"
+    return hashlib.sha1(key.encode()).hexdigest()[:8] if key else ""
 
 
-def _converted(video_id: str, tune: str = "") -> Path:
-    stamp = _stamp(tune)
-    return work_dir() / (f"{video_id}~{stamp}.m4a" if stamp
-                         else f"{video_id}.m4a")
+def _converted(video_id: str, tune: str = "", fmt: str = "aac") -> Path:
+    stamp = _stamp(tune, fmt)
+    ext = FORMATS[fmt_name(fmt)]["ext"]
+    return work_dir() / (f"{video_id}~{stamp}{ext}" if stamp
+                         else f"{video_id}{ext}")
 
 
 def _vid_of(path: Path) -> str:
@@ -168,7 +231,12 @@ def _vid_of(path: Path) -> str:
     return path.stem.split("~", 1)[0]
 
 
-def playable(video_id: str, tune: str = "") -> tuple[Path | None, str]:
+def _job(video_id: str, tune: str, fmt: str = "aac") -> str:
+    return f"{video_id}~{_stamp(tune, fmt)}{FORMATS[fmt_name(fmt)]['ext']}"
+
+
+def playable(video_id: str, tune: str = "",
+             fmt: str = "aac") -> tuple[Path | None, str]:
     """(path, state): ready | arriving | needs conversion | converting | missing.
 
     Downloads are private until yt-dlp publishes the completed final name.
@@ -185,31 +253,28 @@ def playable(video_id: str, tune: str = "") -> tuple[Path | None, str]:
         return None, "arriving"
     # With EQ or normalisation on, even an already-playable file has to be
     # rebuilt — there's no filter chain between the file and the phone.
-    if src.suffix.lower() in NATIVE and not filter_chain(tune):
+    if _as_is(src, filter_chain(tune), fmt_name(fmt)):
         return src, "ready"
-    out = _converted(video_id, tune)
+    out = _converted(video_id, tune, fmt)
     if out.is_file() and out.stat().st_size > 10_000:
         return out, "ready"
     with _lock:
-        if _job(video_id, tune) in _converting:
+        if _job(video_id, tune, fmt) in _converting:
             return None, "converting"
     return None, "needs conversion"
 
 
-def _job(video_id: str, tune: str) -> str:
-    return f"{video_id}~{_stamp(tune)}"
-
-
-def convert(video_id: str, tune: str = "",
+def convert(video_id: str, tune: str = "", fmt: str = "aac",
             timeout: int = 300) -> tuple[Path | None, str]:
-    """Blocking transcode. ~350x realtime plain, ~90x tuned."""
+    """Blocking. A remux is near instant; an encode ~60x realtime, tuned ~90x."""
     src = source_for(video_id)
     if not src:
         return None, "missing"
+    fmt = fmt_name(fmt)
     chain = filter_chain(tune)
-    if src.suffix.lower() in NATIVE and not chain:
+    if _as_is(src, chain, fmt):
         return src, "ready"
-    job = _job(video_id, tune)
+    job = _job(video_id, tune, fmt)
     with _lock:
         if job in _converting:
             return None, "converting"
@@ -218,23 +283,28 @@ def convert(video_id: str, tune: str = "",
         ff = shutil.which("ffmpeg")
         if not ff:
             return None, "no ffmpeg"
-        out = _converted(video_id, tune)
-        tmp = out.with_suffix(".part.m4a")
-        # faststart puts the index at the front, which is what lets the phone
-        # seek without pulling the whole file first.
+        spec = FORMATS[fmt]
+        out = _converted(video_id, tune, fmt)
+        tmp = out.with_suffix(".part" + spec["ext"])
         cmd = [ff, "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
                "-vn"]
+        # Opus already, into another container that holds Opus, untouched:
+        # copy the packets. Anything else is encoded.
+        remux = not chain and fmt != "aac" and _codec(src) == "opus"
         if chain:
             cmd += ["-af", chain]
-        cmd += ["-c:a", "aac", "-b:a", "192k",
-                "-movflags", "+faststart", str(tmp)]
+        cmd += ["-c:a", "copy"] if remux else spec["encode"]
+        # faststart puts the index at the front, which is what lets the phone
+        # seek without pulling the whole file first.
+        cmd += spec["mux"] + [str(tmp)]
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
                            creationflags=CREATE_NO_WINDOW)
         if p.returncode != 0 or not tmp.is_file():
             tmp.unlink(missing_ok=True)
             return None, (p.stderr or "ffmpeg failed")[:200]
         tmp.replace(out)
-        log.info("transcoded %s for casting%s", video_id,
+        log.info("%s %s for casting as %s%s", "remuxed" if remux else "transcoded",
+                 video_id, fmt,
                  f" (tuned: {tune_name(tune)})" if tune_name(tune)
                  else " (processed)" if chain else "")
         return out, "ready"
@@ -245,14 +315,14 @@ def convert(video_id: str, tune: str = "",
             _converting.discard(job)
 
 
-def warm(video_id: str, tune: str = "") -> None:
+def warm(video_id: str, tune: str = "", fmt: str = "aac") -> None:
     """Get the next track ready in the background, so the gap isn't audible."""
     if not video_id:
         return
-    _, state = playable(video_id, tune)
+    _, state = playable(video_id, tune, fmt)
     if state != "needs conversion":
         return
-    threading.Thread(target=convert, args=(video_id, tune), daemon=True,
+    threading.Thread(target=convert, args=(video_id, tune, fmt), daemon=True,
                      name=f"cast-warm {video_id}").start()
 
 
@@ -264,25 +334,26 @@ _held: dict[str, tuple[Path, float]] = {}
 _HOLD = 1800.0
 
 
-def serve(video_id: str, tune: str = "") -> tuple[Path | None, str]:
+def serve(video_id: str, tune: str = "",
+          fmt: str = "aac") -> tuple[Path | None, str]:
     """What the stream route hands out, without ever making the phone wait
     for tuning: untuned now, tuned from the next time it's asked for."""
-    tune = tune_name(tune)
-    key = _job(video_id, tune)
+    tune, fmt = tune_name(tune), fmt_name(fmt)
+    key = _job(video_id, tune, fmt)
     now = time.monotonic()
     with _lock:
         held = _held.get(key)
         if held and now - held[1] < _HOLD and held[0].is_file():
             _held[key] = (held[0], now)
             return held[0], "ready"
-    path, state = playable(video_id, tune)
+    path, state = playable(video_id, tune, fmt)
     if state != "ready" and state not in ("arriving", "missing") and tune:
-        plain, plain_state = playable(video_id)
+        plain, plain_state = playable(video_id, "", fmt)
         if plain_state == "ready" and plain:
-            warm(video_id, tune)
+            warm(video_id, tune, fmt)
             path, state = plain, "ready"
     if state in ("needs conversion", "converting"):
-        path, state = convert(video_id, tune)
+        path, state = convert(video_id, tune, fmt)
     if state == "ready" and path:
         with _lock:
             for k in [k for k, (_, at) in _held.items() if now - at >= _HOLD]:
@@ -299,17 +370,20 @@ def prune() -> int:
     playing.
     """
     from . import autoeq
-    live = {_stamp(t) for t in ("", *TUNES, *autoeq.cached_tunes())}
+    live = {_stamp(t, f) for t in ("", *TUNES, *autoeq.cached_tunes())
+            for f in FORMATS}
     with _lock:
         busy = {Path(p).name for p, _ in _held.values()}
     gone = 0
-    for path in work_dir().glob("*.m4a"):
+    for path in work_dir().iterdir():
+        if not path.is_file() or path.suffix.lower() not in _OUT_EXTS:
+            continue
         vid = _vid_of(path)
         stamp = path.stem.split("~", 1)[1] if "~" in path.stem else ""
         stale = stamp not in live
         if path.name in busy:
             continue
-        if path.name.endswith(".part.m4a"):
+        if path.stem.endswith(".part"):
             # Mid-transcode, unless it's been sitting there an hour.
             stale = time.time() - path.stat().st_mtime > 3600
             if not stale:
@@ -324,10 +398,12 @@ def prune() -> int:
 
 
 def stats() -> dict:
-    ready = len(list(work_dir().glob("*.m4a")))
+    ready = sum(1 for p in work_dir().iterdir() if p.suffix.lower() in _OUT_EXTS
+                and not p.stem.endswith(".part"))
     with _lock:
         busy = len(_converting)
     return {"transcoded": ready, "converting": busy,
             "ffmpeg": bool(shutil.which("ffmpeg")),
             "processing": filter_chain() or "none",
-            "tunes": {k: v["label"] for k, v in TUNES.items()}}
+            "tunes": {k: v["label"] for k, v in TUNES.items()},
+            "formats": list(FORMATS)}

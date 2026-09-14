@@ -1741,14 +1741,15 @@ def _range_response(request: Request, path: Path):
 
 @app.get("/api/output/stream/{video_id}")
 def api_output_stream(request: Request, video_id: str, tune: str = "",
-                      _: bool = Auth):
+                      fmt: str = "", _: bool = Auth):
     """The track mpv is playing, as bytes a phone will accept.
 
     FileResponse handles Range itself, which is what gives the phone a
     draggable timeline instead of a take-it-or-leave-it download. `tune`
-    names the speaker it's playing out of; see cast.TUNES.
+    names the speaker it's playing out of (cast.TUNES); `fmt` is what the
+    browser said it plays (cast.FORMATS).
     """
-    path, state = cast_mod.serve(video_id, tune)
+    path, state = cast_mod.serve(video_id, tune, fmt)
     if state in ("partial", "arriving"):
         return JSONResponse({"status": "arriving", "detail": "still fetching"},
                             status_code=503, headers={"Retry-After": "1"})
@@ -1766,13 +1767,14 @@ def api_output_stream(request: Request, video_id: str, tune: str = "",
 
 
 @app.get("/api/output/prepare/{video_id}")
-def api_output_prepare(video_id: str, tune: str = "", _: bool = Auth):
+def api_output_prepare(video_id: str, tune: str = "", fmt: str = "",
+                       _: bool = Auth):
     """Warm the next track so the handover isn't audible."""
     # Only the file that will be asked for. Warming the untuned one as well
     # ran two encodes side by side for a fallback a warmed track never needs.
-    _, state = cast_mod.playable(video_id, tune)
+    _, state = cast_mod.playable(video_id, tune, fmt)
     if state == "needs conversion":
-        cast_mod.warm(video_id, tune)
+        cast_mod.warm(video_id, tune, fmt)
         state = "converting"
     return {"status": "ok", "state": state}
 

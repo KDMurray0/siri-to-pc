@@ -4088,11 +4088,24 @@ $("tuneq").addEventListener("input", () => {
 });
 $("tuneres").addEventListener("click", e => {
   const row = e.target.closest(".aeqrow");
-  if (row) tuneChoose(row.dataset.id);
+  if (row) { tunePinNow(); tuneChoose(row.dataset.id); }
 });
-$("tunenone").onclick = () => tuneChoose("");
-$("tunespk").onclick = () => { $("tunepick").hidden = true; tuneSet(true); };
+/* The listener chose. That holds for as long as the sound goes where it was
+   going when they chose, so read where that is — this tap is allowed to
+   start an AudioContext. "pending" stops the probe the same tap already
+   started from overriding them before this one answers. */
+function tunePinNow() {
+  tuneStore("tunepin", "pending");
+  routeProbe().then(route => {
+    if (route) routeNow = route;
+    routeAt = Date.now();
+    tuneStore("tunepin", routeNow || "unknown");
+  });
+}
+$("tunenone").onclick = () => { tunePinNow(); tuneChoose(""); };
+$("tunespk").onclick = () => { tunePinNow(); $("tunepick").hidden = true; tuneSet(true); };
 $("tuneoff").onclick = () => {
+  tunePinNow();
   // First press: headphones. Again: choose which.
   if (!tuneOnSpeaker() || !TUNE_GUESS) {
     $("tunepick").hidden = !$("tunepick").hidden;
@@ -4144,8 +4157,84 @@ if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
   tuneSniff();
 }
 
+/* Which stream format this browser plays (cast.FORMATS). Only "probably"
+   counts: "maybe" is what browsers say about things they then refuse. One
+   that fails anyway is remembered and skipped from then on. A browser that
+   plays WebM Opus gets YouTube's own file, untouched and instantly. */
+function fmtBad() {
+  try { return JSON.parse(localStorage.getItem("fmtbad") || "[]"); } catch (e) { return []; }
+}
+function fmtPick() {
+  const probe = document.createElement("audio"), bad = fmtBad();
+  if (!probe.canPlayType) return "aac";
+  for (const [name, type] of [["webm", 'audio/webm; codecs="opus"'],
+                              ["ogg", 'audio/ogg; codecs="opus"'],
+                              ["mp4opus", 'audio/mp4; codecs="opus"']]) {
+    if (!bad.includes(name) && probe.canPlayType(type) === "probably") return name;
+  }
+  return "aac";
+}
+let FMT = fmtPick();
+
+/* Is the sound going to Bluetooth? A running AudioContext reports how late
+   its output reaches the ear: a few milliseconds on a built-in speaker or a
+   wire, a tenth of a second or more over Bluetooth. Read at a tap (the only
+   time a context may start), then closed again straight away.
+   WebKit answers exactly 512 frames when Safari's fingerprinting protection
+   is on, which iOS 26 has by default: that number is made up, it's treated
+   as "can't tell", and the page stops asking for the rest of the visit. */
+const ROUTE_WIRELESS = 0.1, ROUTE_LOCAL = 0.05;
+let routeAt = 0, routeBlind = false, routeNow = "";
+async function routeProbe() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC || !("outputLatency" in AC.prototype)) { routeBlind = true; return ""; }
+  let ctx = null;
+  try {
+    ctx = new AC();
+    const osc = ctx.createOscillator(), mute = ctx.createGain();
+    mute.gain.value = 0;
+    osc.connect(mute); mute.connect(ctx.destination); osc.start();
+    await ctx.resume();
+    for (let i = 0; i < 8 && !ctx.outputLatency; i++) await new Promise(r => setTimeout(r, 80));
+    const lat = ctx.outputLatency;
+    if (Math.abs(lat - 512 / ctx.sampleRate) < 1e-6) { routeBlind = true; return ""; }
+    if (!lat || !isFinite(lat)) return "";
+    return lat >= ROUTE_WIRELESS ? "wireless" : lat <= ROUTE_LOCAL ? "local" : "";
+  } catch (e) {
+    return "";
+  } finally {
+    try { if (ctx) ctx.close(); } catch (e) {}
+  }
+}
+async function routeCheck() {
+  if (!cast.on || routeBlind || Date.now() - routeAt < 15000) return;
+  routeAt = Date.now();
+  const route = await routeProbe();
+  if (route) routeApply(route);
+}
+/* Follow the route, unless the listener chose while on this same route: then
+   their choice stands until the route changes. */
+function routeApply(route) {
+  routeNow = route;
+  let pin = "";
+  try { pin = localStorage.getItem("tunepin") || ""; } catch (e) {}
+  if (pin === route || pin === "pending") return;
+  if (pin) tuneStore("tunepin", null);
+  if (route === "wireless" && tuneOnSpeaker()) {
+    tuneSet(false, true);
+    const hp = tuneHp();
+    toast(hp ? "Bluetooth — corrected for " + hp.name : "Bluetooth — speaker tuning off");
+  } else if (route === "local" && !tuneOnSpeaker() && TUNE_GUESS) {
+    tuneSet(true, true);
+    toast("Tuned for the " + TUNE_LABEL[TUNE_GUESS].toLowerCase());
+  }
+}
+["pointerdown", "keydown"].forEach(evt =>
+  window.addEventListener(evt, () => { routeCheck(); }, { capture: true, passive: true }));
+
 const castSrc = v => "/api/output/stream/" + encodeURIComponent(v) +
-                     "?" + urlAuth() + (tuneNow() ? "&tune=" + tuneNow() : "");
+                     "?" + urlAuth() + "&fmt=" + FMT +
+                     (tuneNow() ? "&tune=" + tuneNow() : "");
 
 /* A moment of silence, played through both elements while a finger is still
    on the screen.
@@ -4388,8 +4477,8 @@ function castPreload(d) {
   const next = at >= 0 ? (lastQ[at + 1] || {}).video_id : "";
   if (!next || next === cast.ready || next === cast.vid) return;
   cast.ready = next;
-  api("/api/output/prepare/" + encodeURIComponent(next) +
-      (tuneNow() ? "?tune=" + tuneNow() : ""));
+  api("/api/output/prepare/" + encodeURIComponent(next) + "?fmt=" + FMT +
+      (tuneNow() ? "&tune=" + tuneNow() : ""));
   const el = castIdle();
   try { el.src = castSrc(next); el.load(); } catch (e) {}
 }
@@ -4641,8 +4730,33 @@ castEls.forEach(el => el.addEventListener("pause", () => {
 /* A track that hasn't finished downloading answers 503. Retrying every two
    and a half seconds turns that into four seconds of silence on a loop —
    back off instead, and say what's happening rather than looking broken. */
-castEls.forEach(el => el.addEventListener("error", () => {
+castEls.forEach(el => el.addEventListener("error", async () => {
   if (!cast.on || !cast.vid || el !== castLive()) return;
+  // An Opus format this browser said "probably" to and then couldn't play.
+  // Only counts if the server really had the file (a 503 is "not ready",
+  // which the retry below is for) and the browser said unsupported or
+  // undecodable rather than a dropped connection.
+  const code = el.error ? el.error.code : 0;
+  if (FMT !== "aac" && (code === 3 || code === 4)) {
+    const want = cast.vid, tried = FMT;
+    let had = false;
+    try {
+      const r = await fetch(castSrc(want), { headers: { Range: "bytes=0-1" } });
+      had = r.ok;
+    } catch (e) {}
+    if (had && cast.on && cast.vid === want) {
+      const bad = fmtBad();
+      if (!bad.includes(tried)) bad.push(tried);
+      tuneStore("fmtbad", JSON.stringify(bad));
+      FMT = fmtPick();
+      cast.ready = "";
+      castHush();
+      el.src = castSrc(want);
+      el.load();
+      castPlay(el);
+      return;
+    }
+  }
   if (cast.tries >= 10) { toast("That track isn't ready yet"); return; }
   cast.tries++;
   const want = cast.vid;
