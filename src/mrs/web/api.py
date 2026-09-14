@@ -22,6 +22,7 @@ from fastapi.templating import Jinja2Templates
 
 from .. import __version__
 from ..config import config
+from ..core import autoeq
 from ..core import cast as cast_mod
 from ..core import cookies as cookie_mod
 from ..core import radio as radio_mod
@@ -1406,6 +1407,7 @@ _SETTABLE = {
     "announce_duck_db": float, "announce_voice_gain_db": float,
     "allow_legacy_get_mutations": bool, "audit_log_days": int,
     "library_monitor_minutes": int,
+    "device_eq_enabled": bool, "device_eq_auto": bool,
     "tailscale": str, "tailscale_exe": str, "cache_size_mb": int,
     "allow_key_in_url": bool, "port": int,
     "block_full_guests": bool, "lan_open": bool, "party_mode": bool,
@@ -1460,6 +1462,10 @@ def api_setting(request: Request, key: str, value: str = "", _: bool = Auth):
     elif key == "library_monitor_minutes":
         parsed = max(0, min(10080, int(parsed)))
     config.set(key, parsed)
+    if key in ("device_eq_enabled", "device_eq_auto"):
+        if key == "device_eq_auto" and parsed:
+            autoeq.settle(autoeq.output_name())     # match what's plugged in now
+        player.audio.apply()
     bus.publish(Ev.SETTINGS, player.settings())
     return {"status": "ok", "key": key, "value": parsed}
 
@@ -1769,6 +1775,69 @@ def api_output_prepare(video_id: str, tune: str = "", _: bool = Auth):
         cast_mod.warm(video_id, tune)
         state = "converting"
     return {"status": "ok", "state": state}
+
+
+@app.get("/api/autoeq/search")
+def api_autoeq_search(q: str = "", _: bool = Auth):
+    """Headphone models AutoEq has a correction for. Anyone with a link: it's
+    how a phone picks its own headphones."""
+    return {"status": "ok", "results": autoeq.search(q[:80])}
+
+
+@app.get("/api/autoeq/profile")
+def api_autoeq_profile(id: str = "", _: bool = Auth):
+    """One model's correction, fetched once and kept. The phone asks for this
+    before asking for a stream tuned with it."""
+    e = autoeq.entry(id)
+    if not e:
+        raise HTTPException(404, "no such AutoEq entry")
+    prof = autoeq.profile(id)
+    if not prof:
+        return JSONResponse({"status": "unavailable",
+                             "detail": "couldn't fetch that profile from AutoEq"},
+                            status_code=503)
+    return {"status": "ok", **autoeq.public(e), "tune": f"aeq-{e['id']}",
+            "preamp": prof["preamp"], "filters": len(prof["filters"]),
+            "curve": autoeq.curve(prof)}
+
+
+@app.get("/api/autoeq/match")
+def api_autoeq_match(name: str = "", _: bool = Auth):
+    """A device label from a browser, looked up the same way Windows names are."""
+    found, certain = autoeq.match(name[:120])
+    return {"status": "ok", "match": autoeq.public(found) if found else None,
+            "certain": certain}
+
+
+@app.get("/api/autoeq/status")
+def api_autoeq_status(_: bool = Owner):
+    """What the PC is playing through and the correction on it."""
+    return {"status": "ok", **autoeq.status()}
+
+
+@app.get("/api/autoeq/assign")
+def api_autoeq_assign(id: str = "", clear: int = 0, _: bool = Owner):
+    """Choose the model for the output in use. id "" means none for this one;
+    clear forgets the choice, so a certain name match can apply again."""
+    name = autoeq.output_name()
+    if not name:
+        raise HTTPException(409, "not playing through a PC output right now")
+    if clear:
+        rows = dict(config.get("device_eq") or {})
+        rows.pop(name, None)
+        config.set("device_eq", rows)
+        autoeq.settle(name)
+    else:
+        if id and not autoeq.profile(id):
+            return JSONResponse({"status": "unavailable",
+                                 "detail": "couldn't fetch that profile from AutoEq"},
+                                status_code=503)
+        try:
+            autoeq.assign(name, id)
+        except ValueError:
+            raise HTTPException(404, "no such AutoEq entry")
+    autoeq.refresh_now(player._output_changed)
+    return {"status": "ok", **autoeq.status()}
 
 
 @app.get("/api/output/stats")

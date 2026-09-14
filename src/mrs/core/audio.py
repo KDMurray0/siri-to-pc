@@ -43,6 +43,12 @@ class AudioEngine:
         parts: list[str] = []
         for freq, gain in EQ_PRESETS.get(config.get("eq", "flat"), []):
             parts.append(f"equalizer=f={freq}:width_type=o:width=1.5:g={gain}")
+        # The headphones' own correction, before normalising, so its preamp
+        # comes back up rather than leaving everything 6 dB quieter.
+        from . import autoeq
+        fix = autoeq.pc_chain()
+        if fix:
+            parts.append(fix)
         if config.get("normalize"):
             # target a consistent RMS, not just peak clipping
             parts.append("dynaudnorm=f=150:g=15:p=0.9:m=15:r=0.9")
@@ -50,10 +56,19 @@ class AudioEngine:
         return ",".join(parts)
 
     def apply(self) -> None:
+        chain = self.build_chain()
         try:
-            self.mpv.set("af", self.build_chain())
+            self.mpv.set("af", chain)
         except Exception as exc:
             log.debug("apply af failed: %s", exc)
+        # The crossfade engine plays the incoming track for the length of the
+        # fade. Without the same chain those seconds were uncorrected, and the
+        # sound changed character at the handover.
+        try:
+            if self.alt is not None and self.alt.alive():
+                self.alt.set("af", chain)
+        except Exception as exc:
+            log.debug("apply af to the crossfade engine failed: %s", exc)
 
     def apply_all(self) -> None:
         self.apply()

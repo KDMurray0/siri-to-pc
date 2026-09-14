@@ -699,6 +699,27 @@ body.casting.tunable .tunerow{display:flex}
   font:inherit;font-size:11px;font-weight:600;padding:4px 10px;
   border-radius:999px;cursor:pointer}
 .tunerow button.on{border-color:var(--accent);color:var(--fg)}
+.tunerow button{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+body:not(.casting) .tunepick{display:none}
+.tunepick{display:flex;flex-direction:column;gap:6px}
+.tunepick[hidden]{display:none}
+.tunepick .keyin,#aeqq{width:100%}
+/* One AutoEq model: the name, and whose measurement it is. */
+.aeqlist{display:flex;flex-direction:column;max-height:220px;overflow:auto}
+.aeqrow{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+  width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--line);
+  color:var(--fg);font:inherit;font-size:12.5px;padding:8px 2px;cursor:pointer}
+.aeqrow em{font-style:normal;font-size:10.5px;color:var(--sub);white-space:nowrap}
+.aeqrow:hover{color:var(--accent)}
+.aeqcard{display:flex;flex-direction:column;gap:8px;padding:10px 0 4px}
+.aeqcard .aeqname{font-size:13px;color:var(--fg)}
+.aeqcard .aeqname em{display:block;font-style:normal;font-size:10.5px;color:var(--sub)}
+.aeqcard svg{width:100%;height:74px;display:block}
+.aeqcard svg .zero{stroke:var(--line);stroke-width:1}
+.aeqcard svg .grid{stroke:var(--line);stroke-width:.5;stroke-dasharray:2 3}
+.aeqcard svg .line{fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round}
+.aeqcard svg text{fill:var(--sub);font-size:8px}
+.aeqacts{display:flex;gap:6px;flex-wrap:wrap}
 /* A phone can't choose a PC speaker, so it isn't offered the half that would
    do nothing. */
 body.nopc .seg-b#segpc{display:none}
@@ -1375,6 +1396,12 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         <button id="tunespk" class="on"></button>
         <button id="tuneoff">Headphones</button>
       </div>
+      <div class="tunepick" id="tunepick" hidden>
+        <input class="keyin" id="tuneq" placeholder="Your headphones, e.g. AirPods Pro"
+               autocomplete="off" spellcheck="false">
+        <div class="aeqlist" id="tuneres"></div>
+        <button class="aeqrow" id="tunenone">No correction<em>plain, whatever they are</em></button>
+      </div>
     </div>
     <div class="picker-head">Play through
       <button class="pickx" id="devclose" aria-label="Close">✕</button></div>
@@ -1422,6 +1449,14 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         <div class="kept" id="keptnote"></div>
         <div class="srow guestok"><span class="slabel">Theme</span><div class="swatches" id="swatches"></div></div>
         <div class="srow guestok"><span class="slabel">Equaliser</span><select id="eq"></select></div>
+        <div class="srow owneronly"><span class="slabel">Headphone correction<em id="aeqdev">Measured corrections from AutoEq, per output</em></span>
+          <div class="toggle" id="aeqon"></div></div>
+        <div class="aeqcard owneronly" id="aeqcard"></div>
+        <div class="srow owneronly"><span class="slabel">Recognise by name<em>When Windows names the model, use it without asking</em></span>
+          <div class="toggle" id="aeqauto"></div></div>
+        <div class="owneronly"><input class="keyin" id="aeqq" placeholder="Search 8,000+ headphone models"
+               autocomplete="off" spellcheck="false"></div>
+        <div class="aeqlist owneronly" id="aeqres"></div>
         <div class="srow"><span class="slabel">Visualiser<em>The bars across the artwork</em></span>
           <div class="toggle" id="viz"></div></div>
         <div class="srow guestok"><span class="slabel">Even out volume<em>Keeps quiet and loud songs level</em></span>
@@ -3970,21 +4005,32 @@ const TUNE_GUESS = /iPhone|iPod/.test(UA) ? "iphone"
   : (/Android/.test(UA) && /Mobile/.test(UA)) ? "phone" : "";
 const TUNE_LABEL = { iphone: "iPhone speaker", ipad: "iPad speakers",
                      phone: "Phone speaker" };
-function tuneNow() {
+/* Headphones: which model, if the listener has said, as an AutoEq profile. */
+function tuneHp() {
+  try { return JSON.parse(localStorage.getItem("tunehp") || "null"); } catch (e) { return null; }
+}
+const tuneStore = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} };
+function tuneOnSpeaker() {
   let off = false;
   try { off = localStorage.getItem("tuneoff") === "1"; } catch (e) {}
-  return off ? "" : TUNE_GUESS;
+  return !off && !!TUNE_GUESS;
+}
+function tuneNow() {
+  if (tuneOnSpeaker()) return TUNE_GUESS;
+  const hp = tuneHp();
+  return hp && hp.tune ? hp.tune : "";
 }
 function tunePaint() {
-  document.body.classList.toggle("tunable", !!TUNE_GUESS);
+  // Any device can have headphones; only phones and tablets get a speaker.
+  document.body.classList.add("tunable");
+  $("tunespk").hidden = !TUNE_GUESS;
   $("tunespk").textContent = TUNE_LABEL[TUNE_GUESS] || "";
-  $("tunespk").classList.toggle("on", !!tuneNow());
-  $("tuneoff").classList.toggle("on", !tuneNow());
+  const hp = tuneHp();
+  $("tuneoff").textContent = hp ? hp.name : "Headphones";
+  $("tunespk").classList.toggle("on", tuneOnSpeaker());
+  $("tuneoff").classList.toggle("on", !tuneOnSpeaker());
 }
-function tuneSet(on) {
-  if (!!tuneNow() === on) return;
-  try { localStorage.setItem("tuneoff", on ? "0" : "1"); } catch (e) {}
-  tunePaint();
+function tuneReload() {
   if (!cast.on || !cast.vid) return;
   // Reload what's playing from the other file, from where it is. Tuning is
   // made in the background, so this may be the untuned one until next time.
@@ -3997,12 +4043,106 @@ function tuneSet(on) {
   }, { once: true });
   el.load();
   if (going) castPlay(el);
-  toast(on ? "Tuned for the " + (TUNE_LABEL[TUNE_GUESS] || "speaker").toLowerCase()
-           : "Tuning off");
 }
-$("tunespk").onclick = () => tuneSet(true);
-$("tuneoff").onclick = () => tuneSet(false);
+function tuneSet(onSpeaker, quiet) {
+  const before = tuneNow();
+  tuneStore("tuneoff", onSpeaker ? "0" : "1");
+  tunePaint();
+  if (tuneNow() !== before) tuneReload();
+  if (quiet) return;
+  const hp = tuneHp();
+  toast(onSpeaker ? "Tuned for the " + (TUNE_LABEL[TUNE_GUESS] || "speaker").toLowerCase()
+        : hp ? "Corrected for " + hp.name : "Headphones, no correction");
+}
+/* Pick the model. The profile is fetched (and kept on the server) before the
+   stream is asked for it, so the stream never waits on GitHub. */
+async function tuneChoose(id, auto) {
+  if (!id) {
+    tuneStore("tunehp", null); tuneStore("tuneauto", null);
+    tuneSet(false); $("tunepick").hidden = true;
+    return;
+  }
+  const r = await api("/api/autoeq/profile?id=" + encodeURIComponent(id));
+  if (!r || !r.tune) { toast("Couldn't get that one from AutoEq"); return; }
+  tuneStore("tunehp", JSON.stringify({ id: r.id, name: r.name, tune: r.tune }));
+  tuneStore("tuneauto", auto ? "1" : null);
+  $("tunepick").hidden = true;
+  const was = tuneNow();
+  tuneStore("tuneoff", "1");
+  tunePaint();
+  if (tuneNow() !== was) tuneReload();
+  toast((auto ? "Heard " : "Corrected for ") + r.name + " · " + r.source);
+}
+let tuneSearchTimer = null;
+$("tuneq").addEventListener("input", () => {
+  clearTimeout(tuneSearchTimer);
+  tuneSearchTimer = setTimeout(async () => {
+    const q = $("tuneq").value.trim();
+    if (q.length < 2) { $("tuneres").innerHTML = ""; return; }
+    const r = await api("/api/autoeq/search?q=" + encodeURIComponent(q));
+    $("tuneres").innerHTML = ((r && r.results) || []).slice(0, 8).map(x =>
+      `<button class="aeqrow" data-id="${esc(x.id)}">${esc(x.name)}` +
+      `<em>${esc(x.source)}${x.form ? " · " + esc(x.form) : ""}</em></button>`).join("") ||
+      '<div class="muted">Nothing by that name in AutoEq</div>';
+  }, 250);
+});
+$("tuneres").addEventListener("click", e => {
+  const row = e.target.closest(".aeqrow");
+  if (row) tuneChoose(row.dataset.id);
+});
+$("tunenone").onclick = () => tuneChoose("");
+$("tunespk").onclick = () => { $("tunepick").hidden = true; tuneSet(true); };
+$("tuneoff").onclick = () => {
+  // First press: headphones. Again: choose which.
+  if (!tuneOnSpeaker() || !TUNE_GUESS) {
+    $("tunepick").hidden = !$("tunepick").hidden;
+    if (!$("tunepick").hidden) $("tuneq").focus();
+    return;
+  }
+  tuneSet(false);
+  if (!tuneHp()) { $("tunepick").hidden = false; $("tuneq").focus(); }
+};
 tunePaint();
+
+/* Headphones connecting, where the browser will say.
+   navigator.mediaDevices exists only on a secure page (https or localhost),
+   and device names are blank until the page has been allowed the
+   microphone. Where both hold, a certain AutoEq match switches over on its
+   own and back again when they go; everywhere else the picker is the way. */
+async function tuneSniff() {
+  const md = navigator.mediaDevices;
+  if (!md || !md.enumerateDevices) return;
+  let list = [];
+  try { list = await md.enumerateDevices(); } catch (e) { return; }
+  const labels = [...new Set(list.filter(d => /audio/.test(d.kind))
+                                 .map(d => d.label).filter(Boolean))];
+  if (!labels.length) return;
+  for (const label of labels) {
+    const r = await api("/api/autoeq/match?name=" + encodeURIComponent("Headphones (" + label + ")"));
+    if (!r || !r.match) continue;
+    if (r.certain) {
+      const hp = tuneHp();
+      if (!hp || hp.id !== r.match.id || tuneOnSpeaker()) tuneChoose(r.match.id, true);
+    } else if (!tuneHp()) {
+      $("tuneq").value = label;
+      $("tuneq").dispatchEvent(new Event("input"));
+      toast("Is that " + r.match.name + "? Pick it under Tuned for");
+    }
+    return;
+  }
+  // Nothing recognisable any more: if it was us that switched, switch back.
+  try {
+    if (localStorage.getItem("tuneauto") === "1" && TUNE_GUESS) {
+      tuneStore("tuneauto", null);
+      tuneSet(true, true);
+      toast("Back to the " + TUNE_LABEL[TUNE_GUESS].toLowerCase());
+    }
+  } catch (e) {}
+}
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+  navigator.mediaDevices.addEventListener("devicechange", tuneSniff);
+  tuneSniff();
+}
 
 const castSrc = v => "/api/output/stream/" + encodeURIComponent(v) +
                      "?" + urlAuth() + (tuneNow() ? "&tune=" + tuneNow() : "");
@@ -4836,6 +4976,87 @@ async function loadProfiles() {
   }).join("");
 }
 
+/* Headphone correction for the PC's own output. */
+function aeqCurve(points) {
+  if (!points || !points.length) return "";
+  const W = 300, H = 74, span = 12;             // ±12 dB fills the height
+  const x = f => (Math.log10(f / 20) / 3) * W;
+  const y = db => H / 2 - Math.max(-span, Math.min(span, db)) * (H / 2 - 4) / span;
+  const d = points.map((p, i) => (i ? "L" : "M") + x(p[0]).toFixed(1) + " " + y(p[1]).toFixed(1)).join("");
+  const grid = [100, 1000, 10000].map(f =>
+    `<line class="grid" x1="${x(f)}" x2="${x(f)}" y1="0" y2="${H}"/>` +
+    `<text x="${x(f) + 2}" y="${H - 2}">${f >= 1000 ? f / 1000 + "k" : f}</text>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Correction curve">` +
+    `${grid}<line class="zero" x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}"/>` +
+    `<path class="line" d="${d}"/></svg>`;
+}
+function aeqPaint(s) {
+  $("aeqdev").textContent = s.device ? "Playing through " + s.device
+                                     : "Not playing through the PC right now";
+  let html = "";
+  if (s.profile) {
+    html = `<div class="aeqname">${esc(s.profile.name)}<em>${esc(s.profile.source)} measurement · ` +
+      `${s.profile.auto ? "recognised from the device name" : "chosen for this output"}` +
+      `${s.enabled ? "" : " · switched off"}</em></div>${aeqCurve(s.curve)}` +
+      `<div class="aeqacts"><button class="btn" data-aeq="none">None for this output</button>` +
+      `<button class="btn" data-aeq="clear">Forget</button></div>`;
+  } else if (s.chosen_none) {
+    html = `<div class="aeqname">No correction for this output<em>you chose that</em></div>` +
+      `<div class="aeqacts"><button class="btn" data-aeq="clear">Forget</button></div>`;
+  } else if (s.suggestion) {
+    html = `<div class="aeqname">Looks like ${esc(s.suggestion.name)}` +
+      `<em>AutoEq has close models too, so it's your call</em></div>` +
+      `<div class="aeqacts"><button class="btn" data-aeq="use" data-id="${esc(s.suggestion.id)}">Use it</button></div>`;
+  } else if (s.device) {
+    html = `<div class="aeqname">Windows doesn't say what's plugged in here` +
+      `<em>Search for your headphones below and it'll be kept for this output</em></div>`;
+  }
+  $("aeqcard").innerHTML = html;
+}
+async function loadAeq() {
+  if (!ME.owner) return;
+  const s = await api("/api/autoeq/status");
+  if (s) aeqPaint(s);
+}
+async function aeqAssign(query) {
+  const r = await apiTry("/api/autoeq/assign?" + query);
+  if (r.ok) { aeqPaint(r.body); $("aeqres").innerHTML = ""; $("aeqq").value = ""; }
+  else toast((r.body && r.body.detail) || "That didn't go through");
+  return r.ok;
+}
+$("aeqcard").addEventListener("click", async e => {
+  const b = e.target.closest("[data-aeq]");
+  if (!b) return;
+  if (b.dataset.aeq === "use") {
+    if (await aeqAssign("id=" + encodeURIComponent(b.dataset.id))) toast("Correction on");
+  } else if (b.dataset.aeq === "none") {
+    if (await aeqAssign("id=")) toast("No correction for this output");
+  } else if (b.dataset.aeq === "clear") {
+    if (await aeqAssign("clear=1")) toast("Forgotten");
+  }
+});
+let aeqTimer = null;
+$("aeqq").addEventListener("input", () => {
+  clearTimeout(aeqTimer);
+  aeqTimer = setTimeout(async () => {
+    const q = $("aeqq").value.trim();
+    if (q.length < 2) { $("aeqres").innerHTML = ""; return; }
+    const r = await api("/api/autoeq/search?q=" + encodeURIComponent(q));
+    $("aeqres").innerHTML = ((r && r.results) || []).slice(0, 12).map(x =>
+      `<button class="aeqrow" data-id="${esc(x.id)}">${esc(x.name)}` +
+      `<em>${esc(x.source)}${x.form ? " · " + esc(x.form) : ""}</em></button>`).join("") ||
+      '<div class="hint">Nothing by that name in AutoEq</div>';
+  }, 250);
+});
+$("aeqres").addEventListener("click", async e => {
+  const row = e.target.closest(".aeqrow");
+  if (row && await aeqAssign("id=" + encodeURIComponent(row.dataset.id))) {
+    toast("Correction on for this output");
+  }
+});
+settingRow("aeqon", "device_eq_enabled");
+settingRow("aeqauto", "device_eq_auto");
+
 async function loadSettings() {
   const s = await api("/api/settings");
   if (!s) return;
@@ -4876,6 +5097,9 @@ async function loadSettings() {
   document.body.classList.toggle("party", !!s.party_mode);
   $("keyinurl").classList.toggle("on", !!s.allow_key_in_url);
   $("legacyget").classList.toggle("on", !!s.allow_legacy_get_mutations);
+  $("aeqon").classList.toggle("on", s.device_eq_enabled !== false);
+  $("aeqauto").classList.toggle("on", s.device_eq_auto !== false);
+  loadAeq();
   $("ckauto").classList.toggle("on", s.cookie_auto_refresh !== false);
   $("pldl").classList.toggle("on", !!s.playlist_download);
   markChips("crossfade", s.crossfade || 0);
@@ -5271,6 +5495,8 @@ function connect() {
           importFound = msg.data.found || 0;
           importTotal = msg.data.total || 0;
           if (activePanel === "lists") loadLists();
+        } else if (ME.owner && $("sheet").classList.contains("open")) {
+          loadAeq();          // the output changed, or its correction did
         }
         break;
     }

@@ -88,8 +88,25 @@ TUNES: dict[str, dict] = {
 
 
 def tune_name(raw: str | None) -> str:
+    """A speaker preset, or aeq-<id> for a headphone profile already on disk.
+
+    Only on disk: the stream must never wait on GitHub, so the page fetches
+    the profile first (/api/autoeq/profile) and asks for it after.
+    """
     raw = (raw or "").strip().lower()
-    return raw if raw in TUNES else ""
+    if raw in TUNES:
+        return raw
+    if raw.startswith("aeq-") and re.fullmatch(r"aeq-[0-9a-f]{12}", raw):
+        from . import autoeq
+        return raw if autoeq.cached_chain(raw[4:]) else ""
+    return ""
+
+
+def _tune_chain(tune: str) -> str:
+    if tune.startswith("aeq-"):
+        from . import autoeq
+        return autoeq.cached_chain(tune[4:])
+    return TUNES[tune]["chain"]
 
 
 def work_dir() -> Path:
@@ -130,8 +147,8 @@ def filter_chain(tune: str = "") -> str:
     tune = tune_name(tune)
     if tune:
         # Last: the speaker is the last thing the sound goes through.
-        parts.append(TUNES[tune]["chain"])
-    return ",".join(parts)
+        parts.append(_tune_chain(tune))
+    return ",".join(p for p in parts if p)
 
 
 def _stamp(tune: str = "") -> str:
@@ -281,7 +298,8 @@ def prune() -> int:
     EQ changed and the processing baked into it is no longer what the PC is
     playing.
     """
-    live = {_stamp(t) for t in ("", *TUNES)}
+    from . import autoeq
+    live = {_stamp(t) for t in ("", *TUNES, *autoeq.cached_tunes())}
     with _lock:
         busy = {Path(p).name for p, _ in _held.values()}
     gone = 0

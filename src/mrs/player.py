@@ -127,6 +127,8 @@ class PlayerService:
         if config.get("listen_loopback", True) and listener.available():
             listener.start()
         threading.Thread(target=self._levels, daemon=True, name="levels").start()
+        from .core import autoeq
+        autoeq.watch(self._output_changed)
         self._alarms = AlarmClock(self._on_alarm)
         radio.now_playing.on_song = self._on_radio_song
         log.info("player ready")
@@ -1186,6 +1188,11 @@ class PlayerService:
         if alarm.get("volume"):
             self.control("volume", alarm["volume"])
         handle_request(query, announce=False)
+
+    def _output_changed(self) -> None:
+        """Different headphones, different correction."""
+        self.audio.apply()
+        bus.publish(Ev.SETTINGS, self.settings())
 
     # -- settings ------------------------------------------------------
     def settings(self) -> dict:

@@ -36,6 +36,12 @@ DEFAULTS: dict[str, Any] = {
     "quiet_level": 55,
     "eq": "flat",
     "normalize": False,
+    # Headphone correction from AutoEq, kept per output by its Windows name:
+    # {"Headphones (WH-1000XM4)": {"id", "name", "source", "auto"}}. An entry
+    # with an empty id means the owner said "nothing for this one".
+    "device_eq": {},
+    "device_eq_enabled": True,
+    "device_eq_auto": True,        # apply a certain name match unasked
     "crossfade": 0,
     "repeat": "off",          # off | all | one
     "shuffle": False,

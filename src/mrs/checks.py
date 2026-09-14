@@ -1972,6 +1972,156 @@ def _run(verbose: bool = False) -> Result:
               wave and "gradient" not in wave.group(0))
             say("the phone's buttons", c)
 
+            # -- 21. headphone correction from AutoEq ----------------------
+            c = _Checker("autoeq")
+            from .core import autoeq as _aeq
+            from .player import player as _player
+            index = "\n".join([
+                "# Index",
+                "- [Sony WH-1000XM4](./oratory1990/over-ear/Sony%20WH-1000XM4) by oratory1990",
+                "- [Sony WH-1000XM4](./Rtings/over-ear/Sony%20WH-1000XM4) by Rtings",
+                "- [Sony WH-1000XM4 (ANC off)](./crinacle/GRAS%2043AG-7%20over-ear/Sony%20WH-1000XM4%20(ANC%20off)) by crinacle on GRAS 43AG-7",
+                "- [Apple AirPods Pro](./crinacle/711%20in-ear/Apple%20AirPods%20Pro) by crinacle on 711",
+                "- [Apple AirPods Pro 2](./crinacle/711%20in-ear/Apple%20AirPods%20Pro%202) by crinacle on 711",
+                "- [Sennheiser HD 650](./oratory1990/over-ear/Sennheiser%20HD%20650) by oratory1990",
+                "- [Evil](./../../etc) by nobody",
+            ])
+            hd650 = ("Preamp: -6.1 dB\n"
+                     "Filter 1: ON LSC Fc 105 Hz Gain 6.4 dB Q 0.70\n"
+                     "Filter 2: ON PK Fc 8800 Hz Gain 5.1 dB Q 1.42\n"
+                     "Filter 3: ON PK Fc 118 Hz Gain -3.1 dB Q 0.50\n"
+                     "Filter 4: ON HSC Fc 10000 Hz Gain -2.1 dB Q 0.70\n")
+            asked = []
+
+            def fake_fetch(url, timeout=10.0):
+                asked.append(url)
+                if url.endswith("INDEX.md"):
+                    return index.encode()
+                if url.endswith("Sennheiser%20HD%20650%20ParametricEQ.txt") or \
+                        url.endswith("Sony%20WH-1000XM4%20ParametricEQ.txt"):
+                    return hd650.encode()
+                return None
+
+            _aeq._entries = None
+            with _patch.object(_aeq, "_fetch", fake_fetch):
+                rows = _aeq._load(refresh=True)
+                c("the index parses, and a path out of the results is dropped",
+                  len(rows) == 6, str(len(rows)))
+                c("whose measurement, and on what", rows[2]["source"] == "crinacle"
+                  and rows[2]["rig"] == "GRAS 43AG-7")
+                e, sure = _aeq.match("Headphones (WH-1000XM4)")
+                c("a Bluetooth name finds its model",
+                  e and e["name"] == "Sony WH-1000XM4" and sure)
+                c("...measured by the source AutoEq trusts most",
+                  e and e["source"] == "oratory1990")
+                e, sure = _aeq.match("Headset (WH-1000XM4 Hands-Free AG Audio)")
+                c("the hands-free half of the same headphones too", e and sure)
+                e, sure = _aeq.match("Headphones (Kyle's AirPods Pro)")
+                c("AirPods Pro is found but not assumed: Pro 2 says the same",
+                  e and e["name"] == "Apple AirPods Pro" and not sure)
+                for generic in ("Headphones (High Definition Audio Device)",
+                                "Speakers (USB Audio CODEC )",
+                                "4 - PHL 346E2C (AMD High Definition Audio Device)",
+                                "Speakers (Steam Streaming Speakers)"):
+                    c(f"{generic[:30]!r} matches nothing",
+                      _aeq.match(generic) == (None, False))
+                c("search finds by the words typed",
+                  [r["name"] for r in _aeq.search("hd 650")][:1] == ["Sennheiser HD 650"])
+
+                hd = _aeq.match("Headphones (HD 650)")[0]
+                prof = _aeq.profile(hd["id"])
+                c("a profile is fetched from its own file",
+                  prof and len(prof["filters"]) == 4 and prof["preamp"] == -6.1)
+                c("...and kept, so the stream never waits on GitHub",
+                  bool(_aeq.cached_chain(hd["id"])))
+                wild = _aeq.parse_profile("Preamp: 40 dB\nFilter 1: ON PK Fc 999999 Hz "
+                                          "Gain -90 dB Q 0\nFilter 2: OFF PK Fc 1000 Hz Gain 3 dB Q 1")
+                c("values out of range are clamped, switched-off filters skipped",
+                  wild["preamp"] == 0.0 and len(wild["filters"]) == 1
+                  and wild["filters"][0]["f"] == 22000.0 and wild["filters"][0]["gain"] == -30.0)
+
+                if _sh.which("ffmpeg"):
+                    import numpy as _np
+                    n = 1 << 15
+                    imp = _np.zeros(n, dtype=_np.float32)
+                    imp[0] = 0.25
+                    got = _sp.run(["ffmpeg", "-hide_banner", "-loglevel", "error",
+                                   "-f", "f32le", "-ar", "48000", "-ac", "1", "-i", "-",
+                                   "-af", _aeq.chain(prof), "-f", "f32le", "-"],
+                                  input=imp.tobytes(), capture_output=True, timeout=30)
+                    heard = _np.frombuffer(got.stdout, dtype=_np.float32)[:n] / 0.25
+                    spec = _np.abs(_np.fft.rfft(heard))
+                    freqs = _np.fft.rfftfreq(n, 1 / 48000)
+                    worst = 0.0
+                    for f, db in _aeq.curve(prof):
+                        if f < 40:
+                            continue            # below the FFT's resolution here
+                        i = int(_np.argmin(_np.abs(freqs - f)))
+                        worst = max(worst, abs(20 * _np.log10(spec[i]) - (db + prof["preamp"])))
+                    c("ffmpeg applies the curve AutoEq means (RBJ)", worst < 0.3,
+                      f"worst {worst:.2f} dB")
+
+                # The PC's own output.
+                rows_before = dict(_cfg.get("device_eq") or {})
+                with _patch.object(_aeq, "output_name", lambda: "Headphones (HD 650)"):
+                    _aeq._Watch.last = None
+                    guest_r = client.get("/api/autoeq/search?q=hd",
+                                         headers={"X-Music-Key": phone})
+                    c("a link can search models for its own headphones",
+                      guest_r.status_code == 200 and guest_r.json().get("results"))
+                    pr = client.get(f"/api/autoeq/profile?id={hd['id']}",
+                                    headers={"X-Music-Key": phone})
+                    c("...and fetch one, getting the tune to ask the stream for",
+                      pr.status_code == 200 and pr.json().get("tune") == f"aeq-{hd['id']}")
+                    c("but not choose the PC's",
+                      client.post("/api/autoeq/assign", json={"id": hd["id"]},
+                                  headers={"X-Music-Key": phone}).status_code == 403)
+                    c("or read what the PC is plugged into",
+                      client.get("/api/autoeq/status",
+                                 headers={"X-Music-Key": phone}).status_code == 403)
+                    r = client.post("/api/autoeq/assign", json={"id": hd["id"]},
+                                    headers=owner_h)
+                    c("the owner chooses for the output in use", r.status_code == 200
+                      and (r.json().get("profile") or {}).get("name") == "Sennheiser HD 650",
+                      r.text[:120])
+                    c("...and the player's chain carries it",
+                      "lowshelf=f=105.0" in _player.audio.build_chain())
+                    c("...before normalising, so its preamp comes back up",
+                      not _cfg.get("normalize") or _player.audio.build_chain().index("lowshelf")
+                      < _player.audio.build_chain().index("dynaudnorm"))
+                    _cfg.set("device_eq_enabled", False)
+                    c("switched off, it's gone", "lowshelf" not in _player.audio.build_chain())
+                    _cfg.set("device_eq_enabled", True)
+                    client.post("/api/autoeq/assign", json={"id": ""}, headers=owner_h)
+                    c("'none for this output' is kept",
+                      "lowshelf" not in _player.audio.build_chain()
+                      and _aeq.assigned("Headphones (HD 650)") == {"id": "", "auto": False})
+                    _aeq.settle("Headphones (HD 650)")
+                    c("...and a certain match doesn't override it",
+                      not _aeq.assigned("Headphones (HD 650)").get("id"))
+                    r = client.post("/api/autoeq/assign", json={"clear": 1}, headers=owner_h)
+                    c("forgetting lets the name match again",
+                      (_aeq.assigned("Headphones (HD 650)") or {}).get("auto") is True,
+                      str(_aeq.assigned("Headphones (HD 650)")))
+
+                from .core import cast as _cast2
+                c("a phone can be tuned to a profile on disk",
+                  _cast2.tune_name(f"aeq-{hd['id']}") == f"aeq-{hd['id']}"
+                  and "lowshelf" in _cast2.filter_chain(f"aeq-{hd['id']}"))
+                c("...but not one that isn't, or anything else",
+                  _cast2.tune_name("aeq-000000000000") == ""
+                  and _cast2.tune_name("aeq-../../x") == "")
+                c("every request went to AutoEq's results, nowhere else",
+                  asked and all(u.startswith(_aeq.BASE) for u in asked))
+                _cfg.set("device_eq", rows_before)
+                _aeq._Watch.last = None
+            _aeq._entries = None
+            from .core import endpoint as _ep
+            got = _ep.default_output()
+            c("Windows can be asked for the output's name without crashing",
+              isinstance(got.get("name"), str) and isinstance(got.get("id"), str))
+            say("headphone correction", c)
+
     except Exception as exc:            # a check suite must not be the thing
         out.failed.append(f"the checks themselves broke: {exc!r}")
     finally:
