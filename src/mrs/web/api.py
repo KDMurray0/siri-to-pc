@@ -23,6 +23,7 @@ from fastapi.templating import Jinja2Templates
 from .. import __version__
 from ..config import config
 from ..core import autoeq
+from ..core import stats
 from ..core import cast as cast_mod
 from ..core import cookies as cookie_mod
 from ..core import radio as radio_mod
@@ -1527,6 +1528,8 @@ def _guard_rate(room, request: Request | None = None) -> None:
     row = getattr(request.state, "pass_row", None) if request is not None else None
     if row and not (row.get("internal") or row.get("owner")):
         sec.note_use(row["id"], requests=1, ip=_client_ip(request))
+    else:
+        stats.note(stats.HOUSE, requests=1)
 
 
 def _guard_shared(request: Request) -> None:
@@ -1676,6 +1679,16 @@ def _media_type(path: Path) -> str:
             or "application/octet-stream")
 
 
+def _note_served(request: Request, sent: int) -> None:
+    """Bytes that left this machine, against whoever asked for them."""
+    if sent <= 0:
+        return
+    row = getattr(request.state, "pass_row", None) or {}
+    who = row.get("id") if row.get("id") and not (row.get("internal")
+                                                  or row.get("owner")) else stats.HOUSE
+    stats.note(who, bytes_out=sent)
+
+
 def _range_response(request: Request, path: Path):
     """Serve one completed file with correct single-range semantics.
 
@@ -1689,6 +1702,7 @@ def _range_response(request: Request, path: Path):
               "Cache-Control": "private, max-age=3600"}
     raw = (request.headers.get("range") or "").strip()
     if not raw or not raw.lower().startswith("bytes="):
+        _note_served(request, size)
         return FileResponse(path, media_type=media, headers=common)
     if size <= 0:
         return Response(status_code=416,
@@ -1698,6 +1712,7 @@ def _range_response(request: Request, path: Path):
     if "," in spec:
         # We do not implement multipart/byteranges; ignoring Range and
         # returning 200 is explicitly preferable to a malformed 206.
+        _note_served(request, size)
         return FileResponse(path, media_type=media, headers=common)
     first, sep, last = spec.partition("-")
     if not sep:
@@ -1723,15 +1738,22 @@ def _range_response(request: Request, path: Path):
     length = end - start + 1
 
     def body():
-        with path.open("rb") as fh:
-            fh.seek(start)
-            remaining = length
-            while remaining:
-                chunk = fh.read(min(64 * 1024, remaining))
-                if not chunk:
-                    break
-                remaining -= len(chunk)
-                yield chunk
+        sent = 0
+        try:
+            with path.open("rb") as fh:
+                fh.seek(start)
+                remaining = length
+                while remaining:
+                    chunk = fh.read(min(64 * 1024, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    sent += len(chunk)
+                    yield chunk
+        finally:
+            # What actually went out. A phone that changes its mind halfway
+            # through a song did not stream the other half.
+            _note_served(request, sent)
 
     return StreamingResponse(
         body(), status_code=206, media_type=media,
@@ -2676,6 +2698,30 @@ def api_stream(video_id: str, _: bool = Auth):
 
 
 # ── diagnostics ───────────────────────────────────────────────────────
+
+@app.get("/api/stats")
+def api_stats(_: bool = Owner):
+    """What this server has done: the house's totals and each link's.
+
+    A link's record outlives the link — revoking somebody's access should
+    not quietly rewrite what the month looked like.
+    """
+    from ..core import stats as stats_mod
+    named = {}
+    try:
+        for row in sec.list_passes():
+            named[row["id"]] = {"name": row.get("name", ""),
+                                "scope": row.get("scope", ""),
+                                "revoked": bool(row.get("revoked")),
+                                "expired": bool(row.get("expired"))}
+    except Exception as exc:
+        log.debug("couldn't name the links: %s", exc)
+    links = []
+    for row in stats_mod.links():
+        links.append({**row, **named.get(row["id"], {})})
+    return {"status": "ok", "house": stats_mod.house(months=6), "links": links,
+            "month": stats_mod.month_of()}
+
 
 @app.get("/api/diag")
 def api_diag(_: bool = Owner):

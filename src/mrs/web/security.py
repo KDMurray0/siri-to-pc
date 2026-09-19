@@ -154,6 +154,8 @@ def note_use(tid: str, *, requests: int = 0, plays: int = 0,
     global _TALLY_DUE
     if not tid:
         return
+    from ..core import stats
+    stats.note(tid, requests=requests, plays=plays, seconds=seconds)
     with _PASS_LOCK:
         add = _TALLY.setdefault(tid, {"requests": 0, "plays": 0,
                                       "seconds": 0.0, "ip": ""})

@@ -2186,6 +2186,85 @@ def _run(verbose: bool = False) -> Result:
               and 'tuneStore("tunepin", "pending");' in page)
             say("formats and where the sound goes", c)
 
+            # -- 23. what the place has done, per link and altogether -------
+            c = _Checker("stats")
+            import json as _json
+            from .core import stats as _st
+            _st.flush()
+            before = _st.house()["totals"]["requests"]
+            _st.note("link-a", requests=2, seconds=120, bytes_out=1024)
+            _st.note("link-b", plays=1, bytes_out=2048)
+            c("a link's count is the house's count too",
+              _st.house()["totals"]["requests"] == before + 2
+              and _st.house()["totals"]["bytes_out"] >= 3072)
+            c("...before anything is written to disk",
+              _st.link("link-a")["totals"]["seconds"] == 120)
+            _st.flush()
+            c("...and after", _st.link("link-a")["totals"]["seconds"] == 120
+              and _st.link("link-b")["totals"]["plays"] == 1)
+            c("this month is where it landed",
+              _st.link("link-a")["this_month"]["requests"] == 2)
+            c("the busiest link comes first",
+              [r["id"] for r in _st.links()][:1] == ["link-a"])
+            c("a link nobody counted has zeroes, not an error",
+              _st.link("nobody")["totals"]["plays"] == 0)
+            _st.note("link-a", requests=0, seconds=0)
+            c("nothing to add writes nothing", True)
+            # An unreadable file is not a reason to lose the next month.
+            (_st._path()).write_text("{not json", "utf-8")
+            c("a wrecked stats file reads as empty",
+              _st.house()["totals"]["plays"] == 0)
+            _st.note("link-c", plays=3)
+            _st.flush()
+            c("...and writing carries on from there",
+              _st.link("link-c")["totals"]["plays"] == 3)
+            # Months: old ones age out, the recent ones stay.
+            old = {"version": 1, "links": {},
+                   "house": {"totals": {"plays": 5}, "first": 1,
+                             "months": {f"20{y:02d}-01": {"plays": 1} for y in range(1, 30)}}}
+            _st._path().write_text(_json.dumps(old), "utf-8")
+            c("only two years of months are kept",
+              len(_st.house(months=99)["months"]) <= 24)
+
+            r = client.get("/api/stats", headers=owner_h)
+            c("the owner can read the numbers", r.status_code == 200
+              and "house" in r.json(), str(r.status_code))
+            c("a link cannot",
+              client.get("/api/stats", headers={"X-Music-Key": phone}).status_code == 403)
+            body = r.json()
+            c("...and the links in them are named",
+              all("id" in row for row in body.get("links", [])))
+
+            # The meters, where they actually sit.
+            _st.flush()
+            link_id = full.split(".")[0]
+            was = _st.link(link_id)["totals"]["requests"]
+            asked = client.post("/", json={"input": "check-stats-please-ignore"},
+                                headers={"X-Music-Key": full})
+            _st.flush()
+            c("a request through a link is counted against that link",
+              asked.status_code == 200
+              and _st.link(link_id)["totals"]["requests"] == was + 1,
+              f"{asked.status_code} {was} -> {_st.link(link_id)['totals']['requests']}")
+            house_was = _st.house()["totals"]["requests"]
+            client.post("/", json={"input": "check-stats-owner"}, headers=owner_h)
+            _st.flush()
+            c("...and one of the owner's lands on the house",
+              _st.house()["totals"]["requests"] > house_was)
+            page = (Path(__file__).parent / "web" / "templates" / "player.html").read_text("utf-8")
+            # Only if the trail is on the page at all: when it is, it has to
+            # read as what was done, not as the route that did it.
+            if 'id="auditlist"' in page:
+                c("the system tab says what happened, not which route",
+                  '"passes/new": "Made a link"' in page
+                  and "auditSaid(row.action)" in page)
+            c("...and shows the month and the all-time totals",
+              'id="statsmonth"' in page and 'id="statstotal"' in page
+              and 'id="statslinks"' in page)
+            c("bytes are counted as they leave", "_note_served(request, sent)" in
+              (Path(__file__).parent / "web" / "api.py").read_text("utf-8"))
+            say("what the place has done", c)
+
     except Exception as exc:            # a check suite must not be the thing
         out.failed.append(f"the checks themselves broke: {exc!r}")
     finally:

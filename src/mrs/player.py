@@ -23,6 +23,7 @@ from .core.mpv import (MpvClient, PIPE_ALT, PIPE_MAIN, fresh_pipes,
 from .core.queue import QueueManager
 from .core.sink import MpvSink
 from .core import radio
+from .core import stats
 from .core.taste import taste
 from .events import Ev, bus
 from .logging_setup import get
@@ -150,6 +151,7 @@ class PlayerService:
 
     def stop(self) -> None:
         self._stop.set()
+        stats.flush()
         listener.stop()
         self.queue.stop()
         taste.save()
@@ -493,8 +495,15 @@ class PlayerService:
                 # by an artist called Radio. What it's playing arrives later
                 # and repeatedly, through _on_radio_song.
                 log.info("tuned in: %s", cur.title)
+            if path:
+                stats.note(stats.HOUSE, plays=1)
         else:
-            self._watch["pos"] = max(self._watch.get("pos", 0), pos)
+            was = self._watch.get("pos", 0)
+            # Only forward motion, and only a tick's worth: a seek is not
+            # time anybody listened to.
+            if not props.get("pause") and 0 < pos - was <= 2.5:
+                stats.note(stats.HOUSE, seconds=pos - was)
+            self._watch["pos"] = max(was, pos)
             self._watch["dur"] = dur or self._watch.get("dur", 0)
 
     def _revive_alt(self) -> bool:

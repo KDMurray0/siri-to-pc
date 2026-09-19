@@ -322,6 +322,27 @@ body.reordering .q{transition:transform .12s ease}
   color:var(--fg);border-radius:9px;padding:7px 10px;font-size:12px;
   font-family:inherit;outline:none}
 .plimport input:focus{border-color:var(--accent)}
+/* Numbers worth looking at: four to a row, the number first. */
+.statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));
+  gap:8px;padding:2px 0 10px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:9px 10px}
+.stat b{display:block;font-size:17px;font-weight:700;letter-spacing:-.02em}
+.stat span{font-size:10px;color:var(--sub);text-transform:uppercase;
+  letter-spacing:.06em}
+.seclbl .since{font-style:normal;text-transform:none;letter-spacing:0;
+  opacity:.75;margin-left:6px}
+/* A month, its bar, and what it came to. */
+.months{display:flex;flex-direction:column;gap:5px;padding-bottom:10px}
+.mrow{display:grid;grid-template-columns:58px 1fr auto;gap:8px;align-items:center;
+  font-size:11px;color:var(--sub)}
+.mbar{height:7px;border-radius:4px;background:var(--line);overflow:hidden}
+.mbar i{display:block;height:100%;background:var(--accent);border-radius:4px}
+.mrow.now .mbar i{opacity:1}
+.linkstat{display:grid;grid-template-columns:1fr auto;gap:4px 10px;
+  padding:7px 0;border-bottom:1px solid var(--line);font-size:12px}
+.linkstat em{grid-column:1/-1;font-style:normal;font-size:10.5px;color:var(--sub)}
+.linkstat .gone{opacity:.55}
 .seclbl{font-size:10px;color:var(--sub);text-transform:uppercase;letter-spacing:.08em;
   margin:10px 4px 6px;font-weight:700}
 .artistchips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px}
@@ -1619,6 +1640,13 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 
       <section class="spane" data-s="system">
         <div class="srow"><span class="slabel">Version</span><span class="sval" id="release">—</span></div>
+        <div class="seclbl owneronly">This month</div>
+        <div class="statgrid owneronly" id="statsmonth"></div>
+        <div class="seclbl owneronly">All time<em class="since" id="statssince"></em></div>
+        <div class="statgrid owneronly" id="statstotal"></div>
+        <div class="months owneronly" id="statsmonths"></div>
+        <div class="seclbl owneronly">Per link</div>
+        <div class="owneronly" id="statslinks"></div>
         <div class="srow"><span class="slabel">Setup guide<em>What the tools are for, what the key is, and which extras are worth having</em></span>
           <button class="btn" id="reguide">Open</button></div>
         <div class="srow"><span class="slabel">Start with Windows<em>When you sign in</em></span><div class="toggle" id="boot"></div></div>
@@ -3204,7 +3232,7 @@ document.querySelectorAll(".stab").forEach(tab => tab.onclick = () => {
   // Only ask when the tab is actually on screen: it walks three caches and
   // stats the download folder.
   if (tab.dataset.s === "system") {
-    loadHealth(); loadCache(); loadBlocked();
+    loadHealth(); loadCache(); loadBlocked(); loadStats();
   }
   if (tab.dataset.s === "sharing") {
     loadNetwork(); loadPasses(); loadDdns(); loadProfiles();
@@ -3353,6 +3381,70 @@ const toggleRow = (id, path) => {
 toggleRow("announce", "/api/announce");
 toggleRow("boot", "/api/boot");
 toggleRow("lockips", "/api/lockips");
+/* What this place has done, and what each link has done in it. */
+function gb(bytes) {
+  const n = Number(bytes) || 0;
+  if (n >= 1024 ** 3) return (n / 1024 ** 3).toFixed(n >= 10 * 1024 ** 3 ? 0 : 1) + " GB";
+  if (n >= 1024 ** 2) return Math.round(n / 1024 ** 2) + " MB";
+  return Math.round(n / 1024) + " KB";
+}
+function hours(seconds) {
+  const s = Number(seconds) || 0;
+  // Under a minute is seconds: "0 min" reads as nothing happened.
+  if (s < 60) return Math.round(s) + " s";
+  if (s < 3600) return Math.round(s / 60) + " min";
+  const h = s / 3600;
+  return (h >= 100 ? Math.round(h) : h.toFixed(1)) + " h";
+}
+const NUM = n => (Number(n) || 0).toLocaleString();
+function statTiles(box, d) {
+  $(box).innerHTML = [
+    [NUM(d.requests), "songs asked for"],
+    [NUM(d.plays), "tracks played"],
+    [hours(d.seconds), "listened"],
+    [gb(d.bytes_out), "streamed out"],
+    [gb(d.bytes_in), "downloaded"],
+  ].map(([v, label]) => `<div class="stat"><b>${esc(v)}</b><span>${esc(label)}</span></div>`).join("");
+}
+const MONTH_NAME = m => {
+  const [y, mo] = String(m).split("-");
+  const d = new Date(Number(y), Number(mo) - 1, 1);
+  // Full year: "Sept 26" reads as the twenty-sixth of September.
+  return isNaN(d) ? m : d.toLocaleString(undefined, { month: "short", year: "numeric" });
+};
+async function loadStats() {
+  if (!ME.owner) return;
+  const r = await api("/api/stats");
+  if (!r || !r.house) return;
+  const h = r.house;
+  statTiles("statsmonth", h.this_month || {});
+  statTiles("statstotal", h.totals || {});
+  $("statssince").textContent = h.first ? "since " + new Date(h.first * 1000)
+    .toLocaleDateString(undefined, { month: "long", year: "numeric" }) : "";
+  // Months, with the bar showing time listened rather than bytes: hours in
+  // a room is the thing that varies for a reason.
+  const months = (h.months || []).slice().reverse();
+  const top = Math.max(1, ...months.map(m => m.seconds || 0));
+  $("statsmonths").innerHTML = months.map(m =>
+    `<div class="mrow${m.month === r.month ? " now" : ""}">` +
+    `<span>${esc(MONTH_NAME(m.month))}</span>` +
+    `<span class="mbar"><i style="width:${Math.round((m.seconds || 0) / top * 100)}%"></i></span>` +
+    `<span>${esc(hours(m.seconds))} · ${esc(NUM(m.requests))} asked · ${esc(gb(m.bytes_out))}</span></div>`
+  ).join("") || '<div class="hint">Nothing yet this month.</div>';
+
+  const links = (r.links || []).filter(l => l.id !== "house");
+  $("statslinks").innerHTML = links.length ? links.map(l => {
+    const gone = l.revoked || l.expired;
+    const now = l.this_month || {};
+    return `<div class="linkstat${gone ? " gone" : ""}">` +
+      `<span>${esc(l.name || l.id)}${l.revoked ? " · banned" : l.expired ? " · lapsed" : ""}</span>` +
+      `<span>${esc(hours(l.totals.seconds))} · ${esc(gb(l.totals.bytes_out))}</span>` +
+      `<em>${esc(NUM(l.totals.requests))} asked for, ${esc(NUM(l.totals.plays))} played` +
+      ` · this month ${esc(NUM(now.requests || 0))} asked, ${esc(hours(now.seconds))}` +
+      (l.last ? ` · last ${esc(ago(l.last))}` : "") + `</em></div>`;
+  }).join("") : '<div class="hint">No link has played anything yet.</div>';
+}
+
 /* Not fire-and-forget: this one asks Windows to register a scheduled task,
    and Windows is entitled to say no. A switch that stays on after the thing
    it switches on didn't happen is worse than no switch. */

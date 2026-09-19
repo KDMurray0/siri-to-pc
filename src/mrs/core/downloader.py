@@ -488,7 +488,15 @@ class Downloader:
             return self.cached(track.video_id)
 
         try:
-            return self._fetch_locked(track, on_progress)
+            path = self._fetch_locked(track, on_progress)
+            if path:
+                from . import stats
+                try:
+                    stats.note(stats.HOUSE, downloads=1,
+                               bytes_in=Path(path).stat().st_size)
+                except OSError:
+                    pass
+            return path
         finally:
             # This is the one cleanup boundary that also covers an exception
             # from config, argument construction, logging, or a mocked
