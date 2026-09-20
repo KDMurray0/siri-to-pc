@@ -2265,6 +2265,64 @@ def _run(verbose: bool = False) -> Result:
               (Path(__file__).parent / "web" / "api.py").read_text("utf-8"))
             say("what the place has done", c)
 
+            # -- 24. a real certificate, or none --------------------------
+            c = _Checker("tls")
+            from . import server as _srv
+            from .paths import data_dir as _dd
+            was_cert, was_key = _cfg.get("tls_cert"), _cfg.get("tls_key")
+            try:
+                _cfg.set("tls_cert", "", save=False)
+                _cfg.set("tls_key", "", save=False)
+                c("nothing configured and nothing in the standard place is http",
+                  _srv.tls_files() is None and _srv.cert_days_left() == 0.0)
+                _cfg.set("tls_cert", str(_dd() / "nope.pem"), save=False)
+                _cfg.set("tls_key", str(_dd() / "nope.key"), save=False)
+                c("a path that points at nothing doesn't stop the server",
+                  _srv.tls_files() is None)
+                # A pair that doesn't go together is the renewal failure that
+                # matters: it looks configured and serves nothing.
+                certs = _dd() / "certs"
+                certs.mkdir(parents=True, exist_ok=True)
+                (certs / "fullchain.pem").write_text("not a certificate", "utf-8")
+                (certs / "privkey.pem").write_text("not a key", "utf-8")
+                _cfg.set("tls_cert", "", save=False)
+                _cfg.set("tls_key", "", save=False)
+                c("rubbish in the standard place is refused, not served",
+                  _srv.tls_files() is None)
+                c("the standard place is the one certificate.ps1 writes to",
+                  (certs / "fullchain.pem").exists()
+                  and ("MusicRequestServer" + chr(92) + "certs")
+                  in (Path(__file__).resolve().parents[2] / "certificate.ps1")
+                  .read_text("utf-8", "replace"))
+            finally:
+                _cfg.set("tls_cert", was_cert or "", save=False)
+                _cfg.set("tls_key", was_key or "", save=False)
+                for leftover in ("fullchain.pem", "privkey.pem"):
+                    (_dd() / "certs" / leftover).unlink(missing_ok=True)
+            from .core import net as _net
+            c("the scheme follows what is being served, not what is set",
+              _net.scheme() == "http" and not _srv.runtime.get("tls"))
+            _srv.runtime["tls"] = True
+            try:
+                # addresses() is stubbed in here (it reaches the network),
+                # so the scheme itself is what there is to check.
+                c("...and says https once a certificate is loaded",
+                  _net.scheme() == "https")
+            finally:
+                _srv.runtime.pop("tls", None)
+            _srv.runtime["local_port"] = 41234
+            try:
+                c("this machine talks to itself in plaintext",
+                  _srv.local_url(443) == "http://127.0.0.1:41234/api/ping")
+            finally:
+                _srv.runtime.pop("local_port", None)
+            # PowerShell 5.1 reads a file with no BOM as ANSI, which turns a
+            # dash into a quote and the script into a syntax error.
+            raw = (Path(__file__).resolve().parents[2] / "certificate.ps1").read_bytes()
+            c("certificate.ps1 is ASCII with a BOM, so PowerShell can read it",
+              raw[:3] == bytes([0xEF, 0xBB, 0xBF]) and all(b < 128 for b in raw[3:]))
+            say("a real certificate", c)
+
     except Exception as exc:            # a check suite must not be the thing
         out.failed.append(f"the checks themselves broke: {exc!r}")
     finally:

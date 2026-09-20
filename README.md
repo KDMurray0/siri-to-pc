@@ -368,6 +368,63 @@ For maximum security, scope to just your phone:
 New-NetFirewallRule -DisplayName "Music Request Server" -Direction Inbound -LocalPort 7420 -Protocol TCP -Action Allow -Profile Private -RemoteAddress 192.168.1.50
 ```
 
+## HTTPS with a real certificate
+
+A certificate this machine signs for itself is worthless — Safari refuses it
+outright, iOS offers no exception for a bare IP, and the desktop window needs
+a browser flag to load its own player. A certificate signed by an authority,
+for a name that points at your house, works everywhere with no warnings.
+`certificate.ps1` gets one from Let's Encrypt and keeps it renewed.
+
+You need a name first. The Sharing tab's **A name that follows you** keeps a
+Dynu hostname pointed at your address; set that up before this.
+
+1. **Dynu API credentials.** Dynu control panel → **API Credentials**. That
+   page gives an OAuth2 **Client ID** and **Secret** — not your account
+   password, and not the older API key.
+
+2. **Get the certificate.** In PowerShell, in the project folder:
+
+   ```powershell
+   .\certificate.ps1 -Domain music.example.dynu.net -ClientId YOUR_CLIENT_ID
+   ```
+
+   It asks for the secret without echoing it, installs Posh-ACME if it isn't
+   there, proves the name is yours through a DNS record Dynu writes for it,
+   and puts the certificate in `%LOCALAPPDATA%\MusicRequestServer\certs`.
+   Nothing needs to be reachable from the internet while this runs, and no
+   port has to be open.
+
+   Add `-Staging` for a rehearsal: it proves the DNS side works without
+   spending one of the five certificates a week Let's Encrypt allows per
+   name. A staging certificate is not trusted, so switch it off again.
+
+3. **Restart the player once.** It finds the files by itself and serves
+   https on its own port; links and QR codes change to `https://` and the
+   Sharing tab says how many days are left on the certificate.
+
+Renewal is a scheduled task that checks nightly. When it writes a new
+certificate the server picks it up within a minute, without interrupting
+what's playing.
+
+What still uses plain http: this machine, on loopback only. A certificate
+belongs to a name, and the desktop window asking for it at `127.0.0.1` would
+be a name mismatch — so the window, the tray and the app's own health checks
+talk to a plaintext port bound to `127.0.0.1` that nothing else can reach.
+
+**Devices on your own wifi** have to resolve the name to reach it. Most
+routers handle a LAN device asking for your public address (NAT hairpinning);
+some don't. If yours doesn't, add a second Dynu hostname pointing at this
+machine's LAN address and cover both:
+
+```powershell
+.\certificate.ps1 -Domain music.example.dynu.net -AlsoCover home.music.example.dynu.net -ClientId YOUR_CLIENT_ID
+```
+
+Some DNS servers refuse to return private addresses (rebinding protection),
+in which case that trick won't work either and the LAN falls back to the
+address with no encryption.
+
 ## Network Setup
 
 ### Static DHCP lease

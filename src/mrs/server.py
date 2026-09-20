@@ -8,6 +8,7 @@ import shutil
 import socket
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from .config import config
@@ -59,8 +60,83 @@ def open_local(url: str, timeout: float = 1.5):
 
 
 def local_url(port: int, path: str = "/api/ping") -> str:
-    """Our own address. http — see the note in run() about why only http."""
-    return f"http://127.0.0.1:{port}{path}"
+    """Our own address, in plaintext.
+
+    With a certificate loaded the network side speaks TLS, and this machine
+    keeps a plain http socket on loopback for the window, the tray and every
+    readiness check. A certificate is issued to a name; asking for it at
+    127.0.0.1 is a name mismatch, and the window that has to load the player
+    would be showing a certificate warning to its own server.
+    """
+    return f"http://127.0.0.1:{runtime.get('local_port') or port}{path}"
+
+
+def tls_files() -> tuple[str, str] | None:
+    """The certificate and key to serve with, if both are there and load.
+
+    Checked by loading them, not by looking: a path that points at nothing,
+    a key that doesn't match its certificate or a file half-written by a
+    renewal all look fine until a browser asks, and then nothing works and
+    the reason is in no log.
+    """
+    cert = str(config.get("tls_cert") or "").strip()
+    key = str(config.get("tls_key") or "").strip()
+    if not cert or not key:
+        # The place certificate.ps1 puts them, so a renewal is a file write
+        # and nothing has to be told about it.
+        from .paths import data_dir
+        pair = data_dir() / "certs" / "fullchain.pem", data_dir() / "certs" / "privkey.pem"
+        if not all(p.is_file() for p in pair):
+            return None
+        cert, key = (str(p) for p in pair)
+    import ssl
+    try:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(cert, key)
+    except (OSError, ValueError, ssl.SSLError) as exc:
+        log.error("certificate not usable (%s) — serving plain http instead", exc)
+        return None
+    return cert, key
+
+
+def cert_days_left(cert: str = "") -> float:
+    """Days until the certificate expires, or 0 if it can't be read."""
+    import ssl
+    path = cert or str(config.get("tls_cert") or "")
+    if not path:
+        return 0.0
+    try:
+        got = ssl._ssl._test_decode_cert(path)
+        ends = ssl.cert_time_to_seconds(got["notAfter"])
+        return max(0.0, (ends - time.time()) / 86400)
+    except Exception:
+        return 0.0
+
+
+def _port_free(port: int) -> bool:
+    """Can we bind it right now?"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind((config.get("host", "0.0.0.0"), port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def _free_loopback_port(near: int) -> int:
+    """A port on 127.0.0.1 nothing else holds, starting beside the main one."""
+    for candidate in [near + 1, near + 2, 0]:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.bind(("127.0.0.1", candidate))
+            return int(s.getsockname()[1])
+        except OSError:
+            continue
+        finally:
+            s.close()
+    return 0
 
 
 def _is_ours(port: int) -> bool:
@@ -355,22 +431,89 @@ def run() -> None:
     asyncio.set_event_loop(loop)
     bus.bind_loop(loop)
 
-    # http, always. A certificate this machine signs for itself is one no
-    # client will accept without being told to: Safari refuses it outright
-    # with no way through, iOS offers no exception for a bare IP, and the
-    # flyout needed a Chromium flag to load its own player. What it bought
-    # in exchange was a program that never finished starting, because every
-    # readiness check in it asked in plaintext. The setting is gone rather
-    # than defaulted off, so a config left over from when it was on cannot
-    # bring any of that back.
-    cfg = uvicorn.Config(app, host=config.get("host", "0.0.0.0"),
-                         port=port,
-                         log_config=None, access_log=False, loop="asyncio")
-    server = uvicorn.Server(cfg)
+    # A certificate this machine signs for itself is one no client will
+    # accept without being told to: Safari refuses it outright, iOS offers no
+    # exception for a bare IP, and the window needed a Chromium flag to load
+    # its own player. So there is no self-signed option and no way to turn
+    # one on. A certificate signed by an authority, for a name that resolves
+    # here, is a different thing entirely — that is what tls_cert is for, and
+    # everything this machine asks itself still goes over loopback in plain
+    # http so none of the old breakage can come back.
+    def server_for(**kw):
+        return uvicorn.Server(uvicorn.Config(
+            app, log_config=None, access_log=False, loop="asyncio", **kw))
+
+    tls = tls_files()
+    runtime["tls"] = bool(tls)
     try:
-        loop.run_until_complete(server.serve())
+        if tls:
+            loop.run_until_complete(_serve_secure(server_for, port, tls))
+        else:
+            runtime.pop("local_port", None)
+            loop.run_until_complete(
+                server_for(host=config.get("host", "0.0.0.0"), port=port).serve())
     finally:
         player.stop()
+
+
+def _cert_stamp(cert: str, key: str) -> tuple:
+    """Enough of the files to notice a renewal writing new ones."""
+    out = []
+    for path in (cert, key):
+        try:
+            st = os.stat(path)
+            out.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
+async def _serve_secure(server_for, port: int, tls: tuple[str, str]) -> None:
+    """TLS to the network, plain http to this machine, renewals followed.
+
+    uvicorn reads a certificate once, when it binds. A renewal sixty days
+    from now writes new files in place and the old certificate would keep
+    being served until somebody restarted the music, so the socket is rebuilt
+    here instead — the player, the queue and whatever is playing don't notice.
+    """
+    cert, key = tls
+    local_port = _free_loopback_port(port)
+    runtime["local_port"] = local_port
+    plain = server_for(host="127.0.0.1", port=local_port)
+    plain_task = asyncio.ensure_future(plain.serve())
+    log.info("https on port %d (%.0f days on the certificate); plain http on "
+             "127.0.0.1:%d for this machine", port, cert_days_left(cert), local_port)
+    try:
+        while True:
+            stamp = _cert_stamp(cert, key)
+            secure = server_for(host=config.get("host", "0.0.0.0"), port=port,
+                                ssl_certfile=cert, ssl_keyfile=key)
+            task = asyncio.ensure_future(secure.serve())
+            renewed = False
+            while not task.done():
+                await asyncio.sleep(20)
+                if _cert_stamp(cert, key) != stamp and tls_files():
+                    log.info("certificate renewed — taking up the new one")
+                    secure.should_exit = True
+                    await task
+                    renewed = True
+                    break
+            if not renewed:
+                await task          # it stopped on its own, so do we
+                return
+            # The old socket has just let go. Windows can take a moment to
+            # agree, and failing to rebind here would leave the network side
+            # dark until somebody restarted the app.
+            for wait in (0.5, 1, 2, 4, 8):
+                await asyncio.sleep(wait)
+                if _port_free(port):
+                    break
+    finally:
+        plain.should_exit = True
+        try:
+            await plain_task
+        except Exception:
+            pass
 
 
 def run_in_thread(port: int | None = None) -> threading.Thread:

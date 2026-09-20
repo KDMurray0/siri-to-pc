@@ -2093,6 +2093,8 @@ def api_network(pass_id: str = "", check: int = 0, _: bool = Owner):
     out = net.addresses(token)
     if check:
         out["port_open"] = net.port_open(net.live_port())
+    from ..server import cert_days_left
+    out["cert_days"] = round(cert_days_left(), 1) if out.get("https") else 0
     return {"status": "ok", **out}
 
 

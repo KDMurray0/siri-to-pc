@@ -3283,11 +3283,14 @@ async function loadNetwork() {
       `A forward rule aimed at ${r.configured_port} points at nothing — ` +
       `forward ${r.port} instead, or restart with the other port free.`;
   }
-  $("nethint").textContent =
-    "Traffic is not encrypted — anything reaching this over the internet " +
-    "should go through a VPN or a reverse proxy that terminates TLS. " +
-    (wan ? `Forward port ${r.port} to this machine for the first one to work.`
-         : "Couldn't work out your public address.");
+  $("nethint").textContent = (r.https
+    ? `Encrypted. The certificate has ${Math.round(r.cert_days)} days left and ` +
+      "renews itself; links work by name, not by address."
+    : "Traffic is not encrypted — anything reaching this over the internet " +
+      "should go through a VPN, or run certificate.ps1 to get a real " +
+      "certificate for your name. ") +
+    (wan ? ` Forward port ${r.port} to this machine for the first one to work.`
+         : " Couldn't work out your public address.");
 }
 /* navigator.clipboard only exists in a secure context, so on plain http
    over the LAN it is simply absent — which is why copying did nothing at

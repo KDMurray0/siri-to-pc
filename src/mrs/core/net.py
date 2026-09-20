@@ -45,9 +45,17 @@ _WAN_SOURCES = (
 
 
 def scheme() -> str:
-    """Always http. Self-signed TLS is refused by every client that mattered
-    here — Safari most of all — and cost a program that would start."""
-    return "http"
+    """https once a real certificate is loaded, http otherwise.
+
+    Read from the running server rather than from the setting: a certificate
+    that didn't load leaves it serving plain http, and a link that says
+    https then points at nothing.
+    """
+    try:
+        from ..server import runtime
+        return "https" if runtime.get("tls") else "http"
+    except Exception:
+        return "http"
 
 
 def lan_ip() -> str:
@@ -220,7 +228,7 @@ def addresses(pass_token: str = "") -> dict:
                  "url": player_url("127.0.0.1", pass_token), "host": "127.0.0.1"})
     wanted = int(config.get("port", 5000))
     return {"addresses": rows, "port": port, "scheme": scheme(),
-            "wan_ip": wan, "https": False,
+            "wan_ip": wan, "https": scheme() == "https",
             # If these disagree, a port-forward rule aimed at the configured
             # port points at nothing. Worth saying out loud rather than
             # letting it look like a firewall problem.

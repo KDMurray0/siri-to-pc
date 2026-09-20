@@ -42,6 +42,14 @@ DEFAULTS: dict[str, Any] = {
     "device_eq": {},
     "device_eq_enabled": True,
     "device_eq_auto": True,        # apply a certain name match unasked
+
+    # A real certificate, from a certificate authority, for the name in
+    # ddns_hostname. Both files are PEM: the full chain and the private key.
+    # Empty means plain http, which is what a home LAN had before. See
+    # certificate.ps1 — a certificate this machine signs for itself is not
+    # worth having, and that lesson is written into run().
+    "tls_cert": "",
+    "tls_key": "",
     "crossfade": 0,
     "repeat": "off",          # off | all | one
     "shuffle": False,
