@@ -17,12 +17,15 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+                               RedirectResponse,
                                StreamingResponse)
 from fastapi.templating import Jinja2Templates
 
 from .. import __version__
 from ..config import config
 from ..core import autoeq
+from . import accounts
+from . import google
 from ..core import stats
 from ..core import cast as cast_mod
 from ..core import cookies as cookie_mod
@@ -161,12 +164,49 @@ def _refuse(ip: str) -> None:
                         detail="Blocked" if banned else "Not authorised")
 
 
+SESSION_COOKIE = "mrs_account"
+
+
+def _account_row(request: Request) -> dict | None:
+    """Who the signed-in cookie says this is, in pass-row shape.
+
+    None means "nobody signed in here" and the older ways in are tried next.
+    A cookie for an account that has since been forgotten is nobody.
+    """
+    cookie = request.cookies.get(SESSION_COOKIE, "")
+    if not cookie:
+        return None
+    sub = sec.read_session(config.get("api_key") or "", cookie)
+    if not sub:
+        return None
+    person = accounts.get(sub)
+    if not person:
+        return None
+    accounts.seen(sub)
+    row = accounts.as_row(person)
+    request.state.account = person
+    if person.get("scope") == "blocked":
+        row["blocked"] = True
+    return row
+
+
 def require_key(request: Request, key: str = Query(default=""),
                 token: str = Query(default="")) -> bool:
     expected = config.get("api_key") or ""
     if not expected:
         return True                      # no key set: nothing to check
     ip = _client_ip(request)
+
+    # Somebody who has signed in is themselves, whatever link they arrived
+    # on originally. Checked first: an account can be taken away, and a link
+    # they still hold shouldn't outrank that.
+    row = _account_row(request)
+    if row is not None:
+        if row.get("blocked"):
+            raise HTTPException(status_code=403, detail="That account is blocked")
+        bans.good_key(ip)
+        request.state.pass_row = row
+        return _check_ip_lock(ip)
 
     # Where the key belongs. A header stays out of browser history, out of
     # access logs and out of Referer, which a query string does not.
@@ -364,7 +404,12 @@ def _serve_page(request: Request, name: str, key: str, token: str):
     # whose link you revoked an hour ago.
     offered = (token or key
                or request.headers.get("X-Music-Key")
-               or request.headers.get("X-API-Key") or "")
+               or request.headers.get("X-API-Key")
+               # Somebody signed in is somebody in particular, and what they
+               # may do is their account's business. Without this, a guest
+               # account opening the page from the sofa would be handed the
+               # owner's copy by the open-home rule.
+               or request.cookies.get(SESSION_COOKIE, "") or "")
     home = is_home(ip) and config.get("lan_open", True) and not offered
 
     if not home:
@@ -372,7 +417,13 @@ def _serve_page(request: Request, name: str, key: str, token: str):
     owner = home or is_owner(request, key)
     row = getattr(request.state, "pass_row", None) or {}
     creds = config.get("api_key", "") if owner else (token or key)
-    if not creds and row.get("id"):
+    signed_in = getattr(request.state, "account", None)
+    if signed_in:
+        # The cookie is the credential, and it goes with every request this
+        # page makes on its own. Nothing has to be baked into the html --
+        # which is the point of signing in rather than holding a link.
+        creds = config.get("api_key", "") if owner else ""
+    if not creds and not signed_in and row.get("id"):
         # Authenticated by header rather than by query string, so there's no
         # credential in the url to hand on. Rebuild the one that got them in —
         # otherwise the page loads and then can't call anything, which is a
@@ -392,6 +443,9 @@ def _serve_page(request: Request, name: str, key: str, token: str):
         "scope": "owner" if owner else (row.get("scope") or "full"),
         "announce_duck_db": config.get("announce_duck_db", -12.0),
         "announce_voice_gain_db": config.get("announce_voice_gain_db", 0.0),
+        "signed_in_as": (signed_in or {}).get("email", ""),
+        "sign_in_offered": "1" if (google.configured() and not signed_in
+                                   and not owner) else "0",
     })
 
 
@@ -1409,6 +1463,7 @@ _SETTABLE = {
     "allow_legacy_get_mutations": bool, "audit_log_days": int,
     "library_monitor_minutes": int,
     "device_eq_enabled": bool, "device_eq_auto": bool,
+    "google_client_id": str, "google_client_secret": str, "owner_email": str,
     "tailscale": str, "tailscale_exe": str, "cache_size_mb": int,
     "allow_key_in_url": bool, "port": int,
     "block_full_guests": bool, "lan_open": bool, "party_mode": bool,
@@ -2700,6 +2755,146 @@ def api_stream(video_id: str, _: bool = Auth):
 
 
 # ── diagnostics ───────────────────────────────────────────────────────
+
+@app.get("/auth/google/start")
+def auth_google_start(request: Request, next: str = "/player"):
+    """Begin a sign-in. Only for somebody already allowed through the door.
+
+    A link is the invitation: whoever holds one may sign in, and the account
+    they end up with can do what that link could. Without one — no link, not
+    on the home network, no account already — there is nothing to sign into,
+    because otherwise anybody who found the address could make themselves an
+    account on somebody else's music server.
+    """
+    if not google.configured():
+        raise HTTPException(503, "Signing in with Google isn't set up here")
+    invited_by, scope = "", ""
+    row = _account_row(request)
+    if row is None:
+        key = request.query_params.get("key", "")
+        token = request.query_params.get("token", "")
+        try:
+            require_key(request, key, token)
+            got = getattr(request.state, "pass_row", None) or {}
+            invited_by = got.get("name", "") or "a link"
+            scope = got.get("scope", "") or ""
+            if not got:
+                invited_by, scope = "the key", "owner"
+        except HTTPException:
+            from .security import is_home
+            if not (is_home(_client_ip(request)) and config.get("lan_open", True)):
+                raise HTTPException(
+                    403, "Ask whoever runs this for a link, then sign in")
+            invited_by = "the home network"
+    url = google.start(next_path=_safe_next(next), invited_by=invited_by,
+                       scope=scope)
+    if not url:
+        raise HTTPException(503, "No hostname set, so Google has nowhere to "
+                                 "send anybody back to")
+    return RedirectResponse(url, status_code=302)
+
+
+def _safe_next(path: str) -> str:
+    """Only ever back into this server, and only to a page."""
+    path = (path or "/player").strip()
+    if not path.startswith("/") or path.startswith("//") or "\\" in path:
+        return "/player"
+    return path[:120]
+
+
+@app.get("/auth/google/callback")
+def auth_google_callback(request: Request, code: str = "", state: str = "",
+                         error: str = ""):
+    """Google sending somebody back. Everything here is checked, not trusted."""
+    if error:
+        return _signin_page("Google says: " + error[:120])
+    row = google.pending(state)
+    if not row:
+        # Also what an old tab, a refresh of this url, or somebody else's
+        # forged link looks like.
+        return _signin_page("That sign-in had already been used or has "
+                            "expired. Open the link again.")
+    who = google.finish(code, row)
+    if not who:
+        return _signin_page("Google couldn't confirm who that was.")
+    person = accounts.admit(who["sub"], who["email"], who["name"],
+                            invited_by=row.get("invited_by", ""),
+                            scope=row.get("scope", ""))
+    if person.get("scope") == "blocked":
+        return _signin_page("That account is blocked here.")
+    resp = RedirectResponse(_safe_next(row.get("next", "/player")), status_code=302)
+    resp.set_cookie(
+        SESSION_COOKIE,
+        sec.session_cookie(config.get("api_key") or "", person["sub"]),
+        max_age=30 * 86400, httponly=True, samesite="lax",
+        # Only over TLS when there is TLS: marking it secure on a plain http
+        # LAN means the browser never sends it and nobody can stay signed in.
+        secure=_net_scheme() == "https", path="/")
+    log.info("%s signed in (%s)", person.get("email") or person["sub"],
+             person.get("scope"))
+    return resp
+
+
+@app.get("/auth/signout")
+def auth_signout(request: Request):
+    resp = RedirectResponse("/player", status_code=302)
+    resp.delete_cookie(SESSION_COOKIE, path="/")
+    return resp
+
+
+def _net_scheme() -> str:
+    from ..core import net
+    return net.scheme()
+
+
+def _signin_page(message: str):
+    """A plain sentence rather than a JSON error: people see this one."""
+    body = ("<!doctype html><meta charset=utf-8>"
+            "<meta name=viewport content='width=device-width,initial-scale=1'>"
+            "<title>Sign in</title>"
+            "<style>body{background:#0e0f16;color:#f5f6fb;font:15px/1.6 "
+            "-apple-system,Segoe UI,Roboto,sans-serif;display:flex;"
+            "min-height:100vh;align-items:center;justify-content:center;"
+            "margin:0;padding:24px;text-align:center}a{color:#6d8bff}</style>"
+            f"<div><p>{_esc(message)}</p><p><a href='/player'>Back to the "
+            "player</a></p></div>")
+    return HTMLResponse(body, status_code=400)
+
+
+def _esc(text: str) -> str:
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+@app.get("/api/accounts")
+def api_accounts(_: bool = Owner):
+    """Everybody who has signed in, and what Google needs to be told."""
+    return {"status": "ok", "people": accounts.everyone(),
+            "configured": google.configured(),
+            "redirect_uri": google.redirect_uri(),
+            "owner_email": accounts.owner_email(),
+            "signed_in_count": accounts.count()}
+
+
+@app.get("/api/accounts/scope")
+def api_accounts_scope(sub: str = "", scope: str = "", _: bool = Owner):
+    """Change what somebody may do, or block them."""
+    try:
+        got = accounts.set_scope(sub, scope)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if not got:
+        raise HTTPException(404, "no such account")
+    return {"status": "ok", "person": got}
+
+
+@app.get("/api/accounts/forget")
+def api_accounts_forget(sub: str = "", _: bool = Owner):
+    """Remove an account. Their next sign-in would start again as a stranger."""
+    if not accounts.forget(sub):
+        raise HTTPException(404, "no such account")
+    return {"status": "ok"}
+
 
 @app.get("/api/stats")
 def api_stats(_: bool = Owner):

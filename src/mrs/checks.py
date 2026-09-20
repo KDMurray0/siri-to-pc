@@ -67,6 +67,12 @@ _UNGUARDED_BY_DESIGN = {
     "/welcome":   "same",
     "/api/events": "calls require_key in the body — it needs the pass row "
                    "afterwards to decide whose events to send",
+    "/auth/google/start": "the way in: checks a link, the home network or an "
+                          "existing account in the body, then hands off to Google",
+    "/auth/google/callback": "Google answering. Nothing in it is trusted: the "
+                             "state must be one we issued and the token is "
+                             "fetched from Google directly",
+    "/auth/signout": "throws a cookie away; there is nothing to guard",
     "/openapi.json": "disabled",
     "/docs": "disabled",
     "/redoc": "disabled",
@@ -2322,6 +2328,157 @@ def _run(verbose: bool = False) -> Result:
             c("certificate.ps1 is ASCII with a BOM, so PowerShell can read it",
               raw[:3] == bytes([0xEF, 0xBB, 0xBF]) and all(b < 128 for b in raw[3:]))
             say("a real certificate", c)
+
+            # -- 25. people, rather than whoever holds the link -------------
+            c = _Checker("accounts")
+            import base64 as _b64mod
+            from .web import accounts as _acc, google as _goog
+            from .web.api import SESSION_COOKIE as _COOKIE
+
+            def _sign_in_as(sub):
+                return {_COOKIE: sec.session_cookie(now_key(), sub)}
+
+            _acc._path().unlink(missing_ok=True)
+            was_owner_email = _cfg.get("owner_email")
+            _cfg.set("owner_email", "", save=False)
+            person = _acc.admit("1234567890", "guest@example.com", "A Guest",
+                                invited_by="the spare link")
+            c("somebody new can only play on their own device",
+              person["scope"] == "phone" and person["invited_by"] == "the spare link")
+            c("being first in does not make you the owner",
+              _acc.get("1234567890")["scope"] == "phone")
+            _cfg.set("owner_email", "me@example.com", save=False)
+            mine = _acc.admit("9000000001", "ME@example.com", "Me")
+            c("the address written down beforehand is the owner",
+              mine["scope"] == "owner" and mine["email"] == "me@example.com")
+            c("a made-up account id is refused",
+              _acc.get("../../etc") is None and not _acc._ok_sub("../x"))
+            try:
+                _acc.set_scope("9000000001", "phone")
+                c("the only owner cannot demote themselves", False)
+            except ValueError:
+                c("the only owner cannot demote themselves", True)
+            _acc.set_scope("1234567890", "full")
+            c("the owner can let somebody onto the speakers",
+              _acc.get("1234567890")["scope"] == "full")
+
+            # The cookie: signed, and worth nothing if touched.
+            good = sec.session_cookie(now_key(), "1234567890")
+            c("a cookie says who it is", sec.read_session(now_key(), good) == "1234567890")
+            c("...and not if a letter of it changes",
+              sec.read_session(now_key(), good[:-1] + ("x" if good[-1] != "x" else "y")) == "")
+            c("...or if another server signed it",
+              sec.read_session("some other key", good) == "")
+            c("...or once it has expired",
+              sec.read_session(now_key(),
+                               sec.session_cookie(now_key(), "1234567890", days=-1)) == "")
+
+            # Signed in, the cookie is the credential.
+            r = client.get("/api/status", cookies=_sign_in_as("1234567890"))
+            c("a signed-in listener gets in with no link at all",
+              r.status_code == 200, str(r.status_code))
+            r = client.post("/api/setting", json={"key": "device_eq_auto", "value": "1"},
+                            cookies=_sign_in_as("1234567890"))
+            c("...and still can't change the machine", r.status_code == 403)
+            r = client.post("/api/setting", json={"key": "device_eq_auto", "value": "1"},
+                            cookies=_sign_in_as("9000000001"))
+            c("the owner's account can", r.status_code == 200, str(r.status_code))
+            c("a cookie for somebody who was forgotten is nobody",
+              client.get("/api/status",
+                         cookies=_sign_in_as("no-such-person")).status_code in (401, 403))
+            _bans.forgive("testclient")
+            _acc.set_scope("1234567890", "blocked")
+            r = client.get("/api/status", cookies=_sign_in_as("1234567890"))
+            c("a blocked account is turned away", r.status_code == 403, str(r.status_code))
+            _acc.set_scope("1234567890", "phone")
+            _bans.forgive("testclient")
+
+            # The page: a guest signed in at home is still a guest.
+            with _patch("mrs.web.security.is_home", lambda ip: True):
+                page = client.get("/player", cookies=_sign_in_as("1234567890"))
+                c("a signed-in guest on the home network is not handed the owner's page",
+                  page.status_code == 200 and 'const GUEST = "1"' in page.text,
+                  str(page.status_code))
+                c("...and no credential is baked into it",
+                  'const KEY = "";' in page.text)
+                owner_page = client.get("/player", cookies=_sign_in_as("9000000001"))
+                c("the owner's account gets the owner's page",
+                  'const GUEST = "0"' in owner_page.text)
+
+            # Starting a sign-in is itself guarded.
+            _cfg.set("google_client_id", "test-client-id", save=False)
+            _cfg.set("google_client_secret", "test-secret", save=False)
+            _cfg.set("ddns_hostname", "music.example.test", save=False)
+            with _patch("mrs.web.security.is_home", lambda ip: False):
+                r = client.get("/auth/google/start", follow_redirects=False)
+                c("a stranger cannot start a sign-in", r.status_code == 403,
+                  str(r.status_code))
+                r = client.get(f"/auth/google/start?token={phone}",
+                               follow_redirects=False)
+                c("holding a link, they can", r.status_code == 302,
+                  str(r.status_code))
+                sent = r.headers.get("location", "")
+                c("...and are sent to Google, not somewhere else",
+                  sent.startswith("https://accounts.google.com/o/oauth2/v2/auth"))
+                c("...with the client id, and asking which account",
+                  "test-client-id" in sent and "prompt=select_account" in sent)
+                state = sent.split("state=")[1].split("&")[0]
+                waiting = _goog._PENDING.get(state, {})
+                c("the link they used decides what the account may do",
+                  waiting.get("scope") == "phone", str(waiting.get("scope")))
+
+                # Google answering.
+                def _token(**over):
+                    claims = {"sub": "55501", "email": "new@example.com",
+                              "email_verified": True, "name": "New Person",
+                              "aud": "test-client-id", "exp": time.time() + 600,
+                              "iss": "https://accounts.google.com",
+                              "nonce": waiting.get("nonce")}
+                    claims.update(over)
+                    raw = _json.dumps(claims).encode()
+                    mid = _b64mod.urlsafe_b64encode(raw).decode().rstrip("=")
+                    return {"id_token": "x." + mid + ".y"}
+
+                c("a callback with a state nobody issued is refused",
+                  client.get("/auth/google/callback?code=x&state=made-up",
+                             follow_redirects=False).status_code == 400)
+                for name, over in (("meant for another app", {"aud": "someone-else"}),
+                                   ("from the wrong issuer", {"iss": "https://evil.example"}),
+                                   ("already expired", {"exp": time.time() - 600}),
+                                   ("answering a different sign-in", {"nonce": "other"}),
+                                   ("an address Google hasn't checked",
+                                    {"email_verified": False})):
+                    with _patch.object(_goog, "_post", lambda *a, **k: _token(**over)):
+                        c(f"a token {name} is refused",
+                          _goog.finish("code", dict(waiting)) is None)
+                with _patch.object(_goog, "_post", lambda *a, **k: _token()):
+                    r = client.get(f"/auth/google/callback?code=abc&state={state}",
+                                   follow_redirects=False)
+                c("a good one signs them in", r.status_code == 302, str(r.status_code))
+                c("...to the page they were going to",
+                  r.headers.get("location") == "/player")
+                c("...with a cookie that is http-only",
+                  "httponly" in r.headers.get("set-cookie", "").lower())
+                made = _acc.get("55501")
+                c("...and an account with the link's reach, not more",
+                  made and made["scope"] == "phone" and made["email"] == "new@example.com")
+                c("a state cannot be used twice",
+                  client.get(f"/auth/google/callback?code=abc&state={state}",
+                             follow_redirects=False).status_code == 400)
+            c("only the owner sees who has signed in",
+              client.get("/api/accounts", headers={"X-Music-Key": phone}).status_code == 403
+              and client.get("/api/accounts", headers=owner_h).status_code == 200)
+            body = client.get("/api/accounts", headers=owner_h).json()
+            c("...and what to paste into the Google Console",
+              body.get("redirect_uri", "").endswith("/auth/google/callback"))
+            c("the secret is never handed back",
+              "google_client_secret" not in client.get(
+                  "/api/settings", headers=owner_h).json())
+            for k, v in (("google_client_id", ""), ("google_client_secret", ""),
+                         ("ddns_hostname", ""), ("owner_email", was_owner_email or "")):
+                _cfg.set(k, v, save=False)
+            _acc._path().unlink(missing_ok=True)
+            say("people rather than links", c)
 
     except Exception as exc:            # a check suite must not be the thing
         out.failed.append(f"the checks themselves broke: {exc!r}")

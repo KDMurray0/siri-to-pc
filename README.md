@@ -425,6 +425,54 @@ Some DNS servers refuse to return private addresses (rebinding protection),
 in which case that trick won't work either and the LAN falls back to the
 address with no encryption.
 
+## Signing in with Google
+
+A link is a credential anybody can forward, and it can't tell two people
+apart. An account is a person: their queue, their history and their playlists
+follow them to whatever device they pick up, and taking somebody's access away
+is a change to their account rather than a hunt for who else has the link.
+
+Links don't go away — one is still how a person gets in the first time. What
+a link stops being is the identity.
+
+Needs HTTPS first: Google will not send anybody back to a plain http address
+that isn't localhost.
+
+1. **Write down your own address first.** Settings → Access → *Your own
+   email*. The account matching it becomes the owner. Being the first person
+   to sign in doesn't do it — otherwise whoever found the address first would
+   own the server.
+
+2. **Make a Google client.** [Google Cloud Console](https://console.cloud.google.com/)
+   → APIs & Services → Credentials → **Create credentials → OAuth client ID**
+   → *Web application*.
+
+   - **Authorised JavaScript origins:** `https://music.example.dynu.net:7420`
+   - **Authorised redirect URIs:** `https://music.example.dynu.net:7420/auth/google/callback`
+
+   Settings → Access shows the exact redirect URI with a Copy button — paste
+   that, it has to match character for character.
+
+3. **Paste the client ID and secret** into Settings → Access. The secret is
+   kept on this machine and never handed back to any page.
+
+Then hand somebody a link as usual. On their phone, Settings → **Sign in**
+turns that link into an account with exactly the reach the link had: a
+phone-only link makes an account that plays on their own device, a full link
+makes one that can drive the speakers too. You can change that afterwards, or
+block them, from the same panel.
+
+What's checked when somebody comes back from Google: that the sign-in was one
+this server started, that the token was issued to this server's client id by
+Google, that it hasn't expired, that it answers this particular sign-in, and
+that Google has verified the email address. The token is fetched from Google
+directly over TLS using the client secret, so nothing the browser carried is
+taken on trust.
+
+The session is a signed cookie holding an account id and nothing else. It
+lasts 30 days, is HttpOnly, and is marked Secure whenever the server is on
+https.
+
 ## Network Setup
 
 ### Static DHCP lease

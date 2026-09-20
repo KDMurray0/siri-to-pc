@@ -20,7 +20,8 @@ passes/extend passes/revoke lockdown port/shuffle blocked ddns network qr cache
 theme announce sleep download pin lockips groqkey groqmodels groqmodel boot
 boot/status boot/early cookies cookies/find cookies/extension cookies/signedin
 cookies/import cookies/grab openfolder library/scan library/paths lastfm alarms
-cast diag audit policy stats autoeq/status autoeq/assign'''.split())
+cast diag audit policy stats accounts accounts/scope accounts/forget
+autoeq/status autoeq/assign'''.split())
 SCOPED = set('''status play play/video/{video_id} control/{action} session/ended
 session/progress session/here seek queue/{op} cancel radio search play/artist
 play/album lyrics lyrics/search about history block blocks history/forget liked
@@ -32,7 +33,7 @@ READ_ONLY = set('''ping status health search lyrics lyrics/search about history
 blocks liked playlists settings audio/devices setup/state whoami passes profiles
 qr network groqmodels boot/status cookies diag output/stats audit policy backup
 output/stream/{video_id} announce/{aid}.mp3 stream/{video_id} events
-autoeq/search autoeq/profile autoeq/match autoeq/status stats'''.split())
+autoeq/search autoeq/profile autoeq/match autoeq/status stats accounts'''.split())
 READ_PARAMS = {
     "sessions": {"close"}, "cache": {"prune"}, "blocked": {"forgive", "clear"},
     "ddns": {"hostname", "user", "secret", "provider", "now"},

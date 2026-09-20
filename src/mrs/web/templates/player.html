@@ -1468,6 +1468,9 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 
       <section class="spane open" data-s="sound">
         <div class="kept" id="keptnote"></div>
+        <div class="srow guestok" id="signinrow" hidden>
+          <span class="slabel" id="signinlabel">Signed in</span>
+          <button class="btn" id="signinbtn">Sign in with Google</button></div>
         <div class="srow guestok"><span class="slabel">Theme</span><div class="swatches" id="swatches"></div></div>
         <div class="srow guestok"><span class="slabel">Equaliser</span><select id="eq"></select></div>
         <div class="srow owneronly"><span class="slabel">Headphone correction<em id="aeqdev">Measured corrections from AutoEq, per output</em></span>
@@ -1510,6 +1513,19 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
       </section>
 
       <section class="spane" data-s="access">
+        <div class="seclbl">People</div>
+        <div class="srow"><span class="slabel">Signing in with Google<em id="ghint">Let people in by who they are, not by which link they hold</em></span>
+          <span class="sval" id="gstate">off</span></div>
+        <div class="srow"><span class="slabel">Client ID<em>From the Google Cloud Console</em></span>
+          <input class="keyin" id="gclient" placeholder="...apps.googleusercontent.com"></div>
+        <div class="srow"><span class="slabel">Client secret<em>Kept here, never shown again</em></span>
+          <input class="keyin" id="gsecret" type="password" placeholder="GOCSPX-..."></div>
+        <div class="srow"><span class="slabel">Your own email<em>The account that gets to be the owner</em></span>
+          <input class="keyin" id="gowner" type="email" placeholder="you@gmail.com"></div>
+        <div class="srow"><span class="slabel">Redirect URI<em>Paste this into the Console, exactly</em></span>
+          <button class="btn" id="gcopyuri">Copy</button></div>
+        <div class="hint" id="guri"></div>
+        <div id="peoplelist"></div>
         <div class="srow"><span class="slabel"><span class="status-dot" id="ckdot"></span> YouTube cookies</span>
           <button class="btn" id="findck">Test cookies</button></div>
         <div class="hint" id="ckhint"></div>
@@ -1708,6 +1724,8 @@ const KEY = "{{ api_key }}";
  * describing the shared player on a page that was about to become a phone.
  * The server already knows; it says so in the html. */
 const GUEST = "{{ is_guest }}" === "1";
+const SIGNED_IN = "{{ signed_in_as }}";
+const SIGN_IN_OFFERED = "{{ sign_in_offered }}" === "1";
 const SCOPE = "{{ scope }}";
 const _announceDuck = Number("{{ announce_duck_db }}");
 const ANNOUNCE_DUCK_DB = Number.isFinite(_announceDuck)
@@ -3234,6 +3252,9 @@ document.querySelectorAll(".stab").forEach(tab => tab.onclick = () => {
   if (tab.dataset.s === "system") {
     loadHealth(); loadCache(); loadBlocked(); loadStats();
   }
+  if (tab.dataset.s === "access") {
+    loadPeople();
+  }
   if (tab.dataset.s === "sharing") {
     loadNetwork(); loadPasses(); loadDdns(); loadProfiles();
     if (ME.owner) watchSharing();
@@ -3384,6 +3405,84 @@ const toggleRow = (id, path) => {
 toggleRow("announce", "/api/announce");
 toggleRow("boot", "/api/boot");
 toggleRow("lockips", "/api/lockips");
+/* Signing in, and who has.
+   A link is the invitation: the button carries whatever credential this page
+   was opened with, because a navigation can't set a header, and the server
+   checks it again before it will start a sign-in at all. */
+function signInPaint() {
+  const row = $("signinrow");
+  if (!row) return;
+  if (SIGNED_IN) {
+    row.hidden = false;
+    $("signinlabel").innerHTML = "Signed in<em>" + esc(SIGNED_IN) + "</em>";
+    $("signinbtn").textContent = "Sign out";
+    $("signinbtn").onclick = () => { location.href = "/auth/signout"; };
+  } else if (SIGN_IN_OFFERED) {
+    row.hidden = false;
+    $("signinlabel").innerHTML =
+      "Sign in<em>Your queue, your history and your playlists follow you to " +
+      "any device, and you don't need the link again</em>";
+    $("signinbtn").onclick = () => {
+      location.href = "/auth/google/start?next=/player" +
+        (KEY ? "&token=" + encodeURIComponent(KEY) : "");
+    };
+  }
+}
+signInPaint();
+
+const PERSON_SCOPE = { owner: "everything", full: "the speakers too",
+                       phone: "their own device", blocked: "nothing" };
+async function loadPeople() {
+  if (!ME.owner) return;
+  const r = await api("/api/accounts");
+  if (!r) return;
+  $("gstate").textContent = r.configured ? "on" : "off";
+  $("guri").textContent = r.redirect_uri
+    ? r.redirect_uri
+    : "Set a hostname under Sharing first — Google needs somewhere to send people back to.";
+  $("gcopyuri").onclick = () => copyText(r.redirect_uri || "");
+  if (!$("gowner").matches(":focus")) $("gowner").value = r.owner_email || "";
+  const people = r.people || [];
+  $("peoplelist").innerHTML = people.length ? people.map(p =>
+    `<div class="linkstat"><span>${esc(p.name || p.email || p.sub)}` +
+    `${p.scope === "owner" ? " · you" : ""}</span>` +
+    `<span>${esc(PERSON_SCOPE[p.scope] || p.scope)}</span>` +
+    `<em>${esc(p.email || "")}` +
+    (p.invited_by ? ` · came in on ${esc(p.invited_by)}` : "") +
+    (p.last_seen ? ` · last ${esc(ago(p.last_seen))}` : "") +
+    `</em><span class="passacts" style="grid-column:1/-1">` +
+    (p.scope === "owner" ? "" :
+      `<button class="btn" data-person="${esc(p.sub)}" data-scope="full">Speakers too</button>` +
+      `<button class="btn" data-person="${esc(p.sub)}" data-scope="phone">Their device</button>` +
+      `<button class="btn" data-person="${esc(p.sub)}" data-scope="blocked">Block</button>` +
+      `<button class="btn" data-person="${esc(p.sub)}" data-forget="1">Forget</button>`) +
+    `</span></div>`).join("")
+    : '<div class="hint">Nobody has signed in yet. Hand somebody a link and ' +
+      'they can sign in from it.</div>';
+}
+$("peoplelist").addEventListener("click", async e => {
+  const b = e.target.closest("[data-person]");
+  if (!b) return;
+  const r = b.dataset.forget
+    ? await api("/api/accounts/forget?sub=" + encodeURIComponent(b.dataset.person))
+    : await api("/api/accounts/scope?sub=" + encodeURIComponent(b.dataset.person) +
+                "&scope=" + encodeURIComponent(b.dataset.scope));
+  if (!r) { toast("That didn't go through"); return; }
+  loadPeople();
+});
+for (const [id, key] of [["gclient", "google_client_id"],
+                         ["gsecret", "google_client_secret"],
+                         ["gowner", "owner_email"]]) {
+  $(id).addEventListener("change", async () => {
+    const r = await api("/api/setting?key=" + key + "&value=" +
+                        encodeURIComponent($(id).value.trim()));
+    if (!r) { toast("That needs the key"); return; }
+    if (id === "gsecret") $(id).value = "";
+    toast("Saved");
+    loadPeople();
+  });
+}
+
 /* What this place has done, and what each link has done in it. */
 function gb(bytes) {
   const n = Number(bytes) || 0;
@@ -4580,7 +4679,7 @@ function castPreload(d) {
 
 function castSync(d) {
   if (!cast.on || !d) return;
-  if (!URL_TOKEN) {
+  if (!URL_TOKEN && !SIGNED_IN) {
     // No pass yet, so there is no url we're willing to build. Fetch one and
     // let the next status tick do the work — a second's wait beats putting
     // the key in the address bar.
@@ -5670,7 +5769,7 @@ function applyActivity(a) {
 let es = null;
 function connect() {
   if (es) es.close();
-  if (!URL_TOKEN) { refreshToken().then(connect); return; }
+  if (!URL_TOKEN && !SIGNED_IN) { refreshToken().then(connect); return; }
   // `here` says which queue this page is watching. Same choice the capsule
   // makes, and the same one the X-Play-Here header carries on everything
   // else — an EventSource can't send a header, so it goes in the url.

@@ -136,6 +136,34 @@ def _sign(key: str, body: str) -> str:
     return _b64(hmac.new(key.encode(), body.encode(), hashlib.sha256).digest()[:18])
 
 
+def session_cookie(key: str, sub: str, days: int = 30) -> str:
+    """A signed note saying which account this browser is. Nothing else.
+
+    Signed with the server's own key, like a pass, so it can be checked
+    without keeping a table of live sessions — and revoking somebody is a
+    change to their account rather than a hunt for their devices.
+    """
+    body = f"{sub}.{int(time.time() + days * 86400)}"
+    return f"{body}.{_sign(key, body)}"
+
+
+def read_session(key: str, cookie: str) -> str:
+    """The account id in a cookie, or "" if it isn't ours or has expired."""
+    parts = (cookie or "").split(".")
+    if len(parts) != 3 or not key:
+        return ""
+    sub, until, sig = parts
+    body = f"{sub}.{until}"
+    if not hmac.compare_digest(sig, _sign(key, body)):
+        return ""
+    try:
+        if float(until) < time.time():
+            return ""
+    except ValueError:
+        return ""
+    return sub
+
+
 # What each link has actually done, kept in memory between flushes so a
 # progress ping every few seconds doesn't rewrite a json file every few
 # seconds. Requests and finished tracks flush straight away — they're rare,

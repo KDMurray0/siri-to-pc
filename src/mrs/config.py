@@ -50,6 +50,14 @@ DEFAULTS: dict[str, Any] = {
     # worth having, and that lesson is written into run().
     "tls_cert": "",
     "tls_key": "",
+
+    # Signing in with Google. The id and secret come from the Google Cloud
+    # Console; owner_email is written down first so that being the first
+    # person through the door isn't what makes somebody the owner. Empty
+    # means the whole thing is off and links are the only way in.
+    "google_client_id": "",
+    "google_client_secret": "",     # never leaves this machine; hidden from the UI
+    "owner_email": "",
     "crossfade": 0,
     "repeat": "off",          # off | all | one
     "shuffle": False,
@@ -371,11 +379,13 @@ class Config:
     def public(self) -> dict[str, Any]:
         """Everything except secrets — safe to hand to the UI."""
         hidden = {"api_key", "groq_api_key", "lastfm_secret", "lastfm_session",
-                  "ddns_password"}
+                  "ddns_password", "google_client_secret"}
         out = {k: v for k, v in self._data.items() if k not in hidden}
         out["groq_set"] = bool(self._data.get("groq_api_key"))
         out["ddns_set"] = bool(self._data.get("ddns_password"))
         out["lastfm_set"] = bool(self._data.get("lastfm_session"))
+        out["google_set"] = bool(self._data.get("google_client_id")
+                                 and self._data.get("google_client_secret"))
         return out
 
     # -- change notifications --
