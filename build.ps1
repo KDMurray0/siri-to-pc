@@ -44,11 +44,24 @@ Say "Building"
 python -m PyInstaller --noconfirm --distpath "$stage\dist" --workpath "$stage\build" MusicRequestServer.spec
 if ($LASTEXITCODE -ne 0) { Write-Host "Build failed." -ForegroundColor Red; exit 1 }
 
-$running = Get-Process MusicRequestServer -ErrorAction SilentlyContinue
+$running = Get-CimInstance Win32_Process -Filter "Name='MusicRequestServer.exe'" `
+    -ErrorAction SilentlyContinue | Where-Object {
+        $_.ExecutablePath -and
+        [System.IO.Path]::GetFullPath($_.ExecutablePath) -ieq $exe
+    }
 if ($running) {
     Say "Closing the running copy"
-    $running | Stop-Process -Force
+    $running | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
     Start-Sleep -Milliseconds 1500
+    $stillRunning = Get-CimInstance Win32_Process -Filter "Name='MusicRequestServer.exe'" `
+        -ErrorAction SilentlyContinue | Where-Object {
+            $_.ExecutablePath -and
+            [System.IO.Path]::GetFullPath($_.ExecutablePath) -ieq $exe
+        }
+    if ($stillRunning) {
+        Write-Host "The installed copy did not close; refusing to overwrite its files." -ForegroundColor Red
+        exit 1
+    }
 }
 
 Say "Installing into dist\MusicRequestServer"
@@ -64,7 +77,12 @@ if ($NoRestart) {
 Say "Starting"
 Start-Process $exe
 Start-Sleep -Seconds 6
-if (Get-Process MusicRequestServer -ErrorAction SilentlyContinue) {
+$running = Get-CimInstance Win32_Process -Filter "Name='MusicRequestServer.exe'" `
+    -ErrorAction SilentlyContinue | Where-Object {
+        $_.ExecutablePath -and
+        [System.IO.Path]::GetFullPath($_.ExecutablePath) -ieq $exe
+    }
+if ($running) {
     Say "Running."
     # Explicit, or the script inherits robocopy's exit code — which is 1 for
     # "copied some files", i.e. every successful install.

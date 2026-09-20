@@ -1,9 +1,7 @@
 # Only for the checks and the self-test. The app runs without these.
 -r requirements.txt
 
-# FastAPI's TestClient is Starlette's, which drives httpx. Pinned to the
-# range it is known to work with: Starlette 1.x warns that httpx is
-# deprecated in favour of httpx2, so an unpinned install is free to move
-# the test client out from under the suite. Move to httpx2 deliberately,
-# with the checks run against it, not by accident on a fresh install.
-httpx>=0.27,<0.29
+# Starlette's TestClient now prefers the maintained httpx2 client. Keep this
+# test-only dependency explicit so clean installs don't silently fall back to
+# the deprecated httpx integration.
+httpx2>=2.12,<3

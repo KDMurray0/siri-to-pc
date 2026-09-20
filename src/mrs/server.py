@@ -400,6 +400,8 @@ def startup() -> None:
 
     if config.get("library_paths"):
         library.scan_async()
+    if config.get("library_monitor_minutes"):
+        library.start_monitor()
 
     downloader.prune_cache()
     player.start()

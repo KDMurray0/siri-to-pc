@@ -2480,6 +2480,576 @@ def _run(verbose: bool = False) -> Result:
             _acc._path().unlink(missing_ok=True)
             say("people rather than links", c)
 
+            # -- 22. focused regressions for the issue register ------------
+            c = _Checker("issue regressions")
+            import json as _json
+            import os as _os
+            import sys as _sys
+            import tempfile as _tempfile
+            import threading as _threading
+            import types as _types
+            import zipfile as _zipfile
+            from pathlib import Path as _Path
+            from .core import backup as _backup
+            from .core import downloader as _dlmod
+            from .core import library as _libmod
+            from .core import playlists as _plmod
+            from .core import spectrum as _spectrum
+            from .core.session import Session as _Session, Sessions as _Sessions
+            from .core.profile import Profiles as _Profiles
+            from .core.taste import TasteEngine as _TasteEngine
+            from .models import Track as _Track
+            from .web import api as _api_mod
+
+            # The dynamic playlists only draw from the current listener's
+            # records and use the same queue boundary as ordinary requests.
+            with _tempfile.TemporaryDirectory(prefix="mrs-smart-list-") as root:
+                store = _TasteEngine(root=_Path(root))
+                a = _Track(video_id="smart-a", title="Smart A", artist="Band A")
+                b = _Track(video_id="smart-b", title="Smart B", artist="Band B")
+                blocked = _Track(video_id="smart-blocked", title="Hidden", artist="No")
+                store.toggle_like(a)
+                store.record(a, 100, 100)
+                store.record(a, 100, 100)
+                store.record(b, 100, 100)
+                store.toggle_like(blocked)
+                store.block(track=blocked)
+                with _patch.object(_api_mod, "taste", store):
+                    r = client.get("/api/smartplaylists", headers=owner_h)
+                    c("smart playlist counts are live and skip blocked rows",
+                      r.status_code == 200 and
+                      {x["kind"]: x["count"] for x in r.json()["playlists"]}
+                      == {"liked": 1, "recent": 2, "most_played": 2}, r.text[:180])
+                    r = client.get("/api/smartplaylists?kind=liked", headers=owner_h)
+                    c("the list panel can read dynamic tracks with GET",
+                      r.status_code == 200 and
+                      [x["video_id"] for x in r.json().get("tracks", [])] == ["smart-a"])
+                    c("adding a dynamic list cannot be triggered by GET",
+                      client.get("/api/smartplaylists/play?kind=recent",
+                                 headers=owner_h).status_code == 405)
+                    queued = []
+                    with _patch.object(_player.queue, "enqueue",
+                                       side_effect=lambda ts, imported=False:
+                                       queued.extend(ts)):
+                        r = client.post("/api/smartplaylists/play",
+                                        json={"kind": "recent"}, headers=owner_h)
+                    c("adding a smart list uses the shared queue, not a new resolver",
+                      r.status_code == 200 and r.json().get("added") == 2
+                      and {t.video_id for t in queued} == {"smart-a", "smart-b"},
+                      r.text[:160])
+                c("a link cannot inspect the owner's audit trail",
+                  client.get("/api/audit", headers={"X-Music-Key": phone}).status_code == 403)
+                ar = client.get("/api/audit", headers=owner_h)
+                c("the owner audit endpoint returns bounded entries",
+                  ar.status_code == 200 and isinstance(ar.json().get("entries"), list))
+
+            # Playlist files are user-editable JSON. Reject malformed fields
+            # row-by-row while leaving playable siblings intact.
+            with _tempfile.TemporaryDirectory(prefix="mrs-playlist-rows-") as root:
+                lists = _plmod.Playlists(home=_Path(root))
+                folder = lists.folder("Mixed")
+                (folder / "tracks.json").write_text(_json.dumps([
+                    {"video_id": "good-row", "title": "Good row", "duration": 12},
+                    "not an object",
+                    {"video_id": ["bad"], "title": "Wrong id type"},
+                    {"video_id": "bad-duration", "title": "Bad", "duration": "long"},
+                    {"title": "No playable locator"},
+                ]), encoding="utf-8")
+                got = lists.tracks("Mixed")
+                c("valid playlist rows survive wrong types and partial records",
+                  [t.video_id for t in got] == ["good-row"])
+
+            # Listener state is user-editable persistence. A failed write must
+            # remain retryable, malformed counters must be ignored, and a
+            # block must durably remove the song's scoring evidence.
+            with _tempfile.TemporaryDirectory(prefix="mrs-taste-state-") as root:
+                home = _Path(root)
+                stats = home / "play_stats.json"
+                stats.write_text(_json.dumps({
+                    "songs": {"valid-song": [3, 1], "bad-song": "broken"},
+                    "artists": {"valid-band": [2, 0], "bad-band": ["x"]},
+                    "history": ["valid-song", 42],
+                    "recent": [{"video_id": "valid-song"}, "bad-row"],
+                    "played_at": {"valid-song": 1, "bad": "soon"},
+                }), encoding="utf-8")
+                store = _TasteEngine(root=home)
+                counts_ok = store.play_counts() == {"valid-song": 3}
+                with _patch("mrs.core.taste.write_atomic",
+                            side_effect=OSError("disk full")):
+                    store._dirty = True
+                    store.save()
+                failed_write_is_retryable = store._dirty
+                with _patch("mrs.core.taste.write_atomic") as write_atomic:
+                    store.save()
+                retry_ok = write_atomic.called and not store._dirty
+                blocked = _Track(video_id="durable-block", title="Blocked")
+                store.record(blocked, 100, 100)
+                store.flush()
+                store.block(track=blocked)
+                block_persisted = blocked.video_id not in _TasteEngine(
+                    root=home).play_counts()
+                c("malformed taste counters are ignored and failed saves retry",
+                  counts_ok and failed_write_is_retryable and retry_ok)
+                c("blocking a song durably removes its scoring evidence",
+                  block_persisted)
+
+            # The library index has the same row-by-row failure mode as the
+            # playlist files. Keep valid local tracks when one row is corrupt.
+            with _tempfile.TemporaryDirectory(prefix="mrs-library-rows-") as root:
+                index = _Path(root) / "library.json"
+                local_row = _Track(video_id="local-good", title="Good",
+                                   path="C:/music/good.mp3", url="C:/music/good.mp3",
+                                   source="local").to_dict()
+                index.write_text(_json.dumps([local_row, "not an object",
+                                              {"title": "no file"}]),
+                                 encoding="utf-8")
+                with _patch.object(_libmod, "state_file", lambda name: index):
+                    local = _libmod.LocalLibrary()
+                c("valid local-library rows survive malformed siblings",
+                  local.count() == 1
+                  and local.search("good", limit=1)[0].video_id == "local-good")
+
+            # Every browser output format is cache-owned; evicting its source
+            # must not leave an orphaned non-AAC transcode behind.
+            with _tempfile.TemporaryDirectory(prefix="mrs-cast-prune-") as root:
+                base = _Path(root)
+                cache, pinned, cast_work = base / "cache", base / "pinned", base / "cast"
+                cache.mkdir()
+                pinned.mkdir()
+                cast_work.mkdir()
+                (cache / "format-prune.webm").write_bytes(b"source")
+                orphan = cast_work / "format-prune~default.ogg"
+                orphan.write_bytes(b"transcode")
+                unrelated = cast_work / "format-prune-extra~default.ogg"
+                unrelated.write_bytes(b"keep")
+                with _patch.object(_dlmod, "cache_dir", lambda: cache), \
+                     _patch.object(_dlmod, "pinned_dir", lambda: pinned), \
+                     _patch.object(_cast2, "work_dir", lambda: cast_work), \
+                     _patch.object(_cast2, "prune", lambda: 0):
+                    removed = _dlmod.downloader.prune_cache(keep_mb=0)
+                c("cache eviction removes every orphaned cast format",
+                  removed == 1 and not orphan.exists() and unrelated.is_file())
+
+            # A corrupt play-count value should make a row disappear, not
+            # turn the whole most-played endpoint into a 500.
+            class _BrokenCounts:
+                def liked(self):
+                    return []
+                def recent(self, limit):
+                    return [{"video_id": "good-count", "title": "Good"},
+                            {"video_id": "bad-count", "title": "Bad"}]
+                def play_counts(self):
+                    return {"good-count": 4, "bad-count": "not a number"}
+                def is_blocked(self, track):
+                    return False
+            rows = _api_mod._smart_rows(_BrokenCounts(), "most_played")
+            c("corrupt play counts do not break most-played rows",
+              [row["video_id"] for row in rows] == ["good-count"])
+
+            media_route = next((route for route in _api_mod.app.routes
+                                if route.path == "/api/announce/{aid}.mp3"), None)
+            c("announcement media handler is not shadowed by the toggle handler",
+              media_route is not None
+              and media_route.endpoint is _api_mod.api_announce_file
+              and _api_mod.api_announce.__name__ == "api_announce")
+            page = (_Path(__file__).parent / "web" / "templates" /
+                    "player.html").read_text(encoding="utf-8")
+            c("malformed browser format preferences are ignored safely",
+              "return Array.isArray(got)" in page
+              and "got.filter(x => typeof x === \"string\")" in page)
+
+            # Cache identity must include path and file version, not the stem.
+            with _tempfile.TemporaryDirectory(prefix="mrs-spectrum-") as root:
+                base = _Path(root)
+                left, right = base / "one", base / "two"
+                left.mkdir(); right.mkdir()
+                f1, f2 = left / "01 Intro.mp3", right / "01 Intro.mp3"
+                f1.write_bytes(b"one"); f2.write_bytes(b"two")
+                with _patch.object(_spectrum, "_dir", lambda: base / "spectra"):
+                    key1 = _spectrum._cache_file(str(f1))
+                    key2 = _spectrum._cache_file(str(f2))
+                    old = key1
+                    f1.write_bytes(b"replacement with another size")
+                    _os.utime(f1, (time.time() + 3, time.time() + 3))
+                    new = _spectrum._cache_file(str(f1))
+                c("same-stem files and a replaced file get distinct spectrum keys",
+                  key1 != key2 and old != new)
+
+            # Both separators are legal ZIP spelling on Windows. A malicious
+            # member must not escape the playlist subtree during restore.
+            with _tempfile.TemporaryDirectory(prefix="mrs-backup-") as root:
+                base = _Path(root) / "data"
+                base.mkdir()
+                sentinel = base / "sentinel.txt"
+                sentinel.write_text("keep", encoding="utf-8")
+                archive = _Path(root) / "mixed.zip"
+                with _zipfile.ZipFile(archive, "w") as z:
+                    z.writestr("playlists/..\\sentinel.txt", "overwrite")
+                    z.writestr("playlists/good.json", "[]")
+                with _patch.object(_backup, "data_dir", lambda: base), \
+                     _patch.object(_backup, "make_backup",
+                                   lambda: {"ok": True, "path": "safety.zip"}):
+                    restored = _backup.restore(str(archive))
+                c("mixed-separator archive traversal is skipped safely",
+                  restored.get("ok") and sentinel.read_text("utf-8") == "keep"
+                  and (base / "playlists" / "good.json").is_file())
+
+            # The library scheduler is inert when disabled, avoids overlapping
+            # a manual scan, and runs at most once per configured interval.
+            local = _libmod.LocalLibrary()
+            options = {"library_monitor_minutes": 5, "library_paths": ["music"]}
+            with _patch.object(_cfg, "get",
+                               side_effect=lambda key, default=None:
+                               options.get(key, default)):
+                local._next_monitor = 0
+                due1 = local._monitor_due(now=100)
+                due2 = local._monitor_due(now=101)
+                local._next_monitor = 0
+                with local._lock:
+                    local._scanning = True
+                overlaps = local._monitor_due(now=200)
+                with local._lock:
+                    local._scanning = False
+                options["library_monitor_minutes"] = 0
+                disabled = local._monitor_due(now=300)
+            c("automatic library refresh is scheduled without overlapping scans",
+              due1 and not due2 and not overlaps and not disabled)
+            options_before = _cfg.get("library_monitor_minutes", 0)
+            with _patch.object(_api_mod.library, "start_monitor") as start_monitor:
+                r = client.post("/api/setting",
+                                json={"key": "library_monitor_minutes", "value": "15"},
+                                headers=owner_h)
+                c("the owner can configure periodic refresh through POST",
+                  r.status_code == 200 and r.json().get("value") == 15
+                  and start_monitor.called, r.text[:160])
+            _cfg.set("library_monitor_minutes", options_before)
+
+            from . import server as _server_mod
+            old_wanted_port = _server_mod.runtime.get("wanted_port")
+            preferred = 48371
+            with _patch.object(_server_mod, "_is_ours", return_value=False), \
+                 _patch.object(_server_mod, "_port_free",
+                               side_effect=lambda port: port == preferred + 2), \
+                 _patch("time.sleep", return_value=None):
+                selected = _server_mod.pick_port(preferred)
+            launcher_text = (_Path(__file__).resolve().parents[2] /
+                             "launcher.pyw").read_text(encoding="utf-8")
+            c("port fallback publishes the selected port for launcher URLs",
+              selected == preferred + 2
+              and _server_mod.runtime.get("wanted_port") == preferred
+              and _server_mod.local_url(selected) ==
+                  f"http://127.0.0.1:{preferred + 2}/api/ping"
+              and "srv.runtime.get(\"port\")" in launcher_text)
+            _server_mod.runtime["wanted_port"] = old_wanted_port
+
+            # Deterministic IDs survive fresh Python interpreters.
+            with _tempfile.TemporaryDirectory(prefix="mrs-local-id-") as root:
+                env = dict(_os.environ)
+                env["PYTHONPATH"] = str(_Path(__file__).resolve().parents[1])
+                env["MRS_TESTING"] = "1"
+                env["MRS_DATA_DIR"] = str(_Path(root) / "data")
+                env["MRS_CACHE_DIR"] = str(_Path(root) / "cache")
+                script = ("from pathlib import Path; from mrs.core.library import LocalLibrary; "
+                          "print(LocalLibrary._stable_id(Path(r'C:\\Music\\A\\01.mp3')))")
+                one = _sp.check_output([_sys.executable, "-c", script], env=env, text=True).strip()
+                two = _sp.check_output([_sys.executable, "-c", script], env=env, text=True).strip()
+                c("local track identity is stable across interpreter processes",
+                  one.startswith("local:v2:") and one == two)
+
+            # A pass's persistence policy and the live session must change
+            # together in both directions.
+            profs, rooms = _Profiles(), _Sessions()
+            row = {"id": "check-policy-transition", "name": "check",
+                   "scope": "phone", "expires": time.time() + 3600}
+            temp_profile = profs.for_row(row)
+            with _patch.object(_Session, "start", lambda self: None), \
+                 _patch.object(_Session, "stop", lambda self: None):
+                first_room = rooms.for_pass(row["id"], "check", "phone", temp_profile)
+                row["expires"] = 0
+                permanent_profile = profs.for_row(row)
+                second_room = rooms.for_pass(row["id"], "check", "phone", permanent_profile)
+                row["expires"] = time.time() + 3600
+                expiring_profile = profs.for_row(row)
+                third_room = rooms.for_pass(row["id"], "check", "phone", expiring_profile)
+                rooms.close(row["id"])
+            c("both permanence transitions replace the cached live session",
+              first_room is not second_room and second_room is not third_room
+              and not temp_profile.permanent and permanent_profile.permanent
+              and not expiring_profile.permanent)
+
+            # Silent stdout cannot suspend the timeout, and cleanup must clear
+            # the active process registry even after cancellation.
+            class _SilentProcess:
+                def __init__(self):
+                    self.stopped = _threading.Event()
+                    self.returncode = None
+                    self.stdout = self._lines()
+                def _lines(self):
+                    self.stopped.wait(5)
+                    if False:
+                        yield ""
+                def poll(self):
+                    return self.returncode
+                def terminate(self):
+                    self.returncode = -15
+                    self.stopped.set()
+                def kill(self):
+                    self.returncode = -9
+                    self.stopped.set()
+                def wait(self, timeout=None):
+                    if not self.stopped.wait(timeout):
+                        raise _sp.TimeoutExpired("fake yt-dlp", timeout)
+                    return self.returncode
+            proc = _SilentProcess()
+            with _patch("mrs.core.downloader.subprocess.Popen", return_value=proc), \
+                 _patch.object(_dlmod.downloader, "_stop_process",
+                               lambda p, force=False: p.terminate()):
+                started = time.monotonic()
+                code, output = _dlmod.downloader._run(["yt-dlp"], timeout=0.1)
+                elapsed = time.monotonic() - started
+            c("a silent downloader hits its deadline and reaps the process",
+              code != 0 and "TIMEOUT" in output and elapsed < 1
+              and proc not in _dlmod.downloader._procs)
+
+            failed_id = "cleanup-exception-check"
+            failed_track = _Track(video_id=failed_id, title="Failure cleanup")
+            _dlmod._note_inflight(failed_id, total=10)
+            with _patch.object(_dlmod.downloader, "cached", return_value=None), \
+                 _patch.object(_dlmod.downloader, "_fetch_locked",
+                               side_effect=RuntimeError("mock fetch failure")):
+                try:
+                    _dlmod.downloader.fetch(failed_track)
+                except RuntimeError:
+                    pass
+            c("an unexpected fetch exception clears local and shared in-flight state",
+              failed_id not in _dlmod.downloader._inflight
+              and _dlmod.arriving(failed_id) is None)
+
+            # Partial files aren't cache hits; pruning cannot remove an active
+            # download even when the cache limit is deliberately zero.
+            with _tempfile.TemporaryDirectory(prefix="mrs-download-cache-") as root:
+                cache, pinned = _Path(root) / "cache", _Path(root) / "pinned"
+                cache.mkdir(); pinned.mkdir()
+                partial = cache / "prune-check.m4a.part"
+                partial.write_bytes(b"partial")
+                active = cache / "active-check.m4a"
+                active.write_bytes(b"active")
+                with _dlmod._INFLIGHT_LOCK:
+                    _dlmod._INFLIGHT["active-check"] = {"started": time.time()}
+                try:
+                    with _patch.object(_dlmod, "cache_dir", lambda: cache), \
+                         _patch.object(_dlmod, "pinned_dir", lambda: pinned), \
+                         _patch("mrs.core.cast.prune", lambda: 0):
+                        partial_hit = _dlmod.downloader.cached("prune-check")
+                        removed = _dlmod.downloader.prune_cache(keep_mb=0)
+                    c("partial audio is not served and active files survive pruning",
+                      partial_hit is None and active.is_file() and removed == 0)
+                finally:
+                    with _dlmod._INFLIGHT_LOCK:
+                        _dlmod._INFLIGHT.pop("active-check", None)
+
+            # Completed files have stable media types and byte-range behavior
+            # for browser/Safari clients.
+            with _tempfile.TemporaryDirectory(prefix="mrs-range-") as root:
+                media = _Path(root) / "track.mp3"
+                payload = b"0123456789abcdefghij"
+                media.write_bytes(payload)
+                with _patch.object(_cast2, "serve", return_value=(media, "ready")):
+                    full_response = client.get("/api/output/stream/range-check",
+                                               headers=owner_h)
+                    suffix_response = client.get("/api/output/stream/range-check",
+                                                 headers={**owner_h, "Range": "bytes=-5"})
+                    bad_range = client.get("/api/output/stream/range-check",
+                                           headers={**owner_h, "Range": "bytes=99-"})
+                    multi_range = client.get("/api/output/stream/range-check",
+                                             headers={**owner_h, "Range": "bytes=0-1,4-5"})
+                c("completed media honors full, suffix, invalid and multi-range requests",
+                  full_response.status_code == 200
+                  and full_response.headers.get("content-type", "").startswith("audio/mpeg")
+                  and full_response.content == payload
+                  and suffix_response.status_code == 206
+                  and suffix_response.content == payload[-5:]
+                  and suffix_response.headers.get("content-range") == "bytes 15-19/20"
+                  and bad_range.status_code == 416
+                  and multi_range.status_code == 206
+                  and multi_range.headers.get("content-type", "").startswith(
+                      "multipart/byteranges")
+                  and b"01" in multi_range.content and b"45" in multi_range.content,
+                  str([(r.status_code, r.headers.get("content-type"),
+                        r.headers.get("content-range"), r.content[:24])
+                       for r in (full_response, suffix_response, bad_range,
+                                 multi_range)]))
+                type_map = {ext: _api_mod._media_type(_Path("track" + ext))
+                            for ext in (".m4a", ".mp3", ".aac", ".wav",
+                                        ".flac", ".ogg", ".opus", ".webm")}
+                c("every native cast format has an audio content type",
+                  type_map == {".m4a": "audio/mp4", ".mp3": "audio/mpeg",
+                               ".aac": "audio/aac", ".wav": "audio/wav",
+                               ".flac": "audio/flac", ".ogg": "audio/ogg",
+                               ".opus": "audio/ogg", ".webm": "audio/webm"},
+                  str(type_map))
+
+            # Narration uses the music mixer's exact base level, applies a
+            # configurable dB duck/gain, and restores gain on success/failure.
+            old_duck = _cfg.get("announce_duck_db", -12.0)
+            old_voice = _cfg.get("announce_voice_gain_db", 0.0)
+            duck_bound = client.post("/api/setting",
+                                     json={"key": "announce_duck_db", "value": "-100"},
+                                     headers=owner_h)
+            voice_bound = client.post("/api/setting",
+                                      json={"key": "announce_voice_gain_db", "value": "99"},
+                                      headers=owner_h)
+            guest_gain = client.post("/api/setting",
+                                     json={"key": "announce_duck_db", "value": "-6"},
+                                     headers={"X-Music-Key": phone})
+            c("announcement dB settings clamp safely and remain owner-only",
+              duck_bound.status_code == 200 and duck_bound.json().get("value") == -60.0
+              and voice_bound.status_code == 200
+              and voice_bound.json().get("value") == 12.0
+              and guest_gain.status_code == 403)
+            _cfg.set("announce_duck_db", old_duck)
+            _cfg.set("announce_voice_gain_db", old_voice)
+            _cfg.set("announce_duck_db", -12.0)
+            _cfg.set("announce_voice_gain_db", 3.0)
+            class _FakeTTS:
+                async def save(self, path):
+                    with open(path, "wb") as fh:
+                        fh.write(b"voice")
+            edge = _types.SimpleNamespace(Communicate=lambda *args: _FakeTTS())
+            audio_state = {}
+            def _volume_get(prop, default=None):
+                return audio_state.get(prop, default)
+            def _volume_set(prop, value):
+                audio_state[prop] = value
+            fake_mpv = _types.SimpleNamespace(get=_volume_get, set=_volume_set)
+            gains_ok = True
+            with _patch.dict(_sys.modules, {"edge_tts": edge}), \
+                 _patch.object(_player, "mpv", fake_mpv), \
+                 _patch.object(_player, "casting", return_value=False), \
+                 _patch("mrs.player.shutil.which", return_value="mpv"):
+                for volume in (0, 5, 70, 150):
+                    audio_state.update(volume=volume, **{"volume-gain": 2.5})
+                    command = []
+                    def _capture(cmd, **kwargs):
+                        command.extend(cmd)
+                        gains_ok_local = audio_state.get("volume-gain") == -9.5
+                        if not gains_ok_local:
+                            raise AssertionError("music wasn't ducked during speech")
+                    with _patch("mrs.player.subprocess.run", side_effect=_capture):
+                        _player._speak("volume check")
+                    got_volume = next((x for x in command if x.startswith("--volume=")), "")
+                    got_gain = next((x for x in command if x.startswith("--volume-gain=")), "")
+                    gains_ok = gains_ok and got_volume == f"--volume={volume}" \
+                        and float(got_gain.split("=", 1)[1]) == 5.5 \
+                        and audio_state.get("volume-gain") == 2.5
+                audio_state.update(volume=55, **{"volume-gain": 1.5})
+                with _patch("mrs.player.subprocess.run",
+                            side_effect=RuntimeError("fake speech failure")):
+                    _player._speak("failure check")
+                restored_after_failure = audio_state.get("volume-gain") == 1.5
+                c("speech follows zero/low/normal/high music volume and restores existing gain",
+                  gains_ok)
+                c("a failed announcement restores the original music gain",
+                  restored_after_failure and not _player._ducking)
+
+                audio_state.update(volume=60, **{"volume-gain": 4.0})
+                entered, release = _threading.Event(), _threading.Event()
+                count = active_count = maximum_active = 0
+                counter_lock = _threading.Lock()
+                def _slow_speech(cmd, **kwargs):
+                    nonlocal count, active_count, maximum_active
+                    with counter_lock:
+                        count += 1; active_count += 1
+                        maximum_active = max(maximum_active, active_count)
+                        first_call = count == 1
+                    if first_call:
+                        entered.set()
+                        release.wait(3)
+                    with counter_lock:
+                        active_count -= 1
+                with _patch("mrs.player.subprocess.run", side_effect=_slow_speech):
+                    first = _threading.Thread(target=_player._speak, args=("one",))
+                    second = _threading.Thread(target=_player._speak, args=("two",))
+                    first.start(); entered.wait(2); second.start()
+                    time.sleep(0.1)
+                    overlap_blocked = count == 1
+                    release.set(); first.join(3); second.join(3)
+                c("overlapping announcements serialize and restore the mixer state",
+                  overlap_blocked and count == 2 and maximum_active == 1
+                  and audio_state.get("volume-gain") == 4.0)
+            _cfg.set("announce_duck_db", old_duck)
+            _cfg.set("announce_voice_gain_db", old_voice)
+
+            # On the browser path, restore the old attenuation before sampling
+            # the next announcement and guard stale ended events by generation.
+            template_text = (_Path(__file__).parent / "web" / "templates" /
+                             "player.html").read_text(encoding="utf-8")
+            apply_at = template_text.index("function applyAnnounce(d)")
+            restore_at = template_text.index("restoreCastDuck();", apply_at)
+            volume_at = template_text.index("const wasVol = el.volume", apply_at)
+            c("cast announcements restore before sampling and reject stale callbacks",
+              restore_at < volume_at
+              and "restoreCastDuck(generation)" in template_text[volume_at:volume_at + 1400])
+            c("the new controls expose dB ducking, audit and library refresh",
+              all(mark in template_text for mark in
+                  ('id="announceDuck"', 'id="announceVoice"',
+                   'id="auditrefresh"', 'id="libmonitor"',
+                   'data-smart-play=')))
+
+            # Blocking advances the player immediately. The undo target must
+            # consequently be the recording that was blocked, not whatever
+            # happened to become current between the first and second tap.
+            from .models import Track as _UndoTrack
+            class _UndoStore:
+                def __init__(self): self.songs, self.artists = set(), set()
+                def block(self, track=None, artist="", on=True):
+                    if artist:
+                        if on and artist not in self.artists:
+                            self.artists.add(artist); return True
+                        if not on and artist in self.artists:
+                            self.artists.remove(artist); return True
+                        return False
+                    if not track or not track.video_id: return False
+                    if on and track.video_id not in self.songs:
+                        self.songs.add(track.video_id); return True
+                    if not on and track.video_id in self.songs:
+                        self.songs.remove(track.video_id); return True
+                    return False
+                def blocks(self): return {"songs": [], "artists": []}
+            undo_store = _UndoStore()
+            undo_track = _UndoTrack(video_id="undo-song", title="Undo me")
+            with _patch.object(_api_mod, "_session_for", return_value=None), \
+                 _patch.object(_api_mod, "_profile_for", return_value=None), \
+                 _patch.object(_api_mod, "taste", undo_store), \
+                 _patch.object(_api_mod.player.queue, "current_track", return_value=undo_track), \
+                 _patch.object(_api_mod, "_skip_current"):
+                blocked = _api_mod.api_block(object(), on=1, _=True)
+                restored = _api_mod.api_block(object(), on=0,
+                                               video_id=blocked["undo"]["video_id"],
+                                               _=True)
+                try:
+                    _api_mod.api_block(object(), on=1, video_id="not-current", _=True)
+                    arbitrary_block_refused = False
+                except Exception as exc:
+                    arbitrary_block_refused = getattr(exc, "status_code", None) == 400
+            c("block undo names the song that was blocked, not the one now playing",
+              blocked.get("undo") == {"video_id": "undo-song"}
+              and restored.get("changed") and "undo-song" not in undo_store.songs
+              and arbitrary_block_refused)
+            c("the page protects destructive controls and keeps the device icon visible",
+              all(mark in template_text for mark in
+                  ('function armDanger(button, action)', 'function toastUndo(msg, onUndo)',
+                   '.danger.arm::after', 'class="ib small danger" id="blocksong"',
+                   'class="pickx danger sesskick"', 'class="pickx danger passkill"',
+                   'if (!armDanger(del, "delete this list")) return;',
+                   '<button class="ib small" id="volicon"',
+                   'aria-label="Choose output device"><svg')))
+            c("queue and activity text wrap rather than clipping mid-word",
+              '-webkit-line-clamp:2' in template_text
+              and 'title="${esc(t.title)}"' in template_text
+              and '$("actlabel").title = text;' in template_text)
+            say("issue regressions", c)
+
     except Exception as exc:            # a check suite must not be the thing
         out.failed.append(f"the checks themselves broke: {exc!r}")
     finally:

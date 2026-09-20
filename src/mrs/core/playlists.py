@@ -113,7 +113,24 @@ class Playlists:
                             index, name)
                 continue
             try:
-                out.append(Track.from_dict(row))
+                clean = dict(row)
+                string_fields = ("video_id", "title", "artist", "album", "art",
+                                 "url", "source", "path", "origin", "reason")
+                for field in string_fields:
+                    value = clean.get(field, "")
+                    if value is None:
+                        clean[field] = ""
+                    elif not isinstance(value, str):
+                        raise TypeError(f"{field} must be text")
+                duration = clean.get("duration", 0)
+                if (isinstance(duration, bool)
+                        or not isinstance(duration, (int, float))
+                        or duration < 0 or duration > 86400):
+                    raise TypeError("duration must be a non-negative number")
+                clean["duration"] = int(duration)
+                if not (clean.get("video_id") or clean.get("url")):
+                    raise ValueError("row has no playable id or url")
+                out.append(Track.from_dict(clean))
             except Exception as exc:
                 log.warning("skipping malformed row %d in playlist %r: %s",
                             index, name, exc)

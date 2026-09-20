@@ -420,7 +420,7 @@ def _serve_page(request: Request, name: str, key: str, token: str):
     signed_in = getattr(request.state, "account", None)
     if signed_in:
         # The cookie is the credential, and it goes with every request this
-        # page makes on its own. Nothing has to be baked into the html --
+        # page makes on its own. Nothing has to be baked into the html —
         # which is the point of signing in rather than holding a link.
         creds = config.get("api_key", "") if owner else ""
     if not creds and not signed_in and row.get("id"):
@@ -1085,6 +1085,7 @@ def api_history(request: Request, _: bool = Auth):
 
 @app.get("/api/block")
 def api_block(request: Request, artist: str = "", on: int = 1,
+              video_id: str = "",
               _: bool = Auth):
     """Never play this again — this recording, or this act at all.
 
@@ -1105,17 +1106,31 @@ def api_block(request: Request, artist: str = "", on: int = 1,
     if artist:
         done = store.block(artist=artist, on=want)
         label = artist
+        undo = {"artist": artist} if want and done else None
     else:
+        # Blocking immediately advances past the current song. A delayed undo
+        # must name that recording, rather than affect whatever plays next.
+        # An explicit ID is only accepted for unblocking; new blocks must
+        # still describe the song actually playing.
+        if video_id:
+            if want:
+                raise HTTPException(status_code=400,
+                                    detail="A song can only be blocked while it is playing")
+            from ..models import Track
+            track = Track(video_id=video_id)
         if not track:
             return {"status": "error", "message": "Nothing playing to block"}
         done = store.block(track=track, on=want)
-        label = track.title
+        label = track.title or "song"
+        undo = ({"video_id": track.video_id} if want and done and
+                track.video_id else None)
     if want and done and track and not artist:
         _skip_current(room)
     elif want and done and artist and track and store.is_blocked(track):
         _skip_current(room)
     return {"status": "ok", "blocked": want, "changed": done,
             "message": (f"Blocked {label}" if want else f"Unblocked {label}"),
+            "undo": undo,
             **store.blocks()}
 
 
@@ -1199,6 +1214,117 @@ def _lists_for(request: Request):
     if me is None:
         return playlists
     return me.lists          # None when the link isn't permanent
+
+
+def _smart_store(request: Request):
+    """The listening history these dynamic lists are allowed to use."""
+    if _owner_view(request):
+        return taste
+    me = _profile_for(request)
+    return me.taste if me is not None and me.permanent else None
+
+
+def _smart_rows(store, kind: str, limit: int = 100):
+    """Build a live playlist from one listener's own saved listening data."""
+    from ..models import Track
+
+    liked = store.liked() or []
+    recent = store.recent(200) or []
+    metadata: dict[str, dict] = {}
+    for row in [*recent, *liked]:
+        if isinstance(row, dict) and isinstance(row.get("video_id"), str):
+            metadata.setdefault(row["video_id"], row)
+
+    if kind == "liked":
+        source = liked
+    elif kind == "recent":
+        source = recent
+    elif kind == "most_played":
+        try:
+            raw_counts = store.play_counts() or {}
+        except Exception:
+            raw_counts = {}
+        counts = {}
+        if isinstance(raw_counts, dict):
+            for video_id, value in raw_counts.items():
+                if not isinstance(video_id, str):
+                    continue
+                try:
+                    counts[video_id] = int(value)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+        source = [metadata[vid] for vid, _ in sorted(
+            counts.items(), key=lambda item: (-item[1], item[0]))
+                  if vid in metadata]
+    else:
+        raise HTTPException(400, "Unknown smart playlist")
+
+    rows = []
+    seen: set[str] = set()
+    for row in source:
+        try:
+            if not isinstance(row, dict):
+                continue
+            track = Track.from_dict(row)
+            if (not isinstance(track.video_id, str) or not track.video_id.strip()
+                    or not isinstance(track.title, str) or not track.title.strip()
+                    or track.video_id in seen or store.is_blocked(track)):
+                continue
+            seen.add(track.video_id)
+            rows.append(track.to_dict())
+            if len(rows) >= max(1, min(200, int(limit))):
+                break
+        except (AttributeError, TypeError, ValueError):
+            # One corrupt historical row should not make the whole dynamic
+            # playlist unusable.
+            continue
+    return rows
+
+
+_SMART_LABELS = {
+    "liked": "Liked songs",
+    "recent": "Recently played",
+    "most_played": "Most played",
+}
+
+
+@app.get("/api/smartplaylists")
+def api_smartplaylists(request: Request, kind: str = "", _: bool = Auth):
+    """Read live playlists derived from this listener's own history."""
+    store = _smart_store(request)
+    if kind:
+        if kind not in _SMART_LABELS:
+            raise HTTPException(400, "Unknown smart playlist")
+        rows = _smart_rows(store, kind) if store is not None else []
+        return {"status": "ok", "kind": kind,
+                "name": _SMART_LABELS[kind], "tracks": rows}
+    return {"status": "ok", "playlists": [
+        {"kind": name, "name": label,
+         "count": len(_smart_rows(store, name)) if store is not None else 0}
+        for name, label in _SMART_LABELS.items()]}
+
+
+@app.get("/api/smartplaylists/play")
+def api_smartplaylist_play(request: Request, kind: str, _: bool = Auth):
+    """Add up to fifty current smart-list tracks to the caller's queue."""
+    if kind not in _SMART_LABELS:
+        raise HTTPException(400, "Unknown smart playlist")
+    store = _smart_store(request)
+    if store is None:
+        raise HTTPException(403, "Smart playlists need a permanent link")
+    from ..models import Track
+    tracks = [Track.from_dict(row) for row in _smart_rows(store, kind, 50)]
+    if not tracks:
+        return {"status": "ok", "added": 0,
+                "message": f"{_SMART_LABELS[kind]} is empty"}
+    room = _session_for(request)
+    _guard_rate(room, request)
+    if not room:
+        _guard_shared(request)
+    queue = room.queue if room else player.queue
+    queue.enqueue(tracks, imported=True)
+    return {"status": "ok", "added": len(tracks),
+            "message": f"Added {len(tracks)} from {_SMART_LABELS[kind]}"}
 
 
 @app.get("/api/playlists")
@@ -1516,8 +1642,10 @@ def api_setting(request: Request, key: str, value: str = "", _: bool = Auth):
     elif key == "audit_log_days":
         parsed = max(1, min(365, int(parsed)))
     elif key == "library_monitor_minutes":
-        parsed = max(0, min(10080, int(parsed)))
+        parsed = 0 if int(parsed) <= 0 else max(5, min(10080, int(parsed)))
     config.set(key, parsed)
+    if key == "library_monitor_minutes" and parsed:
+        library.start_monitor()
     if key in ("device_eq_enabled", "device_eq_auto"):
         if key == "device_eq_auto" and parsed:
             autoeq.settle(autoeq.output_name())     # match what's plugged in now
@@ -1928,7 +2056,7 @@ def api_output_stats(_: bool = Auth):
 
 
 @app.get("/api/announce/{aid}.mp3")
-def api_announce(aid: str, _: bool = Auth):
+def api_announce_file(aid: str, _: bool = Auth):
     """The spoken track name, for the browser acting as the speaker."""
     path = player.announce_file(aid)
     if not path or not Path(path).is_file():

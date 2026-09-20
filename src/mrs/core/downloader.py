@@ -310,7 +310,11 @@ class Downloader:
             total -= size
             removed += 1
             # Its transcode is dead weight the moment the source goes.
-            for t in cast.work_dir().glob(f"{vid}*.m4a"):
+            output_exts = {spec["ext"] for spec in cast.FORMATS.values()}
+            for t in cast.work_dir().iterdir():
+                if (not t.is_file() or t.suffix.lower() not in output_exts
+                        or (t.stem != vid and not t.stem.startswith(f"{vid}~"))):
+                    continue
                 try:
                     total -= t.stat().st_size
                     t.unlink()

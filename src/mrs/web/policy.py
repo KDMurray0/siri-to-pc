@@ -27,12 +27,13 @@ session/progress session/here seek queue/{op} cancel radio search play/artist
 play/album lyrics lyrics/search about history block blocks history/forget liked
 playlists station foryou spectrum spotify/add playlist/{op} settings setting
 whoami output/stream/{video_id} output/prepare/{video_id} output/stats
-announce/{aid}.mp3 source stream/{video_id} smartplaylists autoeq/search
+announce/{aid}.mp3 source stream/{video_id} smartplaylists smartplaylists/play autoeq/search
 autoeq/profile autoeq/match'''.split())
 READ_ONLY = set('''ping status health search lyrics lyrics/search about history
 blocks liked playlists settings audio/devices setup/state whoami passes profiles
 qr network groqmodels boot/status cookies diag output/stats audit policy backup
 output/stream/{video_id} announce/{aid}.mp3 stream/{video_id} events
+smartplaylists
 autoeq/search autoeq/profile autoeq/match autoeq/status stats accounts'''.split())
 READ_PARAMS = {
     "sessions": {"close"}, "cache": {"prune"}, "blocked": {"forgive", "clear"},

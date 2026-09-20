@@ -102,8 +102,8 @@ body.mini.mini-hover .artnote{width:74px;height:74px}
 /* what the server is doing, when it isn't simply playing */
 .activity{display:none;align-items:center;justify-content:center;gap:7px;
   margin-top:8px;font-size:11.5px;color:var(--accent);font-weight:600;
-  letter-spacing:.02em;height:16px;white-space:nowrap;overflow:hidden;max-width:100%}
-#actlabel{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:190px}
+  letter-spacing:.02em;min-height:16px;line-height:1.25;flex-wrap:wrap;max-width:100%}
+#actlabel{max-width:min(52vw,360px);text-align:center;white-space:normal}
 body.busy .activity{display:flex}
 .activity .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);
   animation:pulse 1s ease-in-out infinite}
@@ -143,6 +143,14 @@ body.seeking .seekdot{transform:scale(1.3)}
 .ib:active{transform:scale(.92)}
 .ib.small{width:34px;height:34px}
 .ib.on{color:var(--accent);background:color-mix(in srgb,var(--accent) 18%,transparent)}
+.danger{position:relative}
+.ib.danger:hover,.ib.danger.arm,.qc.danger:hover,.qc.danger.arm,
+.pickx.danger:hover,.pickx.danger.arm{color:var(--bad);
+  background:color-mix(in srgb,var(--bad) 15%,transparent)}
+.danger.arm::after{content:"sure?";position:absolute;left:50%;bottom:calc(100% + 5px);
+  translate:-50% 0;z-index:40;padding:3px 6px;border-radius:5px;
+  background:var(--bad);color:#fff;font:700 10px/1 -apple-system,"Segoe UI",sans-serif;
+  white-space:nowrap;box-shadow:0 3px 10px rgba(0,0,0,.32)}
 /* Repeat had only a colour change to say it was on, and looked identical
    whether it was repeating the queue or the one track. Now: a filled pill for
    on, and a "1" for repeating this song, which is the usual shorthand. */
@@ -282,7 +290,8 @@ div.qi::after{content:"";position:absolute;inset:24%;opacity:.4;
 .q:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}
 .q .qi{width:34px;height:34px;border-radius:7px;object-fit:cover;background:var(--panel);flex:0 0 auto}
 .q .qt{min-width:0;flex:1}
-.q .qn{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q .qn{font-size:12.5px;font-weight:600;line-height:1.25;overflow:hidden;
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
 .q .qa{font-size:11px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .why{margin-left:6px;font-size:9px;letter-spacing:.04em;text-transform:uppercase;
   border:1px solid var(--line);border-radius:4px;padding:0 4px;opacity:0;
@@ -608,6 +617,10 @@ select,.keyin{background:var(--panel);border:1px solid var(--line);color:var(--f
   padding:9px 16px;border-radius:22px;opacity:0;pointer-events:none;
   transition:opacity .2s,transform .2s;max-width:88%;text-align:center}
 .toast.show{opacity:1;transform:translate(-50%,0)}
+.toast.action{display:flex;align-items:center;gap:10px;pointer-events:auto}
+.toast.action button{background:transparent;color:inherit;border:1px solid currentColor;
+  border-radius:12px;padding:3px 8px;font:inherit;cursor:pointer}
+.toast.action button:hover{background:color-mix(in srgb,currentColor 14%,transparent)}
 
 /* ── mini mode ─────────────────────────────────────────────────────────
    Constant width. Idle shows art + name; hovering lifts the text to the top
@@ -1338,12 +1351,13 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
       <button class="ib small" id="addlist" title="Add to a playlist"><svg viewBox="0 0 24 24"><path d="M3 6h12v2H3zm0 5h12v2H3zm0 5h8v2H3zm15-9h2v4h4v2h-4v4h-2v-4h-4v-2h4z"/></svg></button>
       <!-- Never again: this recording, or this act at all. A skip is a nudge
            the scoring weighs up; these two are answers. -->
-      <button class="ib small" id="blocksong" title="Never play this song again"
+      <button class="ib small danger" id="blocksong" title="Never play this song again"
               aria-label="Never play this song again"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 2a7.9 7.9 0 014.9 1.7L5.7 16.9A8 8 0 0112 4zm0 16a7.9 7.9 0 01-4.9-1.7L18.3 7.1A8 8 0 0112 20z"/></svg></button>
-      <button class="ib small" id="blockartist" title="Never play this artist again"
+      <button class="ib small danger" id="blockartist" title="Never play this artist again"
               aria-label="Never play this artist again"><svg viewBox="0 0 24 24"><path d="M12 12a4 4 0 100-8 4 4 0 000 8zm-8 8a8 8 0 0113.4-5.9l-1.5 1.4A6 6 0 006.1 20H4zm14.7-.9l-1.8-1.8 1.8-1.8-1.4-1.4-1.8 1.8-1.8-1.8-1.4 1.4 1.8 1.8-1.8 1.8 1.4 1.4 1.8-1.8 1.8 1.8 1.4-1.4z"/></svg></button>
       <div class="vol">
-        <button class="ib small" id="volicon" title="Choose output device"></button>
+        <button class="ib small" id="volicon" title="Choose output device"
+                aria-label="Choose output device"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9.2v5.6h3.8L11.5 19V5l-4.7 4.2z"/><path d="M14 9.4a3.6 3.6 0 010 5.2" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg></button>
         <div class="slider" id="volslider">
           <div class="sfill" id="sfill"></div><div class="knob" id="knob"></div>
         </div>
@@ -1491,6 +1505,10 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
           <div class="chips" id="crossfade"></div></div>
         <div class="srow guestok"><span class="slabel">Announce songs<em>Says the track name out loud</em></span>
           <div class="toggle" id="announce"></div></div>
+        <div class="srow owneronly"><label class="slabel" for="announceDuck">Lower music while speaking<em>Perceptual level change, in decibels</em></label>
+          <span style="display:flex;align-items:center;gap:8px"><input class="keyin" id="announceDuck" type="range" min="-60" max="0" step="1" style="width:115px"><output id="announceDuckValue">−12 dB</output></span></div>
+        <div class="srow owneronly"><label class="slabel" for="announceVoice">Narrator level<em>Relative to the music's normal mixer level</em></label>
+          <span style="display:flex;align-items:center;gap:8px"><input class="keyin" id="announceVoice" type="range" min="-24" max="12" step="1" style="width:115px"><output id="announceVoiceValue">0 dB</output></span></div>
         <div class="srow guestok"><span class="slabel">Sleep timer</span><div class="chips" id="sleep"></div></div>
       </section>
 
@@ -1510,6 +1528,12 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
           <span class="sval" id="libcount">none indexed</span></div>
         <div class="srow"><span class="slabel">Index local files<em>Owned songs play instantly, no download</em></span>
           <button class="btn" id="libscan">Scan now</button></div>
+        <div class="srow owneronly"><label class="slabel" for="libmonitor">Refresh music folders<em>Automatically rescan folders on this interval</em></label>
+          <select class="keyin" id="libmonitor">
+            <option value="0">Off</option><option value="5">Every 5 minutes</option>
+            <option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option>
+            <option value="60">Every hour</option><option value="360">Every 6 hours</option>
+          </select></div>
       </section>
 
       <section class="spane" data-s="access">
@@ -1663,6 +1687,10 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         <div class="months owneronly" id="statsmonths"></div>
         <div class="seclbl owneronly">Per link</div>
         <div class="owneronly" id="statslinks"></div>
+        <div class="seclbl owneronly">Changes to this machine</div>
+        <div class="srow owneronly"><span class="slabel">What's been changed here<em>What was done and by whom — never what was said or any secret</em></span>
+          <button class="btn" id="auditrefresh">Show</button></div>
+        <div class="owneronly" id="auditlist"></div>
         <div class="srow"><span class="slabel">Setup guide<em>What the tools are for, what the key is, and which extras are worth having</em></span>
           <button class="btn" id="reguide">Open</button></div>
         <div class="srow"><span class="slabel">Start with Windows<em>When you sign in</em></span><div class="toggle" id="boot"></div></div>
@@ -1728,10 +1756,10 @@ const SIGNED_IN = "{{ signed_in_as }}";
 const SIGN_IN_OFFERED = "{{ sign_in_offered }}" === "1";
 const SCOPE = "{{ scope }}";
 const _announceDuck = Number("{{ announce_duck_db }}");
-const ANNOUNCE_DUCK_DB = Number.isFinite(_announceDuck)
+let ANNOUNCE_DUCK_DB = Number.isFinite(_announceDuck)
   ? Math.max(-60, Math.min(0, _announceDuck)) : -12;
 const _announceVoice = Number("{{ announce_voice_gain_db }}");
-const ANNOUNCE_VOICE_GAIN_DB = Number.isFinite(_announceVoice)
+let ANNOUNCE_VOICE_GAIN_DB = Number.isFinite(_announceVoice)
   ? Math.max(-24, Math.min(12, _announceVoice)) : 0;
 const $ = id => document.getElementById(id);
 /* Every ordinary call sends the key as a header, where it stays out of
@@ -2174,10 +2202,24 @@ async function blockThis(byArtist) {
   if (byArtist && !who) { toast("Nothing playing"); return; }
   const r = await api("/api/block?on=1" +
                       (byArtist ? "&artist=" + encodeURIComponent(who) : ""));
-  toast((r && r.message) || "That needs the key");
+  if (!r || r.status !== "ok") { toast((r && r.message) || "That needs the key"); return; }
+  if (!r.changed || !r.undo) { toast(r.message); return; }
+  toastUndo(r.message, async () => {
+    const undo = r.undo;
+    const path = "/api/block?on=0" +
+      (undo.artist ? "&artist=" + encodeURIComponent(undo.artist)
+                   : "&video_id=" + encodeURIComponent(undo.video_id || ""));
+    const restored = await api(path);
+    toast(restored && restored.changed ? (restored.message || "Block undone")
+                                      : "Couldn't undo that");
+  });
 }
-$("blocksong").onclick = () => blockThis(false);
-$("blockartist").onclick = () => blockThis(true);
+$("blocksong").onclick = e => {
+  if (armDanger(e.currentTarget, "block this song")) blockThis(false);
+};
+$("blockartist").onclick = e => {
+  if (armDanger(e.currentTarget, "block this artist")) blockThis(true);
+};
 
 $("download").onclick = async () => {
   const r = await api("/api/download");
@@ -2248,8 +2290,52 @@ bar.addEventListener("pointercancel", () => {
 let toastT;
 function toast(msg) {
   if (!msg) return;
-  const el = $("toast"); el.textContent = msg; el.classList.add("show");
+  const el = $("toast");
+  el.classList.remove("action");
+  el.replaceChildren(document.createTextNode(msg));
+  el.classList.add("show");
   clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove("show"), 2600);
+}
+
+/* Small, local confirmation for actions that cannot be put back. The button
+   says what the next press does, the short bubble makes that state visible,
+   and the original accessible name is restored whether it is confirmed or
+   times out. */
+const dangerTimers = new WeakMap();
+function disarmDanger(button) {
+  clearTimeout(dangerTimers.get(button)); dangerTimers.delete(button);
+  if (!button.classList.contains("arm")) return;
+  button.classList.remove("arm");
+  if (button.dataset.dangerHadTitle === "1") button.title = button.dataset.dangerTitle;
+  else button.removeAttribute("title");
+  if (button.dataset.dangerHadLabel === "1") button.setAttribute("aria-label", button.dataset.dangerLabel);
+  else button.removeAttribute("aria-label");
+  delete button.dataset.dangerTitle; delete button.dataset.dangerLabel;
+  delete button.dataset.dangerHadTitle; delete button.dataset.dangerHadLabel;
+}
+function armDanger(button, action) {
+  if (button.classList.contains("arm")) { disarmDanger(button); return true; }
+  button.dataset.dangerHadTitle = button.hasAttribute("title") ? "1" : "0";
+  button.dataset.dangerTitle = button.getAttribute("title") || "";
+  button.dataset.dangerHadLabel = button.hasAttribute("aria-label") ? "1" : "0";
+  button.dataset.dangerLabel = button.getAttribute("aria-label") || "";
+  const prompt = "Press again to " + action;
+  button.title = prompt; button.setAttribute("aria-label", prompt);
+  button.classList.add("arm");
+  dangerTimers.set(button, setTimeout(() => disarmDanger(button), 2600));
+  return false;
+}
+function toastUndo(msg, onUndo) {
+  const el = $("toast"), undo = document.createElement("button");
+  undo.type = "button"; undo.textContent = "Undo";
+  undo.onclick = async () => {
+    clearTimeout(toastT); undo.disabled = true;
+    await onUndo();
+  };
+  el.classList.add("action");
+  el.replaceChildren(document.createTextNode(msg), undo);
+  el.classList.add("show");
+  clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove("show"), 5000);
 }
 
 /* ── search ────────────────────────────────────────────────────────── */
@@ -2681,10 +2767,10 @@ function qRow(t) {
   const w = WHY[t.reason] || null;
   const why = w ? `<span class="why" title="${w[0]}">${w[1]}</span>` : "";
   return `<div class="q${t.current?" cur":""}" data-idx="${t.index}">${art}` +
-    `<div class="qt"><div class="qn">${esc(t.title)}</div>` +
+    `<div class="qt"><div class="qn" title="${esc(t.title)}">${esc(t.title)}</div>` +
     `<div class="qa">${esc(t.artist||"")}${why}</div></div>${eq}` +
     `<div class="qctl">` +
-      `<button class="qc" data-act="del" data-i="${t.index}" title="Remove">✕</button>` +
+      `<button class="qc danger" data-act="del" data-i="${t.index}" title="Remove">✕</button>` +
       `<span class="grip" title="Drag to reorder">${GRIP}</span>` +
     `</div></div>`;
 }
@@ -3119,10 +3205,10 @@ function listRow(p, shared, owner) {
     (busy ? '<span class="plspin" aria-label="Importing"></span>'
           : `<button class="qc" data-play="${esc(n)}" data-sh="${sh}" title="Play">▶</button>` +
             (owner
-              ? `<button class="qc${p.shared ? " on" : ""}" data-share="${esc(n)}" ` +
+              ? `<button class="qc${p.shared ? " on danger" : ""}" data-share="${esc(n)}" ` +
                 `data-on="${p.shared ? 0 : 1}" title="${p.shared ? "Stop sharing" : "Let everyone add to this"}">⇄</button>`
               : "") +
-            (shared ? "" : `<button class="qc" data-del="${esc(n)}" title="Delete">✕</button>`)) +
+            (shared ? "" : `<button class="qc danger" data-del="${esc(n)}" title="Delete">✕</button>`)) +
     `</div>` +
     `<div class="pltracks" id="${plSlug(n, shared)}"></div>`;
 }
@@ -3130,7 +3216,9 @@ function listRow(p, shared, owner) {
 async function loadLists() {
   const box = $("panel-lists");
   box.innerHTML = '<div class="muted">Loading…</div>';
-  const r = await api("/api/playlists");
+  const [r, smart] = await Promise.all([
+    api("/api/playlists"), api("/api/smartplaylists")
+  ]);
   // /api/playlists returns a *list* of {name, count}. Object.keys() on an
   // array hands back "0", "1", "2" — which is where the mystery playlist
   // called 0 came from, and why the real names never showed up.
@@ -3140,6 +3228,16 @@ async function loadLists() {
   let html = `<div class="srow" style="border:0"><button class="btn primary" id="plnew">Save current song to a list</button></div>` +
     `<div class="plimport"><input id="plspot" placeholder="Paste a Spotify or Apple Music link" autocomplete="off" spellcheck="false">` +
     `<button class="btn" id="plspotgo">Add</button></div>`;
+  const dynamic = (smart && smart.playlists) || [];
+  if (dynamic.length) {
+    html += '<div class="plhead">Made from your listening</div>' +
+      dynamic.map(p => {
+        const count = Number(p.count) || 0;
+        return `<div class="plrow"><span class="pn">${esc(p.name)}` +
+          `<em>${count} songs · updates automatically</em></span>` +
+          `<button class="qc" ${count ? "" : "disabled"} data-smart-play="${esc(p.kind)}" title="Add to queue">＋</button></div>`;
+      }).join("");
+  }
   html += rows.length
     ? rows.map(p => listRow(p, false, owner)).join("")
     : '<div class="muted">No lists yet.</div>';
@@ -3164,6 +3262,13 @@ async function loadLists() {
   };
 }
 $("panel-lists").addEventListener("click", async e => {
+  const smartPlay = e.target.closest("[data-smart-play]");
+  if (smartPlay) {
+    const r = await api("/api/smartplaylists/play?kind=" +
+      encodeURIComponent(smartPlay.dataset.smartPlay));
+    toast((r && r.message) || "Couldn't add that smart playlist");
+    return;
+  }
   const open = e.target.closest("[data-open]");
   const play = e.target.closest("[data-play]"), del = e.target.closest("[data-del]");
   if (open) {
@@ -3188,7 +3293,7 @@ $("panel-lists").addEventListener("click", async e => {
           return `<div class="pltrack"><span class="pli">${i + 1}</span>` +
           `<span class="plt">${esc(t.title || "")}<em>${esc(t.artist || "")}${who}</em></span>` +
           `<button class="qc" data-plplay="${esc(name)}" data-sh="${esc(open.dataset.sh || "")}" data-idx="${i}" title="Play from here">▶</button>` +
-          (canRm ? `<button class="qc" data-plrm="${esc(name)}" data-sh="${esc(open.dataset.sh || "")}" data-vid="${esc(t.video_id || "")}" title="Remove">✕</button>` : "") +
+          (canRm ? `<button class="qc danger" data-plrm="${esc(name)}" data-sh="${esc(open.dataset.sh || "")}" data-vid="${esc(t.video_id || "")}" title="Remove">✕</button>` : "") +
           `</div>`;
         }).join("")
       : '<div class="muted" style="padding:6px 2px">Empty.</div>';
@@ -3224,7 +3329,11 @@ $("panel-lists").addEventListener("click", async e => {
                         (play.dataset.sh ? "&shared=1" : ""));
     toast(r && r.message);
   }
-  if (del) { const r = await api("/api/playlist/delete?name=" + encodeURIComponent(del.dataset.del)); toast(r && r.message); loadLists(); }
+  if (del) {
+    if (!armDanger(del, "delete this list")) return;
+    const r = await api("/api/playlist/delete?name=" + encodeURIComponent(del.dataset.del));
+    toast(r && r.message); loadLists();
+  }
 });
 
 /* ── settings ──────────────────────────────────────────────────────── */
@@ -3405,6 +3514,31 @@ const toggleRow = (id, path) => {
 toggleRow("announce", "/api/announce");
 toggleRow("boot", "/api/boot");
 toggleRow("lockips", "/api/lockips");
+
+function paintDbSetting(id, outputId) {
+  const value = Number($(id).value);
+  $(outputId).textContent = `${value > 0 ? "+" : ""}${value} dB`;
+}
+for (const [id, outputId, key] of [
+  ["announceDuck", "announceDuckValue", "announce_duck_db"],
+  ["announceVoice", "announceVoiceValue", "announce_voice_gain_db"]
+]) {
+  $(id).addEventListener("input", () => paintDbSetting(id, outputId));
+  $(id).addEventListener("change", async () => {
+    const r = await api("/api/setting?key=" + key +
+      "&value=" + encodeURIComponent($(id).value));
+    if (!r || r.status !== "ok") return;
+    if (key === "announce_duck_db") ANNOUNCE_DUCK_DB = Number(r.value);
+    else ANNOUNCE_VOICE_GAIN_DB = Number(r.value);
+  });
+}
+$("libmonitor").onchange = async () => {
+  const r = await api("/api/setting?key=library_monitor_minutes&value=" +
+    encodeURIComponent($("libmonitor").value));
+  if (r && r.status === "ok") toast($("libmonitor").value === "0"
+    ? "Automatic library refresh is off" : "Automatic library refresh updated");
+};
+
 /* Signing in, and who has.
    A link is the invitation: the button carries whatever credential this page
    was opened with, because a navigation can't set a header, and the server
@@ -3547,6 +3681,54 @@ async function loadStats() {
   }).join("") : '<div class="hint">No link has played anything yet.</div>';
 }
 
+/* The trail says "POST /api/passes/new". Nobody wants to read a route, so
+   each one is said in English; anything unlisted falls back to its own
+   words rather than being hidden. */
+const AUDIT_SAID = {
+  "setting": "Changed a setting", "settings": "Changed a setting",
+  "audio": "Changed the sound", "audio/device": "Changed the output",
+  "theme": "Changed the theme", "announce": "Changed announcements",
+  "sleep": "Set a sleep timer", "passes/new": "Made a link",
+  "passes/revoke": "Revoked a link", "passes/extend": "Gave a link longer",
+  "token": "Issued a pass for a page", "cache": "Tidied the downloads",
+  "library/scan": "Scanned the music folders",
+  "library/paths": "Changed the music folders", "restart": "Restarted the player",
+  "boot": "Changed what happens at start-up",
+  "boot/early": "Changed what happens at start-up",
+  "port/shuffle": "Moved to another port", "lockdown": "Locked it down",
+  "blocked": "Changed who's shut out", "backup": "Made a backup",
+  "restore": "Restored a backup", "ddns": "Changed the name that follows you",
+  "download": "Kept a track", "pin": "Pinned a track", "alarms": "Changed the alarms",
+  "cast": "Changed the other machines", "lastfm": "Changed Last.fm",
+  "groqkey": "Changed the request reader", "groqmodel": "Changed the request reader",
+  "cookies/import": "Imported cookies", "cookies/grab": "Fetched cookies",
+  "cookies/find": "Looked for cookies", "autoeq/assign": "Chose a headphone correction",
+  "openfolder": "Opened the data folder", "unskip": "Put a song back",
+  "network": "Looked at the network", "setup/done": "Finished setup",
+};
+function auditSaid(action) {
+  const route = String(action || "").replace(/^[A-Z]+\s+/, "").replace(/^\/api\//, "");
+  if (AUDIT_SAID[route]) return AUDIT_SAID[route];
+  const words = route.replace(/[{}]/g, "").replace(/[\/_]/g, " ").trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : "Something changed";
+}
+async function loadAudit() {
+  const box = $("auditlist");
+  if (!box || !ME.owner) return;
+  box.innerHTML = '<div class="hint">Loading…</div>';
+  const r = await api("/api/audit");
+  const rows = ((r && r.entries) || []).slice(0, 40);
+  box.innerHTML = rows.length ? rows.map(row => {
+    const at = new Date(Number(row.at) * 1000);
+    const when = Number.isNaN(at.getTime()) ? "" : ago(at.getTime() / 1000);
+    const who = row.actor === "owner" ? "you" : (row.actor || "").replace(/^guest:/, "");
+    const bad = Number(row.status) >= 400;
+    return `<div class="srow"><span class="slabel">${esc(auditSaid(row.action))}` +
+      `<em>${esc(who)} · ${esc(when)}${bad ? " · refused" : ""}</em></span></div>`;
+  }).join("") : '<div class="hint">Nothing has been changed yet.</div>';
+}
+$("auditrefresh").onclick = loadAudit;
+
 /* Not fire-and-forget: this one asks Windows to register a scheduled task,
    and Windows is entitled to say no. A switch that stays on after the thing
    it switches on didn't happen is worse than no switch. */
@@ -3669,13 +3851,14 @@ async function loadSessions() {
       `<span class="sessname">${esc(s.name)}<em>${what}</em></span>` +
       `<span class="sessmeta ${heat}">${s.ahead} to come · ${s.requests_hour}/h` +
       ` · ${s.plays} played · ${s.listened_minutes}m</span>` +
-      `<button class="pickx sesskick" data-i="${esc(s.id)}" title="End this session">✕</button>` +
+      `<button class="pickx danger sesskick" data-i="${esc(s.id)}" title="End this session">✕</button>` +
       `</div>`;
   }).join("");
 }
 $("whoslistening").addEventListener("click", async e => {
   const b = e.target.closest(".sesskick");
   if (!b) return;
+  if (!armDanger(b, "end this session")) return;
   await api("/api/sessions?close=" + encodeURIComponent(b.dataset.i));
   toast("Session ended");
   // Both lists say something about this person, so both are wrong the moment
@@ -3789,7 +3972,8 @@ async function loadPasses() {
           `title="Another day on this link — they can keep the one they have"` +
           `>${p.expired ? "Restore" : "+1 day"}</button>`
         : "") +
-      `<button class="pickx passkill" data-i="${esc(p.id)}" ` +
+      `<button class="pickx danger passkill" data-i="${esc(p.id)}" ` +
+      `data-danger-action="${p.revoked ? "forget this link" : "ban this link"}" ` +
       `title="${p.revoked ? "Forget this one" : "Ban this link"}">✕</button>` +
       `</span><div class="qrbox" id="pq-${esc(p.id)}"></div></div>`;
   }).join("");
@@ -3879,6 +4063,7 @@ $("passlist").addEventListener("click", async e => {
     loadPasses(); return;
   }
   if (btn.classList.contains("passkill")) {
+    if (!armDanger(btn, btn.dataset.dangerAction || "ban this link")) return;
     // First press bans, second forgets — so a banned link can be cleared away
     // without a second control that only ever applies to half the rows.
     const row = ((await api("/api/passes")) || {}).passes || [];
@@ -4356,7 +4541,10 @@ if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
    that fails anyway is remembered and skipped from then on. A browser that
    plays WebM Opus gets YouTube's own file, untouched and instantly. */
 function fmtBad() {
-  try { return JSON.parse(localStorage.getItem("fmtbad") || "[]"); } catch (e) { return []; }
+  try {
+    const got = JSON.parse(localStorage.getItem("fmtbad") || "[]");
+    return Array.isArray(got) ? got.filter(x => typeof x === "string") : [];
+  } catch (e) { return []; }
 }
 function fmtPick() {
   const probe = document.createElement("audio"), bad = fmtBad();
@@ -5390,6 +5578,24 @@ async function loadSettings() {
     s.eq_presets.forEach(p => { const o = document.createElement("option"); o.value = o.textContent = p; $("eq").appendChild(o); });
   if (s.eq) $("eq").value = s.eq;
   if (s.source) $("source").value = s.source;
+  const duck = Number(s.announce_duck_db ?? _announceDuck);
+  const voice = Number(s.announce_voice_gain_db ?? _announceVoice);
+  $("announceDuck").value = String(Number.isFinite(duck) ? duck : -12);
+  $("announceVoice").value = String(Number.isFinite(voice) ? voice : 0);
+  paintDbSetting("announceDuck", "announceDuckValue");
+  paintDbSetting("announceVoice", "announceVoiceValue");
+  const monitorMinutes = Number(s.library_monitor_minutes) || 0;
+  Array.from($("libmonitor").options).filter(o => o.dataset.custom === "1")
+    .forEach(o => o.remove());
+  if (![0, 5, 15, 30, 60, 360].includes(monitorMinutes) &&
+      !Array.from($("libmonitor").options).some(o => o.value === String(monitorMinutes))) {
+    const custom = document.createElement("option");
+    custom.value = String(monitorMinutes);
+    custom.textContent = `Every ${monitorMinutes} minutes (custom)`;
+    custom.dataset.custom = "1";
+    $("libmonitor").appendChild(custom);
+  }
+  $("libmonitor").value = String(monitorMinutes);
   const viz = s.show_visualiser !== false;
   $("viz").classList.toggle("on", viz);
   document.body.classList.toggle("noviz", !viz);
@@ -5435,6 +5641,7 @@ async function loadSettings() {
   setDot("lfmdot", s.lastfm_set ? "ok" : "");
   $("castall").classList.toggle("on", !!s.cast_all);
   loadAlarms(); loadPeers(); loadLibPaths();
+  loadAudit();
   if (s.theme && s.theme !== curTheme) setTheme(s.theme, false);
   $("diaghint").textContent = "";
 }
@@ -5762,7 +5969,9 @@ function applyActivity(a) {
   document.body.classList.toggle("busy", !!busy);
   if (!busy) return;
   const label = { finding: "Finding", downloading: "Downloading", loading: "Loading" }[a.stage] || a.stage;
-  $("actlabel").textContent = a.detail ? `${label} · ${a.detail}` : label;
+  const text = a.detail ? `${label} · ${a.detail}` : label;
+  $("actlabel").textContent = text;
+  $("actlabel").title = text;
   $("actbar").style.width = Math.round((a.progress || 0) * 100) + "%";
 }
 

@@ -55,15 +55,24 @@ class TasteEngine:
     def _load(self) -> None:
         try:
             d = json.loads(self._file("play_stats.json").read_text("utf-8-sig"))
-            self._song.update({k: list(v) for k, v in d.get("songs", {}).items()})
-            self._artist.update({k: list(v) for k, v in d.get("artists", {}).items()})
-            self._history = d.get("history", [])[-config.get("history_size", 200):]
-            self._recent_meta = d.get("recent", [])[-100:]
-            self._played_at = d.get("played_at", {})
+            self._song.update(self._valid_counts(d.get("songs")))
+            self._artist.update(self._valid_counts(d.get("artists")))
+            history = d.get("history", [])
+            recent = d.get("recent", [])
+            played_at = d.get("played_at", {})
+            self._history = ([v for v in history if isinstance(v, str)]
+                             if isinstance(history, list) else [])[-config.get("history_size", 200):]
+            self._recent_meta = ([v for v in recent if isinstance(v, dict)]
+                                 if isinstance(recent, list) else [])[-100:]
+            self._played_at = ({k: float(v) for k, v in played_at.items()
+                                if isinstance(k, str) and isinstance(v, (int, float))}
+                               if isinstance(played_at, dict) else {})
         except Exception:
             pass
         try:
-            self._liked = json.loads(self._file("liked_songs.json").read_text("utf-8-sig"))
+            raw_liked = json.loads(self._file("liked_songs.json").read_text("utf-8-sig"))
+            self._liked = ([v for v in raw_liked if isinstance(v, dict)]
+                           if isinstance(raw_liked, list) else [])
         except Exception:
             self._liked = []
         try:
@@ -72,6 +81,23 @@ class TasteEngine:
             self._blocked_artists = set(raw.get("artists") or [])
         except Exception:
             self._blocked_songs, self._blocked_artists = {}, set()
+
+    @staticmethod
+    def _valid_counts(raw) -> dict[str, list[int]]:
+        """Keep malformed user-state rows from poisoning every reader."""
+        if not isinstance(raw, dict):
+            return {}
+        out: dict[str, list[int]] = {}
+        for key, value in raw.items():
+            if (not isinstance(key, str) or not isinstance(value, (list, tuple))
+                    or len(value) < 2):
+                continue
+            try:
+                plays, skips = int(value[0]), int(value[1])
+            except (TypeError, ValueError, OverflowError):
+                continue
+            out[key] = [max(0, plays), max(0, skips)]
+        return out
 
     def _prune(self) -> None:
         """Drop the play times we can no longer act on.
@@ -97,7 +123,11 @@ class TasteEngine:
                     "played_at": self._played_at,
                 }))
             except Exception as exc:
-                log.debug("stats save failed: %s", exc)
+                # A failed write must stay dirty or a later flush can never
+                # retry it. This matters for disk-full and transient locks.
+                self._dirty = True
+                log.warning("stats save failed: %s", exc)
+                return
             self._dirty = False
             self._last_save = time.monotonic()
 
@@ -308,8 +338,11 @@ class TasteEngine:
             self._save_blocks()
             # Blocking something you're being played is a request to stop
             # hearing it, so it stops counting for anything as well.
-            if track and track.video_id:
-                self._drop_ids({track.video_id})
+            if on and track and track.video_id:
+                with self._lock:
+                    dropped = self._drop_ids({track.video_id})
+                if dropped:
+                    self.save()
         return changed
 
     def blocks(self) -> dict:
@@ -336,8 +369,15 @@ class TasteEngine:
     def play_counts(self) -> dict[str, int]:
         """video id -> times played through. What the cache keeps by."""
         with self._lock:
-            return {vid: int(v[0]) for vid, v in self._song.items()
-                    if v and len(v) > 0 and v[0]}
+            out = {}
+            for vid, value in self._song.items():
+                try:
+                    count = int(value[0])
+                except (KeyError, IndexError, TypeError, ValueError, OverflowError):
+                    continue
+                if count:
+                    out[vid] = count
+            return out
 
     def liked_seed(self) -> str | None:
         with self._lock:
