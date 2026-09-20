@@ -426,12 +426,24 @@ class Sessions:
         range", and it doesn't run at all if the owner's queue is stopped.
         """
         def loop() -> None:
+            next_tidy = 0.0
             while True:
                 time.sleep(5.0)
                 try:
                     self.reap()
                 except Exception as exc:
                     log.debug("reap: %s", exc)
+                # Expiry cleanup used to happen when the owner opened the
+                # Sharing page. That made a supposedly read-only request
+                # delete pass rows. Keep the maintenance on this existing
+                # lifecycle watchdog instead, where it belongs.
+                if time.monotonic() >= next_tidy:
+                    try:
+                        from ..web.security import tidy_passes
+                        tidy_passes()
+                    except Exception as exc:
+                        log.debug("pass tidy: %s", exc)
+                    next_tidy = time.monotonic() + 3600.0
 
         threading.Thread(target=loop, daemon=True, name="sessions").start()
 

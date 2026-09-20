@@ -115,11 +115,13 @@ def cert_days_left(cert: str = "") -> float:
 
 def _port_free(port: int) -> bool:
     """Can we bind it right now?"""
+    if not isinstance(port, int) or not 1 <= port <= 65535:
+        return False
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         s.bind((config.get("host", "0.0.0.0"), port))
         return True
-    except OSError:
+    except (OSError, OverflowError, ValueError):
         return False
     finally:
         s.close()
@@ -170,6 +172,13 @@ def pick_port(preferred: int) -> int:
     on the same port silently swallows every request the player makes and the
     window just shows a bare 404.
     """
+    try:
+        preferred = int(preferred)
+    except (TypeError, ValueError, OverflowError):
+        preferred = 7420
+    if not 1025 <= preferred <= 65535:
+        log.warning("configured port %r is invalid; using 7420", preferred)
+        preferred = 7420
     if _is_ours(preferred):
         # Another copy of us is already answering here. Starting anyway means
         # two servers sharing one set of mpv pipes, each killing the other's
@@ -427,7 +436,7 @@ def run() -> None:
     startup()
     from .core import ddns
     ddns.start()
-    port = pick_port(int(config.get("port", 5000)))
+    port = pick_port(config.get("port", 7420))
     runtime["port"] = port
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)

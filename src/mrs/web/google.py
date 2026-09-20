@@ -36,7 +36,16 @@ UA = {"User-Agent": "MusicRequestServer/2.0 (personal music player)"}
 # memory: a restart mid-sign-in is a sign-in you do again.
 _PENDING: dict[str, dict] = {}
 _PENDING_FOR = 600.0
+# OAuth state is attacker-controlled at the start endpoint.  Keep a hard
+# process-wide ceiling and a smaller ceiling per requester so abandoned starts
+# cannot grow memory or make every later request scan an unbounded mapping.
+_PENDING_MAX = 128
+_PENDING_PER_IP = 8
 _lock = threading.RLock()
+
+
+class SignInBusy(RuntimeError):
+    """Too many unfinished Google sign-ins are already outstanding."""
 
 
 def configured() -> bool:
@@ -57,7 +66,7 @@ def redirect_uri() -> str:
 
 
 def start(next_path: str = "/player", invited_by: str = "",
-          scope: str = "") -> str:
+          scope: str = "", client_ip: str = "") -> str:
     """The URL to send somebody to, and the state that remembers why."""
     if not configured():
         return ""
@@ -71,8 +80,14 @@ def start(next_path: str = "/player", invited_by: str = "",
         for old, row in list(_PENDING.items()):
             if now - row["at"] > _PENDING_FOR:
                 _PENDING.pop(old, None)
+        if len(_PENDING) >= _PENDING_MAX:
+            raise SignInBusy("too many sign-ins are already in progress")
+        if client_ip and sum(1 for row in _PENDING.values()
+                             if row.get("ip") == client_ip) >= _PENDING_PER_IP:
+            raise SignInBusy("too many sign-ins from this address")
         _PENDING[state] = {"at": now, "nonce": nonce, "next": next_path,
-                           "invited_by": invited_by, "scope": scope, "uri": uri}
+                           "invited_by": invited_by, "scope": scope, "uri": uri,
+                           "ip": client_ip}
     query = urllib.parse.urlencode({
         "client_id": str(config.get("google_client_id")).strip(),
         "redirect_uri": uri,
@@ -156,4 +171,5 @@ def finish(code: str, row: dict) -> dict | None:
         log.warning("google has not verified %r", claims.get("email"))
         return None
     return {"sub": str(claims["sub"]), "email": str(claims.get("email", "")),
-            "name": str(claims.get("name") or claims.get("given_name") or "")}
+            "name": str(claims.get("name") or claims.get("given_name") or ""),
+            "picture": str(claims.get("picture") or "")}

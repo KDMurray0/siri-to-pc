@@ -157,8 +157,9 @@ class TasteEngine:
 
     def _save_liked(self) -> None:
         try:
-            self._file("liked_songs.json").write_text(
-                json.dumps(self._liked[-500:]), encoding="utf-8")
+            with self._lock:
+                liked = [dict(row) for row in self._liked[-500:]]
+            write_atomic(self._file("liked_songs.json"), json.dumps(liked))
         except Exception as exc:
             # Silence here loses everything you've ever liked, and the only
             # sign is that the list is short next time you look.
@@ -353,10 +354,11 @@ class TasteEngine:
     def _save_blocks(self) -> None:
         try:
             with self._lock:
-                data = {"songs": self._blocked_songs,
+                data = {"songs": {key: dict(row)
+                                  for key, row in self._blocked_songs.items()},
                         "artists": sorted(self._blocked_artists)}
-            self._file("blocked_music.json", create=True).write_text(
-                json.dumps(data), encoding="utf-8")
+            write_atomic(self._file("blocked_music.json", create=True),
+                         json.dumps(data))
         except Exception as exc:
             log.warning("couldn't save what you blocked: %s", exc)
 

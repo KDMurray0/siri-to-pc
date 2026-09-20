@@ -24,13 +24,14 @@ from pathlib import Path
 
 from ..config import config
 from ..logging_setup import get
-from ..paths import data_dir
+from ..paths import data_dir, write_atomic
 
 log = get("autoeq")
 
 BASE = "https://raw.githubusercontent.com/jaakkopasanen/AutoEq/master/results/"
 UA = {"User-Agent": "MusicRequestServer/2.0 (personal music player)"}
 REFRESH = 7 * 86400
+MAX_PROFILE_FILES = 128
 
 # AutoEq's own advice on whose measurement to trust when there are several.
 _SOURCE_RANK = {"oratory1990": 0, "crinacle": 1, "Innerfidelity": 2,
@@ -108,9 +109,7 @@ def _load(refresh: bool = False) -> list[dict]:
             got = _fetch(BASE + "INDEX.md", timeout=20)
             if got and b"- [" in got:
                 text = got.decode("utf-8", "replace")
-                tmp = cached.with_suffix(".part")
-                tmp.write_text(text, "utf-8")
-                tmp.replace(cached)
+                write_atomic(cached, text)
         if not text and cached.is_file():
             text = cached.read_text("utf-8", "replace")
         _entries = parse_index(text)
@@ -120,6 +119,11 @@ def _load(refresh: bool = False) -> list[dict]:
 
 def entry(entry_id: str) -> dict | None:
     _load()
+    return _by_id.get(entry_id or "")
+
+
+def cached_entry(entry_id: str) -> dict | None:
+    """An entry already resident in this process, without fetching the index."""
     return _by_id.get(entry_id or "")
 
 
@@ -240,6 +244,19 @@ def _profile_file(entry_id: str) -> Path:
     return _dir() / "profiles" / f"{re.sub(r'[^a-f0-9]', '', entry_id)}.txt"
 
 
+def _prune_profiles(keep: Path) -> None:
+    """Keep an abusive or very old client from growing this cache forever."""
+    try:
+        rows = sorted((p for p in (_dir() / "profiles").glob("*.txt")
+                       if p.is_file()), key=lambda p: p.stat().st_mtime,
+                      reverse=True)
+        for stale in rows[MAX_PROFILE_FILES:]:
+            if stale != keep:
+                stale.unlink(missing_ok=True)
+    except OSError as exc:
+        log.debug("couldn't prune AutoEq profiles: %s", exc)
+
+
 def profile(entry_id: str, fetch: bool = True) -> dict | None:
     """The filters for an entry, from disk, or GitHub the first time."""
     path = _profile_file(entry_id)
@@ -261,9 +278,8 @@ def profile(entry_id: str, fetch: bool = True) -> dict | None:
     got = parse_profile(text)
     if not got["filters"]:
         return None
-    tmp = path.with_suffix(".part")
-    tmp.write_text(text, "utf-8")
-    tmp.replace(path)
+    write_atomic(path, text)
+    _prune_profiles(path)
     return got
 
 

@@ -6,6 +6,8 @@ import os
 import shutil
 import sys
 import tempfile
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 APP_NAME = "MusicRequestServer"
@@ -124,6 +126,28 @@ def migrate_legacy_data() -> list[str]:
     return moved
 
 
+def _write_replacement(path: Path, data: str | bytes) -> None:
+    """Replace *path* with fully flushed text or bytes."""
+    binary = isinstance(data, bytes)
+    mode = "wb" if binary else "w"
+    kwargs = {} if binary else {"encoding": "utf-8"}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".",
+                               suffix=".tmp")
+    try:
+        with os.fdopen(fd, mode, **kwargs) as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def write_atomic(path: Path, text: str) -> None:
     """Write a file so a crash can't leave half of one behind.
 
@@ -136,18 +160,74 @@ def write_atomic(path: Path, text: str) -> None:
     a data directory would otherwise both write "x.tmp" and one would rename
     the other's half-finished file into place.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".",
-                               suffix=".tmp")
+    _write_replacement(path, text)
+
+
+def write_atomic_bytes(path: Path, data: bytes) -> None:
+    """Binary counterpart to :func:`write_atomic`."""
+    _write_replacement(path, data)
+
+
+def _lock_owner_running(lock: Path) -> bool:
+    """Whether the local process named in a lock file is still alive.
+
+    Treat an unreadable or inaccessible process as alive.  Retaining a stale
+    lock briefly is harmless; deleting a live lock reintroduces the precise
+    lost-update race this mechanism exists to prevent.
+    """
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())     # rename is atomic; the write wasn't
-        os.replace(tmp, path)
-    except Exception:
+        pid = int(lock.read_text(encoding="ascii").split()[0])
+        if pid <= 0:
+            return False
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return True
+    except (IndexError, UnicodeError, ValueError):
+        return False
+
+
+@contextmanager
+def exclusive_file_lock(path: Path, *, timeout: float = 5.0,
+                        stale_after: float = 120.0):
+    """Serialize a read-modify-write transaction between server processes.
+
+    Atomic replacement prevents a torn file, but not two processes each
+    reading the same old JSON and making one another's changes disappear.
+    The lock sits beside the specific data file so unrelated state remains
+    independently writable.  A stale lock from a killed process is recovered
+    only after a generous age; a live writer is never silently bypassed.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = path.with_name(path.name + ".lock")
+    deadline = time.monotonic() + timeout
+    fd: int | None = None
+    while fd is None:
         try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, f"{os.getpid()} {time.time():.6f}\n".encode())
+        except FileExistsError:
+            try:
+                age = time.time() - lock.stat().st_mtime
+                if age > stale_after and not _lock_owner_running(lock):
+                    lock.unlink()
+                    continue
+            except FileNotFoundError:
+                continue
+            except OSError:
+                pass
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"timed out waiting to update {path.name}")
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        try:
+            os.close(fd)
+        finally:
+            try:
+                lock.unlink()
+            except FileNotFoundError:
+                pass

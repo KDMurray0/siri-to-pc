@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import urllib.parse
 import time
 import urllib.request
@@ -17,6 +18,10 @@ SEARCH = "https://lrclib.net/api/search"
 UA = {"User-Agent": "MusicRequestServer/2.0 (personal music player)"}
 _TIME = re.compile(r"\[(\d+):(\d+(?:\.\d+)?)\]")
 _cache: dict[str, dict] = {}
+_cache_lock = threading.RLock()
+_inflight: dict[str, threading.Event] = {}
+_misses: dict[str, float] = {}
+_MISS_TTL = 30.0
 
 
 def _fetch(url: str):
@@ -148,15 +153,71 @@ def _pick(rows, duration: float) -> tuple[dict | None, bool]:
     return min(rows, key=off), False
 
 
+def _cache_key(title: str, artist: str, duration: int = 0) -> str:
+    """The recording identity shared by the cache and its cache-only reader."""
+    return f"{artist}|{title}|{int(round(duration or 0))}"
+
+
+def cached_lyrics(title: str, artist: str, duration: int = 0) -> dict | None:
+    """Return an already-resolved transcription without starting a lookup."""
+    if not title:
+        return None
+    with _cache_lock:
+        return _cache.get(_cache_key(title, artist, duration))
+
+
 def get_lyrics(title: str, artist: str, duration: int = 0) -> dict | None:
     if not title:
         return None
     # The length is part of what a result is *for*: the same title by the
     # same artist in two recordings needs two answers, not whichever was
     # looked up first.
-    key = f"{artist}|{title}|{int(round(duration or 0))}"
-    if key in _cache:
-        return _cache[key]
+    key = _cache_key(title, artist, duration)
+    with _cache_lock:
+        if key in _cache:
+            return _cache[key]
+        if _misses.get(key, 0.0) > time.monotonic():
+            return None
+        waiting = _inflight.get(key)
+        if waiting is None:
+            waiting = threading.Event()
+            _inflight[key] = waiting
+            leader = True
+        else:
+            leader = False
+
+    # One browser's lyrics panel is enough to supply every other panel for
+    # this exact recording. Followers wait for that bounded result instead of
+    # opening their own three-request LRCLIB fallback chain.
+    if not leader:
+        waiting.wait(25.0)
+        with _cache_lock:
+            return _cache.get(key)
+
+    result = None
+    try:
+        result = _get_lyrics(title, artist, duration)
+        with _cache_lock:
+            if result is None:
+                _misses[key] = time.monotonic() + _MISS_TTL
+                if len(_misses) > 256:
+                    # Negative answers are deliberately short-lived; they
+                    # are not worth becoming an unbounded second cache.
+                    _misses.clear()
+            else:
+                if len(_cache) > 100:
+                    _cache.clear()
+                _cache[key] = result
+                _misses.pop(key, None)
+        return result
+    finally:
+        with _cache_lock:
+            _inflight.pop(key, None)
+            waiting.set()
+
+
+def _get_lyrics(title: str, artist: str, duration: int = 0) -> dict | None:
+    """Fetch and parse one record. Caller owns its per-record flight."""
 
     params = {"track_name": title, "artist_name": artist or ""}
     if duration:
@@ -190,7 +251,4 @@ def get_lyrics(title: str, artist: str, duration: int = 0) -> dict | None:
                                     _parse_synced(data["syncedLyrics"]))
     if not result["synced"] and not result["plain"]:
         return None
-    if len(_cache) > 100:
-        _cache.clear()
-    _cache[key] = result
     return result

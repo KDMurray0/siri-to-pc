@@ -377,6 +377,15 @@ class TagStore:
         self._enqueue(ak, track)
         return None
 
+    def cached(self, track: Track) -> dict[str, int] | None:
+        """Return known tags without queueing a Last.fm lookup."""
+        if not track or not self.enabled():
+            return None
+        self.load()
+        tk, ak = self._track_key(track), self._artist_key(track)
+        with self._lock:
+            return self._cache.get(tk) or self._cache.get(ak)
+
     def _enqueue(self, key: str, track: Track) -> None:
         with self._lock:
             if key in self._queued or len(self._queued) > 500:

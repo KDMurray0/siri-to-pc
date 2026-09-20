@@ -19,7 +19,7 @@ import threading
 from pathlib import Path
 
 from ..logging_setup import get
-from ..paths import data_dir
+from ..paths import data_dir, write_atomic_bytes
 
 log = get("spectrum")
 
@@ -182,14 +182,27 @@ def _normalise(frames: list[list[float]]) -> bytes:
     return bytes(out)
 
 
+def _read_cache(cache: Path) -> bytes | None:
+    """Return a complete spectrum cache, removing interrupted writes."""
+    try:
+        data = cache.read_bytes()
+        if data and len(data) % len(BANDS) == 0:
+            return data
+        # A successful analysis can never produce a partial frame.  Treating
+        # one as usable permanently freezes a broken visualiser until manual
+        # cache deletion.
+        cache.unlink(missing_ok=True)
+    except Exception:
+        pass
+    return None
+
+
 def analyse(path: str) -> bytes:
     """Envelope for a file, cached on disk."""
     cache = _cache_file(path)
-    try:
-        if cache.is_file() and cache.stat().st_size:
-            return cache.read_bytes()
-    except Exception:
-        pass
+    hit = _read_cache(cache)
+    if hit is not None:
+        return hit
     if not path or not Path(path).is_file():
         return b""
     try:
@@ -199,7 +212,7 @@ def analyse(path: str) -> bytes:
         return b""
     if data:
         try:
-            cache.write_bytes(data)
+            write_atomic_bytes(cache, data)
         except Exception:
             pass
         log.info("analysed %s (%d frames)", Path(path).name, len(data) // len(BANDS))
@@ -207,11 +220,7 @@ def analyse(path: str) -> bytes:
 
 
 def cached(path: str) -> bytes | None:
-    try:
-        f = _cache_file(path)
-        return f.read_bytes() if f.is_file() else None
-    except Exception:
-        return None
+    return _read_cache(_cache_file(path))
 
 
 _queued: set[str] = set()

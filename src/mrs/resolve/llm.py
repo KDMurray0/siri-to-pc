@@ -126,6 +126,11 @@ MODELS_URL = "https://api.groq.com/openai/v1/models"
 _models: tuple[float, list[str]] = (0.0, [])
 
 
+def cached_models() -> list[str]:
+    """Return the last model list without contacting Groq."""
+    return list(_models[1])
+
+
 def models(force: bool = False) -> list[str]:
     """What Groq will actually serve us right now, best guess first.
 

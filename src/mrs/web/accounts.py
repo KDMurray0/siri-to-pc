@@ -20,15 +20,22 @@ import time
 
 from ..config import config
 from ..logging_setup import get
-from ..paths import data_dir, write_atomic
+from ..paths import data_dir, exclusive_file_lock, write_atomic
 
 log = get("accounts")
 
 # What an account may do. Deliberately the same words a link's scope uses, so
 # everything downstream that already understands a scope needs no new case.
 SCOPES = ("owner", "full", "phone", "blocked")
+# New Google identities must never be able to self-assign ownership.  Owners
+# are promoted solely by the configured owner email or by an existing owner.
+NEW_ACCOUNT_SCOPES = ("full", "phone", "blocked")
 FILE = "accounts.json"
 _lock = threading.RLock()
+
+
+class AccountPersistenceError(RuntimeError):
+    """The identity change was not durably saved."""
 
 
 def _path():
@@ -50,7 +57,11 @@ def _read() -> dict:
                 "sub": sub,
                 "email": str(row.get("email", ""))[:120],
                 "name": str(row.get("name", ""))[:80],
-                "scope": row.get("scope") if row.get("scope") in SCOPES else "phone",
+                "picture": str(row.get("picture", ""))[:400],
+                # A damaged account file must fail closed.  Treating an
+                # unknown value as phone access would turn corruption into an
+                # accidental admission decision.
+                "scope": row.get("scope") if row.get("scope") in SCOPES else "blocked",
                 "created": int(row.get("created") or 0),
                 "last_seen": int(row.get("last_seen") or 0),
                 "invited_by": str(row.get("invited_by", ""))[:60],
@@ -58,11 +69,13 @@ def _read() -> dict:
     return out
 
 
-def _write(people: dict) -> None:
+def _write(people: dict) -> bool:
     try:
         write_atomic(_path(), json.dumps({"version": 1, "people": people}))
-    except OSError as exc:
+        return True
+    except Exception as exc:
         log.warning("couldn't save the accounts: %s", exc)
+        return False
 
 
 def _ok_sub(sub: str) -> bool:
@@ -96,21 +109,32 @@ def owner_email() -> str:
     return str(config.get("owner_email") or "").strip().lower()
 
 
-def admit(sub: str, email: str, name: str, *, invited_by: str = "",
-          scope: str = "") -> dict:
+def default_scope() -> str:
+    got = str(config.get("new_account_scope") or "blocked")
+    return got if got in NEW_ACCOUNT_SCOPES else "blocked"
+
+
+def admit(sub: str, email: str, name: str, *, picture: str = "",
+          invited_by: str = "", scope: str = "") -> dict:
     """Record somebody who has just proved who they are.
 
-    The first person in is the owner only when the email matches the one
-    written down beforehand. Nobody becomes the owner by being early.
+    A new sign-in lands at the owner's chosen default -- their own device, or
+    held as blocked until the owner lets them in. The first person in is the
+    owner only when the email matches the one written down beforehand; nobody
+    becomes the owner by being early.
     """
     email = (email or "").strip().lower()
-    with _lock:
+    with _lock, exclusive_file_lock(_path()):
         people = _read()
         row = people.get(sub)
         now = int(time.time())
         if row is None:
+            # The admission route selects the scope from a validated pass or
+            # a local-network policy.  Do not accept owner here: OAuth alone
+            # must not create an owner account.
+            admitted_scope = scope if scope in NEW_ACCOUNT_SCOPES else default_scope()
             row = {"sub": sub, "email": email, "name": name[:80],
-                   "scope": scope if scope in SCOPES else "phone",
+                   "picture": picture[:400], "scope": admitted_scope,
                    "created": now, "invited_by": invited_by[:60], "last_seen": now}
             if email and email == owner_email():
                 row["scope"] = "owner"
@@ -119,16 +143,19 @@ def admit(sub: str, email: str, name: str, *, invited_by: str = "",
         else:
             row["email"] = email or row["email"]
             row["name"] = name[:80] or row["name"]
+            if picture:
+                row["picture"] = picture[:400]
             row["last_seen"] = now
             # The owner's address can be set after they first signed in.
             if email and email == owner_email() and row["scope"] != "owner":
                 row["scope"] = "owner"
-        _write(people)
+        if not _write(people):
+            raise AccountPersistenceError("couldn't save the account")
         return dict(row)
 
 
 def seen(sub: str) -> None:
-    with _lock:
+    with _lock, exclusive_file_lock(_path()):
         people = _read()
         row = people.get(sub)
         if not row:
@@ -143,7 +170,7 @@ def seen(sub: str) -> None:
 def set_scope(sub: str, scope: str) -> dict | None:
     if scope not in SCOPES:
         raise ValueError("no such scope")
-    with _lock:
+    with _lock, exclusive_file_lock(_path()):
         people = _read()
         row = people.get(sub)
         if not row:
@@ -155,17 +182,19 @@ def set_scope(sub: str, scope: str) -> dict | None:
             if not others:
                 raise ValueError("that's the only owner")
         row["scope"] = scope
-        _write(people)
+        if not _write(people):
+            raise AccountPersistenceError("couldn't save the account")
         log.info("%s is now %s", row.get("email") or sub, scope)
         return dict(row)
 
 
 def forget(sub: str) -> bool:
-    with _lock:
+    with _lock, exclusive_file_lock(_path()):
         people = _read()
         row = people.pop(sub, None)
         if row:
-            _write(people)
+            if not _write(people):
+                raise AccountPersistenceError("couldn't save the account")
             log.info("forgot the account %s", row.get("email") or sub)
         return bool(row)
 
@@ -183,4 +212,5 @@ def as_row(account: dict) -> dict:
             "scope": "full" if scope == "owner" else scope,
             "owner": scope == "owner",
             "account": account["sub"],
-            "email": account.get("email", "")}
+            "email": account.get("email", ""),
+            "picture": account.get("picture", "")}

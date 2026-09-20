@@ -8,8 +8,8 @@ import secrets
 import threading
 from typing import Any
 
-from .paths import (config_path, data_dir, migrate_legacy_data,
-                    write_atomic)
+from .paths import (config_path, data_dir, exclusive_file_lock,
+                    migrate_legacy_data, write_atomic)
 
 _lock = threading.RLock()
 
@@ -58,6 +58,10 @@ DEFAULTS: dict[str, Any] = {
     "google_client_id": "",
     "google_client_secret": "",     # never leaves this machine; hidden from the UI
     "owner_email": "",
+    # An uninvited Google sign-in is held until an owner explicitly admits
+    # it.  Invited sign-ins inherit the scope of the pass that admitted them.
+    "new_account_scope": "phone",
+    "server_name": "Music Request",
     "crossfade": 0,
     "repeat": "off",          # off | all | one
     "shuffle": False,
@@ -286,7 +290,7 @@ class Config:
         if not key or self._shadow_key() == key:
             return
         try:
-            self._shadow_path().write_text(key, encoding="utf-8")
+            write_atomic(self._shadow_path(), key)
         except Exception as exc:
             print(f"[config] couldn't shadow the api key: {exc}")
 
@@ -318,9 +322,24 @@ class Config:
         actually changed on top of it. `full` is for the one caller that
         genuinely owns the whole thing: the initial load filling in defaults.
         """
-        with _lock:
+        # The re-read and replacement are one transaction.  Atomic writes
+        # alone cannot stop a second process from slipping in between them.
+        with _lock, exclusive_file_lock(self._path):
             data = self._data
-            if not full and self._dirty:
+            if full:
+                # Two first launches can both see a missing config before one
+                # creates it.  Once we hold the lock, the second must adopt
+                # the first complete document rather than overwrite its key
+                # (or any setup choices) with its own bootstrap snapshot.
+                try:
+                    on_disk = json.loads(
+                        self._path.read_text(encoding="utf-8-sig") or "{}")
+                    if isinstance(on_disk, dict) and on_disk:
+                        data = {**self._data, **on_disk}
+                        self._data.update(on_disk)
+                except Exception:
+                    pass
+            elif self._dirty:
                 try:
                     on_disk = json.loads(
                         self._path.read_text(encoding="utf-8-sig") or "{}")

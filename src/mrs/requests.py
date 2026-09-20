@@ -971,8 +971,9 @@ def add_spotify(url: str, queue=None, room: str = "", lists=OWN) -> dict:
 def play_station(url: str, name: str = "", art: str = "", queue=None) -> dict:
     """Tune a live station picked from the search results."""
     queue = queue if queue is not None else player.queue
-    if not url:
-        return {"status": "error", "message": "No station"}
+    from .core import radio
+    if not radio.is_known_stream(url):
+        return {"status": "error", "message": "Choose a station from the search results"}
     track = Track(title=name or "Radio", artist="Radio", art=art, url=url,
                   source="radio", origin="request", reason="asked")
     queue.play_now([track], kind="radio")

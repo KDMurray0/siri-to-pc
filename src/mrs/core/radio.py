@@ -10,6 +10,7 @@ Streams move, time out and lie. Nothing here retries hard or blocks the player.
 from __future__ import annotations
 
 import json
+import ipaddress
 import threading
 import time
 import urllib.parse
@@ -38,6 +39,25 @@ _last_call = 0.0
 _blocked_until = 0.0
 _misses = 0
 _gate = threading.Lock()
+
+
+def _safe_stream_url(url: str) -> bool:
+    """A stream we could legitimately hand to mpv, never a local endpoint."""
+    try:
+        got = urllib.parse.urlsplit((url or "").strip())
+        host = (got.hostname or "").lower()
+    except ValueError:
+        return False
+    if got.scheme not in ("http", "https") or not host or got.username or got.password:
+        return False
+    if host in ("localhost", "localhost.localdomain") or host.endswith(".local"):
+        return False
+    try:
+        return ipaddress.ip_address(host).is_global
+    except ValueError:
+        # A directory-supplied DNS name is allowed; arbitrary DNS names are
+        # not, because is_known_stream() below matches only recent results.
+        return len(host) <= 253
 
 
 def _call(path: str) -> list:
@@ -82,7 +102,7 @@ def _call(path: str) -> list:
 def _to_track(row: dict) -> Track | None:
     url = (row.get("url_resolved") or row.get("url") or "").strip()
     name = (row.get("name") or "").strip()
-    if not url or not name:
+    if not url or not name or not _safe_stream_url(url):
         return None
     return Track(
         title=name,
@@ -101,7 +121,8 @@ def search(query: str, limit: int = 4) -> list[Track]:
     if len(query) < 3:
         return []
     ck = f"{query.lower()}:{limit}"
-    hit = _cache.get(ck)
+    with _gate:
+        hit = _cache.get(ck)
     if hit and time.time() - hit[0] < CACHE_TTL:
         return hit[1]
 
@@ -135,8 +156,25 @@ def search(query: str, limit: int = 4) -> list[Track]:
         out.append(t)
         if len(out) >= limit:
             break
-    _cache[ck] = (time.time(), out)
+    with _gate:
+        _cache[ck] = (time.time(), out)
     return out
+
+
+def is_known_stream(url: str) -> bool:
+    """Was this exact public stream just returned by the station directory?
+
+    The play endpoint must not be a generic URL loader.  Requiring a recent
+    result turns the directory search into the narrow server-side allowlist
+    and prevents a full-access guest aiming mpv at loopback or private hosts.
+    """
+    url = (url or "").strip()
+    if not _safe_stream_url(url):
+        return False
+    now = time.time()
+    with _gate:
+        return any(now - at < CACHE_TTL and any(t.url == url for t in tracks)
+                   for at, tracks in _cache.values())
 
 
 def is_station(track: Track | None) -> bool:

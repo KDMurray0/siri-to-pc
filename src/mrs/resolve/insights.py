@@ -240,6 +240,19 @@ class _Store:
             self._rows[key] = row
         self.save()
 
+    def claim(self, key: str) -> bool:
+        """Become the one worker allowed to resolve this record."""
+        self.load()
+        with self._lock:
+            if key in self._rows or key in self._busy:
+                return False
+            self._busy.add(key)
+            return True
+
+    def release(self, key: str) -> None:
+        with self._lock:
+            self._busy.discard(key)
+
 
 store = _Store()
 
@@ -249,13 +262,9 @@ def _key(title: str, artist: str) -> str:
     return f"{_fold((artist or '').lower())}|{_fold(_plain(title).lower())}"
 
 
-def lookup(title: str, artist: str) -> dict:
-    """Everything the internet will say about this record. Cached forever."""
+def _lookup_claimed(title: str, artist: str) -> dict:
+    """Resolve a record after this caller has claimed its in-flight slot."""
     key = _key(title, artist)
-    got = store.cached(key)
-    if got is not None:
-        return got
-
     fm = _lastfm(title, artist)
     page = _wiki_page(title, artist)
     story = _story_from(_wiki_text(page)) if page else ""
@@ -276,6 +285,25 @@ def lookup(title: str, artist: str) -> dict:
            "sources": sources, "at": time.time()}
     store.put(key, row)
     return row
+
+
+def lookup(title: str, artist: str) -> dict | None:
+    """Everything the internet will say about this record, once at a time.
+
+    A simultaneous panel refresh returns not-ready to followers.  They do not
+    start their own Last.fm/Wikipedia/LLM chain, and the next refresh reads
+    the shared cached result.
+    """
+    key = _key(title, artist)
+    got = store.cached(key)
+    if got is not None:
+        return got
+    if not store.claim(key):
+        return None
+    try:
+        return _lookup_claimed(title, artist)
+    finally:
+        store.release(key)
 
 
 def _heard(taste, track: Track) -> dict:
@@ -312,17 +340,23 @@ def _heard(taste, track: Track) -> dict:
     return out
 
 
-def about(track: Track | None, *, taste=None, fetch: bool = True) -> dict:
+def about(track: Track | None, *, taste=None, fetch: bool = True,
+          enrich: bool | None = None) -> dict:
     """The panel's contents for one record.
 
-    `fetch=False` answers only from what's already on disk, for the caller
-    that wants an instant answer and will ask again in a moment.
+    `fetch=False` is a cache-only read: it neither starts the main lookup nor
+    queues tag/era enrichment.  Callers that deliberately want a background
+    panel refresh can request that enrichment explicitly.
     """
     if not track or not track.title:
         return {"ready": False, "title": "", "artist": ""}
     from ..core.era import era
     from ..core.tags import tagstore
 
+    # The cache-only form is used by compatibility GETs.  It has to be truly
+    # passive; era.get() and tagstore.get() queue network workers on misses.
+    if enrich is None:
+        enrich = fetch
     key = _key(track.title, track.artist)
     row = store.cached(key)
     if row is None and fetch:
@@ -332,7 +366,7 @@ def about(track: Track | None, *, taste=None, fetch: bool = True) -> dict:
 
     tags = []
     try:
-        got = tagstore.get(track)
+        got = (tagstore.get(track) if enrich else tagstore.cached(track))
         tags = [t for t, _ in sorted((got or {}).items(),
                                      key=lambda kv: -kv[1])][:6]
     except Exception:
@@ -346,7 +380,7 @@ def about(track: Track | None, *, taste=None, fetch: bool = True) -> dict:
         # The artist's start year, not the record's — era looks up bands.
         # Shown as "active since", because putting 1995 next to a song
         # from 2001 is just wrong.
-        "since": era.get(track) or 0,
+        "since": (era.get(track) if enrich else era.cached(track)) or 0,
         "tags": tags,
         "story": row.get("story", ""),
         "facts": row.get("facts", []),
@@ -362,20 +396,15 @@ def warm(track: Track | None) -> None:
     if not track or not track.title:
         return
     key = _key(track.title, track.artist)
-    if store.cached(key) is not None:
+    if not store.claim(key):
         return
-    with store._lock:
-        if key in store._busy:
-            return
-        store._busy.add(key)
 
     def run():
         try:
-            lookup(track.title, track.artist)
+            _lookup_claimed(track.title, track.artist)
         except Exception as exc:
             log.debug("warm failed: %s", exc)
         finally:
-            with store._lock:
-                store._busy.discard(key)
+            store.release(key)
 
     threading.Thread(target=run, daemon=True, name="insights").start()

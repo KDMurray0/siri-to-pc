@@ -870,6 +870,13 @@ def related(video_id: str, limit: int = 10) -> list[Track]:
     """The 'radio' continuation for a track."""
     if not video_id:
         return []
+    # The public route takes this value directly.  Without a core limit a
+    # client can turn one radio click into an arbitrarily large upstream
+    # continuation request even if another caller bypasses the HTTP layer.
+    try:
+        limit = max(1, min(20, int(limit)))
+    except (TypeError, ValueError, OverflowError):
+        limit = 10
     key = f"radio:{video_id}:{limit}"
     hit = _cached(key)
     if hit is not None:

@@ -22,6 +22,7 @@ import json
 import socket
 import threading
 import time
+import urllib.parse
 import urllib.request
 
 from ..config import config
@@ -197,9 +198,14 @@ def live_port() -> int:
 
 
 def player_url(host: str, pass_token: str = "") -> str:
-    port = live_port()
-    q = f"?key={pass_token}" if pass_token else ""
-    return f"{scheme()}://{host}:{port}/player{q}"
+    """The front door, and nothing else in the url.
+
+    It used to carry a signed pass so a copied link worked for whoever you
+    sent it to. People sign in now, so the link is just the address and what
+    you do at it is prove who you are. The argument stays for the callers that
+    still pass one; it is ignored.
+    """
+    return f"{scheme()}://{host}:{live_port()}/"
 
 
 def addresses(pass_token: str = "") -> dict:

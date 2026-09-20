@@ -10,8 +10,11 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
 import json
+import math
 import mimetypes
+import urllib.parse
 import shutil
+import threading
 import time
 from pathlib import Path
 
@@ -292,16 +295,49 @@ Owner = Depends(require_admin)
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request, key: str = Query(default=""),
                 token: str = Query(default="")):
-    """The setup page: the Shortcut recipe, and the key it needs.
+    """The front door.
 
-    Guarded, because it prints the master key straight into the html. This
-    was the one page that never got the treatment /player did — it predates
-    the whole idea of the server being reachable from outside the house, and
-    once the port was forwarded it meant anyone who found it owned the
-    server. On the home network it opens as it always has.
+    Everyone lands here and there is one thing to do: sign in. The owner (at
+    home, or arriving with the key) and anyone already signed in are sent
+    straight on to the player -- a home screen you have to click past is one
+    nobody wants -- and everyone else meets the sign-in page. A signed pass
+    is still an invitation credential; signing in gives that person a durable
+    identity after the invitation has been checked.
+    """
+    from .security import is_home
+    ip = _client_ip(request)
+    offered = (token or key
+               or request.headers.get("X-Music-Key")
+               or request.headers.get("X-API-Key") or "")
+    home_owner = is_home(ip) and config.get("lan_open", True) and not offered
+    row = _account_row(request)
 
-    Owner-only rather than any-valid-link: a guest has no business here, and
-    what's on it is the credential their link exists to avoid handing over.
+    def landing(blocked=False):
+        return templates.TemplateResponse(request, "landing.html", {
+            "google": google.configured(),
+            "server_name": config.get("server_name", "Music Request"),
+            "blocked": blocked})
+
+    if row and row.get("blocked"):
+        return landing(blocked=True)
+    owner = is_owner(request, key)
+    if home_owner or (row is not None) or owner:
+        # A key in the url is the owner's; keep it so the player still gets
+        # the owner credential. A signed-in cookie carries itself.
+        tail = (f"?key={urllib.parse.quote(key, safe='')}"
+                if key and row is None and _key_in_url_ok(request)
+                and same_key(key, config.get("api_key") or "") else "")
+        return RedirectResponse("/player" + tail, status_code=302)
+    return landing()
+
+
+@app.get("/setup", response_class=HTMLResponse)
+async def setup_page(request: Request, key: str = Query(default=""),
+                     token: str = Query(default="")):
+    """The iOS Shortcut recipe, and the key it needs.
+
+    Owner-only, because it prints the master key straight into the html. On
+    the home network it opens as it always has.
     """
     import socket
     from .security import is_home
@@ -444,6 +480,8 @@ def _serve_page(request: Request, name: str, key: str, token: str):
         "announce_duck_db": config.get("announce_duck_db", -12.0),
         "announce_voice_gain_db": config.get("announce_voice_gain_db", 0.0),
         "signed_in_as": (signed_in or {}).get("email", ""),
+        "signed_in_name": (signed_in or {}).get("name", ""),
+        "signed_in_pic": (signed_in or {}).get("picture", ""),
         "sign_in_offered": "1" if (google.configured() and not signed_in
                                    and not owner) else "0",
     })
@@ -828,7 +866,6 @@ def api_sessions(close: str = "", _: bool = Owner):
     from ..core.session import sessions
     if close:
         sessions.close(close)
-    sessions.reap()
     return {"status": "ok", "sessions": sessions.listing()}
 
 
@@ -903,6 +940,10 @@ def api_radio(request: Request, count: int = 8, _: bool = Auth):
                            "for the song by name and you'll get a queue"}
     if not track:
         return {"status": "ok", "ok": False, "message": "Nothing playing"}
+    count = max(1, min(20, int(count)))
+    _guard_rate(room, request)
+    if not room:
+        _guard_shared(request)
     q.release_hold()
     similar = catalog.related(track.video_id, limit=count)
     q.enqueue(similar)
@@ -946,7 +987,7 @@ def _elsewhere_collect(fut, seconds: float = 1.5) -> list[dict]:
 
 
 @app.get("/api/search")
-def api_search(q: str, limit: int = 12, _: bool = Auth):
+def api_search(request: Request, q: str, limit: int = 12, _: bool = Auth):
     """Songs, artists, albums, your playlists and your own files.
 
     Your playlists come first — they're the things you made, so they should
@@ -955,6 +996,10 @@ def api_search(q: str, limit: int = 12, _: bool = Auth):
     q = (q or "").strip()
     if not q:
         return {"status": "error", "message": "q required"}
+    if len(q) > 160:
+        raise HTTPException(400, "Search is limited to 160 characters")
+    limit = max(1, min(20, int(limit)))
+    _guard_rate(_session_for(request), request)
     if spotify.is_spotify_url(q):
         return {"status": "ok", "spotify": True, "results": [], "playlists": [],
                 "artists": [], "albums": [], "library": [],
@@ -1017,12 +1062,21 @@ def api_lyrics(request: Request, _: bool = Auth):
                          player.queue.current_track())
     if not track:
         return {"status": "ok", "lyrics": None}
-    data = lyrics_mod.get_lyrics(track.title, track.artist, track.duration)
+    if request.method == "GET":
+        # Legacy GET support is deliberately cache-only.  A prefetch or a
+        # browser retry must not create LRCLIB traffic or change cache state.
+        data = lyrics_mod.cached_lyrics(track.title, track.artist, track.duration)
+    else:
+        # A lyrics refresh can issue three LRCLIB requests.  It is external
+        # work just like a music request, so a shared credential cannot fan it
+        # out.
+        _guard_rate(room, request)
+        data = lyrics_mod.get_lyrics(track.title, track.artist, track.duration)
     return {"status": "ok", "lyrics": data}
 
 
 @app.get("/api/lyrics/search")
-def api_lyrics_search(q: str = "", _: bool = Auth):
+def api_lyrics_search(request: Request, q: str = "", _: bool = Auth):
     """Which song has these words in it.
 
     Search, not playback — the caller decides what to do with the answer, so
@@ -1030,7 +1084,14 @@ def api_lyrics_search(q: str = "", _: bool = Auth):
     first. `verified` says whether the words were actually found in that
     recording's lyrics or whether it is the model's guess unchecked.
     """
-    rows = lyrics_mod.hunt(q or "")
+    q = (q or "").strip()
+    if len(q) > 280:
+        raise HTTPException(400, "Lyrics search is limited to 280 characters")
+    # Fragments are rejected by hunt without network work.  Charge every
+    # query that can reach the paid/remote lookup path.
+    if len(q) >= 3:
+        _guard_rate(_session_for(request), request)
+    rows = lyrics_mod.hunt(q)
     return {"status": "ok", "query": q, "results": rows}
 
 
@@ -1038,9 +1099,10 @@ def api_lyrics_search(q: str = "", _: bool = Auth):
 def api_about(request: Request, wait: int = 0, _: bool = Auth):
     """Where this song came from, for whoever is listening to it.
 
-    `wait=0` answers from what's already looked up and starts the lookup if
-    it hasn't been — the panel opens instantly and fills itself a moment
-    later rather than staring at a spinner for eight seconds.
+    A POST with `wait=0` answers from what's already looked up and starts the
+    lookup if it hasn't been — the panel opens instantly and fills itself a
+    moment later rather than staring at a spinner for eight seconds. Legacy
+    GET is cache-only and never starts an enrichment job.
     """
     from ..core import radio
     from ..resolve import insights
@@ -1053,9 +1115,19 @@ def api_about(request: Request, wait: int = 0, _: bool = Auth):
     if not track:
         return {"status": "ok", "about": None}
     mine = room.queue.taste if room else player.queue.taste
-    data = insights.about(track, taste=mine, fetch=bool(wait))
-    if not data.get("ready"):
-        insights.warm(track)
+    if request.method == "GET":
+        data = insights.about(track, taste=mine, fetch=False)
+    else:
+        # A waiting panel asks Last.fm, Wikipedia, and sometimes the LLM.
+        # Charge the credential before it can start that work; warm() below
+        # is charged too when this is a cache miss.
+        if wait:
+            _guard_rate(room, request)
+        data = insights.about(track, taste=mine, fetch=bool(wait), enrich=True)
+        if not data.get("ready"):
+            if not wait:
+                _guard_rate(room, request)
+            insights.warm(track)
     return {"status": "ok", "about": data}
 
 
@@ -1351,6 +1423,8 @@ def api_station(request: Request, url: str = "", name: str = "", art: str = "", 
     _guard_rate(room, request)
     if not room:
         _guard_shared(request)
+    if not radio_mod.is_known_stream(url):
+        raise HTTPException(400, "Choose a station from the search results")
     return play_station(url, name, art, queue=room.queue if room else None)
 
 
@@ -1590,6 +1664,7 @@ _SETTABLE = {
     "library_monitor_minutes": int,
     "device_eq_enabled": bool, "device_eq_auto": bool,
     "google_client_id": str, "google_client_secret": str, "owner_email": str,
+    "new_account_scope": str, "server_name": str,
     "tailscale": str, "tailscale_exe": str, "cache_size_mb": int,
     "allow_key_in_url": bool, "port": int,
     "block_full_guests": bool, "lan_open": bool, "party_mode": bool,
@@ -1635,6 +1710,8 @@ def api_setting(request: Request, key: str, value: str = "", _: bool = Auth):
             parsed = caster_type(value)
     except Exception:
         raise HTTPException(400, f"bad value for {key}")
+    if caster_type is float and not math.isfinite(parsed):
+        raise HTTPException(400, f"bad value for {key}")
     if key == "announce_duck_db":
         parsed = max(-60.0, min(0.0, float(parsed)))
     elif key == "announce_voice_gain_db":
@@ -1643,6 +1720,10 @@ def api_setting(request: Request, key: str, value: str = "", _: bool = Auth):
         parsed = max(1, min(365, int(parsed)))
     elif key == "library_monitor_minutes":
         parsed = 0 if int(parsed) <= 0 else max(5, min(10080, int(parsed)))
+    elif key == "port" and not 1025 <= int(parsed) <= 65535:
+        raise HTTPException(400, "port must be between 1025 and 65535")
+    elif key == "new_account_scope" and parsed not in accounts.NEW_ACCOUNT_SCOPES:
+        raise HTTPException(400, "new accounts may be full, phone, or blocked")
     config.set(key, parsed)
     if key == "library_monitor_minutes" and parsed:
         library.start_monitor()
@@ -1693,6 +1774,10 @@ def _profile_for(request: Request):
     return profiles.for_row(row)
 
 
+_shared_rate_lock = threading.Lock()
+_shared_rate: dict[str, list[float]] = {}
+
+
 def _guard_rate(room, request: Request | None = None) -> None:
     """One guest can't spend everyone's evening, and it goes on their tab.
 
@@ -1701,8 +1786,8 @@ def _guard_rate(room, request: Request | None = None) -> None:
     whether it played here or out of the computer's speakers: what the owner
     wants to know is what a link has been used for, not where it came out.
     """
+    cap = int(config.get("guest_requests_hour", 40))
     if room:
-        cap = int(config.get("guest_requests_hour", 40))
         if cap and room.queue.recent_requests() >= cap:
             left = 60 - int((time.time() - room.queue.oldest_request()) / 60)
             raise HTTPException(
@@ -1710,6 +1795,24 @@ def _guard_rate(room, request: Request | None = None) -> None:
                      f"{max(1, left)} minutes")
     row = getattr(request.state, "pass_row", None) if request is not None else None
     if row and not (row.get("internal") or row.get("owner")):
+        # Shared-player callers do not have a personal QueueManager, so the
+        # queue's hourly history cannot protect them. Keep the same bounded
+        # one-hour window by pass id in-process instead of silently treating
+        # the counter below as a limiter.
+        if not room and cap:
+            now = time.monotonic()
+            with _shared_rate_lock:
+                recent = [at for at in _shared_rate.get(row["id"], [])
+                          if now - at < 3600]
+                if len(recent) >= cap:
+                    raise HTTPException(
+                        429, f"That's {cap} requests in an hour — try again later")
+                recent.append(now)
+                _shared_rate[row["id"]] = recent
+                if len(_shared_rate) > 512:
+                    for pid in [pid for pid, times in _shared_rate.items()
+                                if not any(now - at < 3600 for at in times)]:
+                        _shared_rate.pop(pid, None)
         sec.note_use(row["id"], requests=1, ip=_client_ip(request))
     else:
         stats.note(stats.HOUSE, requests=1)
@@ -1954,6 +2057,12 @@ def api_output_stream(request: Request, video_id: str, tune: str = "",
     names the speaker it's playing out of (cast.TUNES); `fmt` is what the
     browser said it plays (cast.FORMATS).
     """
+    # A caller can skip the preload endpoint entirely.  Charge the first
+    # range request only when it is about to start real conversion work;
+    # follow-up byte ranges see "converting" or "ready" and remain free.
+    _path, initial = cast_mod.playable(video_id, tune, fmt)
+    if initial == "needs conversion":
+        _guard_rate(_session_for(request), request)
     path, state = cast_mod.serve(video_id, tune, fmt)
     if state in ("partial", "arriving"):
         return JSONResponse({"status": "arriving", "detail": "still fetching"},
@@ -1972,29 +2081,48 @@ def api_output_stream(request: Request, video_id: str, tune: str = "",
 
 
 @app.get("/api/output/prepare/{video_id}")
-def api_output_prepare(video_id: str, tune: str = "", fmt: str = "",
+def api_output_prepare(request: Request, video_id: str, tune: str = "", fmt: str = "",
                        _: bool = Auth):
     """Warm the next track so the handover isn't audible."""
     # Only the file that will be asked for. Warming the untuned one as well
     # ran two encodes side by side for a fallback a warmed track never needs.
+    room = _session_for(request)
+    _guard_rate(room, request)
     _, state = cast_mod.playable(video_id, tune, fmt)
     if state == "needs conversion":
-        cast_mod.warm(video_id, tune, fmt)
-        state = "converting"
+        state = "converting" if cast_mod.warm(video_id, tune, fmt) else "busy"
     return {"status": "ok", "state": state}
 
 
 @app.get("/api/autoeq/search")
-def api_autoeq_search(q: str = "", _: bool = Auth):
+def api_autoeq_search(request: Request, q: str = "", _: bool = Auth):
     """Headphone models AutoEq has a correction for. Anyone with a link: it's
     how a phone picks its own headphones."""
-    return {"status": "ok", "results": autoeq.search(q[:80])}
+    q = (q or "").strip()[:80]
+    if len(q) >= 2:
+        _guard_rate(_session_for(request), request)
+    return {"status": "ok", "results": autoeq.search(q)}
 
 
 @app.get("/api/autoeq/profile")
-def api_autoeq_profile(id: str = "", _: bool = Auth):
+def api_autoeq_profile(request: Request, id: str = "", _: bool = Auth):
     """One model's correction, fetched once and kept. The phone asks for this
     before asking for a stream tuned with it."""
+    if not id or len(id) > 40:
+        raise HTTPException(404, "no such AutoEq entry")
+    if request.method == "GET":
+        # Compatibility mode still permits old GET callers, but a GET must
+        # never turn into a GitHub request or a persistent cache write.
+        e = autoeq.cached_entry(id)
+        prof = autoeq.profile(id, fetch=False)
+        if not e or not prof:
+            return JSONResponse({"status": "not_ready",
+                                 "detail": "Use POST to fetch this profile"},
+                                status_code=409)
+        return {"status": "ok", **autoeq.public(e), "tune": f"aeq-{e['id']}",
+                "preamp": prof["preamp"], "filters": len(prof["filters"]),
+                "curve": autoeq.curve(prof)}
+    _guard_rate(_session_for(request), request)
     e = autoeq.entry(id)
     if not e:
         raise HTTPException(404, "no such AutoEq entry")
@@ -2009,9 +2137,12 @@ def api_autoeq_profile(id: str = "", _: bool = Auth):
 
 
 @app.get("/api/autoeq/match")
-def api_autoeq_match(name: str = "", _: bool = Auth):
+def api_autoeq_match(request: Request, name: str = "", _: bool = Auth):
     """A device label from a browser, looked up the same way Windows names are."""
-    found, certain = autoeq.match(name[:120])
+    name = (name or "").strip()[:120]
+    if name:
+        _guard_rate(_session_for(request), request)
+    found, certain = autoeq.match(name)
     return {"status": "ok", "match": autoeq.public(found) if found else None,
             "certain": certain}
 
@@ -2073,10 +2204,27 @@ def api_token(hours: int = 12, _: bool = Owner):
     <audio>.src and EventSource so the key itself never rides in a URL.
     """
     key = config.get("api_key") or ""
-    got = sec.issue(key, name="this player", hours=max(1, hours), scope="full",
+    hours = _pass_hours(hours, permanent=False)
+    got = sec.issue(key, name="this player", hours=hours, scope="full",
                     internal=True)
+    if not got.get("token"):
+        raise HTTPException(503, "Couldn't save the player credential")
     return {"status": "ok", "token": got.get("token", ""),
             "expires_in": int(hours) * 3600}
+
+
+def _pass_hours(value: float, *, permanent: bool = True) -> float:
+    """Validate a pass lifetime before it reaches timestamp arithmetic."""
+    try:
+        hours = float(value)
+    except (TypeError, ValueError, OverflowError):
+        raise HTTPException(400, "hours must be a number")
+    if (not math.isfinite(hours) or hours < 0 or hours > sec.MAX_LINK_HOURS
+            or (not permanent and hours <= 0)):
+        raise HTTPException(
+            400, f"hours must be {'between 1 and' if not permanent else 'between 0 and'} "
+            f"{sec.MAX_LINK_HOURS:g}")
+    return hours
 
 
 @app.get("/api/passes")
@@ -2084,8 +2232,6 @@ def api_passes(_: bool = Owner):
     """Every link you've handed out, and who has it."""
     from ..core.session import sessions
 
-    sec.tidy_passes()
-    sessions.reap()
     # Whether anyone is on the other end, asked of the sessions rather than
     # guessed from how recently the link was touched. A timestamp can only
     # say "not long ago", so a link went on claiming somebody was listening
@@ -2107,10 +2253,13 @@ def api_pass_new(name: str = "", hours: float = 24, scope: str = "full",
     couldn't take over the speakers in your front room.
     """
     from ..core import net
+    hours = _pass_hours(hours)
     key = config.get("api_key") or ""
     if not key:
         return {"status": "error", "message": "Set an API key first"}
     got = sec.issue(key, name=name, hours=hours, scope=scope)
+    if not got.get("token"):
+        raise HTTPException(503, "Couldn't save that link")
     rows = net.addresses(got["token"])["addresses"]
     row = next((r for r in rows if r["kind"] == kind), rows[-1])
     return {"status": "ok", "url": row["url"], "kind": row["kind"], **got}
@@ -2138,6 +2287,7 @@ def api_pass_extend(id: str = "", hours: float = 24, _: bool = Owner):
     """
     if not id:
         return {"status": "error", "message": "Which one?"}
+    hours = _pass_hours(hours)
     got = sec.extend(id, hours)
     return {"status": "ok" if got.get("ok") else "error",
             **got, "passes": sec.list_passes()}
@@ -2273,6 +2423,8 @@ def api_network(pass_id: str = "", check: int = 0, _: bool = Owner):
     # No particular person asked for: these are the owner's own addresses, so
     # they carry the owner's pass and work on a phone as well as here.
     token = (sec.reissue_token(key, pass_id) if pass_id else sec.owner_pass(key))
+    if not token:
+        raise HTTPException(503, "Couldn't save the owner credential")
     out = net.addresses(token)
     if check:
         out["port_open"] = net.port_open(net.live_port())
@@ -2298,6 +2450,8 @@ def api_qr(kind: str = "lan", pass_id: str = "", _: bool = Owner):
     from ..core import net
     key = config.get("api_key") or ""
     token = (sec.reissue_token(key, pass_id) if pass_id else sec.owner_pass(key))
+    if not token:
+        raise HTTPException(503, "Couldn't save the owner credential")
     rows = net.addresses(token)["addresses"]
     row = next((r for r in rows if r["kind"] == kind), None)
     if not row:
@@ -2376,9 +2530,11 @@ def api_groqkey(value: str = "", _: bool = Owner):
 
 
 @app.get("/api/groqmodels")
-def api_groqmodels(refresh: int = 0, _: bool = Owner):
-    """What Groq will serve, so the picker can't offer a retired model."""
-    return {"status": "ok", "models": llm.models(force=bool(refresh)),
+def api_groqmodels(request: Request, refresh: int = 0, _: bool = Owner):
+    """What Groq will serve, without letting legacy GETs contact Groq."""
+    models = (llm.cached_models() if request.method == "GET"
+              else llm.models(force=bool(refresh)))
+    return {"status": "ok", "models": models,
             "current": config.get("groq_model") or llm.DEFAULT_MODEL,
             "default": llm.DEFAULT_MODEL}
 
@@ -2653,12 +2809,19 @@ def boot_state() -> dict:
             out["warnings"].append(
                 f"its last run ended with {t['last_result_hex']}")
     elif config.get("start_before_signin"):
-        out["warnings"].append("start-before-sign-in is switched on here but "
-                               "Windows has no such task")
+        # A status report must never rewrite the user's preference. The task
+        # may have been removed deliberately or be temporarily unavailable;
+        # reporting drift lets the owner decide whether to recreate it.
+        if ok:
+            out["warnings"].append("start-before-sign-in is enabled but its "
+                                   "Windows task is missing")
+        else:
+            out["warnings"].append("couldn't check the before-sign-in task "
+                                   "just now")
 
     if config.get("start_on_boot") and out.get("at_signin") is False:
-        out["warnings"].append("start-at-sign-in is switched on here but "
-                               "there's no entry for it in Windows")
+        out["warnings"].append("start-at-sign-in is enabled but its Windows "
+                               "entry is missing")
     if packaged and out["at_signin"] and not out.get("signin_matches", True):
         out["warnings"].append("the sign-in entry points at a different copy: "
                                + str(out.get("signin_command"))[:120])
@@ -2874,7 +3037,7 @@ def api_cast(add: str = "", remove: str = "", text: str = "", _: bool = Owner):
 
 
 @app.get("/api/stream/{video_id}")
-def api_stream(video_id: str, _: bool = Auth):
+def api_stream(video_id: str, _: bool = Owner):
     """Serve a cached file so a peer can play the exact same audio."""
     path = downloader.cached(video_id)
     if not path:
@@ -2886,36 +3049,25 @@ def api_stream(video_id: str, _: bool = Auth):
 
 @app.get("/auth/google/start")
 def auth_google_start(request: Request, next: str = "/player"):
-    """Begin a sign-in. Only for somebody already allowed through the door.
+    """Begin a sign-in. Open to anyone -- a front door is meant to be knocked
+    on, and no link or key is needed to prove who you are to Google.
 
-    A link is the invitation: whoever holds one may sign in, and the account
-    they end up with can do what that link could. Without one — no link, not
-    on the home network, no account already — there is nothing to sign into,
-    because otherwise anybody who found the address could make themselves an
-    account on somebody else's music server.
+    What a newcomer becomes is decided when they come back: a face already
+    known keeps its account, and a new one lands at new_account_scope, which
+    the owner sets -- to "blocked" if they would rather look people over
+    before letting them in. Ownership is never granted here; only the
+    configured owner email can be an owner.
+
+    The rate limit stays: a public endpoint that mints server-side state is
+    something to keep a lid on.
     """
     if not google.configured():
         raise HTTPException(503, "Signing in with Google isn't set up here")
-    invited_by, scope = "", ""
-    row = _account_row(request)
-    if row is None:
-        key = request.query_params.get("key", "")
-        token = request.query_params.get("token", "")
-        try:
-            require_key(request, key, token)
-            got = getattr(request.state, "pass_row", None) or {}
-            invited_by = got.get("name", "") or "a link"
-            scope = got.get("scope", "") or ""
-            if not got:
-                invited_by, scope = "the key", "owner"
-        except HTTPException:
-            from .security import is_home
-            if not (is_home(_client_ip(request)) and config.get("lan_open", True)):
-                raise HTTPException(
-                    403, "Ask whoever runs this for a link, then sign in")
-            invited_by = "the home network"
-    url = google.start(next_path=_safe_next(next), invited_by=invited_by,
-                       scope=scope)
+    try:
+        url = google.start(next_path=_safe_next(next),
+                           client_ip=_client_ip(request))
+    except google.SignInBusy as exc:
+        raise HTTPException(429, str(exc))
     if not url:
         raise HTTPException(503, "No hostname set, so Google has nowhere to "
                                  "send anybody back to")
@@ -2945,9 +3097,15 @@ def auth_google_callback(request: Request, code: str = "", state: str = "",
     who = google.finish(code, row)
     if not who:
         return _signin_page("Google couldn't confirm who that was.")
-    person = accounts.admit(who["sub"], who["email"], who["name"],
-                            invited_by=row.get("invited_by", ""),
-                            scope=row.get("scope", ""))
+    try:
+        person = accounts.admit(
+            who["sub"], who["email"], who["name"],
+            picture=who.get("picture", ""),
+            invited_by=str(row.get("invited_by") or ""),
+            scope=str(row.get("scope") or ""))
+    except accounts.AccountPersistenceError:
+        # Do not issue a valid session for an identity we failed to remember.
+        return _signin_page("Couldn't save that sign-in. Please try again.", 503)
     if person.get("scope") == "blocked":
         return _signin_page("That account is blocked here.")
     resp = RedirectResponse(_safe_next(row.get("next", "/player")), status_code=302)
@@ -2965,7 +3123,7 @@ def auth_google_callback(request: Request, code: str = "", state: str = "",
 
 @app.get("/auth/signout")
 def auth_signout(request: Request):
-    resp = RedirectResponse("/player", status_code=302)
+    resp = RedirectResponse("/", status_code=302)
     resp.delete_cookie(SESSION_COOKIE, path="/")
     return resp
 
@@ -2975,7 +3133,7 @@ def _net_scheme() -> str:
     return net.scheme()
 
 
-def _signin_page(message: str):
+def _signin_page(message: str, status_code: int = 400):
     """A plain sentence rather than a JSON error: people see this one."""
     body = ("<!doctype html><meta charset=utf-8>"
             "<meta name=viewport content='width=device-width,initial-scale=1'>"
@@ -2984,9 +3142,9 @@ def _signin_page(message: str):
             "-apple-system,Segoe UI,Roboto,sans-serif;display:flex;"
             "min-height:100vh;align-items:center;justify-content:center;"
             "margin:0;padding:24px;text-align:center}a{color:#6d8bff}</style>"
-            f"<div><p>{_esc(message)}</p><p><a href='/player'>Back to the "
-            "player</a></p></div>")
-    return HTMLResponse(body, status_code=400)
+            f"<div><p>{_esc(message)}</p><p><a href='/'>Back to the "
+            "start page</a></p></div>")
+    return HTMLResponse(body, status_code=status_code)
 
 
 def _esc(text: str) -> str:
@@ -3001,6 +3159,8 @@ def api_accounts(_: bool = Owner):
             "configured": google.configured(),
             "redirect_uri": google.redirect_uri(),
             "owner_email": accounts.owner_email(),
+            "new_account_scope": accounts.default_scope(),
+            "new_account_scopes": accounts.NEW_ACCOUNT_SCOPES,
             "signed_in_count": accounts.count()}
 
 
@@ -3009,8 +3169,9 @@ def api_accounts_scope(sub: str = "", scope: str = "", _: bool = Owner):
     """Change what somebody may do, or block them."""
     try:
         got = accounts.set_scope(sub, scope)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
+    except (ValueError, accounts.AccountPersistenceError) as exc:
+        raise HTTPException(503 if isinstance(exc, accounts.AccountPersistenceError) else 400,
+                            str(exc))
     if not got:
         raise HTTPException(404, "no such account")
     return {"status": "ok", "person": got}
@@ -3019,7 +3180,23 @@ def api_accounts_scope(sub: str = "", scope: str = "", _: bool = Owner):
 @app.get("/api/accounts/forget")
 def api_accounts_forget(sub: str = "", _: bool = Owner):
     """Remove an account. Their next sign-in would start again as a stranger."""
-    if not accounts.forget(sub):
+    from ..core.profile import profiles
+    from ..paths import data_dir
+
+    if not accounts.get(sub):
+        raise HTTPException(404, "no such account")
+    profile_home = data_dir() / "profiles" / accounts.profile_id(sub)
+    # Wipe the durable listening record before the account row.  If that
+    # fails, retain the account so the owner can retry rather than claiming a
+    # privacy deletion that left the profile intact.
+    if profile_home.exists() and not profiles.wipe(accounts.profile_id(sub)):
+        raise HTTPException(500, "Couldn't remove that account's profile")
+    profiles.forget(accounts.profile_id(sub))
+    try:
+        deleted = accounts.forget(sub)
+    except accounts.AccountPersistenceError:
+        raise HTTPException(503, "Couldn't save the account removal")
+    if not deleted:
         raise HTTPException(404, "no such account")
     return {"status": "ok"}
 

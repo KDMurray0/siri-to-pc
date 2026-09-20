@@ -49,6 +49,21 @@ CREATE_NO_WINDOW = 0x08000000
 
 _converting: set[str] = set()
 _lock = threading.Lock()
+# A conversion is CPU and disk intensive.  Per-job de-duplication alone did
+# not stop a guest cycling through different tracks and creating one ffmpeg
+# process per request.
+MAX_CONVERSIONS = 3
+
+
+def _claim(job: str) -> str:
+    """Claim one conversion slot: claimed | converting | busy."""
+    with _lock:
+        if job in _converting:
+            return "converting"
+        if len(_converting) >= MAX_CONVERSIONS:
+            return "busy"
+        _converting.add(job)
+        return "claimed"
 
 
 def _speaker(cut: int, harmonics: float, body: float, bite: float,
@@ -265,7 +280,7 @@ def playable(video_id: str, tune: str = "",
 
 
 def convert(video_id: str, tune: str = "", fmt: str = "aac",
-            timeout: int = 300) -> tuple[Path | None, str]:
+            timeout: int = 300, *, _claimed: bool = False) -> tuple[Path | None, str]:
     """Blocking. A remux is near instant; an encode ~60x realtime, tuned ~90x."""
     src = source_for(video_id)
     if not src:
@@ -275,10 +290,14 @@ def convert(video_id: str, tune: str = "", fmt: str = "aac",
     if _as_is(src, chain, fmt):
         return src, "ready"
     job = _job(video_id, tune, fmt)
-    with _lock:
-        if job in _converting:
-            return None, "converting"
-        _converting.add(job)
+    if not _claimed:
+        claim = _claim(job)
+        if claim != "claimed":
+            return None, claim
+    else:
+        with _lock:
+            if job not in _converting:
+                return None, "busy"
     try:
         ff = shutil.which("ffmpeg")
         if not ff:
@@ -315,15 +334,26 @@ def convert(video_id: str, tune: str = "", fmt: str = "aac",
             _converting.discard(job)
 
 
-def warm(video_id: str, tune: str = "", fmt: str = "aac") -> None:
+def warm(video_id: str, tune: str = "", fmt: str = "aac") -> bool:
     """Get the next track ready in the background, so the gap isn't audible."""
     if not video_id:
-        return
+        return False
     _, state = playable(video_id, tune, fmt)
     if state != "needs conversion":
-        return
-    threading.Thread(target=convert, args=(video_id, tune, fmt), daemon=True,
-                     name=f"cast-warm {video_id}").start()
+        return state == "ready"
+    job = _job(video_id, tune, fmt)
+    if _claim(job) != "claimed":
+        return False
+    worker = threading.Thread(target=convert, args=(video_id, tune, fmt),
+                              kwargs={"_claimed": True}, daemon=True,
+                              name=f"cast-warm {video_id}")
+    try:
+        worker.start()
+        return True
+    except Exception:
+        with _lock:
+            _converting.discard(job)
+        return False
 
 
 # Which file a stream url is being answered with. Safari reads one url as

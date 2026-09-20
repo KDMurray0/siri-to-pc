@@ -25,7 +25,7 @@ from pathlib import Path
 from ..config import config
 from ..events import Ev, bus
 from ..logging_setup import get, spawn
-from ..paths import data_dir
+from ..paths import data_dir, write_atomic
 
 log = get("cookies")
 
@@ -160,7 +160,9 @@ def save_master(text: str) -> None:
             shutil.copyfile(master, backup_path())
     except Exception:
         pass
-    master.write_text(text, encoding="utf-8")
+    # This is the only durable copy.  A full disk or killed process must
+    # leave the old export usable, not half a Netscape cookie line behind.
+    write_atomic(master, text)
     # Point the config at what we just wrote. refresh() does this and this
     # didn't, so signing in saved perfectly good cookies while the config went
     # on naming some other file — often a path from a source checkout that a
@@ -246,12 +248,9 @@ def installed_browsers() -> list[str]:
             if any(p and os.path.isfile(p) for p in opts)]
 
 
-def filter_to_youtube(path: Path) -> int:
-    """Strip every cookie that isn't YouTube/Google. Returns lines kept."""
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except Exception:
-        return 0
+def _youtube_only(text: str) -> tuple[str, int]:
+    """Return a minimal Netscape export and its kept-cookie count."""
+    lines = text.splitlines()
     kept = ["# Netscape HTTP Cookie File",
             "# Filtered to YouTube/Google by Music Request Server."]
     count = 0
@@ -262,8 +261,18 @@ def filter_to_youtube(path: Path) -> int:
         if any(domain.endswith(d) for d in KEEP_DOMAINS):
             kept.append(line)
             count += 1
+    return "\n".join(kept) + "\n", count
+
+
+def filter_to_youtube(path: Path) -> int:
+    """Strip every cookie that isn't YouTube/Google. Returns lines kept."""
     try:
-        path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return 0
+    filtered, count = _youtube_only(text)
+    try:
+        write_atomic(path, filtered)
     except Exception as exc:
         log.warning("could not rewrite cookie file: %s", exc)
     return count
@@ -612,10 +621,11 @@ def import_file(src: Path) -> dict:
     """Take an exported cookies.txt, keep only YouTube/Google, and test it."""
     dest = cookie_path()
     try:
-        save_master(src.read_text(encoding="utf-8", errors="replace"))
+        filtered, kept = _youtube_only(
+            src.read_text(encoding="utf-8", errors="replace"))
+        save_master(filtered)
     except Exception as exc:
-        return {"ok": False, "message": f"Couldn't read that file: {exc}"}
-    kept = filter_to_youtube(dest)
+        return {"ok": False, "message": f"Couldn't import that file: {exc}"}
     config.update({"cookies_file": str(dest), "cookies_from_browser": ""})
     ensure_session()
     ok, msg = check()

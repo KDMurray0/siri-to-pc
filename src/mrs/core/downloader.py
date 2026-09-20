@@ -19,7 +19,7 @@ from ..config import config
 from ..events import Ev
 from ..logging_setup import get
 from ..models import Track
-from ..paths import cache_dir, pinned_dir
+from ..paths import cache_dir, pinned_dir, write_atomic
 
 log = get("download")
 
@@ -221,8 +221,7 @@ class Downloader:
         if not path:
             return
         try:
-            Path(path).with_name(Path(path).name + ".complete").write_text(
-                "1", encoding="ascii")
+            write_atomic(Path(path).with_name(Path(path).name + ".complete"), "1")
         except OSError:
             pass
         return None

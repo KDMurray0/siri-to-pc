@@ -25,6 +25,7 @@ import base64
 import contextlib
 import hashlib
 import hmac
+import math
 import os
 import json
 import secrets
@@ -37,6 +38,7 @@ from ..paths import data_dir, write_atomic
 log = get("security")
 
 TOKEN_TTL = 12 * 3600          # how long a minted token stays good
+MAX_LINK_HOURS = 365 * 24       # links longer than a year should be permanent
 STRIKES = 3                    # wrong keys before the door shuts
 BAN_SECONDS = 24 * 3600
 
@@ -125,11 +127,13 @@ def _load_passes() -> dict:
         return {}
 
 
-def _save_passes(rows: dict) -> None:
+def _save_passes(rows: dict) -> bool:
     try:
         write_atomic(_passes_file(), json.dumps(rows, indent=1))
+        return True
     except Exception as exc:
         log.debug("couldn't write the pass list: %s", exc)
+        return False
 
 
 def _sign(key: str, body: str) -> str:
@@ -273,13 +277,19 @@ def owner_pass(key: str) -> str:
 def issue(key: str, name: str = "", hours: float = 24,
           scope: str = "full", internal: bool = False,
           owner: bool = False) -> dict:
-    """Mint a pass. hours <= 0 means it never expires.
+    """Mint a pass. Zero hours means it never expires.
 
     `internal` marks the player's own pass — the one it fetches so <audio>
     and EventSource have something to put in a URL. It's a real pass, but it
     isn't a link anybody was given, so it stays out of that list.
     """
     if not key:
+        return {}
+    try:
+        hours = float(hours)
+    except (TypeError, ValueError, OverflowError):
+        return {}
+    if not math.isfinite(hours) or hours < 0 or hours > MAX_LINK_HOURS:
         return {}
     scope = scope if scope in SCOPES else "full"
     tid = _fresh_id()
@@ -294,7 +304,8 @@ def issue(key: str, name: str = "", hours: float = 24,
                      "created": int(time.time()), "revoked": False,
                      "internal": bool(internal), "owner": bool(owner),
                      "last_seen": 0}
-        _save_passes(rows)
+        if not _save_passes(rows):
+            return {}
     log.info("issued a %s pass to %r (%s)", scope, name or "unnamed",
              "never expires" if not expires else f"{hours:g}h")
     return {"id": tid, "token": token, "name": name or "unnamed",
@@ -412,11 +423,17 @@ def list_passes() -> list[dict]:
 
 
 def extend(tid: str, hours: float = 24) -> dict:
-    """Give a link more time. hours <= 0 makes it permanent.
+    """Give a link more time. Zero hours makes it permanent.
 
     Measured from now rather than from when it died, because "another day"
     said about a link that expired yesterday means a day from now.
     """
+    try:
+        hours = float(hours)
+    except (TypeError, ValueError, OverflowError):
+        return {"ok": False, "message": "hours must be a number"}
+    if not math.isfinite(hours) or hours < 0 or hours > MAX_LINK_HOURS:
+        return {"ok": False, "message": f"hours must be between 0 and {MAX_LINK_HOURS:g}"}
     with _held():
         rows = _load_passes()
         row = rows.get(tid)
@@ -427,7 +444,8 @@ def extend(tid: str, hours: float = 24) -> dict:
         # Extending something you had revoked is plainly meant to bring it
         # back; leaving it revoked would be a button that does nothing.
         row["revoked"] = False
-        _save_passes(rows)
+        if not _save_passes(rows):
+            return {"ok": False, "message": "Couldn't save that link"}
     log.info("extended %s: %s -> %s", tid,
              "never" if not was else time.strftime("%Y-%m-%d %H:%M",
                                                    time.localtime(was)),
@@ -446,7 +464,8 @@ def revoke(tid: str) -> bool:
         if not row:
             return False
         row["revoked"] = True
-        _save_passes(rows)
+        if not _save_passes(rows):
+            return False
     log.warning("revoked the pass for %r", row.get("name", tid))
     return True
 
@@ -466,8 +485,8 @@ def revoke_owner_pass() -> int:
             if r.get("owner") and not r.get("revoked"):
                 r["revoked"] = True
                 gone += 1
-        if gone:
-            _save_passes(rows)
+        if gone and not _save_passes(rows):
+            return 0
     if gone:
         log.warning("revoked your own pass as part of a lockdown")
     return gone
@@ -480,7 +499,8 @@ def restore_pass(tid: str) -> bool:
         if not row:
             return False
         row["revoked"] = False
-        _save_passes(rows)
+        if not _save_passes(rows):
+            return False
     return True
 
 
@@ -490,7 +510,8 @@ def forget_pass(tid: str) -> bool:
         if tid not in rows:
             return False
         del rows[tid]
-        _save_passes(rows)
+        if not _save_passes(rows):
+            return False
     return True
 
 

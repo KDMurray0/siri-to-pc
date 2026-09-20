@@ -214,7 +214,7 @@ class Playlists:
     def create(self, name: str) -> str:
         with self._lock:
             folder = self.folder(name)
-            (folder / "name.txt").write_text(name.strip(), encoding="utf-8")
+            write_atomic(folder / "name.txt", name.strip())
             fresh = not self._index(name).exists()
             if fresh:
                 self._save(name, [])

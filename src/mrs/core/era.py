@@ -109,6 +109,18 @@ class EraStore:
         self._start()
         return None
 
+    def cached(self, track: Track | None) -> int | None:
+        """Return a known year without placing an enrichment job on the queue."""
+        if not track:
+            return None
+        who = track.primary_artist()
+        if not who:
+            return None
+        self.load()
+        with self._lock:
+            got = self._year.get(who)
+        return got if got and got > 0 else None
+
     def stats(self) -> dict:
         self.load()      # lazy, so a cold read would report zeroes
         with self._lock:

@@ -14,13 +14,15 @@ themselves.
 
 from __future__ import annotations
 
+import os
 import time
 import stat
+import tempfile
 import zipfile
 from pathlib import Path
 
 from ..logging_setup import get
-from ..paths import data_dir
+from ..paths import data_dir, write_atomic_bytes
 
 log = get("backup")
 
@@ -72,11 +74,24 @@ def make_backup(into: Path | None = None) -> dict:
     while dest.exists():
         dest = dest_dir / f"MusicRequestServer-{stamp}-{n}.zip"
         n += 1
+    # Publish a backup only once the central directory has been written.  A
+    # directly-written zip that is interrupted looks like a real backup in
+    # the UI but cannot be restored when it is needed most.
+    fd, tmp = tempfile.mkstemp(dir=str(dest_dir), prefix=dest.name + ".", suffix=".tmp")
+    os.close(fd)
     count = 0
-    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
-        for path, arc in _members(root):
-            z.write(path, arc)
-            count += 1
+    try:
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+            for path, arc in _members(root):
+                z.write(path, arc)
+                count += 1
+        os.replace(tmp, dest)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     size = dest.stat().st_size
     log.info("backed up %d files to %s", count, dest)
     return {"ok": True, "path": str(dest), "files": count,
@@ -142,15 +157,64 @@ def restore(zip_path: str) -> dict:
                 safe.append((info, norm, parts))
         if not safe:
             return {"ok": False, "message": "Nothing recognisable in there"}
-        # Copy what's here now — with the source closed, so the copy can't
-        # land on the file we're about to read.
-        keep = make_backup()
-        with zipfile.ZipFile(src) as z:
-            for info, norm, parts in safe:
-                out = root.joinpath(*parts)
-                out.parent.mkdir(parents=True, exist_ok=True)
-                with z.open(info) as fh:
-                    out.write_bytes(fh.read())
+        # Validate every member first, then unpack into a private staging
+        # directory.  Writing a zip member straight into the live profile
+        # meant a bad disk or corrupt last member left a half-restored setup.
+        # The staging directory is deliberately under the same root so final
+        # replacements have the strongest atomicity Windows can offer.
+        with tempfile.TemporaryDirectory(prefix=".mrs-restore-", dir=root) as tmp:
+            staging = Path(tmp) / "incoming"
+            rollback = Path(tmp) / "previous"
+            staged: list[tuple[Path, Path, tuple[str, ...]]] = []
+            with zipfile.ZipFile(src) as z:
+                for info, _norm, parts in safe:
+                    incoming = staging.joinpath(*parts)
+                    incoming.parent.mkdir(parents=True, exist_ok=True)
+                    with z.open(info) as fh:
+                        # This is not live data.  If this fails the existing
+                        # profile remains completely untouched.
+                        write_atomic_bytes(incoming, fh.read())
+                    staged.append((root.joinpath(*parts), incoming, tuple(parts)))
+
+            # Copy what's here now only after the archive has fully staged.
+            # The source is closed, so the safety backup can never overwrite
+            # the archive being restored from.
+            keep = make_backup()
+
+            # Snapshot every live destination before the first replacement.
+            # A later failure can then roll back *all* earlier replacements,
+            # not merely avoid a torn individual file.
+            before: dict[Path, Path | None] = {}
+            for out, _incoming, parts in staged:
+                if out.is_file():
+                    old = rollback.joinpath(*parts)
+                    old.parent.mkdir(parents=True, exist_ok=True)
+                    write_atomic_bytes(old, out.read_bytes())
+                    before[out] = old
+                else:
+                    before[out] = None
+
+            changed: list[Path] = []
+            try:
+                for out, incoming, _parts in staged:
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    write_atomic_bytes(out, incoming.read_bytes())
+                    changed.append(out)
+            except Exception as restore_exc:
+                rollback_errors = []
+                for out in reversed(changed):
+                    try:
+                        old = before[out]
+                        if old is None:
+                            out.unlink(missing_ok=True)
+                        else:
+                            write_atomic_bytes(out, old.read_bytes())
+                    except Exception as rollback_exc:
+                        rollback_errors.append(str(rollback_exc))
+                if rollback_errors:
+                    raise RuntimeError("restore failed and rollback was incomplete: "
+                                       + "; ".join(rollback_errors)) from restore_exc
+                raise
     except zipfile.BadZipFile:
         return {"ok": False, "message": "That isn't a zip"}
     except Exception as exc:

@@ -348,6 +348,9 @@ body.reordering .q{transition:transform .12s ease}
 .mbar{height:7px;border-radius:4px;background:var(--line);overflow:hidden}
 .mbar i{display:block;height:100%;background:var(--accent);border-radius:4px}
 .mrow.now .mbar i{opacity:1}
+.pfp{width:26px;height:26px;border-radius:50%;object-fit:cover;background:var(--line);flex:0 0 auto;vertical-align:middle}
+.slabel.withpfp{display:flex;align-items:center;gap:9px}
+.linkstat .who{display:flex;align-items:center;gap:8px}
 .linkstat{display:grid;grid-template-columns:1fr auto;gap:4px 10px;
   padding:7px 0;border-bottom:1px solid var(--line);font-size:12px}
 .linkstat em{grid-column:1/-1;font-style:normal;font-size:10.5px;color:var(--sub)}
@@ -1546,6 +1549,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
           <input class="keyin" id="gsecret" type="password" placeholder="GOCSPX-..."></div>
         <div class="srow"><span class="slabel">Your own email<em>The account that gets to be the owner</em></span>
           <input class="keyin" id="gowner" type="email" placeholder="you@gmail.com"></div>
+        <div class="srow"><label class="slabel" for="gscope">New home-network sign-ins<em>Shared links keep the access level they were given</em></label>
+          <select class="keyin" id="gscope"><option value="blocked">Hold for approval</option><option value="phone">Their own device</option><option value="full">Speakers too</option></select></div>
         <div class="srow"><span class="slabel">Redirect URI<em>Paste this into the Console, exactly</em></span>
           <button class="btn" id="gcopyuri">Copy</button></div>
         <div class="hint" id="guri"></div>
@@ -1612,13 +1617,17 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 
       <section class="spane" data-s="sharing">
         <div class="panic">
-          <button class="btn danger" id="lockdown">Revoke all &amp; shuffle port</button>
-          <div class="hint">Kills every link you've handed out, ends the sessions playing on
-            them, and moves the server to a new random port. Your own devices need the new
-            address and a fresh link; nothing you've shared will work again. Your music,
-            playlists and settings are untouched.</div>
+          <button class="btn danger" id="lockdown">Reset access &amp; shuffle port</button>
+          <div class="hint">Ends every session, wipes any old links still lying around, and
+            moves the server to a new random port. Signed-in people come straight back once
+            you tell them the new address; anything pasted somewhere old stops working. Your
+            music, playlists, accounts and settings are untouched.</div>
         </div>
-        <div class="seclbl">Getting to this player yourself</div>
+        <div class="seclbl">The link you give people</div>
+        <div class="hint">Send anyone this address. They open it, sign in with
+          Google, and they're in — no key, no per-person link to hand out or
+          take back. Who may stay, and what they can do, is under People in the
+          Access tab.</div>
         <div id="netaddrs"></div>
         <div class="hint" id="nethint"></div>
         <div class="srow"><span class="slabel">Can the outside world reach it?<em>Asks something outside your network to try the door</em></span>
@@ -1643,30 +1652,6 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
           <button class="btn mk-go" id="ddnssave">Point it here</button>
         </div>
         <div class="reach" id="ddnsbox"></div>
-
-        <div class="seclbl">Links for other people</div>
-        <div class="mk">
-          <input class="keyin mk-name" id="passname" placeholder="Their name" autocomplete="off">
-          <div class="mk-opts">
-            <select class="keyin" id="passscope">
-              <option value="phone">Their phone only</option>
-              <option value="full">Any speaker</option>
-            </select>
-            <select class="keyin" id="passhours">
-              <option value="24">For 24 hours</option>
-              <option value="168">For a week</option>
-              <option value="0">Permanent</option>
-            </select>
-          </div>
-          <button class="btn mk-go" id="passmake">Create link</button>
-        </div>
-        <div class="madebox" id="madebox"></div>
-        <div id="passlist"></div>
-
-        <div class="seclbl">People with a permanent link</div>
-        <div class="hint">What their listening has built up. Their top artists
-          and how much they've played — not what they played, and not when.</div>
-        <div id="profilelist"></div>
 
         <div class="seclbl">While people are round</div>
         <div class="srow"><span class="slabel">Party mode<em>Requests queue up in order — no radio, and nobody skips the line</em></span>
@@ -1754,6 +1739,8 @@ const KEY = "{{ api_key }}";
 const GUEST = "{{ is_guest }}" === "1";
 const SIGNED_IN = "{{ signed_in_as }}";
 const SIGN_IN_OFFERED = "{{ sign_in_offered }}" === "1";
+const SIGNED_IN_NAME = "{{ signed_in_name }}";
+const SIGNED_IN_PIC = "{{ signed_in_pic }}";
 const SCOPE = "{{ scope }}";
 const _announceDuck = Number("{{ announce_duck_db }}");
 let ANNOUNCE_DUCK_DB = Number.isFinite(_announceDuck)
@@ -3365,7 +3352,7 @@ document.querySelectorAll(".stab").forEach(tab => tab.onclick = () => {
     loadPeople();
   }
   if (tab.dataset.s === "sharing") {
-    loadNetwork(); loadPasses(); loadDdns(); loadProfiles();
+    loadNetwork(); loadDdns();
     if (ME.owner) watchSharing();
   }
 });
@@ -3381,10 +3368,7 @@ function watchSharing() {
     const open = $("sheet").classList.contains("open") &&
                  document.querySelector('.spane[data-s="sharing"]').classList.contains("open");
     if (!open) { clearInterval(sharingTimer); sharingTimer = null; return; }
-    loadSessions(); loadProfiles();
-    // Not while a QR is on screen — redrawing the list would take it away
-    // mid-scan.
-    if (!$("passlist").querySelector(".qrbox:not(:empty)")) loadPasses();
+    loadSessions();
   };
   tick();
   sharingTimer = setInterval(tick, 8000);
@@ -3392,10 +3376,8 @@ function watchSharing() {
 $("healthbtn").onclick = loadHealth;
 
 /* which addresses reach this player, and whether Tailscale is up */
-let SHARE_PASS = "";        // whose link the addresses currently carry
-
 async function loadNetwork() {
-  const r = await api("/api/network" + (SHARE_PASS ? "?pass_id=" + SHARE_PASS : ""));
+  const r = await api("/api/network");
   if (!r) return;
   $("netaddrs").innerHTML = (r.addresses || []).map(a =>
     `<div class="srow"><span class="slabel">${esc(a.label)}` +
@@ -3453,8 +3435,7 @@ $("netaddrs").addEventListener("click", async e => {
     if (box.innerHTML) { box.innerHTML = ""; return; }   // second press hides it
     // The link carries the api key, so this is fetched with it and dropped
     // straight into the page rather than pointed at by a public url.
-    const r = await fetch("/api/qr?kind=" + encodeURIComponent(q.dataset.k) +
-                          (SHARE_PASS ? "&pass_id=" + SHARE_PASS : ""),
+    const r = await fetch("/api/qr?kind=" + encodeURIComponent(q.dataset.k),
                           { headers: { "X-Music-Key": KEY } });
     box.innerHTML = r.ok ? await r.text() : "";
     return;
@@ -3539,27 +3520,26 @@ $("libmonitor").onchange = async () => {
     ? "Automatic library refresh is off" : "Automatic library refresh updated");
 };
 
-/* Signing in, and who has.
-   A link is the invitation: the button carries whatever credential this page
-   was opened with, because a navigation can't set a header, and the server
-   checks it again before it will start a sign-in at all. */
+/* Signing in, and who has. No link and no key: a navigation can't set a
+   header anyway, and it no longer needs to — anyone may knock, and the
+   server works out who they are when Google answers. */
 function signInPaint() {
   const row = $("signinrow");
   if (!row) return;
   if (SIGNED_IN) {
     row.hidden = false;
-    $("signinlabel").innerHTML = "Signed in<em>" + esc(SIGNED_IN) + "</em>";
+    $("signinlabel").innerHTML =
+      (SIGNED_IN_PIC ? '<img class="pfp" src="' + esc(SIGNED_IN_PIC) +
+                       '" alt="" referrerpolicy="no-referrer">' : "") +
+      "Signed in<em>" + esc(SIGNED_IN_NAME || SIGNED_IN) + "</em>";
+    $("signinlabel").classList.add("withpfp");
     $("signinbtn").textContent = "Sign out";
     $("signinbtn").onclick = () => { location.href = "/auth/signout"; };
   } else if (SIGN_IN_OFFERED) {
     row.hidden = false;
     $("signinlabel").innerHTML =
-      "Sign in<em>Your queue, your history and your playlists follow you to " +
-      "any device, and you don't need the link again</em>";
-    $("signinbtn").onclick = () => {
-      location.href = "/auth/google/start?next=/player" +
-        (KEY ? "&token=" + encodeURIComponent(KEY) : "");
-    };
+      "Sign in<em>Your queue, history and playlists follow you to any device</em>";
+    $("signinbtn").onclick = () => { location.href = "/auth/google/start?next=/player"; };
   }
 }
 signInPaint();
@@ -3576,10 +3556,12 @@ async function loadPeople() {
     : "Set a hostname under Sharing first — Google needs somewhere to send people back to.";
   $("gcopyuri").onclick = () => copyText(r.redirect_uri || "");
   if (!$("gowner").matches(":focus")) $("gowner").value = r.owner_email || "";
+  if (!$("gscope").matches(":focus")) $("gscope").value = r.new_account_scope || "phone";
   const people = r.people || [];
   $("peoplelist").innerHTML = people.length ? people.map(p =>
-    `<div class="linkstat"><span>${esc(p.name || p.email || p.sub)}` +
-    `${p.scope === "owner" ? " · you" : ""}</span>` +
+    `<div class="linkstat"><span class="who">` +
+    (p.picture ? `<img class="pfp" src="${esc(p.picture)}" alt="" referrerpolicy="no-referrer">` : "") +
+    `<b>${esc(p.name || p.email || p.sub)}${p.scope === "owner" ? " · you" : ""}</b></span>` +
     `<span>${esc(PERSON_SCOPE[p.scope] || p.scope)}</span>` +
     `<em>${esc(p.email || "")}` +
     (p.invited_by ? ` · came in on ${esc(p.invited_by)}` : "") +
@@ -3591,8 +3573,8 @@ async function loadPeople() {
       `<button class="btn" data-person="${esc(p.sub)}" data-scope="blocked">Block</button>` +
       `<button class="btn" data-person="${esc(p.sub)}" data-forget="1">Forget</button>`) +
     `</span></div>`).join("")
-    : '<div class="hint">Nobody has signed in yet. Hand somebody a link and ' +
-      'they can sign in from it.</div>';
+    : '<div class="hint">Nobody has signed in yet. Give someone the link from ' +
+      'the Sharing tab — they sign in there and appear here.</div>';
 }
 $("peoplelist").addEventListener("click", async e => {
   const b = e.target.closest("[data-person]");
@@ -3606,7 +3588,8 @@ $("peoplelist").addEventListener("click", async e => {
 });
 for (const [id, key] of [["gclient", "google_client_id"],
                          ["gsecret", "google_client_secret"],
-                         ["gowner", "owner_email"]]) {
+                         ["gowner", "owner_email"],
+                         ["gscope", "new_account_scope"]]) {
   $(id).addEventListener("change", async () => {
     const r = await api("/api/setting?key=" + key + "&value=" +
                         encodeURIComponent($(id).value.trim()));
@@ -3865,7 +3848,7 @@ $("whoslistening").addEventListener("click", async e => {
   // one of them changes. Refreshing only this one left their link claiming
   // they were listening for another eight seconds, directly underneath a
   // list that had just stopped mentioning them.
-  loadSessions(); loadPasses();
+  loadSessions();
 });
 
 /* Two presses, because it can't be undone and one press is how it happens
@@ -3877,11 +3860,11 @@ $("lockdown").onclick = async () => {
   const b = $("lockdown");
   if (!b.classList.contains("arm")) {
     b.classList.add("arm");
-    b.textContent = "Press again to revoke everything";
+    b.textContent = "Press again to reset access";
     clearTimeout(armed);
     armed = setTimeout(() => {
       b.classList.remove("arm");
-      b.textContent = "Revoke all & shuffle port";
+      b.textContent = "Reset access & shuffle port";
     }, 6000);
     return;
   }
@@ -3889,191 +3872,10 @@ $("lockdown").onclick = async () => {
   b.classList.remove("arm");
   b.textContent = "Revoking…";
   const r = await api("/api/lockdown");
-  b.textContent = "Revoke all & shuffle port";
+  b.textContent = "Reset access & shuffle port";
   toast((r && r.message) || "That needs the key");
-  SHARE_PASS = "";
-  loadPasses(); loadSessions(); loadNetwork();
+  loadSessions(); loadNetwork();
 };
-
-/* ── who has a link, and taking it back ─────────────────────────────── */
-const PASS_SCOPE = { full: "any speaker", phone: "their phone" };
-
-function passLife(p) {
-  if (!p.expires) return "permanent";
-  if (p.expired) {
-    // An expired link stays on the list for a day so you can see whose it
-    // was and change your mind. Saying how long is left to change it is the
-    // whole point of keeping it.
-    const r = p.removed_in_hours;
-    if (r == null) return "expired";
-    return r <= 0 ? "expired, going now"
-         : r < 1 ? "expired, gone in " + Math.round(r * 60) + "m"
-                 : "expired, gone in " + Math.round(r) + "h";
-  }
-  const h = p.hours_left;
-  return h < 1 ? Math.round(h * 60) + "m left"
-       : h < 48 ? Math.round(h) + "h left"
-       : Math.round(h / 24) + "d left";
-}
-function passSeen(p) {
-  // "Listening now" is asked of the sessions, not guessed from the clock. A
-  // link touched a minute ago whose session has since been ended is not
-  // listening to anything, and saying so for another minute is how the list
-  // ends up disagreeing with the one right above it.
-  if (p.listening) return "listening now";
-  if (!p.last_seen) return "never used";
-  const mins = (Date.now() / 1000 - p.last_seen) / 60;
-  return mins < 2 ? "just now"
-       : mins < 90 ? Math.round(mins) + "m ago"
-       : mins < 2880 ? Math.round(mins / 60) + "h ago"
-       : Math.round(mins / 1440) + "d ago";
-}
-
-/* What a link has actually done, in the order you'd ask it: did they use it,
-   how much did they ask for, how long did they listen. A link that has never
-   been opened says so rather than showing three zeroes. */
-function passTally(p) {
-  const s = p.stats || {};
-  if (!s.requests && !s.plays && !s.minutes) return "";
-  const bits = [];
-  if (s.requests) bits.push(s.requests + (s.requests === 1 ? " request" : " requests"));
-  if (s.plays) bits.push(s.plays + " played");
-  if (s.minutes >= 1) bits.push(Math.round(s.minutes) + "m listened");
-  return bits.join(" · ");
-}
-
-async function loadPasses() {
-  const r = await api("/api/passes");
-  const rows = (r && r.passes) || [];
-  if (!rows.length) {
-    $("passlist").innerHTML =
-      `<div class="hint">Nobody has a link yet.</div>`;
-    return;
-  }
-  $("passlist").innerHTML = rows.map(p => {
-    const dead = p.revoked || p.expired;
-    const tally = passTally(p);
-    return `<div class="passrow${dead ? " dead" : ""}">` +
-      `<span class="passname">${esc(p.name)}</span>` +
-      `<span class="passmeta">${esc(PASS_SCOPE[p.scope] || p.scope)}` +
-      ` · ${esc(passLife(p))} · ${esc(passSeen(p))}` +
-      (p.revoked ? " · <b>banned</b>" : "") +
-      (tally ? `<b class="tally">${esc(tally)}</b>` : "") + `</span>` +
-      `<span class="passacts">` +
-      (dead
-        ? (p.revoked ? `<button class="btn passundo" data-i="${esc(p.id)}">Unban</button>` : "")
-        : `<button class="btn passcopy" data-i="${esc(p.id)}">Copy</button>` +
-          `<button class="btn passqr" data-i="${esc(p.id)}">QR</button>`) +
-      // On anything that can lapse, not only on the ones that have. The
-      // link somebody already holds starts working again, so there is
-      // nothing to re-send.
-      (p.expires
-        ? `<button class="btn passmore" data-i="${esc(p.id)}" ` +
-          `title="Another day on this link — they can keep the one they have"` +
-          `>${p.expired ? "Restore" : "+1 day"}</button>`
-        : "") +
-      `<button class="pickx danger passkill" data-i="${esc(p.id)}" ` +
-      `data-danger-action="${p.revoked ? "forget this link" : "ban this link"}" ` +
-      `title="${p.revoked ? "Forget this one" : "Ban this link"}">✕</button>` +
-      `</span><div class="qrbox" id="pq-${esc(p.id)}"></div></div>`;
-  }).join("");
-}
-
-$("passmake").onclick = async () => {
-  const name = ($("passname").value || "").trim();
-  if (!name) { toast("Give it a name so you can take it back later"); return; }
-  const scope = $("passscope").value, hours = $("passhours").value;
-  const r = await api("/api/passes/new?name=" + encodeURIComponent(name) +
-                      "&hours=" + encodeURIComponent(hours) +
-                      "&scope=" + encodeURIComponent(scope) + "&kind=wan");
-  if (!r || r.status !== "ok") { toast((r && r.message) || "Couldn't make that"); return; }
-  $("passname").value = "";
-  await loadPasses();
-  showMade(r, name, scope, hours);
-};
-
-/* The link, and the two things you'd want to do with it, without hunting for
-   the row it just created. */
-/* The address for a pass, as it stands right now — hostname if there is one,
-   the raw IP if there isn't. Asked fresh every time, because the answer
-   changes the moment a hostname is set up or the address moves. */
-async function passUrl(id) {
-  const r = await api("/api/network?pass_id=" + encodeURIComponent(id));
-  const rows = (r && r.addresses) || [];
-  const row = rows.find(a => a.kind === "wan") || rows[0];
-  return row ? row.url : "";
-}
-
-function showMade(r, name, scope, hours) {
-  const life = hours === "0" ? "permanent"
-             : hours === "168" ? "a week" : "24 hours";
-  const where = scope === "phone" ? "their phone only" : "any speaker";
-  $("madebox").innerHTML =
-    `<div class="made-top">Link for ${esc(name)}<em>${where} · ${life}</em></div>` +
-    `<div class="made-url">${esc(r.url)}</div>` +
-    `<div class="made-acts">` +
-    `<button class="btn" id="madecopy">Copy</button>` +
-    `<button class="btn" id="madeqr">QR</button>` +
-    `<button class="btn" id="madedone">Done</button></div>` +
-    `<div class="qrbox" id="madeqrbox"></div>`;
-  // Resolved now, not remembered from when the pass was minted. Setting up a
-  // hostname after making a link left this box handing out the raw-IP URL for
-  // the rest of the session — while the QR button beside it, which re-fetches,
-  // gave the right one. Two buttons, two answers.
-  $("madecopy").onclick = async () => {
-    const url = await passUrl(r.id) || r.url;
-    if (url !== r.url) $("madebox").querySelector(".made-url").textContent = url;
-    toast(await copyText(url) ? "Link copied" : "Couldn't copy that");
-  };
-  $("madeqr").onclick = async () => {
-    const box = $("madeqrbox");
-    if (box.innerHTML) { box.innerHTML = ""; return; }
-    const res = await fetch("/api/qr?kind=wan&pass_id=" + encodeURIComponent(r.id),
-                            { headers: { "X-Music-Key": KEY } });
-    box.innerHTML = res.ok ? await res.text() : "";
-  };
-  $("madedone").onclick = () => { $("madebox").innerHTML = ""; };
-}
-
-$("passlist").addEventListener("click", async e => {
-  const btn = e.target.closest("[data-i]");
-  if (!btn) return;
-  const id = btn.dataset.i;
-  if (btn.classList.contains("passcopy")) {
-    const url = await passUrl(id);
-    toast(url && await copyText(url) ? "Link copied" : "Couldn't copy that");
-    return;
-  }
-  if (btn.classList.contains("passmore")) {
-    const r = await api("/api/passes/extend?hours=24&id=" + encodeURIComponent(id));
-    toast((r && r.message) || "Couldn't extend that");
-    await loadPasses();
-    return;
-  }
-  if (btn.classList.contains("passqr")) {
-    const box = $("pq-" + id);
-    if (box.innerHTML) { box.innerHTML = ""; return; }
-    const res = await fetch("/api/qr?kind=wan&pass_id=" + encodeURIComponent(id),
-                            { headers: { "X-Music-Key": KEY } });
-    box.innerHTML = res.ok ? await res.text() : "";
-    return;
-  }
-  if (btn.classList.contains("passundo")) {
-    await api("/api/passes/revoke?restore=1&id=" + encodeURIComponent(id));
-    loadPasses(); return;
-  }
-  if (btn.classList.contains("passkill")) {
-    if (!armDanger(btn, btn.dataset.dangerAction || "ban this link")) return;
-    // First press bans, second forgets — so a banned link can be cleared away
-    // without a second control that only ever applies to half the rows.
-    const row = ((await api("/api/passes")) || {}).passes || [];
-    const me = row.find(p => p.id === id);
-    await api("/api/passes/revoke?id=" + encodeURIComponent(id) +
-              (me && me.revoked ? "&forget=1" : ""));
-    toast(me && me.revoked ? "Forgotten" : "That link stops working now");
-    loadPasses(); loadSessions();
-  }
-});
 
 async function loadBlocked() {
   const r = await api("/api/blocked");
@@ -4117,6 +3919,13 @@ async function checkBoot() {
         ? '<br><b style="color:var(--bad,#e0645a)">' +
           b.warnings.map(w => esc(w)).join("<br>") + "</b>"
         : "");
+  // A toggle that claimed to be on with nothing behind it in Windows: the
+  // server has just corrected the setting, so repaint the switches from the
+  // truth and say why one flipped.
+  if (b.healed && b.healed.length) {
+    loadSettings();
+    toast("A start-up switch was on with nothing set in Windows — switched off to match");
+  }
 }
 $("bootrecheck").onclick = checkBoot;
 
@@ -5450,28 +5259,6 @@ $("libadd").onclick = async () => {
 $("reguide").onclick = () => { location.href = "/welcome?key=" + encodeURIComponent(KEY); };
 
 /* Who has a profile, and the one genuinely fun thing in here. */
-async function loadProfiles() {
-  const r = await api("/api/profiles");
-  const rows = (r && r.profiles) || [];
-  if (!rows.length) {
-    $("profilelist").innerHTML =
-      '<div class="hint">Nobody has a permanent link yet. Make one and it ' +
-      'starts remembering what they like.</div>';
-    return;
-  }
-  $("profilelist").innerHTML = rows.map(p => {
-    const top = (p.top_artists || []).map(a =>
-      `<span class="fav">${esc(a.artist)}</span>`).join("");
-    return `<div class="profrow"><span class="passname">${esc(p.name)}</span>` +
-      `<span class="passmeta">${p.tracks_played} played` +
-      (p.playlists ? ` &middot; ${p.playlists} playlist${p.playlists === 1 ? "" : "s"}` : "") +
-      `</span>` +
-      (top ? `<div class="favs">${top}</div>`
-           : '<div class="favs"><span class="fav quiet">nothing yet</span></div>') +
-      `</div>`;
-  }).join("");
-}
-
 /* Headphone correction for the PC's own output. */
 function aeqCurve(points) {
   if (!points || !points.length) return "";

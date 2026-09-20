@@ -61,7 +61,9 @@ class _Checker:
 # guard by reading it, so this notices instead.
 _UNGUARDED_BY_DESIGN = {
     "/api/ping":  "health check, says only that we're alive",
-    "/":          "guards itself: LAN-open or the key, checked in the body",
+    "/":          "the public front door: a landing page, or a redirect to "
+                  "the player for the owner and anyone signed in",
+    "/setup":     "the Shortcut recipe; owner-only, checked in the body",
     "/player":    "guards itself via _serve_page, which also picks the credential",
     "/remote":    "same",
     "/welcome":   "same",
@@ -354,12 +356,12 @@ def _run(verbose: bool = False) -> Result:
 
             # -- 4. the setup page does not hand out the key ---------------
             c = _Checker("setup page")
-            page = get("/", full)
+            page = get("/setup", full)
             c("a link can't open the setup page", page.status_code == 403,
               f"HTTP {page.status_code}")
             c("...and the key isn't in what it does return",
               now_key() not in page.text)
-            bad_key = client.get("/?key=nonsense")
+            bad_key = client.get("/setup?key=nonsense")
             c("a wrong key can't either", bad_key.status_code == 403,
               f"HTTP {bad_key.status_code}")
             c("...and leaks nothing", now_key() not in bad_key.text)
@@ -1533,8 +1535,8 @@ def _run(verbose: bool = False) -> Result:
             c("quotes come off", lyric_hunt('the song that goes "let it be now"')
               == "let it be now", repr(lyric_hunt('the song that goes "let it be now"')))
 
-            got = client.get("/api/lyrics/search?q=ab",
-                             headers={"X-Music-Key": now_key()})
+            got = client.post("/api/lyrics/search", json={"q": "ab"},
+                              headers={"X-Music-Key": now_key()})
             c("the search route answers the owner", got.status_code == 200,
               str(got.status_code))
             body = got.json() if got.status_code == 200 else {}
@@ -1542,11 +1544,11 @@ def _run(verbose: bool = False) -> Result:
             c("...and says nothing for a fragment too short",
               body.get("results") == [], str(body.get("results"))[:60])
             c("a phone link may search too",
-              client.get("/api/lyrics/search?q=ab",
-                         headers={"X-Music-Key": phone}, ).status_code == 200)
+              client.post("/api/lyrics/search", json={"q": "ab"},
+                          headers={"X-Music-Key": phone}, ).status_code == 200)
             c("a stranger may not",
-              client.get("/api/lyrics/search?q=ab",
-                         headers={"X-Music-Key": "nope"}).status_code in (401, 403))
+              client.post("/api/lyrics/search", json={"q": "ab"},
+                          headers={"X-Music-Key": "nope"}).status_code in (401, 403))
             say("asking by lyric", c)
 
             # -- 13. shuffle as a standing preference ----------------------
@@ -1778,9 +1780,21 @@ def _run(verbose: bool = False) -> Result:
             r = client.get("/api/control/next", headers=owner_h)
             c("a GET that changes something is refused on a new install",
               r.status_code == 405, str(r.status_code))
+            c("a lyrics refresh that can fetch is refused as GET",
+              client.get("/api/lyrics", headers=owner_h).status_code == 405)
+            c("an about-panel refresh that can enrich is refused as GET",
+              client.get("/api/about", headers=owner_h).status_code == 405)
+            c("a model refresh that can contact Groq is refused as GET",
+              client.get("/api/groqmodels", headers=owner_h).status_code == 405)
             r = client.post("/api/control/next", json={}, headers=owner_h)
             c("...and the same thing as a POST works", r.status_code == 200,
               str(r.status_code))
+            c("...while the lyrics panel accepts its POST refresh",
+              client.post("/api/lyrics", json={}, headers=owner_h).status_code == 200)
+            c("...and the about panel accepts its POST refresh",
+              client.post("/api/about", json={}, headers=owner_h).status_code == 200)
+            c("...and model discovery accepts its POST refresh",
+              client.post("/api/groqmodels", json={}, headers=owner_h).status_code == 200)
             c("a read is still a GET",
               client.get("/api/status", headers=owner_h).status_code == 200)
             c("a read-or-write route reads by GET",
@@ -2071,12 +2085,12 @@ def _run(verbose: bool = False) -> Result:
                 rows_before = dict(_cfg.get("device_eq") or {})
                 with _patch.object(_aeq, "output_name", lambda: "Headphones (HD 650)"):
                     _aeq._Watch.last = None
-                    guest_r = client.get("/api/autoeq/search?q=hd",
-                                         headers={"X-Music-Key": phone})
+                    guest_r = client.post("/api/autoeq/search", json={"q": "hd"},
+                                          headers={"X-Music-Key": phone})
                     c("a link can search models for its own headphones",
                       guest_r.status_code == 200 and guest_r.json().get("results"))
-                    pr = client.get(f"/api/autoeq/profile?id={hd['id']}",
-                                    headers={"X-Music-Key": phone})
+                    pr = client.post("/api/autoeq/profile", json={"id": hd["id"]},
+                                     headers={"X-Music-Key": phone})
                     c("...and fetch one, getting the tune to ask the stream for",
                       pr.status_code == 200 and pr.json().get("tune") == f"aeq-{hd['id']}")
                     c("but not choose the PC's",
@@ -2329,7 +2343,7 @@ def _run(verbose: bool = False) -> Result:
               raw[:3] == bytes([0xEF, 0xBB, 0xBF]) and all(b < 128 for b in raw[3:]))
             say("a real certificate", c)
 
-            # -- 25. people, rather than whoever holds the link -------------
+            # -- 25. people sign in; a link is no longer the identity ------
             c = _Checker("accounts")
             import base64 as _b64mod
             from .web import accounts as _acc, google as _goog
@@ -2340,13 +2354,22 @@ def _run(verbose: bool = False) -> Result:
 
             _acc._path().unlink(missing_ok=True)
             was_owner_email = _cfg.get("owner_email")
+            was_new_scope = _cfg.get("new_account_scope")
             _cfg.set("owner_email", "", save=False)
-            person = _acc.admit("1234567890", "guest@example.com", "A Guest",
-                                invited_by="the spare link")
-            c("somebody new can only play on their own device",
-              person["scope"] == "phone" and person["invited_by"] == "the spare link")
+            _cfg.set("new_account_scope", "phone", save=False)
+            _cfg.set("google_client_id", "test-client-id", save=False)
+            _cfg.set("google_client_secret", "test-secret", save=False)
+            _cfg.set("ddns_hostname", "music.example.test", save=False)
+
+            person = _acc.admit("1234567890", "guest@example.com", "A Guest")
+            c("a new sign-in lands at the owner's default", person["scope"] == "phone")
             c("being first in does not make you the owner",
               _acc.get("1234567890")["scope"] == "phone")
+            _cfg.set("new_account_scope", "blocked", save=False)
+            held = _acc.admit("2222220", "held@example.com", "Held")
+            c("...which the owner can set to hold newcomers until they say yes",
+              held["scope"] == "blocked")
+            _cfg.set("new_account_scope", "phone", save=False)
             _cfg.set("owner_email", "me@example.com", save=False)
             mine = _acc.admit("9000000001", "ME@example.com", "Me")
             c("the address written down beforehand is the owner",
@@ -2388,49 +2411,62 @@ def _run(verbose: bool = False) -> Result:
                          cookies=_sign_in_as("no-such-person")).status_code in (401, 403))
             _bans.forgive("testclient")
             _acc.set_scope("1234567890", "blocked")
-            r = client.get("/api/status", cookies=_sign_in_as("1234567890"))
-            c("a blocked account is turned away", r.status_code == 403, str(r.status_code))
+            c("a blocked account is turned away",
+              client.get("/api/status", cookies=_sign_in_as("1234567890")).status_code == 403)
             _acc.set_scope("1234567890", "phone")
             _bans.forgive("testclient")
 
-            # The page: a guest signed in at home is still a guest.
+            # The front door.
+            with _patch("mrs.web.security.is_home", lambda ip: False):
+                home = client.get("/", follow_redirects=False)
+                c("a stranger meets a sign-in page, not the player",
+                  home.status_code == 200 and "Sign in with Google" in home.text,
+                  str(home.status_code))
+                signed = client.get("/", cookies=_sign_in_as("1234567890"),
+                                    follow_redirects=False)
+                c("someone signed in is sent straight to the player",
+                  signed.status_code == 302 and signed.headers.get("location") == "/player")
+                _acc.set_scope("1234567890", "blocked")
+                blk = client.get("/", cookies=_sign_in_as("1234567890"),
+                                 follow_redirects=False)
+                c("a blocked account is told so, not bounced to the player",
+                  blk.status_code == 200 and "can't listen here" in blk.text)
+                _acc.set_scope("1234567890", "phone")
+            with _patch("mrs.web.security.is_home", lambda ip: True):
+                c("the owner at home goes straight in",
+                  client.get("/", follow_redirects=False).headers.get("location") == "/player")
+
+            # The page: a guest signed in is still a guest, with no key in it.
             with _patch("mrs.web.security.is_home", lambda ip: True):
                 page = client.get("/player", cookies=_sign_in_as("1234567890"))
-                c("a signed-in guest on the home network is not handed the owner's page",
+                c("a signed-in guest is not handed the owner's page",
                   page.status_code == 200 and 'const GUEST = "1"' in page.text,
                   str(page.status_code))
-                c("...and no credential is baked into it",
-                  'const KEY = "";' in page.text)
+                c("...and no credential is baked into it", 'const KEY = "";' in page.text)
                 owner_page = client.get("/player", cookies=_sign_in_as("9000000001"))
                 c("the owner's account gets the owner's page",
                   'const GUEST = "0"' in owner_page.text)
 
-            # Starting a sign-in is itself guarded.
-            _cfg.set("google_client_id", "test-client-id", save=False)
-            _cfg.set("google_client_secret", "test-secret", save=False)
-            _cfg.set("ddns_hostname", "music.example.test", save=False)
+            # Anyone may start a sign-in -- a front door is meant to be
+            # knocked on. No link, no invitation, no key.
+            _cfg.set("new_account_scope", "phone", save=False)
             with _patch("mrs.web.security.is_home", lambda ip: False):
+                _bans.forgive("testclient")
                 r = client.get("/auth/google/start", follow_redirects=False)
-                c("a stranger cannot start a sign-in", r.status_code == 403,
-                  str(r.status_code))
-                r = client.get(f"/auth/google/start?token={phone}",
-                               follow_redirects=False)
-                c("holding a link, they can", r.status_code == 302,
-                  str(r.status_code))
+                c("a stranger can start a sign-in", r.status_code == 302, str(r.status_code))
                 sent = r.headers.get("location", "")
-                c("...and are sent to Google, not somewhere else",
+                c("...sent to Google, nowhere else",
                   sent.startswith("https://accounts.google.com/o/oauth2/v2/auth"))
-                c("...with the client id, and asking which account",
+                c("...with the client id, asking which account",
                   "test-client-id" in sent and "prompt=select_account" in sent)
                 state = sent.split("state=")[1].split("&")[0]
                 waiting = _goog._PENDING.get(state, {})
-                c("the link they used decides what the account may do",
-                  waiting.get("scope") == "phone", str(waiting.get("scope")))
+                c("the sign-in is remembered while Google has them", bool(waiting.get("nonce")))
 
-                # Google answering.
                 def _token(**over):
                     claims = {"sub": "55501", "email": "new@example.com",
                               "email_verified": True, "name": "New Person",
+                              "picture": "https://pics/new.jpg",
                               "aud": "test-client-id", "exp": time.time() + 600,
                               "iss": "https://accounts.google.com",
                               "nonce": waiting.get("nonce")}
@@ -2460,25 +2496,278 @@ def _run(verbose: bool = False) -> Result:
                 c("...with a cookie that is http-only",
                   "httponly" in r.headers.get("set-cookie", "").lower())
                 made = _acc.get("55501")
-                c("...and an account with the link's reach, not more",
-                  made and made["scope"] == "phone" and made["email"] == "new@example.com")
+                c("...a new account at the default scope, with their photo",
+                  made and made["scope"] == "phone"
+                  and made["picture"] == "https://pics/new.jpg")
+                c("...and OAuth alone can never mint an owner",
+                  made["scope"] != "owner")
                 c("a state cannot be used twice",
                   client.get(f"/auth/google/callback?code=abc&state={state}",
                              follow_redirects=False).status_code == 400)
+
             c("only the owner sees who has signed in",
               client.get("/api/accounts", headers={"X-Music-Key": phone}).status_code == 403
               and client.get("/api/accounts", headers=owner_h).status_code == 200)
             body = client.get("/api/accounts", headers=owner_h).json()
-            c("...and what to paste into the Google Console",
+            c("...with what to paste into the Google Console",
               body.get("redirect_uri", "").endswith("/auth/google/callback"))
+            c("...and the default a new sign-in gets",
+              body.get("new_account_scope") == "phone")
+            c("...and the UI offers only safe new-account scopes",
+              tuple(body.get("new_account_scopes") or ()) == _acc.NEW_ACCOUNT_SCOPES)
+            from .core import net as _net
+            shared_url = _net.player_url("music.example.test", phone)
+            c("the link you hand out is the bare front door, no token in it",
+              shared_url.endswith("/") and "token=" not in shared_url,
+              shared_url[:100])
+            c("a header-authenticated owner is recognised at the front door",
+              client.get("/", headers=owner_h,
+                         follow_redirects=False).status_code == 302)
+            signed_out = client.get("/auth/signout",
+                                    cookies=_sign_in_as("1234567890"),
+                                    follow_redirects=False)
+            c("signing out returns to the public start page",
+              signed_out.headers.get("location") == "/"
+              and "mrs_account=" in signed_out.headers.get("set-cookie", ""))
+            was_legacy_mutations = _cfg.get("allow_legacy_get_mutations")
+            _cfg.set("allow_legacy_get_mutations", True, save=False)
+            c("the unsafe owner default is rejected",
+              client.get("/api/setting?key=new_account_scope&value=owner",
+                         headers=owner_h).status_code == 400)
+            _cfg.set("new_account_scope", "owner", save=False)
+            c("a damaged owner default fails closed",
+              _acc.default_scope() == "blocked"
+              and _acc.admit("noowner01", "noowner@example.com", "No Owner")["scope"]
+              == "blocked")
+            _cfg.set("new_account_scope", "phone", save=False)
+
+            # Neither an account session nor a pass may be claimed when the
+            # corresponding durable write failed.
+            with _patch.object(_acc, "_write", return_value=False):
+                try:
+                    _acc.admit("nosave001", "nosave@example.com", "No Save")
+                    saved_account_refused = False
+                except _acc.AccountPersistenceError:
+                    saved_account_refused = True
+            c("an unwritable account registry refuses admission", saved_account_refused)
+            with _patch("mrs.web.security._save_passes", return_value=False):
+                broken_pass = sec.issue(now_key(), name="not-durable", scope="phone")
+            c("an unwritable pass registry returns no credential", not broken_pass)
+
+            # Forget means delete the profile folder too, not merely remove
+            # the account row that points to it.
+            from .core.profile import profiles as _account_profiles
+            erased_sub = "erase0001"
+            _acc.admit(erased_sub, "erase@example.com", "Erase Me")
+            client.get("/api/setting?key=theme&value=warm",
+                       cookies=_sign_in_as(erased_sub))
+            erased_home = _account_profiles.for_row(
+                _acc.as_row(_acc.get(erased_sub))).home()
+            removed = client.get("/api/accounts/forget?sub=" + erased_sub,
+                                 headers=owner_h)
+            c("forgetting an account also removes its profile data",
+              removed.status_code == 200 and not erased_home.exists()
+              and _acc.get(erased_sub) is None)
+
+            # Pending OAuth state is bounded before it can consume arbitrary
+            # memory. Directly exercise the tiny state store; no browser or
+            # network request is needed to construct an authorization URL.
+            pending_before = dict(_goog._PENDING)
+            _goog._PENDING.clear()
+            try:
+                for _ in range(_goog._PENDING_PER_IP):
+                    _goog.start(client_ip="198.51.100.55")
+                try:
+                    _goog.start(client_ip="198.51.100.55")
+                    oauth_cap = False
+                except _goog.SignInBusy:
+                    oauth_cap = len(_goog._PENDING) == _goog._PENDING_PER_IP
+            finally:
+                _goog._PENDING.clear()
+                _goog._PENDING.update(pending_before)
+            c("one address cannot allocate unlimited Google sign-in state", oauth_cap)
+
+            # These are per-record single flights.  Followers receive the
+            # shared cache result rather than multiplying external requests.
+            import threading as _threading
+            from .resolve import insights as _insights, lyrics as _lyrics
+            insight_key = _insights._key("One Lookup", "The Band")
+            _insights.store._rows.pop(insight_key, None)
+            _insights.store._busy.discard(insight_key)
+            insight_entered, insight_release = _threading.Event(), _threading.Event()
+            insight_followers_done = _threading.Event()
+            insight_calls = []
+            insight_followers_left = [5]
+            insight_followers_lock = _threading.Lock()
+
+            def _slow_insight(*args):
+                insight_calls.append(args)
+                insight_entered.set()
+                insight_release.wait(2)
+                return {"at": time.time()}
+
+            with _patch.object(_insights, "_lookup_claimed", side_effect=_slow_insight):
+                first_lookup = _threading.Thread(
+                    target=lambda: _insights.lookup("One Lookup", "The Band"))
+                first_lookup.start()
+                insight_entered.wait(1)
+                def _follow_insight():
+                    _insights.lookup("One Lookup", "The Band")
+                    with insight_followers_lock:
+                        insight_followers_left[0] -= 1
+                        if not insight_followers_left[0]:
+                            insight_followers_done.set()
+                followers = [_threading.Thread(target=_follow_insight) for _ in range(5)]
+                [t.start() for t in followers]
+                insight_followers_done.wait(1)
+                insight_release.set()
+                first_lookup.join(2)
+                [t.join(2) for t in followers]
+            c("concurrent about lookups issue one upstream job", len(insight_calls) == 1)
+
+            from .web import api as _api
+            rate_before = dict(_api._shared_rate)
+            rate_cap_before = _cfg.get("guest_requests_hour")
+            _api._shared_rate.clear()
+            _cfg.set("guest_requests_hour", 1, save=False)
+
+            class _SharedRateRequest:
+                client = type("Client", (), {"host": "198.51.100.10"})()
+                state = type("State", (), {
+                    "pass_row": {"id": "quota-check", "owner": False,
+                                 "internal": False}})()
+
+            try:
+                with _patch.object(sec, "note_use"):
+                    _api._guard_rate(None, _SharedRateRequest())
+                    try:
+                        _api._guard_rate(None, _SharedRateRequest())
+                        shared_rate_limited = False
+                    except Exception as exc:
+                        shared_rate_limited = getattr(exc, "status_code", None) == 429
+            finally:
+                _api._shared_rate.clear()
+                _api._shared_rate.update(rate_before)
+                _cfg.set("guest_requests_hour", rate_cap_before, save=False)
+            c("shared passes have an enforced hourly request cap", shared_rate_limited)
+
+            lyric_key = "Band|One Lyric|200"
+            _lyrics._cache.pop(lyric_key, None)
+            _lyrics._misses.pop(lyric_key, None)
+            lyric_entered, lyric_release = _threading.Event(), _threading.Event()
+            lyric_calls = []
+
+            def _slow_lyrics(url):
+                lyric_calls.append(url)
+                lyric_entered.set()
+                lyric_release.wait(2)
+                return {"plainLyrics": "one shared result"}
+
+            with _patch.object(_lyrics, "_fetch", side_effect=_slow_lyrics):
+                first_lyric = _threading.Thread(
+                    target=lambda: _lyrics.get_lyrics("One Lyric", "Band", 200))
+                first_lyric.start()
+                lyric_entered.wait(1)
+                lyric_followers = [_threading.Thread(
+                    target=lambda: _lyrics.get_lyrics("One Lyric", "Band", 200))
+                    for _ in range(5)]
+                [t.start() for t in lyric_followers]
+                time.sleep(0.05)
+                lyric_release.set()
+                first_lyric.join(2)
+                [t.join(2) for t in lyric_followers]
+            c("concurrent lyric lookups issue one upstream request", len(lyric_calls) == 1)
+            _lyrics._cache.pop(lyric_key, None)
+
+            # A compatibility GET reaches the handler only when explicitly
+            # enabled. Its cache-only helpers must not quietly turn that read
+            # back into Last.fm or MusicBrainz work.
+            from .core.era import era as _era
+            from .core.tags import tagstore as _tagstore
+            from .models import Track as _PassiveTrack
+            passive_track = _PassiveTrack(title="Passive", artist="No Network")
+            with _patch.object(_tagstore, "get", side_effect=AssertionError), \
+                 _patch.object(_era, "get", side_effect=AssertionError), \
+                 _patch.object(_tagstore, "cached", return_value={}) as cached_tags, \
+                 _patch.object(_era, "cached", return_value=None) as cached_era:
+                _insights.about(passive_track, fetch=False)
+            c("a cache-only insight read does not queue enrichment",
+              cached_tags.called and cached_era.called)
+            c("a cache-only lyric read does not start a fetch",
+              _lyrics.cached_lyrics("Passive", "No Network", 180) is None)
+
+            # Listing cannot be the thing that expires credentials or ends
+            # listeners. Those jobs have a lifecycle watchdog of their own.
+            from .core.session import sessions as _sessions
+            with _patch.object(_api.sec, "tidy_passes", side_effect=AssertionError), \
+                 _patch.object(_sessions, "reap", side_effect=AssertionError):
+                passive_lists = (
+                    client.get("/api/passes", headers=owner_h).status_code == 200
+                    and client.get("/api/sessions", headers=owner_h).status_code == 200)
+            c("pass and session lists have no cleanup side effects", passive_lists)
+
+            # Legacy GET remains supported for an old owner page, but it must
+            # use the in-memory model list rather than make a Groq request.
+            with _patch.object(_api.llm, "models", side_effect=AssertionError):
+                legacy_models = client.get("/api/groqmodels", headers=owner_h)
+            c("a legacy model-list GET stays cache-only",
+              legacy_models.status_code == 200)
+
+            # A diagnostic must not clear startup preferences merely because
+            # Windows currently reports that the matching entries are gone.
+            saved_get = _api.config.get
+            def startup_flags(key, default=None):
+                if key in {"start_before_signin", "start_on_boot"}:
+                    return True
+                return saved_get(key, default)
+            with _patch.object(_api.config, "get", side_effect=startup_flags), \
+                 _patch.object(_api.config, "set", side_effect=AssertionError), \
+                 _patch.object(_api, "_run_ps", return_value=(True, "none")), \
+                 _patch("winreg.OpenKey", side_effect=FileNotFoundError):
+                missing_boot = _api.boot_state()
+            c("boot status reports missing startup entries without overwriting settings",
+              any("missing" in w for w in missing_boot.get("warnings", [])))
+
+            from .core import radio as _radio
+            from .models import Track as _RadioTrack
+            station_url = "https://radio.example.test/live"
+            _radio._cache["check-station"] = (
+                time.time(), [_RadioTrack(title="Test Radio", url=station_url,
+                                          source="radio")])
+            c("station loading rejects local, file, and unrecognised URLs",
+              not _radio.is_known_stream("http://127.0.0.1:8080/private")
+              and not _radio.is_known_stream("file:///C:/private.wav")
+              and not _radio.is_known_stream("https://other.example.test/live")
+              and _radio.is_known_stream(station_url))
+            _radio._cache.pop("check-station", None)
+            _cfg.set("allow_legacy_get_mutations", was_legacy_mutations, save=False)
             c("the secret is never handed back",
               "google_client_secret" not in client.get(
                   "/api/settings", headers=owner_h).json())
+            class _SetupSocket:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+                def connect(self, address):
+                    pass
+
+                def getsockname(self):
+                    return ("192.0.2.1", 0)
+
+                def close(self):
+                    pass
+
+            with _patch("socket.socket", _SetupSocket):
+                setup_owner = client.get("/setup", headers=owner_h)
+            c("the setup page still needs the key",
+              client.get("/setup", headers={"X-Music-Key": phone}).status_code == 403
+              and setup_owner.status_code == 200)
             for k, v in (("google_client_id", ""), ("google_client_secret", ""),
-                         ("ddns_hostname", ""), ("owner_email", was_owner_email or "")):
+                         ("ddns_hostname", ""), ("owner_email", was_owner_email or ""),
+                         ("new_account_scope", was_new_scope or "phone")):
                 _cfg.set(k, v, save=False)
             _acc._path().unlink(missing_ok=True)
-            say("people rather than links", c)
+            say("people sign in", c)
 
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
@@ -2888,6 +3177,16 @@ def _run(verbose: bool = False) -> Result:
                                ".flac": "audio/flac", ".ogg": "audio/ogg",
                                ".opus": "audio/ogg", ".webm": "audio/webm"},
                   str(type_map))
+                with _patch.object(_dlmod.downloader, "cached",
+                                   return_value=str(media)):
+                    guest_cached = client.get("/api/stream/range-check",
+                                              headers={"X-Music-Key": phone})
+                    owner_cached = client.get("/api/stream/range-check",
+                                              headers=owner_h)
+                c("a shared link cannot fetch arbitrary cached media",
+                  guest_cached.status_code == 403 and owner_cached.status_code == 200
+                  and owner_cached.content == payload,
+                  f"guest={guest_cached.status_code}, owner={owner_cached.status_code}")
 
             # Narration uses the music mixer's exact base level, applies a
             # configurable dB duck/gain, and restores gain on success/failure.
@@ -3040,7 +3339,7 @@ def _run(verbose: bool = False) -> Result:
               all(mark in template_text for mark in
                   ('function armDanger(button, action)', 'function toastUndo(msg, onUndo)',
                    '.danger.arm::after', 'class="ib small danger" id="blocksong"',
-                   'class="pickx danger sesskick"', 'class="pickx danger passkill"',
+                   'class="pickx danger sesskick"',
                    'if (!armDanger(del, "delete this list")) return;',
                    '<button class="ib small" id="volicon"',
                    'aria-label="Choose output device"><svg')))
