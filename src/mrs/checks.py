@@ -3762,6 +3762,101 @@ def _run(verbose: bool = False) -> Result:
                     config.set(k, v, save=False)
             say("the address settings", c)
 
+            # -- 33. asking Google about a sign-in address before changing it ---
+            c = _Checker("checking the address with Google")
+            import base64 as _b64g
+            from urllib.parse import unquote as _unq33
+            from .web import google as _g33
+            _keep33 = {k: config.get(k) for k in
+                       ("google_client_id", "google_client_secret", "ddns_hostname",
+                        "url_prefix", "public_port")}
+            config.set("google_client_id", "chk-client", save=False)
+            config.set("google_client_secret", "chk-secret", save=False)
+            config.set("ddns_hostname", "music.example.test", save=False)
+            config.set("url_prefix", "", save=False)
+            config.set("public_port", 0, save=False)
+
+            def _err(text):
+                blob = _b64g.urlsafe_b64encode(("\n\x0e" + text).encode()).decode().rstrip("=")
+                return (302, "https://accounts.google.com/signin/oauth/error?authError=" + blob)
+
+            asked: list = []
+
+            def _answer(reply):
+                def probe(url):
+                    asked.append(url)
+                    return reply
+                return probe
+
+            def _chk(path=""):
+                _g33._CHECKED.update(at=0.0, got=None)       # not the cooldown's answer
+                return client.get("/api/accounts/check" + path, headers=owner_h)
+
+            try:
+                with _patch.object(_g33, "_probe", _answer((302, "https://accounts.google.com/v3/signin/identifier?x=1"))):
+                    r = _chk()
+                    c("an address Google will take is said to be accepted",
+                      r.status_code == 200 and r.json()["verdict"] == "accepted", r.text[:120])
+                    c("...asking it about the address this install would really use",
+                      any("redirect_uri=http" in a and "music.example.test" in a
+                          for a in [_unq33(u) for u in asked]))
+                with _patch.object(_g33, "_probe", _answer(_err("redirect_uri_mismatch: not registered"))):
+                    r = _chk("?url_prefix=/music&public_port=443").json()
+                    c("one it hasn't been told about is refused, with what to add",
+                      r["verdict"] == "rejected" and r["reason"] == "redirect_uri_mismatch"
+                      and "/music/auth/google/callback" in r["message"], str(r)[:200])
+                    c("...for the address as it would be, not as it is",
+                      r["redirect_uri"].endswith("/music/auth/google/callback")
+                      and config.get("url_prefix") == "" and config.get("public_port") == 0)
+                    with _patch("mrs.core.net.scheme", lambda: "https"):
+                        c("...and on https 443 the port is left off, which is the point",
+                          _g33.redirect_uri(prefix_override="music", port_override=443)
+                          == "https://music.example.test/music/auth/google/callback")
+                        c("...while any other port stays",
+                          _g33.redirect_uri(prefix_override="", port_override=8443)
+                          == "https://music.example.test:8443/auth/google/callback")
+                        c("...and a path that isn't one is dropped rather than trusted",
+                          _g33.redirect_uri(prefix_override="//evil.example", port_override=443)
+                          == "https://music.example.test/auth/google/callback")
+                with _patch.object(_g33, "_probe", _answer(_err("invalid_client The OAuth client was not found."))):
+                    r = _chk().json()
+                    c("a client id Google doesn't know is its own message",
+                      r["verdict"] == "rejected" and r["reason"] == "invalid_client")
+                with _patch.object(_g33, "_probe", _answer(_err("invalid_request policy"))):
+                    r = _chk().json()
+                    c("an address that breaks its rules says so", r["verdict"] == "rejected"
+                      and r["reason"] == "invalid_request")
+
+                def _down(url):
+                    raise OSError("no route")
+                with _patch.object(_g33, "_probe", _down):
+                    c("Google being out of reach isn't a verdict on the address",
+                      _chk().json()["verdict"] == "unreachable")
+                with _patch.object(_g33, "_probe", _answer((200, ""))):
+                    c("an answer it doesn't recognise is said to be unknown",
+                      _chk().json()["verdict"] == "unknown")
+
+                asked.clear()
+                with _patch.object(_g33, "_probe", _answer((302, "https://accounts.google.com/v3/signin/identifier"))):
+                    _g33._CHECKED.update(at=0.0, got=None)
+                    client.get("/api/accounts/check", headers=owner_h)
+                    client.get("/api/accounts/check", headers=owner_h)
+                    c("asking twice in a row asks Google once", len(asked) == 1, str(len(asked)))
+                c("it is the owner's to ask",
+                  client.get("/api/accounts/check", headers={"X-Music-Key": phone}).status_code == 403)
+                config.set("google_client_id", "", save=False)
+                c("with sign-in not set up there is nothing to ask",
+                  _chk().json()["verdict"] == "unset")
+                config.set("google_client_id", "chk-client", save=False)
+                config.set("ddns_hostname", "", save=False)
+                c("...and with no hostname there is nowhere to send anybody",
+                  _chk().json()["verdict"] == "unset")
+            finally:
+                for k, v in _keep33.items():
+                    config.set(k, v, save=False)
+                _g33._CHECKED.update(at=0.0, got=None)
+            say("checking the address with Google", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json

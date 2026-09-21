@@ -1681,7 +1681,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         <div class="srow"><span class="slabel">Movies address<em>Adds a Music / Movies choice at the bare address</em></span>
           <input class="keyin" id="addrmovies" placeholder="https://host:port/" autocomplete="off" spellcheck="false"></div>
         <div class="srow"><span class="slabel"><em id="addrhint"></em></span>
-          <button class="btn" id="addrsave">Save</button></div>
+          <span class="acctname"><button class="btn" id="addrcheck">Check with Google</button>
+            <button class="btn primary" id="addrsave">Save</button></span></div>
 
         <div class="seclbl">The link you give people</div>
         <div class="hint">Send anyone this address. They open it, sign in with
@@ -3738,7 +3739,35 @@ async function addrHint() {
   if (r && r.redirect_uri) $("addrhint").textContent =
     "Google needs this redirect address: " + r.redirect_uri;
 }
+/* Whether Google would accept the address as it would be once saved. A change
+   Google hasn't been told about means nobody can sign in, so the first Save
+   asks, and only a second one -- which says what it is -- goes ahead anyway. */
+let addrForce = false;
+const addrProposed = () => ({ prefix: $("addrprefix").value.trim(),
+                              port: $("addrport").value.trim() || "0" });
+async function addrAsk() {
+  const p = addrProposed();
+  $("addrhint").textContent = "Asking Google\u2026";
+  const r = await apiTry("/api/accounts/check?url_prefix=" + encodeURIComponent(p.prefix) +
+                         "&public_port=" + encodeURIComponent(p.port));
+  if (!r.ok) { $("addrhint").textContent = (r.body && r.body.detail) || "Couldn't check"; return null; }
+  $("addrhint").textContent = r.body.message;
+  $("addrhint").style.color = r.body.verdict === "accepted" ? "var(--ok)"
+    : r.body.verdict === "unset" ? "" : "var(--bad)";
+  return r.body;
+}
+["addrprefix", "addrport"].forEach(id => $(id).addEventListener("input", () => {
+  addrForce = false; $("addrsave").textContent = "Save";
+}));
+$("addrcheck").onclick = () => addrAsk();
 $("addrsave").onclick = async () => {
+  if (!addrForce) {
+    const got = await addrAsk();
+    if (!got) return;
+    if (!["accepted", "unset"].includes(got.verdict)) {
+      addrForce = true; $("addrsave").textContent = "Save anyway"; return;
+    }
+  }
   const put = (k, v) => apiTry("/api/setting?key=" + k + "&value=" + encodeURIComponent(v));
   for (const [k, v] of [["url_prefix", $("addrprefix").value.trim()],
                         ["public_port", $("addrport").value.trim() || "0"],
@@ -3746,7 +3775,8 @@ $("addrsave").onclick = async () => {
     const r = await put(k, v);
     if (!r.ok) { toast((r.body && r.body.detail) || "That didn't go through"); return; }
   }
-  toast("Saved"); loadSettings(); addrHint();
+  addrForce = false; $("addrsave").textContent = "Save";
+  toast("Saved"); await loadSettings(); addrHint();
 };
 
 /* Siri: a key that can ask for songs as this account, and nothing else. It is

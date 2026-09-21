@@ -19,6 +19,7 @@ import json
 import secrets
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -61,8 +62,12 @@ def configured() -> bool:
                 and str(config.get("google_client_secret") or "").strip())
 
 
-def redirect_uri() -> str:
-    """Where Google sends them back. Must match the Console exactly."""
+def redirect_uri(prefix_override=None, port_override=None) -> str:
+    """Where Google sends them back. Must match the Console exactly.
+
+    The overrides answer "what would it be if the path or port were changed",
+    for checking with Google before anything is.
+    """
     from ..core import net
     host = str(config.get("ddns_hostname") or "").strip()
     if not host:
@@ -70,7 +75,91 @@ def redirect_uri() -> str:
     # The address the outside world uses: Google sends the browser there, so
     # it has to be one that browser can reach, prefix and all, and it has to
     # match what is registered in the Console character for character.
-    return net.public_base(host) + "/auth/google/callback"
+    return net.public_base(host, prefix_override=prefix_override,
+                           port_override=port_override) + "/auth/google/callback"
+
+
+class _Stay(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):
+        return None
+
+
+def _probe(url: str) -> tuple[int, str]:
+    """Ask Google about a sign-in url without following where it sends us.
+
+    Google answers a request it will accept with a redirect to its sign-in page
+    and one it won't with a redirect to an error page, so where the redirect
+    points is the whole answer.
+    """
+    opener = urllib.request.build_opener(_Stay)
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with opener.open(req, timeout=15) as r:
+            return r.status, r.headers.get("Location", "")
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers.get("Location", "")
+
+
+_CHECKED: dict = {"at": 0.0, "for": "", "got": None}
+
+
+def check(uri: str | None = None) -> dict:
+    """Would Google send somebody back to this address?
+
+    Asked of Google itself, with a request that carries no credentials and
+    starts no sign-in that anybody could finish. Worth doing before the address
+    changes, because a redirect address Google hasn't been told about means
+    nobody can sign in, and the only symptom is an error page on Google's side.
+    """
+    if not configured():
+        return {"verdict": "unset", "message": "Google sign-in isn't set up yet."}
+    uri = redirect_uri() if uri is None else uri
+    if not uri:
+        return {"verdict": "unset", "message": "There's no hostname yet, so Google has "
+                                               "nowhere to send anybody back to."}
+    with _lock:
+        # Not a thing to hammer somebody else's login page with.
+        if _CHECKED["for"] == uri and time.time() - _CHECKED["at"] < 5 and _CHECKED["got"]:
+            return dict(_CHECKED["got"])
+    query = urllib.parse.urlencode({
+        "client_id": str(config.get("google_client_id")).strip(),
+        "redirect_uri": uri, "response_type": "code", "scope": "openid email profile",
+        "state": "check", "nonce": "check", "prompt": "select_account"})
+    try:
+        status, where = _probe(f"{AUTH_URL}?{query}")
+    except (OSError, ValueError):
+        return {"verdict": "unreachable", "redirect_uri": uri,
+                "message": "Couldn't reach Google to ask. Try again in a moment."}
+    got = _judge(status, where, uri)
+    got["redirect_uri"] = uri
+    with _lock:
+        _CHECKED.update(at=time.time(), **{"for": uri}, got=dict(got))
+    return got
+
+
+def _judge(status: int, where: str, uri: str) -> dict:
+    """Read Google's answer."""
+    if "/signin/oauth/error" in where:
+        why = ""
+        try:
+            code = urllib.parse.parse_qs(urllib.parse.urlsplit(where).query).get("authError", [""])[0]
+            why = base64.urlsafe_b64decode(code + "=" * (-len(code) % 4)).decode("latin-1")
+        except (ValueError, TypeError):
+            pass
+        if "redirect_uri_mismatch" in why:
+            return {"verdict": "rejected", "reason": "redirect_uri_mismatch",
+                    "message": "Google hasn't been told about this address. In the Cloud "
+                               "Console, under Authorised redirect URIs, add: " + uri}
+        if "invalid_client" in why:
+            return {"verdict": "rejected", "reason": "invalid_client",
+                    "message": "Google doesn't recognise this client id. Check it in Access."}
+        return {"verdict": "rejected", "reason": "invalid_request",
+                "message": "Google won't accept this address. It only allows https "
+                           "addresses, or ones registered as exceptions: " + uri}
+    if status in (301, 302, 303, 307, 308) and "signin" in where:
+        return {"verdict": "accepted", "message": "Google accepts this address."}
+    return {"verdict": "unknown",
+            "message": "Google gave an answer this didn't expect (%s)." % status}
 
 
 def start(next_path: str = "/player", invited_by: str = "",

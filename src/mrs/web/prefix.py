@@ -22,17 +22,22 @@ from ..config import config
 _OK = re.compile(r"^/[a-z0-9][a-z0-9_-]{0,31}$")
 
 
-def configured() -> str:
-    """The prefix the server advertises: "" or "/music". Anything else is "".
+def normalize(value) -> str:
+    """A prefix as it would be used: "" or "/music". Anything else is "".
 
     Checked rather than trusted, because it ends up inside redirects and a
     cookie path, and a value with a scheme or a second slash in it is a
     request to redirect somewhere else.
     """
-    raw = str(config.get("url_prefix") or "").strip().rstrip("/")
+    raw = str(value or "").strip().rstrip("/")
     if raw and not raw.startswith("/"):
         raw = "/" + raw
     return raw if _OK.match(raw or "") else ""
+
+
+def configured() -> str:
+    """The prefix the server advertises: "" or "/music"."""
+    return normalize(config.get("url_prefix"))
 
 
 def base_of(request) -> str:

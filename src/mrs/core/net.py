@@ -211,18 +211,32 @@ def public_port() -> int:
     return got if 0 < got < 65536 else live_port()
 
 
-def public_base(host: str, *, outside: bool = True) -> str:
+def public_base(host: str, *, outside: bool = True, prefix_override=None,
+                port_override=None) -> str:
     """https://host[:port][/prefix], the way somebody else would type it.
 
     The default port for the scheme is left off, which is the entire point:
     https://host/music rather than https://host:29543/. `outside` False is for
     an address on this network, where the real port is the only one that works.
+
+    The overrides are for asking "what would it be if...", before anything is
+    changed: the same arithmetic on values that aren't saved yet.
     """
     from ..web import prefix
     sch = scheme()
-    port = public_port() if outside else live_port()
+    if not outside:
+        port = live_port()
+    elif port_override is not None:
+        try:
+            asked = int(port_override)
+        except (TypeError, ValueError):
+            asked = 0
+        port = asked if 0 < asked < 65536 else live_port()
+    else:
+        port = public_port()
     tail = "" if (sch, port) in (("https", 443), ("http", 80)) else f":{port}"
-    return f"{sch}://{host}{tail}{prefix.configured()}"
+    pre = prefix.configured() if prefix_override is None else prefix.normalize(prefix_override)
+    return f"{sch}://{host}{tail}{pre}"
 
 
 def player_url(host: str, pass_token: str = "", *, outside: bool = True) -> str:

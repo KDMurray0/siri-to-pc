@@ -3708,6 +3708,18 @@ def api_me_siri_revoke(request: Request, id: str = "", _: bool = Auth):
     return {"status": "ok"}
 
 
+@app.get("/api/accounts/check")
+def api_accounts_check(url_prefix: str | None = None, public_port: int | None = None,
+                       _: bool = Owner):
+    """Ask Google whether it would accept this install's sign-in address.
+
+    With a path or port given, the answer is for what the address *would* be
+    once they are saved -- so a change can be checked before it is made.
+    """
+    uri = google.redirect_uri(prefix_override=url_prefix, port_override=public_port)
+    return {"status": "ok", **google.check(uri if google.configured() else None)}
+
+
 @app.get("/api/accounts")
 def api_accounts(_: bool = Owner):
     """Everybody who has signed in, and what Google needs to be told."""
