@@ -78,6 +78,8 @@ _UNGUARDED_BY_DESIGN = {
     "/auth/claim": "finishing a sign-up: needs the short-lived cookie the "
                    "callback set, which names a Google identity we verified",
     "/privacy":   "the notice has to be readable before anyone signs up",
+    "/download/client": "offered on the sign-in page, before anybody has an "
+                        "account; holds no secret and is rate limited",
     "/auth/signout": "throws a cookie away; there is nothing to guard",
     "/openapi.json": "disabled",
     "/docs": "disabled",
@@ -3425,6 +3427,85 @@ def _run(verbose: bool = False) -> Result:
             finally:
                 config.set("allow_shared_links", True, save=False)
             say("personal links", c)
+
+            # -- 30. the desktop app: offered, addressed to this server, limited --
+            c = _Checker("the desktop app")
+            import io as _io30
+            import zipfile as _zf30
+            from .paths import data_dir as _dd30
+            from .web import api as _api30
+            _keep30 = {k: config.get(k) for k in
+                       ("google_client_id", "google_client_secret", "ddns_hostname")}
+            config.set("google_client_id", "dl-test-id", save=False)
+            config.set("google_client_secret", "dl-test-secret", save=False)
+            config.set("ddns_hostname", "music.example.test", save=False)
+            _dl30 = _dd30() / "downloads"
+            _cache30 = _dd30() / "downloads-cache"
+            _dl30.mkdir(parents=True, exist_ok=True)
+            _zip30 = _dl30 / "MusicClient.zip"
+            _api30._DL_SEEN.clear()
+            try:
+                with _patch("mrs.web.security.is_home", lambda ip: False),                         _patch("mrs.core.net.lan_ip", lambda: "192.168.1.9"):
+                    c("with no build, the front page offers nothing to download",
+                      "Get the Windows app" not in client.get("/").text)
+                    none = client.get("/download/client")
+                    c("...and the link says so in words",
+                      none.status_code == 404 and "isn't available" in none.text,
+                      str(none.status_code))
+
+                    with _zf30.ZipFile(_zip30, "w", _zf30.ZIP_DEFLATED) as z:
+                        z.writestr("MusicClient/MusicClient.exe", b"MZ" + b"x" * 5000)
+                        z.writestr("MusicClient/_internal/base.dll", b"dll")
+                    c("with a build, the sign-in page offers it",
+                      "Get the Windows app" in client.get("/").text)
+                    got = client.get("/download/client")
+                    c("it downloads with no account and no key",
+                      got.status_code == 200
+                      and got.headers.get("content-type") == "application/zip",
+                      str(got.status_code))
+                    c("...as a file with a name",
+                      "MusicClient.zip" in got.headers.get("content-disposition", ""))
+                    with _zf30.ZipFile(_io30.BytesIO(got.content)) as z:
+                        names = z.namelist()
+                        addr = z.read("MusicClient/server.txt").decode()
+                    c("...with the program intact",
+                      "MusicClient/MusicClient.exe" in names
+                      and "MusicClient/_internal/base.dll" in names)
+                    c("...and this server's public address already in it",
+                      "music.example.test" in addr, addr[:120])
+                    c("...with the one on the home network as a fallback",
+                      "192.168.1.9" in addr, addr[:160])
+
+                    first = _api30._client_zip()
+                    client.get("/download/client", headers={"Host": "evil.example"})
+                    c("a visitor's own Host header can't mint more copies",
+                      _api30._client_zip() == first
+                      and len(list(_cache30.glob("MusicClient-*.zip"))) == 1)
+                    config.set("ddns_hostname", "other.example.test", save=False)
+                    second = _api30._client_zip()
+                    c("a changed address makes a new copy and clears the old one",
+                      second != first and second.exists() and not first.exists())
+                    config.set("ddns_hostname", "music.example.test", save=False)
+
+                    _api30._DL_SEEN.clear()
+                    cap = _api30.DOWNLOADS_PER_HOUR
+                    codes = [client.get("/download/client").status_code
+                             for _ in range(cap + 2)]
+                    c("each address gets a few an hour, then is asked to wait",
+                      codes[:cap] == [200] * cap and codes[-1] == 429, str(codes))
+
+                    _zip30.write_bytes(b"this is not a zip")
+                    _api30._DL_SEEN.clear()
+                    c("a broken build is a polite 404, not a crash",
+                      client.get("/download/client").status_code == 404)
+            finally:
+                _zip30.unlink(missing_ok=True)
+                for leftover in _cache30.glob("*"):
+                    leftover.unlink(missing_ok=True)
+                _api30._DL_SEEN.clear()
+                for k, v in _keep30.items():
+                    config.set(k, v, save=False)
+            say("the desktop app", c)
 
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")

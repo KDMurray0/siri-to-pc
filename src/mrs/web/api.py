@@ -541,6 +541,7 @@ def _serve_page(request: Request, name: str, key: str, token: str):
         "signed_in_pic": (signed_in or {}).get("picture", ""),
         "sign_in_offered": "1" if (google.configured() and not signed_in
                                    and not owner) else "0",
+        "client_available": "1" if _client_build() else "0",
     })
 
 
@@ -3139,7 +3140,6 @@ def _landing(request: Request, *, tab: str = "login", error: str = "",
              name: str = "", status_code: int = 200, claim: dict | None = None,
              blocked: bool = False):
     """The front page, in one of its states. One place, so they can't drift."""
-    from ..core import cast as _cast_mod
     return templates.TemplateResponse(request, "landing.html", {
         "google": google.configured(),
         "server_name": config.get("server_name", "Music Request"),
@@ -3150,9 +3150,13 @@ def _landing(request: Request, *, tab: str = "login", error: str = "",
 
 
 def _client_build():
-    """The desktop client zip, if one has been built and put where we look."""
-    from ..paths import data_dir
-    for folder in (data_dir() / "downloads", Path(resource_dir()).parent / "downloads"):
+    """The desktop client zip, if one has been built and put where we look.
+
+    Beside the exe when installed (build.ps1 puts it there), or in the data
+    folder for somebody who built it by hand.
+    """
+    from ..paths import data_dir, repo_root
+    for folder in (repo_root() / "downloads", data_dir() / "downloads"):
         try:
             found = sorted(folder.glob("MusicClient*.zip"))
         except OSError:
@@ -3160,6 +3164,104 @@ def _client_build():
         if found:
             return found[-1]
     return None
+
+
+def _client_addresses() -> list[str]:
+    """Where the app should look for this server: outside first, then home.
+
+    From the server's own settings, never from the request -- what is baked in
+    has to be a bounded set, or every Host header anyone sends would mint a
+    new copy on disk.
+    """
+    from ..core import net
+    found = []
+    host = (config.get("ddns_hostname") or "").strip()
+    if host:
+        found.append(net.public_base(host))
+    try:
+        found.append(net.public_base(net.lan_ip(), outside=False))
+    except Exception:                       # no network: the other one will do
+        pass
+    return list(dict.fromkeys(found))
+
+
+def _client_zip():
+    """The client with this server's address already in it, ready to send.
+
+    Built once per (address list, build) and kept, so a download is a file
+    read rather than a copy of forty megabytes. Anything older is removed.
+    """
+    import hashlib
+    import secrets
+    import zipfile
+    from ..paths import data_dir
+    base = _client_build()
+    addresses = _client_addresses()
+    # Appending to something that isn't a zip quietly makes a new zip out of
+    # it, so a damaged build has to be turned away before it gets that far.
+    if not base or not addresses or not zipfile.is_zipfile(base):
+        return None
+    text = "\n".join(addresses) + "\n"
+    tag = hashlib.sha1(f"{text}{base.stat().st_mtime_ns}".encode()).hexdigest()[:10]
+    cache = data_dir() / "downloads-cache"
+    target = cache / f"MusicClient-{tag}.zip"
+    if target.exists():
+        return target
+    tmp = cache / f".{tag}.{secrets.token_hex(4)}.tmp"
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(base, tmp)
+        with zipfile.ZipFile(tmp, "a", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("MusicClient/server.txt",
+                       "# Where this app looks for the server. The first address "
+                       "that answers wins.\n" + text)
+        tmp.replace(target)
+    except (OSError, zipfile.BadZipFile) as exc:
+        log.warning("couldn't prepare the desktop client: %s", exc)
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+    for old in cache.glob("MusicClient-*.zip"):
+        if old != target:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    return target
+
+
+_DL_SEEN: dict[str, list[float]] = {}
+_DL_LOCK = threading.Lock()
+DOWNLOADS_PER_HOUR = 8
+
+
+@app.get("/download/client")
+def download_client(request: Request):
+    """The desktop app. Public: it is offered on the sign-in page.
+
+    It holds nothing secret -- the program, and the address of a server anyone
+    reaching this page already has -- but a big file on a home connection is
+    something to put a limit on, so each address gets a few an hour.
+    """
+    base = _pfx.base_of(request)
+    built = _client_zip()
+    if not built:
+        return _signin_page("The desktop app isn't available from this server yet.",
+                            404, base=base)
+    ip, now = _client_ip(request), time.time()
+    with _DL_LOCK:
+        if len(_DL_SEEN) > 512:
+            for who in [w for w, seen in _DL_SEEN.items() if now - seen[-1] > 3600]:
+                _DL_SEEN.pop(who, None)
+        recent = [t for t in _DL_SEEN.get(ip, []) if now - t < 3600]
+        if len(recent) >= DOWNLOADS_PER_HOUR:
+            return _signin_page("That's a lot of downloads. Try again in a while.",
+                                429, base=base)
+        _DL_SEEN[ip] = recent + [now]
+    return FileResponse(built, media_type="application/zip", filename="MusicClient.zip",
+                        headers={"Cache-Control": "no-store"})
 
 
 def _begin_signin(request: Request, next_path: str, mode: str, signup: dict | None):

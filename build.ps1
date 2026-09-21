@@ -44,6 +44,20 @@ Say "Building"
 python -m PyInstaller --noconfirm --distpath "$stage\dist" --workpath "$stage\build" MusicRequestServer.spec
 if ($LASTEXITCODE -ne 0) { Write-Host "Build failed." -ForegroundColor Red; exit 1 }
 
+# The desktop client is a window onto the server, offered for download from the
+# sign-in page and Settings. Its zip rides along in downloads\ beside the exe.
+Say "Building the desktop client"
+python -m PyInstaller --noconfirm --distpath "$stage\client-dist" --workpath "$stage\client-build" MusicClient.spec
+if ($LASTEXITCODE -ne 0) { Write-Host "Client build failed." -ForegroundColor Red; exit 1 }
+Remove-Item "$stage\MusicClient.zip" -ErrorAction SilentlyContinue
+# python's zipfile rather than Compress-Archive: 5.1 writes backslashes into
+# the entry names, which other unzip tools then mishandle.
+Push-Location "$stage\client-dist"
+python -m zipfile -c "$stage\MusicClient.zip" MusicClient
+$zipped = $LASTEXITCODE
+Pop-Location
+if ($zipped -ne 0) { Write-Host "Couldn't zip the client." -ForegroundColor Red; exit 1 }
+
 $running = Get-CimInstance Win32_Process -Filter "Name='MusicRequestServer.exe'" `
     -ErrorAction SilentlyContinue | Where-Object {
         $_.ExecutablePath -and
@@ -67,6 +81,9 @@ if ($running) {
 Say "Installing into dist\MusicRequestServer"
 robocopy "$stage\dist\MusicRequestServer" $dst /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { Write-Host "Install failed (robocopy $LASTEXITCODE)." -ForegroundColor Red; exit 1 }
+# After the mirror, which would otherwise delete it.
+New-Item -ItemType Directory -Force "$dst\downloads" | Out-Null
+Copy-Item "$stage\MusicClient.zip" "$dst\downloads\MusicClient.zip" -Force
 
 if ($NoRestart) {
     Say "Done. Start it yourself when you're ready:"

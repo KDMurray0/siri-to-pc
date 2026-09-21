@@ -148,6 +148,7 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
 .foot{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:22px;padding-top:16px;border-top:1px solid var(--line);
   font-size:13px;color:var(--faint)}
 .app{display:inline-flex;align-items:center;gap:7px}
+.app[hidden]{display:none}
 .app svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 
 .danger{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
@@ -273,7 +274,7 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
       </div>
     </div>
     <div class="foot">
-      {% if client_available %}<a class="app" href="{{ base }}/download/client"><svg viewBox="0 0 24 24"><path d="M12 4v10m0 0l-4-4m4 4l4-4M5 19h14"/></svg>Get the Windows app</a>{% endif %}
+      {% if client_available %}<a class="app" id="getapp" href="{{ base }}/download/client"><svg viewBox="0 0 24 24"><path d="M12 4v10m0 0l-4-4m4 4l4-4M5 19h14"/></svg>Get the Windows app</a>{% endif %}
       <a href="{{ base }}/privacy">Privacy notice</a>
     </div>
 
@@ -288,6 +289,9 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
 
 <script>
 const BASE = "{{ base }}";
+// Already in the app: there's nothing to download. pywebview puts its object on
+// the page (a moment after load), which a browser never has.
+addEventListener("pywebviewready", () => { const a = document.getElementById("getapp"); if (a) a.hidden = true; });
 (function demo() {
   const typed = document.getElementById("typed");
   const rows = document.querySelectorAll("#queue li");
