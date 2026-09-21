@@ -69,11 +69,15 @@ _UNGUARDED_BY_DESIGN = {
     "/welcome":   "same",
     "/api/events": "calls require_key in the body — it needs the pass row "
                    "afterwards to decide whose events to send",
-    "/auth/google/start": "the way in: checks a link, the home network or an "
-                          "existing account in the body, then hands off to Google",
+    "/auth/google/start": "the way in, open to anyone: GET logs in, POST signs up "
+                          "(name and agreements are checked in the body), then "
+                          "hands off to Google",
     "/auth/google/callback": "Google answering. Nothing in it is trusted: the "
                              "state must be one we issued and the token is "
                              "fetched from Google directly",
+    "/auth/claim": "finishing a sign-up: needs the short-lived cookie the "
+                   "callback set, which names a Google identity we verified",
+    "/privacy":   "the notice has to be readable before anyone signs up",
     "/auth/signout": "throws a cookie away; there is nothing to guard",
     "/openapi.json": "disabled",
     "/docs": "disabled",
@@ -2436,7 +2440,8 @@ def _run(verbose: bool = False) -> Result:
             with _patch("mrs.web.security.is_home", lambda ip: False):
                 home = client.get("/", follow_redirects=False)
                 c("a stranger meets a sign-in page, not the player",
-                  home.status_code == 200 and "Sign in with Google" in home.text,
+                  home.status_code == 200 and "Log in with Google" in home.text
+                  and "Sign up with Google" in home.text,
                   str(home.status_code))
                 signed = client.get("/", cookies=_sign_in_as("1234567890"),
                                     follow_redirects=False)
@@ -2446,7 +2451,9 @@ def _run(verbose: bool = False) -> Result:
                 blk = client.get("/", cookies=_sign_in_as("1234567890"),
                                  follow_redirects=False)
                 c("a blocked account is told so, not bounced to the player",
-                  blk.status_code == 200 and "can't listen here" in blk.text)
+                  blk.status_code == 200 and "listen here" in blk.text)
+                c("...and can still take its data or delete it",
+                  "/api/me/export" in blk.text and "/api/me/delete" in blk.text)
                 _acc.set_scope("1234567890", "phone")
             with _patch("mrs.web.security.is_home", lambda ip: True):
                 c("the owner at home goes straight in",
@@ -2463,33 +2470,54 @@ def _run(verbose: bool = False) -> Result:
                 c("the owner's account gets the owner's page",
                   'const GUEST = "0"' in owner_page.text)
 
-            # Anyone may start a sign-in -- a front door is meant to be
-            # knocked on. No link, no invitation, no key.
+            # A front door is meant to be knocked on, so anyone may start a
+            # login. Signing in is not signing up, though: a Google account we
+            # haven't met is asked for a name and its agreements, and no account
+            # exists until it has answered.
             _cfg.set("new_account_scope", "phone", save=False)
-            with _patch("mrs.web.security.is_home", lambda ip: False):
+
+            def _start(**form):
+                """Begin a sign-in: log in by GET, sign up by POST."""
                 _bans.forgive("testclient")
-                r = client.get("/auth/google/start", follow_redirects=False)
+                if form:
+                    r = client.post("/auth/google/start", data=form,
+                                    follow_redirects=False)
+                else:
+                    r = client.get("/auth/google/start", follow_redirects=False)
+                where = r.headers.get("location", "")
+                got = where.split("state=")[1].split("&")[0] if "state=" in where else ""
+                return got, r
+
+            def _token(asked, sub="55501", **over):
+                claims = {"sub": sub, "email": f"{sub}@example.com",
+                          "email_verified": True, "name": "New Person",
+                          "picture": "https://pics/new.jpg",
+                          "aud": "test-client-id", "exp": time.time() + 600,
+                          "iss": "https://accounts.google.com", "nonce": asked}
+                claims.update(over)
+                raw = _json.dumps(claims).encode()
+                mid = _b64mod.urlsafe_b64encode(raw).decode().rstrip("=")
+                return {"id_token": "x." + mid + ".y"}
+
+            def _back(state, nonce, sub="55501"):
+                """Google sends them back, having confirmed who they are."""
+                with _patch.object(_goog, "_post",
+                                   lambda *a, **k: _token(nonce, sub)):
+                    got = client.get(f"/auth/google/callback?code=abc&state={state}",
+                                     follow_redirects=False)
+                client.cookies.clear()      # the jar would sign every later call in
+                return got
+
+            with _patch("mrs.web.security.is_home", lambda ip: False):
+                state, r = _start()
                 c("a stranger can start a sign-in", r.status_code == 302, str(r.status_code))
                 sent = r.headers.get("location", "")
                 c("...sent to Google, nowhere else",
                   sent.startswith("https://accounts.google.com/o/oauth2/v2/auth"))
                 c("...with the client id, asking which account",
                   "test-client-id" in sent and "prompt=select_account" in sent)
-                state = sent.split("state=")[1].split("&")[0]
                 waiting = _goog._PENDING.get(state, {})
                 c("the sign-in is remembered while Google has them", bool(waiting.get("nonce")))
-
-                def _token(**over):
-                    claims = {"sub": "55501", "email": "new@example.com",
-                              "email_verified": True, "name": "New Person",
-                              "picture": "https://pics/new.jpg",
-                              "aud": "test-client-id", "exp": time.time() + 600,
-                              "iss": "https://accounts.google.com",
-                              "nonce": waiting.get("nonce")}
-                    claims.update(over)
-                    raw = _json.dumps(claims).encode()
-                    mid = _b64mod.urlsafe_b64encode(raw).decode().rstrip("=")
-                    return {"id_token": "x." + mid + ".y"}
 
                 c("a callback with a state nobody issued is refused",
                   client.get("/auth/google/callback?code=x&state=made-up",
@@ -2500,26 +2528,135 @@ def _run(verbose: bool = False) -> Result:
                                    ("answering a different sign-in", {"nonce": "other"}),
                                    ("an address Google hasn't checked",
                                     {"email_verified": False})):
-                    with _patch.object(_goog, "_post", lambda *a, **k: _token(**over)):
+                    with _patch.object(_goog, "_post",
+                                       lambda *a, **k: _token(waiting.get("nonce"), **over)):
                         c(f"a token {name} is refused",
                           _goog.finish("code", dict(waiting)) is None)
-                with _patch.object(_goog, "_post", lambda *a, **k: _token()):
-                    r = client.get(f"/auth/google/callback?code=abc&state={state}",
-                                   follow_redirects=False)
-                c("a good one signs them in", r.status_code == 302, str(r.status_code))
-                c("...to the page they were going to",
-                  r.headers.get("location") == "/player")
-                c("...with a cookie that is http-only",
-                  "httponly" in r.headers.get("set-cookie", "").lower())
-                made = _acc.get("55501")
-                c("...a new account at the default scope, with their photo",
-                  made and made["scope"] == "phone"
-                  and made["picture"] == "https://pics/new.jpg")
-                c("...and OAuth alone can never mint an owner",
-                  made["scope"] != "owner")
+
+                # -- logging in as somebody we've never met ------------------
+                r = _back(state, waiting.get("nonce"))
+                c("a Google account we haven't met is asked to finish, not admitted",
+                  r.status_code == 302 and r.headers.get("location") == "/auth/claim"
+                  and _acc.get("55501") is None,
+                  f"{r.status_code} {r.headers.get('location')}")
+                ck = r.headers.get("set-cookie", "")
+                c("...held by a short-lived cookie that page scripts can't read",
+                  "mrs_claim=" in ck and "httponly" in ck.lower())
+                handle = ck.split("mrs_claim=")[1].split(";")[0]
+                held = {"mrs_claim": handle}
+                client.cookies.clear()
                 c("a state cannot be used twice",
                   client.get(f"/auth/google/callback?code=abc&state={state}",
                              follow_redirects=False).status_code == 400)
+
+                page = client.get("/auth/claim", cookies=held)
+                c("the finishing page offers their name to change",
+                  page.status_code == 200 and "One last thing" in page.text
+                  and 'value="New Person"' in page.text, str(page.status_code))
+                c("...and the photo Google gave", "https://pics/new.jpg" in page.text)
+                c("nobody without the cookie gets it",
+                  "One last thing" not in client.get("/auth/claim").text
+                  and "One last thing" not in client.get(
+                      "/auth/claim", cookies={"mrs_claim": "nope"}).text)
+
+                short = client.post("/auth/claim", data={"name": "A", "terms": "1"},
+                                    cookies=held, follow_redirects=False)
+                c("a one-letter name is turned back with a reason",
+                  short.status_code == 400 and "at least two" in short.text)
+                bare = client.post("/auth/claim", data={"name": "Sam Rivers"},
+                                   cookies=held, follow_redirects=False)
+                c("finishing without the privacy notice is turned back",
+                  bare.status_code == 400 and "privacy notice" in bare.text)
+                c("...and neither attempt made an account, or used up the claim",
+                  _acc.get("55501") is None
+                  and client.get("/auth/claim", cookies=held).status_code == 200)
+
+                cross = client.post("/auth/claim", data={"name": "Sam Rivers", "terms": "1"},
+                                    cookies=held, headers={"Origin": "https://evil.example"},
+                                    follow_redirects=False)
+                c("another site can't post the form for them",
+                  cross.status_code == 403 and _acc.get("55501") is None)
+
+                done = client.post("/auth/claim", data={"name": "  Sam   Rivers ", "terms": "1"},
+                                   cookies=held, follow_redirects=False)
+                c("a name and the notice make an account", done.status_code == 302
+                  and done.headers.get("location") == "/player",
+                  f"{done.status_code} {done.headers.get('location')}")
+                made = _acc.get("55501")
+                c("...named what they chose, not what Google calls them",
+                  bool(made) and made["name"] == "Sam Rivers")
+                c("...at the default scope, with their photo",
+                  made["scope"] == "phone" and made["picture"] == "https://pics/new.jpg")
+                c("...having agreed to the notice, and not to tracking",
+                  made["terms_at"] > 0 and made["terms_version"] == _acc.TERMS_VERSION
+                  and made["tracking"] is False and made["tracking_at"] == 0)
+                c("...and OAuth alone can never mint an owner", made["scope"] != "owner")
+                sc = done.headers.get("set-cookie", "")
+                c("...signed in, with a cookie that is http-only",
+                  "mrs_account=" in sc and "httponly" in sc.lower())
+                c("a claim is used once",
+                  client.post("/auth/claim", data={"name": "Sam Rivers", "terms": "1"},
+                              cookies=held, follow_redirects=False).status_code == 400
+                  and "One last thing" not in client.get(
+                      "/auth/claim", cookies=held).text)
+
+                # -- signing up, having said who they are first --------------
+                before = len(_goog._PENDING)
+                for label, form, needle in (
+                        ("a name that is too short", {"name": "x", "terms": "1"}, "at least two"),
+                        ("a name that's only spaces", {"name": "   ", "terms": "1"}, "at least two"),
+                        ("no agreement to the privacy notice", {"name": "Priya"}, "privacy notice"),
+                        ("an agreement that isn't a yes", {"name": "Priya", "terms": "0"},
+                         "privacy notice")):
+                    _bans.forgive("testclient")
+                    r = client.post("/auth/google/start", data=form, follow_redirects=False)
+                    c(f"signing up with {label} is refused, before Google",
+                      r.status_code == 400 and needle in r.text, str(r.status_code))
+                c("...and none of those started anything with Google",
+                  len(_goog._PENDING) == before)
+                _bans.forgive("testclient")
+                c("another site can't start a sign-up for somebody",
+                  client.post("/auth/google/start", data={"name": "Priya", "terms": "1"},
+                              headers={"Origin": "https://evil.example"},
+                              follow_redirects=False).status_code == 403)
+
+                # Tracking is exactly what was ticked; a form that says nothing
+                # about it says no.
+                st2, r = _start(name="Priya Nair", terms="1", tracking="1")
+                c("a proper sign-up goes on to Google", r.status_code == 302 and bool(st2),
+                  str(r.status_code))
+                c("...carrying the name and the tracking choice with it",
+                  _goog._PENDING.get(st2, {}).get("signup")
+                  == {"name": "Priya Nair", "tracking": True})
+                r = _back(st2, _goog._PENDING[st2]["nonce"], "55502")
+                c("...and coming back creates the account outright, with no second page",
+                  r.status_code == 302 and r.headers.get("location") == "/player"
+                  and "mrs_claim=" not in r.headers.get("set-cookie", ""))
+                p2 = _acc.get("55502")
+                c("...under the name they gave", bool(p2) and p2["name"] == "Priya Nair")
+                c("...having opted in, and when",
+                  p2["tracking"] is True and p2["tracking_at"] > 0 and p2["terms_at"] > 0)
+
+                st3, r = _start(name="Quiet One", terms="1")
+                r = _back(st3, _goog._PENDING[st3]["nonce"], "55503")
+                p3 = _acc.get("55503")
+                c("a sign-up that leaves tracking unticked is not tracked",
+                  bool(p3) and p3["tracking"] is False and p3["tracking_at"] == 0)
+
+                # -- coming back ---------------------------------------------
+                st4, _ = _start()
+                r = _back(st4, _goog._PENDING[st4]["nonce"], "55501")
+                c("logging in again goes straight through",
+                  r.status_code == 302 and r.headers.get("location") == "/player"
+                  and "mrs_claim=" not in r.headers.get("set-cookie", ""))
+                c("...and Google's name for them does not replace theirs",
+                  _acc.get("55501")["name"] == "Sam Rivers")
+                st5, _ = _start(name="Someone Else", terms="1", tracking="1")
+                _back(st5, _goog._PENDING[st5]["nonce"], "55501")
+                c("signing up as a name that's already an account changes nothing about it",
+                  _acc.get("55501")["name"] == "Sam Rivers"
+                  and _acc.get("55501")["tracking"] is False)
+                client.cookies.clear()
 
             c("only the owner sees who has signed in",
               client.get("/api/accounts", headers={"X-Music-Key": phone}).status_code == 403
@@ -3854,6 +3991,8 @@ def _run(verbose: bool = False) -> Result:
             say("issue regressions", c)
 
     except Exception as exc:            # a check suite must not be the thing
+        import traceback
+        traceback.print_exc()           # where it broke, not only that it did
         out.failed.append(f"the checks themselves broke: {exc!r}")
     finally:
         for pid in minted:

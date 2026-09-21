@@ -43,6 +43,14 @@ _PENDING_MAX = 128
 _PENDING_PER_IP = 8
 _lock = threading.RLock()
 
+# Somebody Google has just vouched for, whom we have never seen, and who came in
+# by "Log in" rather than "Sign up". They have proved who they are but not agreed
+# to anything, and there is no name yet -- so they wait here, server-side, for the
+# ten minutes it takes to pick one. The browser holds only a random handle; the
+# verified identity itself never leaves this process.
+_CLAIMS: dict[str, dict] = {}
+_CLAIMS_MAX = 128
+
 
 class SignInBusy(RuntimeError):
     """Too many unfinished Google sign-ins are already outstanding."""
@@ -66,8 +74,14 @@ def redirect_uri() -> str:
 
 
 def start(next_path: str = "/player", invited_by: str = "",
-          scope: str = "", client_ip: str = "") -> str:
-    """The URL to send somebody to, and the state that remembers why."""
+          scope: str = "", client_ip: str = "", mode: str = "login",
+          signup: dict | None = None) -> str:
+    """The URL to send somebody to, and the state that remembers why.
+
+    `mode` is what they pressed: "signup" carries the name and agreements they
+    already gave on our page (kept here, not in the url Google sees), "login"
+    carries nothing and finds an account or asks for the rest afterwards.
+    """
     if not configured():
         return ""
     uri = redirect_uri()
@@ -87,7 +101,8 @@ def start(next_path: str = "/player", invited_by: str = "",
             raise SignInBusy("too many sign-ins from this address")
         _PENDING[state] = {"at": now, "nonce": nonce, "next": next_path,
                            "invited_by": invited_by, "scope": scope, "uri": uri,
-                           "ip": client_ip}
+                           "ip": client_ip, "mode": mode if mode == "signup" else "login",
+                           "signup": dict(signup or {})}
     query = urllib.parse.urlencode({
         "client_id": str(config.get("google_client_id")).strip(),
         "redirect_uri": uri,
@@ -110,6 +125,40 @@ def pending(state: str) -> dict | None:
     if not row or time.time() - row["at"] > _PENDING_FOR:
         return None
     return row
+
+
+def hold(who: dict, row: dict) -> str:
+    """Keep a verified stranger while they choose a name. Returns the handle."""
+    handle = secrets.token_urlsafe(32)
+    now = time.time()
+    with _lock:
+        for old, held in list(_CLAIMS.items()):
+            if now - held["at"] > _PENDING_FOR:
+                _CLAIMS.pop(old, None)
+        if len(_CLAIMS) >= _CLAIMS_MAX:
+            raise SignInBusy("too many people are finishing signing up")
+        _CLAIMS[handle] = {"at": now, "who": dict(who), "next": row.get("next", "/player")}
+    return handle
+
+
+def peek_claim(handle: str) -> dict | None:
+    """What to show them while they decide: a suggested name and their photo."""
+    with _lock:
+        held = _CLAIMS.get(handle or "")
+    if not held or time.time() - held["at"] > _PENDING_FOR:
+        return None
+    who = held["who"]
+    return {"name": who.get("name", ""), "picture": who.get("picture", ""),
+            "next": held["next"]}
+
+
+def take_claim(handle: str) -> dict | None:
+    """The verified identity behind a handle. One use only."""
+    with _lock:
+        held = _CLAIMS.pop(handle or "", None)
+    if not held or time.time() - held["at"] > _PENDING_FOR:
+        return None
+    return {**held["who"], "next": held["next"]}
 
 
 def _post(url: str, form: dict, timeout: float = 12.0) -> dict | None:

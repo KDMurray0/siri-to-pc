@@ -86,7 +86,8 @@ async def _door(request: Request, call_next):
                     {"detail": "Use POST with a JSON body; GET does not change state"},
                     status_code=405, headers={"Allow": "POST"})
 
-    if request.method == "POST" and (route or request.url.path == "/"):
+    if request.method == "POST" and (route or request.url.path in (
+            "/", "/auth/claim", "/auth/google/start")):
         origin = request.headers.get("origin")
         if origin and not _same_origin(origin, request):
             return JSONResponse({"detail": "Cross-origin request refused"},
@@ -330,10 +331,7 @@ async def index(request: Request, key: str = Query(default=""),
     row = _account_row(request)
 
     def landing(blocked=False):
-        return templates.TemplateResponse(request, "landing.html", {
-            "google": google.configured(),
-            "server_name": config.get("server_name", "Music Request"),
-            "blocked": blocked})
+        return _landing(request, blocked=blocked)
 
     if row and row.get("blocked"):
         return landing(blocked=True)
@@ -346,6 +344,24 @@ async def index(request: Request, key: str = Query(default=""),
                 and same_key(key, config.get("api_key") or "") else "")
         return RedirectResponse(_pfx.at(request, "/player") + tail, status_code=302)
     return landing()
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy_page(request: Request):
+    """What is held about a person, why, for how long, and how to take it away.
+
+    Public on purpose: it has to be readable before somebody signs up, and it
+    says nothing that isn't already true of every install. The specifics --
+    who runs this, how long the trail is kept -- come from the running config.
+    """
+    return templates.TemplateResponse(request, "privacy.html", {
+        "server_name": config.get("server_name", "Music Request"),
+        "contact": accounts.owner_email(),
+        "audit_days": int(config.get("audit_log_days", 30) or 30),
+        "notice_version": accounts.TERMS_VERSION,
+        "google": google.configured(),
+        "groq": bool(config.get("groq_api_key") and config.get("use_groq", True)),
+    })
 
 
 @app.get("/setup", response_class=HTMLResponse)
@@ -3092,31 +3108,80 @@ def api_stream(video_id: str, _: bool = Owner):
 
 # ── diagnostics ───────────────────────────────────────────────────────
 
-@app.get("/auth/google/start")
-def auth_google_start(request: Request, next: str = "/player"):
-    """Begin a sign-in. Open to anyone -- a front door is meant to be knocked
-    on, and no link or key is needed to prove who you are to Google.
+def _landing(request: Request, *, tab: str = "login", error: str = "",
+             name: str = "", status_code: int = 200, claim: dict | None = None,
+             blocked: bool = False):
+    """The front page, in one of its states. One place, so they can't drift."""
+    from ..core import cast as _cast_mod
+    return templates.TemplateResponse(request, "landing.html", {
+        "google": google.configured(),
+        "server_name": config.get("server_name", "Music Request"),
+        "blocked": blocked, "tab": tab, "error": error, "name": name,
+        "claim": claim, "client_available": _client_build() is not None,
+        "contact": accounts.owner_email(),
+    }, status_code=status_code)
 
-    What a newcomer becomes is decided when they come back: a face already
-    known keeps its account, and a new one lands at new_account_scope, which
-    the owner sets -- to "blocked" if they would rather look people over
-    before letting them in. Ownership is never granted here; only the
-    configured owner email can be an owner.
 
-    The rate limit stays: a public endpoint that mints server-side state is
-    something to keep a lid on.
-    """
+def _client_build():
+    """The desktop client zip, if one has been built and put where we look."""
+    from ..paths import data_dir
+    for folder in (data_dir() / "downloads", Path(resource_dir()).parent / "downloads"):
+        try:
+            found = sorted(folder.glob("MusicClient*.zip"))
+        except OSError:
+            found = []
+        if found:
+            return found[-1]
+    return None
+
+
+def _begin_signin(request: Request, next_path: str, mode: str, signup: dict | None):
     if not google.configured():
         raise HTTPException(503, "Signing in with Google isn't set up here")
     try:
-        url = google.start(next_path=_safe_next(next),
-                           client_ip=_client_ip(request))
+        url = google.start(next_path=_safe_next(next_path),
+                           client_ip=_client_ip(request), mode=mode, signup=signup)
     except google.SignInBusy as exc:
         raise HTTPException(429, str(exc))
     if not url:
         raise HTTPException(503, "No hostname set, so Google has nowhere to "
                                  "send anybody back to")
     return RedirectResponse(url, status_code=302)
+
+
+@app.get("/auth/google/start")
+def auth_google_start(request: Request, next: str = "/player"):
+    """Log in. Open to anyone -- a front door is meant to be knocked on.
+
+    An account we already know goes straight through. One we don't is asked, on
+    the way back, for a name and its agreements -- signing in is not signing up,
+    and nothing is created until they have said yes to something. Ownership is
+    never granted here; only the configured owner email can be an owner.
+
+    The rate limit stays: a public endpoint that mints server-side state is
+    something to keep a lid on.
+    """
+    return _begin_signin(request, next, "login", None)
+
+
+@app.post("/auth/google/start")
+async def auth_google_signup(request: Request):
+    """Sign up: a name and the agreements, then Google.
+
+    A POST so the name is never in a url, a history entry or an address bar.
+    Both agreements are checked here, not only in the page: the privacy notice
+    is required, and tracking is exactly what was ticked -- absent means no.
+    """
+    form = await request.form()
+    name = accounts.clean_name(form.get("name", ""))
+    if len(name) < 2:
+        return _landing(request, tab="signup", name=name, status_code=400,
+                        error="Tell us what to call you — at least two characters.")
+    if str(form.get("terms", "")) != "1":
+        return _landing(request, tab="signup", name=name, status_code=400,
+                        error="Please read and accept the privacy notice to sign up.")
+    return _begin_signin(request, str(form.get("next", "/player")), "signup",
+                         {"name": name, "tracking": str(form.get("tracking", "")) == "1"})
 
 
 def _safe_next(path: str) -> str:
@@ -3127,35 +3192,17 @@ def _safe_next(path: str) -> str:
     return path[:120]
 
 
-@app.get("/auth/google/callback")
-def auth_google_callback(request: Request, code: str = "", state: str = "",
-                         error: str = ""):
-    """Google sending somebody back. Everything here is checked, not trusted."""
-    if error:
-        return _signin_page("Google says: " + error[:120], base=_pfx.base_of(request))
-    row = google.pending(state)
-    if not row:
-        # Also what an old tab, a refresh of this url, or somebody else's
-        # forged link looks like.
-        return _signin_page("That sign-in had already been used or has "
-                            "expired. Open the link again.", base=_pfx.base_of(request))
-    who = google.finish(code, row)
-    if not who:
-        return _signin_page("Google couldn't confirm who that was.", base=_pfx.base_of(request))
-    try:
-        person = accounts.admit(
-            who["sub"], who["email"], who["name"],
-            picture=who.get("picture", ""),
-            invited_by=str(row.get("invited_by") or ""),
-            scope=str(row.get("scope") or ""))
-    except accounts.AccountPersistenceError:
-        # Do not issue a valid session for an identity we failed to remember.
-        return _signin_page("Couldn't save that sign-in. Please try again.", 503, base=_pfx.base_of(request))
-    if person.get("scope") == "blocked":
-        return _signin_page("That account is blocked here.", base=_pfx.base_of(request))
+CLAIM_COOKIE = "mrs_claim"
+
+
+def _start_session(request: Request, person: dict, next_path: str):
+    """Sign this browser in as an account, and send it on."""
     base = _pfx.base_of(request)
-    resp = RedirectResponse(base + _safe_next(row.get("next", "/player")),
-                            status_code=302)
+    # A blocked account is let in only far enough to reach its own data (the
+    # routes it may use are listed in _BLOCKED_MAY_REACH), and lands on the page
+    # that says so rather than on a player it can't use.
+    dest = base + ("/" if person.get("scope") == "blocked" else _safe_next(next_path))
+    resp = RedirectResponse(dest, status_code=302)
     resp.set_cookie(
         SESSION_COOKIE,
         sec.session_cookie(config.get("api_key") or "", person["sub"]),
@@ -3165,8 +3212,95 @@ def auth_google_callback(request: Request, code: str = "", state: str = "",
         # Scoped to where this application lives: another one on the same
         # address is a different application and gets none of it.
         secure=_net_scheme() == "https", path=base or "/")
-    log.info("%s signed in (%s)", accounts.tag(person["sub"]),
-             person.get("scope"))
+    log.info("%s signed in (%s)", accounts.tag(person["sub"]), person.get("scope"))
+    return resp
+
+
+@app.get("/auth/google/callback")
+def auth_google_callback(request: Request, code: str = "", state: str = "",
+                         error: str = ""):
+    """Google sending somebody back. Everything here is checked, not trusted."""
+    base = _pfx.base_of(request)
+    if error:
+        return _signin_page("Google says: " + error[:120], base=base)
+    row = google.pending(state)
+    if not row:
+        # Also what an old tab, a refresh of this url, or somebody else's
+        # forged link looks like.
+        return _signin_page("That sign-in had already been used or has "
+                            "expired. Open the link again.", base=base)
+    who = google.finish(code, row)
+    if not who:
+        return _signin_page("Google couldn't confirm who that was.", base=base)
+
+    known = accounts.get(who["sub"])
+    chosen = None
+    if known is None:
+        chosen = row.get("signup") if row.get("mode") == "signup" else None
+        if not chosen:
+            # Logged in with a Google account we haven't met. They are who they
+            # say, but nothing has been agreed to and there is no name: hold
+            # them for ten minutes and ask, rather than making an account for
+            # somebody who only pressed the wrong button.
+            try:
+                handle = google.hold(who, row)
+            except google.SignInBusy as exc:
+                return _signin_page(str(exc), 429, base=base)
+            resp = RedirectResponse(base + "/auth/claim", status_code=302)
+            resp.set_cookie(CLAIM_COOKIE, handle, max_age=600, httponly=True,
+                            samesite="lax", secure=_net_scheme() == "https",
+                            path=base or "/")
+            return resp
+    try:
+        person = accounts.admit(
+            who["sub"], who["email"], (chosen or {}).get("name") or who["name"],
+            picture=who.get("picture", ""),
+            terms=bool(chosen), tracking=bool((chosen or {}).get("tracking")))
+    except accounts.AccountPersistenceError:
+        # Do not issue a valid session for an identity we failed to remember.
+        return _signin_page("Couldn't save that sign-in. Please try again.", 503, base=base)
+    return _start_session(request, person, row.get("next", "/player"))
+
+
+@app.get("/auth/claim")
+def auth_claim_page(request: Request):
+    """The last step for somebody new who pressed Log in: a name, and the terms."""
+    held = google.peek_claim(request.cookies.get(CLAIM_COOKIE, ""))
+    if not held:
+        return _signin_page("That took too long. Please sign in again.",
+                            base=_pfx.base_of(request))
+    return _landing(request, tab="claim", claim=held, name=accounts.clean_name(held.get("name", "")))
+
+
+@app.post("/auth/claim")
+async def auth_claim_finish(request: Request):
+    """Create the account: the name they chose and the agreements they ticked."""
+    base = _pfx.base_of(request)
+    handle = request.cookies.get(CLAIM_COOKIE, "")
+    held = google.peek_claim(handle)
+    if not held:
+        return _signin_page("That took too long. Please sign in again.", base=base)
+    form = await request.form()
+    name = accounts.clean_name(form.get("name", ""))
+    problem = ""
+    if len(name) < 2:
+        problem = "Tell us what to call you — at least two characters."
+    elif str(form.get("terms", "")) != "1":
+        problem = "Please read and accept the privacy notice to finish."
+    if problem:
+        return _landing(request, tab="claim", claim=held, name=name, error=problem,
+                        status_code=400)
+    who = google.take_claim(handle)
+    if not who:
+        return _signin_page("That took too long. Please sign in again.", base=base)
+    try:
+        person = accounts.admit(who["sub"], who["email"], name,
+                                picture=who.get("picture", ""), terms=True,
+                                tracking=str(form.get("tracking", "")) == "1")
+    except accounts.AccountPersistenceError:
+        return _signin_page("Couldn't save that. Please try again.", 503, base=base)
+    resp = _start_session(request, person, who.get("next", "/player"))
+    resp.delete_cookie(CLAIM_COOKIE, path=base or "/")
     return resp
 
 

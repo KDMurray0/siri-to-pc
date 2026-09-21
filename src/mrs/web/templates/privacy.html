@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0f0e13">
+<title>Privacy &middot; {{ server_name }}</title>
+<style>
+:root{--bg:#0f0e13;--ink:#f4f1ec;--sub:#a29d95;--faint:#6d6963;--line:#26242c;--panel:#17151c;--accent:#e8a262;
+  --sans:ui-sans-serif,"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  --display:"Segoe UI Variable Display","Segoe UI",ui-sans-serif,system-ui,sans-serif;
+  --mono:ui-monospace,"Cascadia Mono",Consolas,monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.65 var(--sans);-webkit-font-smoothing:antialiased;
+  padding:clamp(20px,5vw,56px) clamp(18px,4vw,32px) 80px}
+main{max-width:660px;margin:0 auto}
+.back{font:600 12px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--sub);text-decoration:none}
+.back:hover{color:var(--accent)}
+h1{font:700 clamp(30px,5vw,42px)/1.1 var(--display);letter-spacing:-.03em;margin:22px 0 10px}
+.lede{color:var(--sub);font-size:17px}
+h2{font:700 20px/1.3 var(--display);letter-spacing:-.02em;margin:40px 0 10px}
+p{margin:0 0 12px;color:#d6d1c8}
+ul{margin:0 0 12px 1.15em;color:#d6d1c8}
+li{margin:5px 0}
+li::marker{color:var(--faint)}
+b{color:var(--ink);font-weight:600}
+a{color:var(--accent);text-underline-offset:3px}
+.card{margin:20px 0;padding:18px 20px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
+.card p:last-child{margin:0}
+dl{margin:0}
+dt{font-weight:600;color:var(--ink);margin-top:16px}
+dt:first-child{margin-top:0}
+dd{color:#cfc9bf;margin:2px 0 0}
+.meta{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);font-size:13px;color:var(--faint)}
+code{font:13px var(--mono);background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="{{ base }}/">&larr; {{ server_name }}</a>
+  <h1>What we keep about you</h1>
+  <p class="lede">{{ server_name }} is a private music player run by a person, not a company. This is everything
+    it holds about the people who sign in, why, and how to make it stop.</p>
+
+  <div class="card">
+    <p><b>The short version.</b> A name you chose, the email on your Google account, and the settings and playlists
+      you make. What you listen to is only remembered if you turn that on, and you can turn it off, take a copy,
+      or delete the lot from Settings at any time.</p>
+  </div>
+
+  <h2>What&rsquo;s held</h2>
+  <dl>
+    <dt>Your account</dt>
+    <dd>The name you gave when you signed up, the email address and profile picture on your Google account, a
+      private identifier Google gives us for you, when you joined, and which version of this notice you agreed to.
+      We use the email to recognise you when you come back and so the owner can tell who&rsquo;s who. We never
+      see your Google password.</dd>
+    <dt>Your settings and playlists</dt>
+    <dd>Equaliser, volume, your saved and playlist songs, and how you&rsquo;ve set the player up. These are yours and
+      live in your own folder.</dd>
+    <dt>What you play and skip <em>(only if you opted in)</em></dt>
+    <dd>If you ticked &ldquo;Learn what I like&rdquo;, the server remembers which songs you play, skip and like so it can tune your
+      radio and suggestions. If you didn&rsquo;t, none of this is recorded against you, and there&rsquo;s a switch in
+      Settings to change your mind either way. Turning it off, or pressing &ldquo;Forget what it has learned&rdquo;,
+      removes what it knows.</dd>
+    <dt>Usage counts</dt>
+    <dd>How many songs you&rsquo;ve requested and how long you&rsquo;ve listened, so the owner can see the place is
+      being used. Counted against your account only if you opted in; otherwise it&rsquo;s only added to the anonymous
+      totals for the whole server.</dd>
+    <dt>A change log</dt>
+    <dd>A log the owner can read of changes made to the server itself, like settings. It isn&rsquo;t a record of what
+      you listen to. If a change was made from your account it&rsquo;s marked with a code for your account, not your name,
+      and kept for {{ audit_days }} days.</dd>
+    <dt>Technical logs</dt>
+    <dd>Operational logs on the server that keep the last few megabytes. They use a short code for your account,
+      never your email or name.</dd>
+  </dl>
+
+  <h2>Who else sees it</h2>
+  <ul>
+    {% if google %}<li><b>Google</b> knows you signed in here, because you did it with Google. Nothing else is sent to them.</li>{% endif %}
+    <li><b>YouTube Music</b> receives the song, artist or search you ask for, as any search would. It isn&rsquo;t told who you are.</li>
+    {% if groq %}<li><b>Groq</b>, the service that understands things like &ldquo;play something chill&rdquo;, receives the words
+      of a request you type or speak, or a scrap of lyrics you search by, with no name or email attached, only to
+      work out what you meant.</li>{% endif %}
+    <li>Nobody else. We don&rsquo;t sell, share or advertise, and there are no analytics or tracking scripts on these pages.</li>
+  </ul>
+
+  <h2>Your rights, and how to use them</h2>
+  <ul>
+    <li><b>See it.</b> Settings &rarr; Account &rarr; <b>Download my data</b> gives you everything above as a file.</li>
+    <li><b>Fix it.</b> Change your name from the same place.</li>
+    <li><b>Stop the learning.</b> Switch off &ldquo;Learn what I like&rdquo; whenever you want.</li>
+    <li><b>Delete it.</b> Settings &rarr; Account &rarr; <b>Delete my account</b> removes your account, settings,
+      playlists, taste and counts, and any change-log entries from your account. There&rsquo;s no waiting period and no undoing it.
+      If you can&rsquo;t reach the player (say the owner has blocked you), the same download and delete buttons are on the
+      page you land on.</li>
+  </ul>
+  <p>Songs you added to <em>shared</em> playlists stay in those playlists, since other people are using them, but your name
+    comes off them.</p>
+
+  <h2>Who runs it</h2>
+  <p>{{ server_name }} is run by an individual{% if contact %}, reachable at <a href="mailto:{{ contact }}">{{ contact }}</a>{% endif %}.
+    Questions or requests about your data go to them, and they can also delete you on your behalf. If you&rsquo;re unhappy
+    with how it&rsquo;s handled, you have the right to complain to your data protection authority.</p>
+
+  <p class="meta">Notice version {{ notice_version }}. When this changes the number goes up, and Settings shows whether the
+  version you agreed to is still the current one.</p>
+</main>
+</body>
+</html>

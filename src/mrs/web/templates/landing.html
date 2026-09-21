@@ -2,63 +2,348 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0f0e13">
 <title>{{ server_name }}</title>
 <style>
-:root{--bg:#0e0f16;--panel:#171826;--fg:#f5f6fb;--sub:#9aa0b8;--line:#252739;
-  --accent:#6d8bff;--bad:#ff6b6b}
+:root{
+  --bg:#0f0e13; --ink:#f4f1ec; --sub:#a29d95; --faint:#6d6963;
+  --line:#26242c; --panel:#17151c; --panel2:#1e1c25;
+  --accent:#e8a262; --accent-ink:#1a1107; --coral:#ff6b4f; --teal:#34b8a8;
+  --bad:#ff7a6b; --ok:#7fd1a5;
+  --sans:ui-sans-serif,"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  --display:"Segoe UI Variable Display","Segoe UI",ui-sans-serif,system-ui,sans-serif;
+  --mono:ui-monospace,"Cascadia Mono",Consolas,monospace;
+}
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--fg);min-height:100vh;
-  font-family:-apple-system,"Segoe UI",Roboto,sans-serif;
-  display:flex;align-items:center;justify-content:center;padding:24px;
-  /* a soft wash so the card doesn't float on flat black */
-  background-image:radial-gradient(120% 80% at 50% -10%,
-    color-mix(in srgb,var(--accent) 16%,var(--bg)),var(--bg) 70%)}
-.card{width:100%;max-width:380px;text-align:center}
-.logo{width:66px;height:66px;margin:0 auto 22px;border-radius:20px;
-  background:linear-gradient(150deg,var(--accent),#9b7bff);
-  display:flex;align-items:center;justify-content:center;
-  box-shadow:0 12px 40px -12px color-mix(in srgb,var(--accent) 60%,transparent)}
-.logo svg{width:34px;height:34px;fill:#0b0c12}
-h1{font-size:25px;font-weight:800;letter-spacing:-.02em;margin-bottom:8px}
-.lede{color:var(--sub);font-size:14.5px;line-height:1.55;margin-bottom:28px}
-.gbtn{display:inline-flex;align-items:center;gap:12px;width:100%;
-  justify-content:center;background:#fff;color:#1f1f1f;border:0;border-radius:12px;
-  padding:13px 18px;font-size:15px;font-weight:600;cursor:pointer;
-  text-decoration:none;transition:transform .06s ease,box-shadow .2s ease;
-  box-shadow:0 2px 12px rgba(0,0,0,.35)}
-.gbtn:hover{transform:translateY(-1px);box-shadow:0 8px 22px rgba(0,0,0,.4)}
-.gbtn:active{transform:translateY(0)}
-.gbtn svg{width:19px;height:19px}
-.note{margin-top:20px;color:var(--sub);font-size:12.5px;line-height:1.5}
-.bad{color:var(--bad);font-weight:600}
-a.plain{color:var(--accent)}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans);min-height:100vh;
+  min-height:100dvh;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+
+/* The wash: the same idea as the player's, a blurred cover bleeding colour into
+   the room, except here three of them slowly trade places. Behind everything. */
+.wash{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+.wash i{position:absolute;border-radius:50%;filter:blur(110px);opacity:.30;will-change:transform}
+.wash i:nth-child(1){width:60vmax;height:60vmax;left:-14vmax;top:-22vmax;background:var(--coral);
+  animation:drift1 46s ease-in-out infinite alternate}
+.wash i:nth-child(2){width:52vmax;height:52vmax;right:-18vmax;top:8vmax;background:var(--accent);opacity:.24;
+  animation:drift2 58s ease-in-out infinite alternate}
+.wash i:nth-child(3){width:46vmax;height:46vmax;left:22vmax;bottom:-30vmax;background:var(--teal);opacity:.20;
+  animation:drift3 64s ease-in-out infinite alternate}
+@keyframes drift1{to{transform:translate(14vmax,10vmax) scale(1.12)}}
+@keyframes drift2{to{transform:translate(-12vmax,-6vmax) scale(.9)}}
+@keyframes drift3{to{transform:translate(-10vmax,-12vmax) scale(1.15)}}
+/* film grain, so the colour has a surface instead of a screen's flat glow */
+body::after{content:"";position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.055;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .7 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>")}
+
+.stage{position:relative;z-index:2;max-width:1120px;margin:0 auto;min-height:100vh;min-height:100dvh;
+  display:grid;grid-template-columns:minmax(0,1.15fr) minmax(320px,.85fr);gap:clamp(28px,6vw,84px);
+  align-items:center;padding:clamp(22px,5vw,56px) clamp(18px,4vw,40px)}
+
+/* ── the pitch ───────────────────────────────────────────────────────── */
+.brand{display:flex;align-items:center;gap:10px;font:600 13px var(--mono);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--sub);margin-bottom:clamp(22px,4vw,40px)}
+.mark{display:flex;align-items:flex-end;gap:2.5px;height:18px}
+.mark b{display:block;width:3px;border-radius:1.5px;background:var(--accent);animation:eq 1.15s ease-in-out infinite}
+.mark b:nth-child(1){height:9px;animation-delay:-.4s}.mark b:nth-child(2){height:16px;animation-delay:-.9s}
+.mark b:nth-child(3){height:12px;animation-delay:-.2s}.mark b:nth-child(4){height:18px;animation-delay:-.7s}
+@keyframes eq{50%{transform:scaleY(.45)}}
+.mark b{transform-origin:bottom}
+
+h1{font:700 clamp(34px,5.6vw,60px)/1.04 var(--display);letter-spacing:-.03em;text-wrap:balance}
+h1 em{font-style:normal;color:var(--accent)}
+.sub{margin-top:18px;max-width:34em;color:var(--sub);font-size:clamp(15px,1.5vw,17px);line-height:1.6}
+
+/* A working picture of the thing, not a list of what it claims. It types a
+   request the way you would and the queue answers. */
+.demo{margin-top:clamp(26px,4vw,40px);max-width:520px}
+.ask{display:flex;align-items:center;gap:11px;height:50px;padding:0 16px;border-radius:14px;
+  background:color-mix(in srgb,var(--panel) 82%,transparent);border:1px solid var(--line);
+  box-shadow:0 10px 30px -14px rgba(0,0,0,.6)}
+.ask svg{width:18px;height:18px;flex:none;stroke:var(--faint);fill:none;stroke-width:1.8;stroke-linecap:round}
+.ask .txt{font-size:15.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.ask .txt.idle{color:var(--faint)}
+.caret{display:inline-block;width:2px;height:19px;background:var(--accent);margin-left:1px;
+  vertical-align:-4px;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.queue{list-style:none;margin-top:12px;display:grid;gap:2px}
+.queue li{display:grid;grid-template-columns:38px 1fr;gap:12px;align-items:center;padding:7px 8px;border-radius:10px;
+  opacity:0;transform:translateY(6px);transition:opacity .35s ease,transform .35s ease,background .2s}
+.queue li.in{opacity:1;transform:none}
+.queue li:first-child{background:color-mix(in srgb,var(--accent) 9%,transparent)}
+.queue .cv{width:38px;height:38px;border-radius:8px;box-shadow:0 4px 12px -4px rgba(0,0,0,.6)}
+.queue .t,.queue .a{display:block}
+.queue .t{font-size:14px;font-weight:600;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.queue .a{font-size:12px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.queue li:first-child .t{color:var(--accent)}
+
+.facts{list-style:none;margin-top:clamp(24px,3.4vw,34px);display:grid;gap:11px;max-width:34em}
+.facts li{display:grid;grid-template-columns:26px 1fr;gap:12px;color:var(--sub);font-size:14px;line-height:1.5}
+.facts svg{width:20px;height:20px;margin-top:2px;stroke:var(--accent);fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.facts b{color:var(--ink);font-weight:600}
+
+/* ── the door ────────────────────────────────────────────────────────── */
+.door{background:color-mix(in srgb,var(--panel) 88%,transparent);border:1px solid var(--line);border-radius:22px;
+  padding:clamp(20px,3vw,30px);box-shadow:0 30px 70px -30px rgba(0,0,0,.7);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+.door h2{font:700 21px/1.2 var(--display);letter-spacing:-.02em}
+.door .lede{margin-top:6px;color:var(--sub);font-size:14px}
+
+/* Log in / Sign up. Real radio inputs, so it works with scripting off and the
+   keyboard behaves; the labels are just the styled face of them. */
+.sw>input{position:absolute;opacity:0;pointer-events:none}
+.tabs{position:relative;display:grid;grid-template-columns:1fr 1fr;margin:20px 0 20px;padding:3px;
+  border-radius:12px;background:var(--bg);border:1px solid var(--line)}
+.tabs label{position:relative;z-index:1;text-align:center;padding:9px 0;font:600 13.5px var(--sans);
+  color:var(--sub);cursor:pointer;border-radius:9px;transition:color .18s}
+.tabs .pill{position:absolute;top:3px;bottom:3px;left:3px;width:calc(50% - 3px);border-radius:9px;
+  background:var(--accent);transition:transform .22s cubic-bezier(.3,.8,.3,1)}
+#t-login:checked ~ .tabs label[for=t-login],#t-signup:checked ~ .tabs label[for=t-signup]{color:var(--accent-ink)}
+#t-signup:checked ~ .tabs .pill{transform:translateX(100%)}
+#t-login:focus-visible ~ .tabs label[for=t-login],#t-signup:focus-visible ~ .tabs label[for=t-signup]{outline:2px solid var(--accent);outline-offset:2px}
+.pane{display:none}
+#t-login:checked ~ .panes .p-login,#t-signup:checked ~ .panes .p-signup{display:block}
+
+label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--sub);margin:0 0 7px}
+.fld{width:100%;height:46px;padding:0 14px;border-radius:11px;background:var(--bg);color:var(--ink);
+  border:1px solid var(--line);font:16px var(--sans);outline:none;transition:border-color .15s,box-shadow .15s}
+.fld::placeholder{color:var(--faint)}
+.fld:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}
+
+.chk{display:grid;grid-template-columns:22px 1fr;gap:11px;align-items:start;margin-top:14px;
+  font-size:13.5px;line-height:1.5;color:var(--sub);cursor:pointer}
+.chk input{appearance:none;-webkit-appearance:none;width:20px;height:20px;margin-top:1px;border-radius:6px;
+  background:var(--bg);border:1.5px solid var(--faint);display:grid;place-content:center;cursor:pointer;
+  transition:border-color .15s,background .15s}
+.chk input::after{content:"";width:10px;height:6px;border:2px solid var(--accent-ink);border-top:0;border-right:0;
+  transform:rotate(-45deg) translate(1px,-1px);opacity:0;margin-top:-2px}
+.chk input:checked{background:var(--accent);border-color:var(--accent)}
+.chk input:checked::after{opacity:1}
+.chk input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.chk b{color:var(--ink);font-weight:600}
+.chk .opt{font:600 10.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-left:6px}
+.chk a,.foot a{color:var(--accent);text-underline-offset:3px}
+
+.gbtn{display:flex;align-items:center;justify-content:center;gap:12px;width:100%;height:48px;margin-top:20px;
+  border:0;border-radius:11px;background:#fff;color:#1f1f1f;font:600 15px var(--sans);cursor:pointer;
+  text-decoration:none;transition:transform .08s ease,box-shadow .2s ease,background .15s}
+.gbtn:hover{box-shadow:0 8px 24px -8px rgba(255,255,255,.35)}
+.gbtn:active{transform:translateY(1px)}
+.gbtn:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.gbtn svg{width:19px;height:19px;flex:none}
+.gbtn.quiet{background:transparent;color:var(--ink);border:1px solid var(--line);margin-top:12px;font-weight:500}
+.gbtn.quiet:hover{border-color:var(--sub);box-shadow:none}
+.gbtn.warn{background:var(--bad);color:#210a07}
+
+.err,.ok{margin:0 0 14px;padding:10px 13px;border-radius:10px;font-size:13.5px;line-height:1.45}
+.err{background:color-mix(in srgb,var(--bad) 13%,transparent);border:1px solid color-mix(in srgb,var(--bad) 40%,transparent);color:#ffb3a8}
+.ok{background:color-mix(in srgb,var(--ok) 13%,transparent);border:1px solid color-mix(in srgb,var(--ok) 40%,transparent);color:#bfe9d2}
+.pic{display:flex;align-items:center;gap:12px;margin:18px 0 4px}
+.pic img{width:44px;height:44px;border-radius:50%;object-fit:cover;background:var(--line)}
+.pic span{font-size:13.5px;color:var(--sub)}
+
+.foot{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:22px;padding-top:16px;border-top:1px solid var(--line);
+  font-size:13px;color:var(--faint)}
+.app{display:inline-flex;align-items:center;gap:7px}
+.app svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+.danger{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+.danger p{font-size:13px;color:var(--sub);margin-bottom:10px}
+#gone{display:none;margin-top:10px}
+
+@media (max-width:860px){
+  /* A phone is here to sign in: name, the way in, then the pitch under it. */
+  .stage{display:flex;flex-direction:column;align-items:stretch;gap:0;padding-top:24px}
+  .pitch{display:contents}
+  .brand{order:0;margin-bottom:20px}
+  .door{order:1}
+  h1{order:2;font-size:32px;margin-top:38px}
+  .sub{order:3}
+  .demo,.facts{display:none}
+}
+@media (prefers-reduced-motion:reduce){
+  .wash i,.mark b,.caret{animation:none}
+  .queue li{transition:none}
+}
 </style>
 </head>
 <body>
-<div class="card">
-  <div class="logo" aria-hidden="true">
-    <svg viewBox="0 0 24 24"><path d="M9 18V5l10-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg>
-  </div>
-  <h1>{{ server_name }}</h1>
+<div class="wash" aria-hidden="true"><i></i><i></i><i></i></div>
 
+<main class="stage">
+  <section class="pitch">
+    <div class="brand"><span class="mark" aria-hidden="true"><b></b><b></b><b></b><b></b></span>{{ server_name }}</div>
+    <h1>Ask for a song.<br><em>It works out the rest.</em></h1>
+    <p class="sub">Say or type a song, a band, an album or a mood. It finds it, plays it, and keeps the
+      queue going on its own &mdash; and once you&rsquo;re signed in, your queue, your history and your
+      playlists follow you to every device you use.</p>
+
+    <div class="demo" aria-hidden="true">
+      <div class="ask">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+        <span class="txt idle" id="typed">Play anything &mdash; a song, artist, vibe, or Spotify link</span><i class="caret"></i>
+      </div>
+      <ol class="queue" id="queue">
+        <li><span class="cv"></span><span><span class="t">&nbsp;</span><span class="a">&nbsp;</span></span></li>
+        <li><span class="cv"></span><span><span class="t">&nbsp;</span><span class="a">&nbsp;</span></span></li>
+        <li><span class="cv"></span><span><span class="t">&nbsp;</span><span class="a">&nbsp;</span></span></li>
+      </ol>
+    </div>
+
+    <ul class="facts">
+      <li><svg viewBox="0 0 24 24"><path d="M4 7h11M4 12h11M4 17h7"/><path d="M19 9v8"/><circle cx="17" cy="17.5" r="2"/></svg>
+        <span><b>Your own queue.</b> Nobody else&rsquo;s song interrupts yours, and yours never interrupts theirs.</span></li>
+      <li><svg viewBox="0 0 24 24"><rect x="3" y="5" width="13" height="10" rx="1.5"/><path d="M7 19h5M9.5 15v4"/><rect x="18" y="8" width="3.5" height="9" rx="1"/></svg>
+        <span><b>Any device.</b> Play on your phone, your laptop or the desktop app, and pick up where you left off.</span></li>
+      <li><svg viewBox="0 0 24 24"><path d="M5 6h14M5 11h9M5 16h12"/></svg>
+        <span><b>Words that keep time.</b> Lyrics that follow the song, line by line.</span></li>
+    </ul>
+  </section>
+
+  <section class="door" aria-labelledby="door-h">
   {% if blocked %}
-    <p class="lede"><span class="bad">This account can't listen here.</span><br>
-      Ask whoever runs it if you think that's a mistake.</p>
-    <a class="gbtn" href="{{ base }}/auth/signout">Sign out</a>
+    <h2 id="door-h">This account can&rsquo;t listen here</h2>
+    <p class="lede">Whoever runs {{ server_name }} has turned this account off. If you think that&rsquo;s a mistake, ask them.</p>
+    <p class="lede" style="margin-top:14px">It&rsquo;s still your data. You can take a copy or have it deleted whenever you like.</p>
+    <a class="gbtn quiet" href="{{ base }}/api/me/export" download>Download my data</a>
+    <div class="danger">
+      <p>Delete this account and everything held under it. This can&rsquo;t be undone.</p>
+      <button class="gbtn warn" type="button" id="askgone" style="margin-top:0">Delete my account</button>
+      <div id="gone">
+        <label class="f" for="conf">Type <b>delete my account</b> to confirm</label>
+        <input class="fld" id="conf" autocomplete="off" spellcheck="false">
+        <button class="gbtn warn" type="button" id="dogone" disabled>Delete everything</button>
+      </div>
+      <div id="msg" class="err" style="display:none;margin-top:12px"></div>
+    </div>
+    <div class="foot"><a href="{{ base }}/auth/signout">Sign out</a><a href="{{ base }}/privacy">Privacy notice</a></div>
+
+  {% elif claim %}
+    <h2 id="door-h">One last thing</h2>
+    <p class="lede">You&rsquo;re signed in with Google, but we haven&rsquo;t met. Choose a name and you&rsquo;re in.</p>
+    {% if claim.picture %}<div class="pic"><img src="{{ claim.picture }}" alt="" referrerpolicy="no-referrer"><span>Signed in with Google</span></div>{% endif %}
+    {% if error %}<p class="err" role="alert">{{ error }}</p>{% endif %}
+    <form method="post" action="{{ base }}/auth/claim" style="margin-top:14px">
+      <label class="f" for="cname">What should we call you?</label>
+      <input class="fld" id="cname" name="name" value="{{ name }}" maxlength="40" required autocomplete="nickname" autofocus>
+      <label class="chk"><input type="checkbox" name="terms" value="1" required>
+        <span>I&rsquo;ve read the <a href="{{ base }}/privacy" target="_blank" rel="noopener">privacy notice</a> and I&rsquo;m happy with it.</span></label>
+      <label class="chk"><input type="checkbox" name="tracking" value="1">
+        <span><b>Learn what I like</b><span class="opt">optional</span><br>Remember what I play and skip, to tune my radio and suggestions. Off unless you tick this; change it any time in Settings.</span></label>
+      <button class="gbtn" type="submit" style="background:var(--accent);color:var(--accent-ink)">Create my account</button>
+    </form>
+    <div class="foot"><a href="{{ base }}/auth/signout">Cancel</a></div>
+
   {% elif google %}
-    <p class="lede">Sign in to play. Your queue, your history and your playlists
-      follow you to any device — no link to keep, nothing to lose.</p>
-    <a class="gbtn" id="go" href="{{ base }}/auth/google/start?next=/player">
-      <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-      Sign in with Google
-    </a>
-    <p class="note">First time here? Signing in makes your account. No sign-up
-      form — Google tells us your name, and that's it.</p>
+    <h2 id="door-h">Come in</h2>
+    <p class="lede">Sign in with Google. No password to make or forget.</p>
+    {% if error %}<p class="err" role="alert" style="margin-top:16px">{{ error }}</p>{% endif %}
+    <div class="sw">
+      <input type="radio" name="tab" id="t-login" {% if tab != "signup" %}checked{% endif %}>
+      <input type="radio" name="tab" id="t-signup" {% if tab == "signup" %}checked{% endif %}>
+      <div class="tabs">
+        <label for="t-login">Log in</label><label for="t-signup">Sign up</label>
+        <span class="pill" aria-hidden="true"></span>
+      </div>
+
+      <div class="panes">
+        <div class="pane p-login">
+          <p class="lede" style="margin:0 0 4px">Been here before? Welcome back.</p>
+          <a class="gbtn" href="{{ base }}/auth/google/start?next=/player">
+            <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+            Log in with Google</a>
+        </div>
+        <div class="pane p-signup">
+          <form method="post" action="{{ base }}/auth/google/start">
+            <input type="hidden" name="next" value="/player">
+            <label class="f" for="sname">What should we call you?</label>
+            <input class="fld" id="sname" name="name" value="{{ name }}" maxlength="40" required autocomplete="nickname" placeholder="Your name">
+            <label class="chk"><input type="checkbox" name="terms" value="1" required>
+              <span>I&rsquo;ve read the <a href="{{ base }}/privacy" target="_blank" rel="noopener">privacy notice</a> and I&rsquo;m happy with it.</span></label>
+            <label class="chk"><input type="checkbox" name="tracking" value="1">
+              <span><b>Learn what I like</b><span class="opt">optional</span><br>Remember what I play and skip, to tune my radio and suggestions. Off unless you tick this; change it any time in Settings.</span></label>
+            <button class="gbtn" type="submit">
+              <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+              Sign up with Google</button>
+          </form>
+        </div>
+      </div>
+    </div>
+    <div class="foot">
+      {% if client_available %}<a class="app" href="{{ base }}/download/client"><svg viewBox="0 0 24 24"><path d="M12 4v10m0 0l-4-4m4 4l4-4M5 19h14"/></svg>Get the Windows app</a>{% endif %}
+      <a href="{{ base }}/privacy">Privacy notice</a>
+    </div>
+
   {% else %}
-    <p class="lede">This player isn't taking sign-ins yet.</p>
-    <p class="note">Ask whoever runs it to switch on Google sign-in.</p>
+    <h2 id="door-h">Not taking sign-ins yet</h2>
+    <p class="lede">Whoever runs {{ server_name }} hasn&rsquo;t switched on Google sign-in. Ask them to.</p>
+    <div class="foot"><a href="{{ base }}/privacy">Privacy notice</a></div>
   {% endif %}
-</div>
+  </section>
+</main>
+
+<script>
+const BASE = "{{ base }}";
+(function demo() {
+  const typed = document.getElementById("typed");
+  const rows = document.querySelectorAll("#queue li");
+  if (!typed || !rows.length) return;
+  const SCRIPT = [
+    ["something chill", [["Weightless", "Marconi Union"], ["Holocene", "Bon Iver"], ["Sunset Lover", "Petit Biscuit"]]],
+    ["play sultans of swing", [["Sultans of Swing", "Dire Straits"], ["Money for Nothing", "Dire Straits"], ["Walk of Life", "Dire Straits"]]],
+    ["nirvana and foo fighters", [["Everlong", "Foo Fighters"], ["Come as You Are", "Nirvana"], ["The Pretender", "Foo Fighters"]]],
+    ["the album rumours", [["Dreams", "Fleetwood Mac"], ["Go Your Own Way", "Fleetwood Mac"], ["The Chain", "Fleetwood Mac"]]],
+  ];
+  // A cover in the colour of its own name: the same title always gets the same one.
+  const cover = t => { let h = 7; for (const c of t) h = (h * 31 + c.charCodeAt(0)) % 360;
+    return `linear-gradient(135deg,hsl(${h} 72% 58%),hsl(${(h + 48) % 360} 62% 34%))`; };
+  const show = list => rows.forEach((r, i) => {
+    const [t, a] = list[i] || ["", ""];
+    r.classList.remove("in");
+    r.querySelector(".cv").style.background = t ? cover(t) : "transparent";
+    r.querySelector(".t").textContent = t || " "; r.querySelector(".a").textContent = a || " ";
+    if (t) setTimeout(() => r.classList.add("in"), 120 + i * 140);
+  });
+  const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (still) { typed.classList.remove("idle"); typed.textContent = SCRIPT[0][0]; show(SCRIPT[0][1]); return; }
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  (async () => {
+    await wait(700);
+    for (let i = 0; ; i = (i + 1) % SCRIPT) {
+      const [ask, list] = SCRIPT[i];
+      typed.classList.remove("idle"); typed.textContent = "";
+      for (const ch of ask) { typed.textContent += ch; await wait(48 + Math.random() * 60); }
+      await wait(350); show(list); await wait(3600);
+      show([]);
+      while (typed.textContent.length) { typed.textContent = typed.textContent.slice(0, -1); await wait(16); }
+      await wait(350);
+    }
+  })();
+})();
+
+// The blocked page: a person's own data is theirs to take or remove.
+(function own() {
+  const ask = document.getElementById("askgone"); if (!ask) return;
+  const conf = document.getElementById("conf"), go = document.getElementById("dogone"),
+        box = document.getElementById("gone"), msg = document.getElementById("msg");
+  const WORDS = "delete my account";
+  ask.onclick = () => { ask.style.display = "none"; box.style.display = "block"; conf.focus(); };
+  conf.oninput = () => { go.disabled = conf.value.trim().toLowerCase() !== WORDS; };
+  go.onclick = async () => {
+    go.disabled = true; go.textContent = "Deleting…";
+    try {
+      const r = await fetch(BASE + "/api/me/delete", { method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: WORDS }) });
+      if (r.ok) { location.href = BASE + "/"; return; }
+      const j = await r.json().catch(() => ({}));
+      msg.textContent = j.detail || "That didn't go through."; msg.style.display = "block";
+    } catch (e) { msg.textContent = "Couldn't reach the server."; msg.style.display = "block"; }
+    go.disabled = false; go.textContent = "Delete everything";
+  };
+})();
+</script>
 </body>
 </html>
