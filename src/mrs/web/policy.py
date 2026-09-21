@@ -29,13 +29,14 @@ playlists station foryou spectrum spotify/add playlist/{op} settings setting
 whoami output/stream/{video_id} output/prepare/{video_id} output/stats
 announce/{aid}.mp3 source smartplaylists smartplaylists/play autoeq/search
 autoeq/profile autoeq/match
-me me/consent me/rename me/export me/forget-taste me/delete'''.split())
+me me/consent me/rename me/export me/forget-taste me/delete
+me/siri me/siri/new me/siri/token me/siri/revoke'''.split())
 READ_ONLY = set('''ping status health history
 blocks liked playlists settings audio/devices setup/state whoami passes profiles
 boot/status cookies diag output/stats audit policy
 output/stream/{video_id} announce/{aid}.mp3 stream/{video_id} events
 smartplaylists
-autoeq/status stats accounts me me/export'''.split())
+autoeq/status stats accounts me me/export me/siri'''.split())
 READ_PARAMS = {
     "sessions": {"close"}, "cache": {"prune"}, "blocked": {"forgive", "clear"},
     "ddns": {"hostname", "user", "secret", "provider", "now"},

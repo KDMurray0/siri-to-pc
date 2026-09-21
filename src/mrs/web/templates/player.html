@@ -356,6 +356,11 @@ body.reordering .q{transition:transform .12s ease}
 .acctcard b{display:block;font-size:15px;line-height:1.3}
 .acctcard span{display:block;font-size:11.5px;color:var(--sub);line-height:1.5}
 .acctname{display:flex;gap:6px}
+.recipe ol{margin:0 0 4px 1.2em;padding:0}
+.recipe li{margin:6px 0;font-size:11.5px;color:var(--sub);line-height:1.5}
+.recipe li b{color:var(--fg)}
+.copyrow{display:flex;gap:6px;margin:5px 0 2px}
+.confirmbox .copyrow .keyin{flex:1;width:auto;min-width:0;margin-bottom:0;font-family:ui-monospace,Consolas,monospace;font-size:11px}
 .acctname .keyin{width:126px}
 .confirmbox{margin:6px 0 4px;padding:12px;border:1px solid color-mix(in srgb,var(--bad,#e0645a) 50%,transparent);
   border-radius:10px}
@@ -1719,6 +1724,24 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
           <a class="btn" id="acctexport" download>Download</a></div>
         <div class="srow guestok"><span class="slabel">Privacy notice<em id="acctnotice"></em></span>
           <a class="btn" id="acctpriv" target="_blank" rel="noopener">Read</a></div>
+
+        <div class="acclbl">Siri</div>
+        <div class="srow guestok"><span class="slabel">Ask Siri for songs<em>A key for a Shortcut on your iPhone. It can ask for music as you, and do nothing else, and you can take it back whenever you like.</em></span>
+          <button class="btn" id="sirinew">Make a key</button></div>
+        <div id="sirilist"></div>
+        <div class="confirmbox recipe guestok" id="sirirecipe" hidden>
+          <ol>
+            <li>On your iPhone open <b>Shortcuts</b>, tap <b>+</b>, and add <b>Dictate Text</b>.</li>
+            <li>Add <b>Get Contents of URL</b> and paste this address:
+              <div class="copyrow"><input class="keyin" id="sirurl" readonly><button class="btn" data-copy="sirurl">Copy</button></div></li>
+            <li>Set <b>Method</b> to <b>POST</b> and <b>Request Body</b> to <b>JSON</b>.</li>
+            <li>Under <b>Headers</b> add <b>X-Music-Key</b> with this value:
+              <div class="copyrow"><input class="keyin" id="sirkey" readonly><button class="btn" data-copy="sirkey">Copy</button></div></li>
+            <li>Add a field: key <b>input</b>, type Text, value <b>Dictated Text</b>.</li>
+            <li>Name it something you'd say out loud, like &ldquo;Play music&rdquo;. Then: &ldquo;Hey Siri, Play music&rdquo;.</li>
+          </ol>
+          <p style="margin:6px 0 0">Keep the key to yourself: anyone with it can ask for songs as you.</p>
+        </div>
 
         <div class="srow guestok" id="acctclientrow" hidden><span class="slabel">Windows app<em>A window of its own that keeps you signed in</em></span>
           <a class="btn" id="acctclient" download>Download</a></div>
@@ -3428,7 +3451,7 @@ document.querySelectorAll(".stab").forEach(tab => tab.onclick = () => {
   if (tab.dataset.s === "access") {
     loadPeople();
   }
-  if (tab.dataset.s === "account") acctLoad();
+  if (tab.dataset.s === "account") { acctLoad(); siriLoad(); }
   if (tab.dataset.s === "sharing") {
     loadNetwork(); loadDdns();
     if (ME.owner) watchSharing();
@@ -3684,6 +3707,63 @@ $("acctforget").onclick = async e => {
   const r = await apiTry("/api/me/forget-taste");
   toast(!r.ok ? "That didn't go through"
     : r.body.cleared ? "Forgotten" : "There was nothing to forget");
+};
+
+/* Siri: a key that can ask for songs as this account, and nothing else. It is
+   shown again on request rather than kept on screen, and each one can be taken
+   back on its own. */
+let SIRI = { keys: [], limit: 3, address: "" };
+async function siriLoad() {
+  if (!SIGNED_IN) return;
+  const r = await api("/api/me/siri");
+  if (!r) return;
+  SIRI = r; siriPaint();
+}
+function siriPaint() {
+  $("sirinew").disabled = SIRI.keys.length >= SIRI.limit;
+  $("sirinew").title = $("sirinew").disabled ? "That's all " + SIRI.limit + " -- remove one first" : "";
+  $("sirilist").innerHTML = SIRI.keys.map(k =>
+    '<div class="srow guestok" data-id="' + esc(k.id) + '"><span class="slabel">' + esc(k.name) +
+    "<em>Made " + esc(ago(k.created) || "just now") +
+    (k.last_seen ? " · used " + esc(ago(k.last_seen)) : " · not used yet") +
+    '</em></span><span class="acctname"><button class="btn" data-a="show">Show</button>' +
+    '<button class="btn dgr" data-a="rm">Remove</button></span></div>').join("");
+}
+function siriRecipe(token) {
+  $("sirurl").value = SIRI.address || (location.origin + BASE + "/");
+  $("sirkey").value = token;
+  $("sirirecipe").hidden = false;
+  $("sirirecipe").scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+$("sirinew").onclick = async () => {
+  const r = await apiTry("/api/me/siri/new?name=" + encodeURIComponent("Key " + (SIRI.keys.length + 1)));
+  if (!r.ok) { toast((r.body && r.body.detail) || "That didn't go through"); return; }
+  await siriLoad(); siriRecipe(r.body.token);
+};
+$("sirilist").onclick = async e => {
+  const btn = e.target.closest("button[data-a]");
+  const row = btn && btn.closest("[data-id]");
+  if (!row) return;
+  const id = row.dataset.id;
+  if (btn.dataset.a === "show") {
+    const r = await apiTry("/api/me/siri/token?id=" + encodeURIComponent(id));
+    if (r.ok) siriRecipe(r.body.token); else toast("That key has gone");
+  } else if (btn.dataset.a === "rm") {
+    if (!armDanger(btn, "remove this key")) return;
+    const r = await apiTry("/api/me/siri/revoke?id=" + encodeURIComponent(id));
+    if (r.ok) { $("sirirecipe").hidden = true; toast("Removed. Anything using it stops working."); }
+    await siriLoad();
+  }
+};
+$("sirirecipe").onclick = e => {
+  const btn = e.target.closest("button[data-copy]");
+  if (!btn) return;
+  const box = $(btn.dataset.copy);
+  box.select();
+  const done = () => { btn.textContent = "Copied"; setTimeout(() => btn.textContent = "Copy", 1600); };
+  // The clipboard API needs https; on plain http the old route still works.
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(box.value).then(done);
+  else { try { document.execCommand("copy"); done(); } catch (err) {} }
 };
 $("acctout").onclick = () => { location.href = BASE + "/auth/signout"; };
 $("acctdel").onclick = () => { $("acctdelbox").hidden = false; $("acctconf").focus(); };

@@ -200,7 +200,12 @@ def _account_row(request: Request) -> dict | None:
     person = accounts.get(sub)
     if not person:
         return None
-    accounts.seen(sub)
+    return _person_row(request, person)
+
+
+def _person_row(request: Request, person: dict) -> dict:
+    """An account acting on this request, in the shape everything downstream reads."""
+    accounts.seen(person["sub"])
     row = accounts.as_row(person)
     # Prime what the counters may keep about them, before anything counts.
     from ..core import stats as _stats
@@ -214,16 +219,39 @@ def _account_row(request: Request) -> dict | None:
 LINKS_OFF = "Personal links aren't used any more. Sign in instead."
 
 
-def _link_row(expected: str, candidate: str) -> dict | None:
+SIRI_ONLY = "That key is only for Siri: it can ask for a song and nothing else."
+
+
+def _siri_row(row: dict, request: Request) -> dict:
+    """A Siri key is an account asking for one thing.
+
+    It acts as the account that owns it, so their queue, their limits, their
+    block and their answer to "may it learn from me" all apply exactly as if
+    they had asked from the player -- and it reaches the one route Shortcuts
+    post to, and no other. It dies when the account does, or is blocked.
+    """
+    if request is None or request.method != "POST" or request.url.path != "/":
+        raise HTTPException(status_code=403, detail=SIRI_ONLY)
+    person = accounts.by_profile(row["siri"])
+    if not person or person.get("scope") == "blocked":
+        raise HTTPException(status_code=403, detail="That key's account isn't allowed in")
+    return _person_row(request, person)
+
+
+def _link_row(expected: str, candidate: str, request: Request | None = None) -> dict | None:
     """The pass behind a token -- unless it is a personal link, and those are off.
 
-    Passes still exist for two things that are not links: the owner's own
-    device pass and the player's own pass for <audio> urls. Everything else
-    was handed to a person, which is what accounts replaced.
+    Passes still exist for things that are not links: the owner's own device
+    pass, the player's own pass for <audio> urls, and an account's Siri keys.
+    Everything else was handed to a person, which is what accounts replaced.
     """
     row = sec.read_token(expected, candidate)
-    if row and not (row.get("internal") or row.get("owner")
-                    or config.get("allow_shared_links", False)):
+    if not row:
+        return None
+    if row.get("siri"):
+        return _siri_row(row, request)
+    if not (row.get("internal") or row.get("owner")
+            or config.get("allow_shared_links", False)):
         raise HTTPException(status_code=403, detail=LINKS_OFF)
     return row
 
@@ -254,7 +282,7 @@ def require_key(request: Request, key: str = Query(default=""),
         bans.good_key(ip)
         return _check_ip_lock(ip)
     if header:
-        row = _link_row(expected, header)
+        row = _link_row(expected, header, request)
         if row:
             bans.good_key(ip)
             request.state.pass_row = row
@@ -264,7 +292,7 @@ def require_key(request: Request, key: str = Query(default=""),
     # send someone is a URL by definition. Those carry a signed token that
     # expires instead of the key itself.
     for candidate in (token, key):
-        row = _link_row(expected, candidate) if candidate else None
+        row = _link_row(expected, candidate, request) if candidate else None
         if row:
             bans.good_key(ip)
             request.state.pass_row = row      # scope is checked per-route
@@ -3602,6 +3630,50 @@ def api_me_delete(request: Request, confirm: str = "", _: bool = Auth):
     for path in {_pfx.base_of(request) or "/", "/"}:
         resp.delete_cookie(SESSION_COOKIE, path=path)
     return resp
+
+
+@app.get("/api/me/siri")
+def api_me_siri(request: Request, _: bool = Auth):
+    """This account's Siri keys, without the keys, and where to point them."""
+    person = _account_of(request)
+    places = _client_addresses()
+    return {"status": "ok",
+            "keys": sec.siri_keys(accounts.profile_id(person["sub"])),
+            "limit": sec.MAX_SIRI_KEYS,
+            "address": (places[0] + "/") if places else ""}
+
+
+@app.get("/api/me/siri/new")
+def api_me_siri_new(request: Request, name: str = "", _: bool = Auth):
+    """Make a key for a Shortcut. It can ask for songs, as this account, and nothing else."""
+    person = _account_of(request)
+    pid = accounts.profile_id(person["sub"])
+    got = sec.siri_issue(config.get("api_key") or "", pid, name)
+    if got.get("error") == "limit":
+        raise HTTPException(409, f"That's {sec.MAX_SIRI_KEYS} keys already -- "
+                                 "remove one you don't use first")
+    if not got.get("token"):
+        raise HTTPException(503, "Couldn't make that key. Nothing changed.")
+    return {"status": "ok", "id": got["id"], "name": got["name"], "token": got["token"]}
+
+
+@app.get("/api/me/siri/token")
+def api_me_siri_token(request: Request, id: str = "", _: bool = Auth):
+    """Show one of this account's keys again. Only its own account can."""
+    person = _account_of(request)
+    token = sec.siri_token(config.get("api_key") or "",
+                           accounts.profile_id(person["sub"]), id)
+    if not token:
+        raise HTTPException(404, "No such key")
+    return {"status": "ok", "id": id, "token": token}
+
+
+@app.get("/api/me/siri/revoke")
+def api_me_siri_revoke(request: Request, id: str = "", _: bool = Auth):
+    person = _account_of(request)
+    if not sec.siri_revoke(accounts.profile_id(person["sub"]), id):
+        raise HTTPException(404, "No such key")
+    return {"status": "ok"}
 
 
 @app.get("/api/accounts")

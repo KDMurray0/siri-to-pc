@@ -3507,6 +3507,155 @@ def _run(verbose: bool = False) -> Result:
                     config.set(k, v, save=False)
             say("the desktop app", c)
 
+            # -- 31. Siri keys: an account asking for one thing ---------------
+            c = _Checker("siri keys")
+            from .web import api as _api31
+            _keep31 = {k: config.get(k) for k in ("owner_email", "allow_shared_links")}
+            _seen31: list = []
+
+            def _asked(text, queue=None, lists=None, **_kw):
+                _seen31.append({"text": text, "queue": queue})
+                return {"status": "ok", "message": "stubbed"}
+
+            SUB_S, SUB_T, SUB_B = "88800111", "88800222", "88800333"
+            _acc2.admit(SUB_S, "siri@example.com", "Siri Sam", terms=True)
+            _acc2.admit(SUB_T, "other@example.com", "Other Person", terms=True)
+            _acc2.set_scope(SUB_S, "phone")
+            _acc2.set_scope(SUB_T, "phone")
+            ck_s = {_COOKIE: sec.session_cookie(now_key(), SUB_S)}
+            ck_t = {_COOKIE: sec.session_cookie(now_key(), SUB_T)}
+            pid_s = _acc2.profile_id(SUB_S)
+            _bans.forgive("testclient")
+            config.set("allow_shared_links", False, save=False)   # keys aren't links
+            try:
+                with _patch("mrs.core.net.lan_ip", lambda: "192.168.1.9"), \
+                        _patch("mrs.web.api.handle_request", _asked):
+                    c("the owner's key is not an account's, so it can't make one",
+                      client.post("/api/me/siri/new", json={}, headers=owner_h).status_code == 403)
+                    made = client.post("/api/me/siri/new", json={"name": "Key 1"}, cookies=ck_s)
+                    c("an account can make a key", made.status_code == 200
+                      and made.json().get("token", "").count(".") == 3, str(made.status_code))
+                    tid, key_s = made.json()["id"], made.json()["token"]
+                    listed = client.get("/api/me/siri", cookies=ck_s)
+                    c("...and lists it without showing it",
+                      len(listed.json()["keys"]) == 1 and key_s not in listed.text)
+                    c("...with where to point it", "192.168.1.9" in listed.json().get("address", ""),
+                      listed.json().get("address", ""))
+                    c("it isn't on the owner's list of links",
+                      all(row["id"] != tid for row in sec.list_passes())
+                      and sec.extend(tid, 5).get("ok") is False)
+
+                    _seen31.clear()
+                    r = client.post("/", json={"input": "play something"}, headers={"X-Music-Key": key_s})
+                    c("the key asks for a song", r.status_code == 200 and _seen31, str(r.status_code))
+                    c("...in that account's own queue, not the shared one",
+                      bool(_seen31) and _seen31[-1]["queue"] is not None)
+                    c("...and in a url as well",
+                      client.post(f"/?token={key_s}", json={"input": "x"}).status_code == 200)
+
+                    for label, method, path in (
+                            ("reading the player's state", "get", "/api/status"),
+                            ("playing something directly", "post", "/api/play"),
+                            ("changing a setting", "post", "/api/setting"),
+                            ("the settings", "get", "/api/settings"),
+                            ("who they are", "get", "/api/me"),
+                            ("making another key", "post", "/api/me/siri/new"),
+                            ("deleting the account", "post", "/api/me/delete"),
+                            ("the player page", "get", "/player")):
+                        _bans.forgive("testclient")
+                        got = getattr(client, method)(path, headers={"X-Music-Key": key_s},
+                                                       **({"json": {"confirm": "delete my account"}}
+                                                          if method == "post" else {}))
+                        c(f"the key is refused {label}", got.status_code == 403,
+                          f"{path} {got.status_code}")
+                    c("...and said so in words", "only for Siri" in client.get(
+                        "/api/status", headers={"X-Music-Key": key_s}).text)
+                    c("...and none of that touched the account", _acc2.get(SUB_S) is not None)
+
+                    # Somebody else's account can't see or remove it.
+                    c("another account can't show it",
+                      client.post("/api/me/siri/token", json={"id": tid}, cookies=ck_t).status_code == 404)
+                    c("...or remove it",
+                      client.post("/api/me/siri/revoke", json={"id": tid}, cookies=ck_t).status_code == 404)
+                    c("...and its own list is empty of it",
+                      client.get("/api/me/siri", cookies=ck_t).json()["keys"] == [])
+                    _bans.forgive("testclient")
+                    c("...so the key still works",
+                      client.post("/", json={"input": "x"}, headers={"X-Music-Key": key_s}).status_code == 200)
+                    again = client.post("/api/me/siri/token", json={"id": tid}, cookies=ck_s)
+                    c("its own account can show it again", again.status_code == 200
+                      and again.json().get("token") == key_s)
+
+                    for n in range(2, sec.MAX_SIRI_KEYS + 1):
+                        client.post("/api/me/siri/new", json={"name": f"Key {n}"}, cookies=ck_s)
+                    over = client.post("/api/me/siri/new", json={"name": "one too many"}, cookies=ck_s)
+                    c("there is a limit on how many", over.status_code == 409
+                      and len(sec.siri_keys(pid_s)) == sec.MAX_SIRI_KEYS, str(over.status_code))
+
+                    # Blocking the account stops its keys.
+                    _acc2.set_scope(SUB_S, "blocked")
+                    _bans.forgive("testclient")
+                    c("a blocked account's key stops",
+                      client.post("/", json={"input": "x"}, headers={"X-Music-Key": key_s}).status_code == 403)
+                    _acc2.set_scope(SUB_S, "phone")
+                    _bans.forgive("testclient")
+                    c("...and works again when they're let back in",
+                      client.post("/", json={"input": "x"}, headers={"X-Music-Key": key_s}).status_code == 200)
+
+                    # The owner's own key asks for songs on the shared player, and is
+                    # still not the master key.
+                    _cfg.set("owner_email", "boss2@example.com", save=False)
+                    _acc2.admit(SUB_B, "boss2@example.com", "Boss Two", terms=True)
+                    ck_b = {_COOKIE: sec.session_cookie(now_key(), SUB_B)}
+                    key_b = client.post("/api/me/siri/new", json={}, cookies=ck_b).json()["token"]
+                    _seen31.clear()
+                    _bans.forgive("testclient")
+                    r = client.post("/", json={"input": "x"}, headers={"X-Music-Key": key_b})
+                    c("an owner's key plays on the shared player",
+                      r.status_code == 200 and _seen31 and _seen31[-1]["queue"] is None)
+                    _bans.forgive("testclient")
+                    c("...and isn't the master key",
+                      client.get("/api/settings", headers={"X-Music-Key": key_b}).status_code == 403
+                      and client.get("/api/accounts", headers={"X-Music-Key": key_b}).status_code == 403)
+
+                    # Taking one back, and what it says when it's used.
+                    gone = client.post("/api/me/siri/revoke", json={"id": tid}, cookies=ck_s)
+                    _bans.forgive("testclient")
+                    c("removing a key kills it", gone.status_code == 200
+                      and client.post("/", json={"input": "x"},
+                                      headers={"X-Music-Key": key_s}).status_code == 403)
+                    _bans.forgive("testclient")
+
+                    # The export lists them without the secret; deleting removes them.
+                    exp = client.get("/api/me/export", cookies=ck_s)
+                    c("the export says what keys exist, not what they are",
+                      exp.status_code == 200 and '"siri_keys"' in exp.text
+                      and "Key 2" in exp.text and key_s not in exp.text)
+                    key_2 = sec.siri_keys(pid_s)[0]["id"]
+                    token_2 = sec.siri_token(now_key(), pid_s, key_2)
+                    dele = client.post("/api/me/delete", json={"confirm": "delete my account"},
+                                       cookies=ck_s)
+                    c("deleting the account removes its keys", dele.status_code == 200
+                      and sec.siri_keys(pid_s) == [])
+                    _bans.forgive("testclient")
+                    c("...so they no longer open anything",
+                      client.post("/", json={"input": "x"},
+                                  headers={"X-Music-Key": token_2}).status_code == 403)
+                    with sec._held():
+                        held31 = _json.dumps(sec._load_passes())
+                    c("...and nothing in the pass file still names them", SUB_S not in held31)
+            finally:
+                for k, v in _keep31.items():
+                    config.set(k, v, save=False)
+                for sub in (SUB_S, SUB_T, SUB_B):
+                    try:
+                        from .web import privacy as _p31
+                        _p31.erase(sub)
+                    except Exception:
+                        pass
+                _bans.forgive("testclient")
+            say("siri keys", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json

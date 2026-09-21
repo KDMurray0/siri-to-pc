@@ -113,6 +113,13 @@ def profile_id(sub: str) -> str:
     return f"g-{sub}"
 
 
+def by_profile(pid: str) -> dict | None:
+    """The account whose profile id this is."""
+    if not str(pid).startswith("g-"):
+        return None
+    return get(str(pid)[2:])
+
+
 def everyone() -> list[dict]:
     with _lock:
         rows = list(_read().values())

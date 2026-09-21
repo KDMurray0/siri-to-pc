@@ -35,6 +35,7 @@ from ..core.session import sessions
 from ..logging_setup import get
 from ..paths import data_dir
 from . import accounts
+from . import security as sec
 
 log = get("privacy")
 
@@ -71,6 +72,9 @@ def erase(sub: str) -> dict:
         report["profile"] = True
     profiles.forget(pid)
 
+    # Their Siri keys go before the account, so a key can never outlive the
+    # person it acts for.
+    report["siri_keys"] = sec.siri_forget(pid)
     report["usage"] = stats.erase(pid)
     report["credits"] = playlists.scrub_person(pid, person.get("name", ""))
     report["audit"] = audit.scrub(f"account:{pid}")
@@ -165,5 +169,8 @@ def export(sub: str) -> dict:
         "profile": files,
         "other_files_in_profile": other,
         "shared_playlist_additions": credits,
+        "siri_keys": [{"name": k["name"], "created": k["created"] or None,
+                       "last_used": k["last_seen"] or None}
+                      for k in sec.siri_keys(pid)],
         "usage_counters": usage if usage is not None else "not kept (you have not opted in)",
     }

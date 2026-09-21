@@ -276,12 +276,15 @@ def owner_pass(key: str) -> str:
 
 def issue(key: str, name: str = "", hours: float = 24,
           scope: str = "full", internal: bool = False,
-          owner: bool = False) -> dict:
+          owner: bool = False, siri: str = "") -> dict:
     """Mint a pass. Zero hours means it never expires.
 
     `internal` marks the player's own pass — the one it fetches so <audio>
     and EventSource have something to put in a URL. It's a real pass, but it
     isn't a link anybody was given, so it stays out of that list.
+
+    `siri` is a profile id: the pass then belongs to that account and is only
+    ever honoured as that person asking for a song. See siri_issue.
     """
     if not key:
         return {}
@@ -304,6 +307,8 @@ def issue(key: str, name: str = "", hours: float = 24,
                      "created": int(time.time()), "revoked": False,
                      "internal": bool(internal), "owner": bool(owner),
                      "last_seen": 0}
+        if siri:
+            rows[tid]["siri"] = str(siri)[:80]
         if not _save_passes(rows):
             return {}
     log.info("issued a %s pass to %r (%s)", scope, name or "unnamed",
@@ -352,7 +357,8 @@ def read_token(key: str, token: str) -> dict | None:
     return {"id": tid, "scope": row.get("scope", scope) or "full",
             "name": row.get("name", ""), "expires": expires,
             "internal": bool(row.get("internal")),
-            "owner": bool(row.get("owner"))}
+            "owner": bool(row.get("owner")),
+            "siri": str(row.get("siri") or "")}
 
 
 def check_token(key: str, token: str) -> bool:
@@ -401,6 +407,8 @@ def list_passes() -> list[dict]:
             continue                 # the player's own, not a link you gave out
         if r.get("owner"):
             continue                 # yours, shown in its own place
+        if r.get("siri"):
+            continue                 # somebody's own key, on their own page
         exp = r.get("expires", 0)
         out.append({
             "id": tid, "name": r.get("name", "unnamed"),
@@ -437,7 +445,7 @@ def extend(tid: str, hours: float = 24) -> dict:
     with _held():
         rows = _load_passes()
         row = rows.get(tid)
-        if not row or row.get("internal") or row.get("owner"):
+        if not row or row.get("internal") or row.get("owner") or row.get("siri"):
             return {"ok": False, "message": "No such link"}
         was = int(row.get("expires") or 0)
         row["expires"] = 0 if hours <= 0 else int(time.time() + hours * 3600)
@@ -502,6 +510,72 @@ def restore_pass(tid: str) -> bool:
         if not _save_passes(rows):
             return False
     return True
+
+
+# Siri keys. A person sets a Shortcut up once, on a phone, and it has to go on
+# working -- so these never expire -- but it must not be the person's whole
+# login pasted into an automation. It can ask for a song and do nothing else
+# (api._siri_row enforces that), it is theirs to make and to take back, and it
+# dies with the account.
+MAX_SIRI_KEYS = 3
+
+
+def siri_keys(pid: str) -> list[dict]:
+    """What an account has, without the keys themselves."""
+    if not pid:
+        return []
+    with _held():
+        rows = _load_passes()
+    out = [{"id": tid, "name": r.get("name", "Siri"),
+            "created": int(r.get("created", 0)),
+            "last_seen": int(r.get("last_seen", 0))}
+           for tid, r in rows.items() if r.get("siri") == pid and not r.get("revoked")]
+    out.sort(key=lambda r: r["created"])
+    return out
+
+
+def siri_issue(key: str, pid: str, name: str = "") -> dict:
+    """A new key for one account, or {"error": ...} saying why not."""
+    if not key or not pid:
+        return {"error": "no key"}
+    if len(siri_keys(pid)) >= MAX_SIRI_KEYS:
+        return {"error": "limit"}
+    got = issue(key, name=(name or "Siri").strip()[:30], hours=0, scope="phone", siri=pid)
+    return got or {"error": "save"}
+
+
+def siri_token(key: str, pid: str, tid: str) -> str:
+    """The key again, for the account it belongs to and nobody else."""
+    if not key or not pid or not tid:
+        return ""
+    with _held():
+        row = _load_passes().get(tid)
+    if not row or row.get("siri") != pid or row.get("revoked"):
+        return ""
+    body = f"{tid}.0.{row.get('scope', 'phone')}"
+    return f"{body}.{_sign(key, body)}"
+
+
+def siri_revoke(pid: str, tid: str) -> bool:
+    with _held():
+        row = _load_passes().get(tid)
+    if not row or row.get("siri") != pid:
+        return False
+    return forget_pass(tid)
+
+
+def siri_forget(pid: str) -> int:
+    """Every key an account had. For when the account goes."""
+    if not pid:
+        return 0
+    with _held():
+        rows = _load_passes()
+        mine = [tid for tid, r in rows.items() if r.get("siri") == pid]
+        for tid in mine:
+            del rows[tid]
+        if mine and not _save_passes(rows):
+            raise RuntimeError("couldn't remove their Siri keys")
+    return len(mine)
 
 
 def forget_pass(tid: str) -> bool:
