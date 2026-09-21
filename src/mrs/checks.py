@@ -17,6 +17,7 @@ whose queue a request lands in. Playback is checked by playing something.
 
 from __future__ import annotations
 
+import re
 import time
 import time as _t
 from dataclasses import dataclass, field
@@ -2586,10 +2587,17 @@ def _run(verbose: bool = False) -> Result:
                               headers={"Origin": "null", "Sec-Fetch-Site": "same-origin"},
                               follow_redirects=False).status_code == 302)
 
-                short = client.post("/auth/claim", data={"name": "A", "terms": "1"},
+                short = client.post("/auth/claim", data={"name": "A", "terms": "1", "tracking": "1"},
                                     cookies=held, follow_redirects=False)
                 c("a one-letter name is turned back with a reason",
                   short.status_code == 400 and "at least two" in short.text)
+                c("...and keeps what they had ticked, so a typo costs nothing",
+                  re.search(r'name="terms"[^>]*\bchecked', short.text) is not None
+                  and re.search(r'name="tracking"[^>]*\bchecked', short.text) is not None)
+                plain400 = client.post("/auth/claim", data={"name": "A", "terms": "1"},
+                                       cookies=held, follow_redirects=False)
+                c("...and doesn't tick what they didn't",
+                  re.search(r'name="tracking"[^>]*\bchecked', plain400.text) is None)
                 bare = client.post("/auth/claim", data={"name": "Sam Rivers"},
                                    cookies=held, follow_redirects=False)
                 c("finishing without the privacy notice is turned back",

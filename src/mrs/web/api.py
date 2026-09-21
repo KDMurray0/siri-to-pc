@@ -3207,12 +3207,14 @@ def api_stream(video_id: str, _: bool = Owner):
 
 def _landing(request: Request, *, tab: str = "login", error: str = "",
              name: str = "", status_code: int = 200, claim: dict | None = None,
-             blocked: bool = False):
+             blocked: bool = False, terms: bool = False, tracking: bool = False):
     """The front page, in one of its states. One place, so they can't drift."""
     return templates.TemplateResponse(request, "landing.html", {
         "google": google.configured(),
         "server_name": config.get("server_name", "Music Request"),
         "blocked": blocked, "tab": tab, "error": error, "name": name,
+        # What they had ticked, so a typo in the name doesn't cost them the ticks.
+        "terms": terms, "tracking": tracking,
         "claim": claim, "client_available": _client_build() is not None,
         "contact": accounts.owner_email(),
     }, status_code=status_code)
@@ -3372,11 +3374,13 @@ async def auth_google_signup(request: Request):
     """
     form = await request.form()
     name = accounts.clean_name(form.get("name", ""))
+    ticked = {"terms": str(form.get("terms", "")) == "1",
+              "tracking": str(form.get("tracking", "")) == "1"}
     if len(name) < 2:
-        return _landing(request, tab="signup", name=name, status_code=400,
+        return _landing(request, tab="signup", name=name, status_code=400, **ticked,
                         error="Tell us what to call you — at least two characters.")
-    if str(form.get("terms", "")) != "1":
-        return _landing(request, tab="signup", name=name, status_code=400,
+    if not ticked["terms"]:
+        return _landing(request, tab="signup", name=name, status_code=400, **ticked,
                         error="Please read and accept the privacy notice to sign up.")
     return _begin_signin(request, str(form.get("next", "/player")), "signup",
                          {"name": name, "tracking": str(form.get("tracking", "")) == "1"})
@@ -3487,7 +3491,8 @@ async def auth_claim_finish(request: Request):
         problem = "Please read and accept the privacy notice to finish."
     if problem:
         return _landing(request, tab="claim", claim=held, name=name, error=problem,
-                        status_code=400)
+                        status_code=400, terms=str(form.get("terms", "")) == "1",
+                        tracking=str(form.get("tracking", "")) == "1")
     who = google.take_claim(handle)
     if not who:
         return _signin_page("That took too long. Please sign in again.", base=base)
