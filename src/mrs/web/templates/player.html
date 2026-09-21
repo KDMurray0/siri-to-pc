@@ -348,6 +348,25 @@ body.reordering .q{transition:transform .12s ease}
 .mbar{height:7px;border-radius:4px;background:var(--line);overflow:hidden}
 .mbar i{display:block;height:100%;background:var(--accent);border-radius:4px}
 .mrow.now .mbar i{opacity:1}
+/* Account tab. Its own label class: a guest's sheet hides every .seclbl. */
+.acclbl{font-size:10px;color:var(--sub);text-transform:uppercase;letter-spacing:.08em;
+  margin:20px 4px 4px;font-weight:700}
+.acctcard{display:flex;align-items:center;gap:14px;padding:8px 0 12px}
+.acctcard .pfp{width:54px;height:54px}
+.acctcard b{display:block;font-size:15px;line-height:1.3}
+.acctcard span{display:block;font-size:11.5px;color:var(--sub);line-height:1.5}
+.acctname{display:flex;gap:6px}
+.acctname .keyin{width:126px}
+.confirmbox{margin:6px 0 4px;padding:12px;border:1px solid color-mix(in srgb,var(--bad,#e0645a) 50%,transparent);
+  border-radius:10px}
+.confirmbox p{font-size:11.5px;color:var(--sub);line-height:1.5;margin-bottom:9px}
+.confirmbox b{color:var(--fg)}
+.confirmbox .keyin{width:100%;margin-bottom:9px}
+a.btn{text-decoration:none;display:inline-block}
+.btn.dgr{color:var(--bad,#e0645a);border-color:color-mix(in srgb,var(--bad,#e0645a) 55%,var(--line))}
+.btn.dgr:hover{color:var(--bad,#e0645a);border-color:var(--bad,#e0645a)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn:disabled:hover{border-color:var(--line);color:var(--fg)}
 .pfp{width:26px;height:26px;border-radius:50%;object-fit:cover;background:var(--line);flex:0 0 auto;vertical-align:middle}
 .slabel.withpfp{display:flex;align-items:center;gap:9px}
 .linkstat .who{display:flex;align-items:center;gap:8px}
@@ -498,10 +517,13 @@ body.expand .prog{margin-top:10px}
 .sheet-head{display:flex;align-items:center;justify-content:space-between;
   padding:18px 18px 10px}
 .sheet-head h2{font-size:17px;font-weight:800;letter-spacing:-.01em}
-.sheet-tabs{display:flex;gap:4px;padding:0 16px 8px;border-bottom:1px solid var(--line)}
-.stab{flex:1;background:none;border:0;color:var(--sub);font-family:inherit;
+.sheet-tabs{display:flex;gap:4px;padding:0 16px 8px;border-bottom:1px solid var(--line);
+  overflow-x:auto;scrollbar-width:none}
+.sheet-tabs::-webkit-scrollbar{display:none}
+.stab{flex:1 0 auto;background:none;border:0;color:var(--sub);font-family:inherit;
   font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
-  padding:7px 0;cursor:pointer;border-radius:8px}
+  padding:7px 9px;cursor:pointer;border-radius:8px}
+.stab[hidden]{display:none}
 .stab:hover{color:var(--fg)}
 .stab.on{color:var(--accent-ink);background:var(--accent)}
 .sheet-body{flex:1;overflow-y:auto;padding:8px 18px 24px}
@@ -1498,6 +1520,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
       <button class="stab" data-s="extras">Extras</button>
       <button class="stab" data-s="sharing">Sharing</button>
       <button class="stab" data-s="system">System</button>
+      <button class="stab guestok" id="tabacct" data-s="account" hidden>Account</button>
     </div>
     <div class="sheet-body">
 
@@ -1679,6 +1702,34 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 
         <div class="seclbl">Listening now</div>
         <div id="whoslistening"></div>
+      </section>
+
+      <section class="spane" data-s="account">
+        <div class="acctcard guestok" id="acctcard"></div>
+        <div class="srow guestok"><span class="slabel">Your name<em>What the owner and shared playlists show</em></span>
+          <span class="acctname"><input class="keyin" id="acctname" maxlength="40" autocomplete="nickname"
+            spellcheck="false"><button class="btn" id="acctsave">Save</button></span></div>
+
+        <div class="acclbl">Privacy</div>
+        <div class="srow guestok"><span class="slabel">Learn what I like<em>Remember what I play, skip and like, to tune my radio and suggestions. Off unless you switch it on, and switching it off forgets what it learned.</em></span>
+          <div class="toggle" id="acctrack"></div></div>
+        <div class="srow guestok"><span class="slabel">Forget what it has learned<em>Clears the taste it built from what you played. Your hearts and blocks stay.</em></span>
+          <button class="btn" id="acctforget">Forget</button></div>
+        <div class="srow guestok"><span class="slabel">Download my data<em>Everything held about you, as one file</em></span>
+          <a class="btn" id="acctexport" download>Download</a></div>
+        <div class="srow guestok"><span class="slabel">Privacy notice<em id="acctnotice"></em></span>
+          <a class="btn" id="acctpriv" target="_blank" rel="noopener">Read</a></div>
+
+        <div class="acclbl">Leaving</div>
+        <div class="srow guestok"><span class="slabel">Sign out<em>On this device only</em></span>
+          <button class="btn" id="acctout">Sign out</button></div>
+        <div class="srow guestok"><span class="slabel">Delete my account<em id="acctdelnote">Removes your account and everything under it, straight away. It can't be undone.</em></span>
+          <button class="btn dgr" id="acctdel">Delete&hellip;</button></div>
+        <div class="confirmbox guestok" id="acctdelbox" hidden>
+          <p>Type <b>delete my account</b> to confirm. Your settings, playlists, taste and counts go with it.</p>
+          <input class="keyin" id="acctconf" autocomplete="off" spellcheck="false" aria-label="Type delete my account">
+          <button class="btn danger" id="acctdelgo" disabled>Delete everything</button>
+        </div>
       </section>
 
       <section class="spane" data-s="system">
@@ -3373,6 +3424,7 @@ document.querySelectorAll(".stab").forEach(tab => tab.onclick = () => {
   if (tab.dataset.s === "access") {
     loadPeople();
   }
+  if (tab.dataset.s === "account") acctLoad();
   if (tab.dataset.s === "sharing") {
     loadNetwork(); loadDdns();
     if (ME.owner) watchSharing();
@@ -3546,6 +3598,8 @@ $("libmonitor").onchange = async () => {
    header anyway, and it no longer needs to — anyone may knock, and the
    server works out who they are when Google answers. */
 function signInPaint() {
+  const acct = $("tabacct");
+  if (acct) acct.hidden = !SIGNED_IN;
   const row = $("signinrow");
   if (!row) return;
   if (SIGNED_IN) {
@@ -3565,6 +3619,76 @@ function signInPaint() {
   }
 }
 signInPaint();
+
+/* The Account tab: a person's own record, and what they can do about it. Only
+   for a signed-in account -- a key or a shared link has no record to show, and
+   the server refuses these routes to them anyway. */
+let ACCT = null;
+async function acctLoad() {
+  if (!SIGNED_IN) return;
+  const r = await api("/api/me");
+  if (!r || !r.account) return;
+  ACCT = r; acctPaint();
+}
+function acctPaint() {
+  const a = ACCT;
+  if (!a) return;
+  $("acctcard").innerHTML =
+    (a.picture ? '<img class="pfp" src="' + esc(a.picture) + '" alt="" referrerpolicy="no-referrer">' : "") +
+    "<div><b>" + esc(a.name) + "</b><span>" + esc(a.email || "") + "</span><span>" +
+    (a.owner ? "Runs this server" : "Can use " + esc(PERSON_SCOPE[a.access] || a.access)) + "</span></div>";
+  if (document.activeElement !== $("acctname")) $("acctname").value = a.name || "";
+  $("acctrack").classList.toggle("on", !!a.consent.tracking);
+  const n = a.consent.privacy_notice;
+  $("acctnotice").textContent = !n.version ? "You haven't agreed to it yet"
+    : n.current ? "You agreed to version " + n.version + ", the current one"
+    : "You agreed to version " + n.version + "; it has changed since";
+  $("acctpriv").href = BASE + "/privacy";
+  $("acctexport").href = BASE + "/api/me/export";
+  // The owner's account is what runs this: removing it is done on the machine.
+  $("acctdel").disabled = !!a.owner;
+  $("acctdelnote").textContent = a.owner
+    ? "This account runs the server, so it can't be deleted from here."
+    : "Removes your account and everything under it, straight away. It can't be undone.";
+}
+$("acctsave").onclick = async () => {
+  const name = $("acctname").value.trim();
+  if (name.length < 2) { toast("A name needs at least two characters"); return; }
+  const r = await apiTry("/api/me/rename?name=" + encodeURIComponent(name));
+  if (!r.ok) { toast((r.body && r.body.detail) || "That didn't go through"); return; }
+  if (ACCT) ACCT.name = r.body.name;
+  acctPaint(); toast("Saved");
+};
+$("acctname").onkeydown = e => { if (e.key === "Enter") $("acctsave").click(); };
+$("acctrack").onclick = async () => {
+  const on = !$("acctrack").classList.contains("on");
+  $("acctrack").classList.toggle("on", on);
+  const r = await apiTry("/api/me/consent?tracking=" + (on ? 1 : 0));
+  if (!r.ok) {
+    $("acctrack").classList.toggle("on", !on);
+    toast((r.body && r.body.detail) || "That didn't go through"); return;
+  }
+  if (ACCT) ACCT.consent = r.body.consent;
+  toast(on ? "It will learn what you like" : "Switched off, and what it learned is gone");
+};
+$("acctforget").onclick = async e => {
+  if (!armDanger(e.currentTarget, "forget what it has learned")) return;
+  const r = await apiTry("/api/me/forget-taste");
+  toast(!r.ok ? "That didn't go through"
+    : r.body.cleared ? "Forgotten" : "There was nothing to forget");
+};
+$("acctout").onclick = () => { location.href = BASE + "/auth/signout"; };
+$("acctdel").onclick = () => { $("acctdelbox").hidden = false; $("acctconf").focus(); };
+$("acctconf").oninput = () => {
+  $("acctdelgo").disabled = $("acctconf").value.trim().toLowerCase() !== "delete my account";
+};
+$("acctdelgo").onclick = async () => {
+  $("acctdelgo").disabled = true;
+  const r = await apiTry("/api/me/delete?confirm=" + encodeURIComponent("delete my account"));
+  if (r.ok) { location.href = BASE + "/"; return; }
+  toast((r.body && r.body.detail) || "That didn't go through");
+  $("acctdelgo").disabled = false;
+};
 
 const PERSON_SCOPE = { owner: "everything", full: "the speakers too",
                        phone: "their own device", blocked: "nothing" };

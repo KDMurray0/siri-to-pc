@@ -3397,7 +3397,14 @@ def api_me_consent(request: Request, tracking: int | None = None,
     # counters stop (or start) keeping a row about them straight away.
     profiles.forget(pid)
     stats_mod.set_tracked(pid, bool(got.get("tracking")))
-    return {"status": "ok", "consent": _consent_view(got)}
+    withdrew = bool(person.get("tracking")) and not got.get("tracking")
+    if withdrew:
+        # Taking consent back means what it was given for goes too: keeping
+        # the history and merely ceasing to add to it is not withdrawing.
+        from . import privacy
+        privacy.forget_taste(person["sub"])
+        stats_mod.erase(pid)
+    return {"status": "ok", "consent": _consent_view(got), "forgot": withdrew}
 
 
 @app.get("/api/me/rename")

@@ -3284,10 +3284,23 @@ def _run(verbose: bool = False) -> Result:
                   str(r_on.status_code))
                 c("...and the profile is rebuilt to learn",
                   _profiles2.for_row(_acc2.as_row(_acc2.get(SUB_C))).tracking is True)
+                from .web import privacy as _priv3
+                _learned = _priv3._home(SUB_C) / "taste" / "play_stats.json"
+                _learned.parent.mkdir(parents=True, exist_ok=True)
+                _learned.write_text('{"x": 1}', encoding="utf-8")
+                _pc = _acc2.profile_id(SUB_C)
+                _st2.note(_pc, requests=2, plays=1, name="Cee")
+                _st2.flush()
                 r_off = client.post("/api/me/consent", json={"tracking": 0}, cookies=ck_c)
                 c("...and withdrawn as easily",
                   r_off.status_code == 200 and r_off.json()["consent"]["tracking"] is False
                   and _acc2.get(SUB_C)["tracking_at"] > 0)
+                c("...and withdrawing takes what was learned with it",
+                  r_off.json().get("forgot") is True and not _learned.exists()
+                  and _pc not in {row["id"] for row in _st2.links()})
+                r_again = client.post("/api/me/consent", json={"tracking": 0}, cookies=ck_c)
+                c("...and saying no twice forgets nothing new",
+                  r_again.status_code == 200 and r_again.json().get("forgot") is False)
                 c("the change of mind is on record", _acc2.get(SUB_C)["tracking_at"] >= _acc2.get(SUB_C)["created"])
                 c("a name can be changed", client.post("/api/me/rename", json={"name": "Cee Two"},
                                                         cookies=ck_c).json().get("name") == "Cee Two")
