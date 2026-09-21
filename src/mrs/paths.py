@@ -126,6 +126,24 @@ def migrate_legacy_data() -> list[str]:
     return moved
 
 
+def replace_file(src, dst, *, tries: int = 8, delay: float = 0.03) -> None:
+    """os.replace, patient about a moment's sharing violation.
+
+    Windows refuses to replace a file that something else has open, and
+    something else -- a virus scanner, the search indexer, a backup -- routinely
+    does for a few milliseconds after it has been written. It clears on its own,
+    and without this the save fails and the caller is told the disk is broken.
+    """
+    for attempt in range(tries):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == tries - 1:
+                raise
+            time.sleep(delay * (attempt + 1))
+
+
 def _write_replacement(path: Path, data: str | bytes) -> None:
     """Replace *path* with fully flushed text or bytes."""
     binary = isinstance(data, bytes)
@@ -139,7 +157,7 @@ def _write_replacement(path: Path, data: str | bytes) -> None:
             fh.write(data)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, path)
+        replace_file(tmp, path)
     except Exception:
         try:
             os.unlink(tmp)

@@ -2565,6 +2565,27 @@ def _run(verbose: bool = False) -> Result:
                   and "One last thing" not in client.get(
                       "/auth/claim", cookies={"mrs_claim": "nope"}).text)
 
+                # A browser posting one of our own forms says Origin: null when the
+                # referrer policy is strict, and only a real browser ever does --
+                # the test client sends no Origin at all, which is how this hid.
+                c("the front page doesn't tell browsers to send Origin: null",
+                  client.get("/").headers.get("referrer-policy") == "same-origin")
+                nul = client.post("/auth/claim", data={"name": "Sam Rivers", "terms": "1"},
+                                  cookies=held, headers={"Origin": "null"}, follow_redirects=False)
+                c("a form from our own page with Origin: null is refused without the browser's say-so",
+                  nul.status_code == 403 and _acc.get("55501") is None)
+                for site in ("cross-site", "same-site", "none"):
+                    got = client.post("/auth/claim", data={"name": "Sam Rivers", "terms": "1"},
+                                      cookies=held, headers={"Origin": "null", "Sec-Fetch-Site": site},
+                                      follow_redirects=False)
+                    c(f"...and a sandboxed frame or other site ({site}) still is",
+                      got.status_code == 403 and _acc.get("55501") is None)
+                _bans.forgive("testclient")
+                c("Origin: null from the browser saying it was our own page is taken",
+                  client.post("/auth/google/start", data={"name": "Origin Null", "terms": "1"},
+                              headers={"Origin": "null", "Sec-Fetch-Site": "same-origin"},
+                              follow_redirects=False).status_code == 302)
+
                 short = client.post("/auth/claim", data={"name": "A", "terms": "1"},
                                     cookies=held, follow_redirects=False)
                 c("a one-letter name is turned back with a reason",
@@ -3856,6 +3877,51 @@ def _run(verbose: bool = False) -> Result:
                     config.set(k, v, save=False)
                 _g33._CHECKED.update(at=0.0, got=None)
             say("checking the address with Google", c)
+
+            # -- 34. a file being replaced while something else holds it --------
+            c = _Checker("replacing a file")
+            from .paths import replace_file as _replace34
+            _calls34: list = []
+
+            def _busy_then_free(n):
+                left = [n]
+
+                def fake(src, dst):
+                    _calls34.append(1)
+                    if left[0] > 0:
+                        left[0] -= 1
+                        raise PermissionError(13, "The process cannot access the file")
+                return fake
+
+            with _patch("mrs.paths.os.replace", _busy_then_free(3)), \
+                    _patch("mrs.paths.time.sleep", lambda s: None):
+                _calls34.clear()
+                _replace34("a", "b")
+                c("a file somebody else has open for a moment is replaced once they let go",
+                  len(_calls34) == 4, str(len(_calls34)))
+            with _patch("mrs.paths.os.replace", _busy_then_free(99)), \
+                    _patch("mrs.paths.time.sleep", lambda s: None):
+                _calls34.clear()
+                try:
+                    _replace34("a", "b", tries=4)
+                    gave_up = False
+                except PermissionError:
+                    gave_up = True
+                c("one that never lets go is still an error, after a fair try",
+                  gave_up and len(_calls34) == 4, str(len(_calls34)))
+
+            def _missing(src, dst):
+                _calls34.append(1)
+                raise FileNotFoundError("gone")
+            with _patch("mrs.paths.os.replace", _missing), \
+                    _patch("mrs.paths.time.sleep", lambda s: None):
+                _calls34.clear()
+                try:
+                    _replace34("a", "b")
+                except FileNotFoundError:
+                    pass
+                c("anything else fails at once, not after eight tries", len(_calls34) == 1)
+            say("replacing a file", c)
 
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")

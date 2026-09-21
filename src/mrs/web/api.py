@@ -119,8 +119,11 @@ async def _door(request: Request, call_next):
         except Exception as exc:
             log.warning("couldn't write the owner audit trail: %s", exc)
     # A page fetched with ?key= or ?token= in its URL would otherwise hand
-    # that URL to every third-party it links to.
-    resp.headers["Referrer-Policy"] = "no-referrer"
+    # that URL to every third-party it links to. "same-origin" does that -- it
+    # sends nothing to anybody else -- where "no-referrer" also makes a browser
+    # send Origin: null for a form posted from one of these pages, which the
+    # sign-up and claim forms are, and which then looks cross-site.
+    resp.headers["Referrer-Policy"] = "same-origin"
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "SAMEORIGIN"
     return resp
@@ -134,6 +137,12 @@ app.add_middleware(_pfx.PrefixMiddleware)
 def _same_origin(origin: str, request: Request) -> bool:
     """Compare normalized origins, including effective default ports."""
     from urllib.parse import urlsplit
+
+    if origin == "null":
+        # What a browser sends for a form under a strict referrer policy, and
+        # also for a sandboxed frame on somebody else's page. The browser
+        # states which it was in a header a page can't set itself.
+        return request.headers.get("sec-fetch-site", "") == "same-origin"
 
     def parts(value):
         got = urlsplit(value)

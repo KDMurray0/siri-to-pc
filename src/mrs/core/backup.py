@@ -22,7 +22,7 @@ import zipfile
 from pathlib import Path
 
 from ..logging_setup import get
-from ..paths import data_dir, write_atomic_bytes
+from ..paths import data_dir, write_atomic_bytes, replace_file
 
 log = get("backup")
 
@@ -85,7 +85,7 @@ def make_backup(into: Path | None = None) -> dict:
             for path, arc in _members(root):
                 z.write(path, arc)
                 count += 1
-        os.replace(tmp, dest)
+        replace_file(tmp, dest)
     except Exception:
         try:
             os.unlink(tmp)
