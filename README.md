@@ -306,7 +306,7 @@ This separation means search results have accurate metadata immediately, and pla
 
 ## API Endpoints
 
-All endpoints return JSON and take the key in the `X-Music-Key` header. Anything that changes something is a `POST` with its parameters as a JSON body; reads are `GET`. A shared link's token may also ride in the URL as `?token=`, because a link has nowhere else to put it.
+All endpoints return JSON and take the key in the `X-Music-Key` header. Anything that changes something is a `POST` with its parameters as a JSON body; reads are `GET`. A player's own token may ride in the URL as `?token=` for the places a header can't reach (`<audio>`, the event stream); a Siri key may too.
 
 **Compatibility mode.** Installs from before this change keep working exactly as they did — `GET` for everything and `?key=SECRET` in the URL — until you turn off *Allow old GET requests* (`allow_legacy_get_mutations`) and *Allow the key in a link* (`allow_key_in_url`) under Settings → Security. New installs start with both off. The examples below are the new form.
 
@@ -425,15 +425,20 @@ Some DNS servers refuse to return private addresses (rebinding protection),
 in which case that trick won't work either and the LAN falls back to the
 address with no encryption.
 
-## Signing in with Google
+## Accounts: signing in with Google
 
-A link is a credential anybody can forward, and it can't tell two people
-apart. An account is a person: their queue, their history and their playlists
-follow them to whatever device they pick up, and taking somebody's access away
-is a change to their account rather than a hunt for who else has the link.
+People have accounts. Somebody opens your address and chooses **Log in** or
+**Sign up**. Signing up asks for a name and for them to agree to the privacy
+notice, then hands them to Google; logging in with a Google account the server
+hasn't met asks for the same two things before anything is created. There are
+no personal links and no keys to hand out. Taking somebody's access away is
+Settings → Access → People: block them, change what they can reach, or remove
+them, by name.
 
-Links don't go away — one is still how a person gets in the first time. What
-a link stops being is the identity.
+Their queue, history and playlists follow them to whatever device they pick
+up. What they may reach is set by you: a new account starts at the default you
+choose (their own device, the speakers too, or held as blocked until you let
+them in).
 
 Needs HTTPS first: Google will not send anybody back to a plain http address
 that isn't localhost.
@@ -447,20 +452,15 @@ that isn't localhost.
    → APIs & Services → Credentials → **Create credentials → OAuth client ID**
    → *Web application*.
 
-   - **Authorised JavaScript origins:** `https://music.example.dynu.net:7420`
-   - **Authorised redirect URIs:** `https://music.example.dynu.net:7420/auth/google/callback`
+   - **Authorised JavaScript origins:** `https://music.example.dynu.net`
+   - **Authorised redirect URIs:** `https://music.example.dynu.net/music/auth/google/callback`
 
    Settings → Access shows the exact redirect URI with a Copy button — paste
-   that, it has to match character for character.
+   that, it has to match character for character. It changes when you change
+   the path or the public port (below), so re-check it then.
 
 3. **Paste the client ID and secret** into Settings → Access. The secret is
    kept on this machine and never handed back to any page.
-
-Then hand somebody a link as usual. On their phone, Settings → **Sign in**
-turns that link into an account with exactly the reach the link had: a
-phone-only link makes an account that plays on their own device, a full link
-makes one that can drive the speakers too. You can change that afterwards, or
-block them, from the same panel.
 
 What's checked when somebody comes back from Google: that the sign-in was one
 this server started, that the token was issued to this server's client id by
@@ -472,6 +472,60 @@ taken on trust.
 The session is a signed cookie holding an account id and nothing else. It
 lasts 30 days, is HttpOnly, and is marked Secure whenever the server is on
 https.
+
+### What is held, and what people can do about it
+
+The public **/privacy** page says it in plain words, with the retention and
+the third parties read from the running config. In short: a name they chose,
+the email and picture on their Google account, their settings and playlists,
+and — only if they opted in — what they play and skip. **Learning what someone
+likes is off unless they tick it** at sign-up or switch it on in Settings →
+Account; turning it off erases what it learned, it doesn't just stop adding.
+
+Settings → **Account** (for anybody signed in) lets them rename themselves,
+switch learning on and off, forget what it has learned, **download everything
+held about them** as a file, and **delete their account** by typing a sentence.
+Deletion is one path shared with the owner's *Remove*: it clears the live
+session, the profile folder, the usage counters, the "added by" credit on shared
+playlists, their Siri keys, their entries in the change log and finally the
+account itself — last, so a failure part-way leaves an account that can try
+again. A blocked account is still let far enough in to reach its own data and
+delete it. The owner's own account can't be deleted from a browser; it runs
+the server.
+
+The old **personal links** are switched off (`allow_shared_links`, false by
+default; there is no switch for it in Settings). Anybody following an old one
+lands on the front page with the reason. The owner's own device pass and the
+player's own pass are not links and keep working.
+
+### The desktop app
+
+`MusicClient.exe` is the player in a window of its own: it keeps you signed in,
+lets audio start by itself, and holds no server code, so it doesn't need
+updating when the server does. It's offered from the sign-in page and from
+Settings → Account (`/download/client`), with the server's addresses already
+written into `server.txt` beside it — the public address first, then the one
+on the home network; the first that answers wins. If none answer it says so and
+lets you type another. `.\build.ps1` builds it and puts the zip in `downloads\`
+beside the server. It needs the Microsoft Edge WebView2 runtime, which is part
+of Windows 11.
+
+### One address, two applications
+
+Settings → Sharing → **The address**:
+
+- **Path** — where Music lives, e.g. `/music`, so `https://host/music`. Both the
+  path and the bare paths always work, so the tray, the launcher and existing
+  Shortcuts don't move.
+- **Public port** — what the outside world uses (`443`). Your router forwards
+  it to this computer's port, and links people are handed leave the port off.
+- **Movies address** — where your other application lives. With a path *and* a
+  Movies address set, the bare address becomes a Music / Movies choice, each
+  with its own sign-in. This is a link, not a proxy: nothing here forwards
+  traffic into the other application.
+
+After changing the path or the port, add the new redirect URI shown in the same
+place to the Google client, and forward the port on the router.
 
 ## Network Setup
 
@@ -583,7 +637,9 @@ YouTube's 2026 anti-bot stack (SABR, PO tokens, session-bound URLs) means a stre
    - **Headers:** `X-Music-Key` = your API key
    - **Request Body:** JSON, one field `input` = Dictated Text
 
-   Replace `192.168.1.XXX` with your PC's IP. The player's *Set up the Shortcut* page shows the exact address and key. A shared link's token can go in the URL instead (`http://…:7420/?token=TOKEN`), which is what the links you hand out do.
+   Replace `192.168.1.XXX` with your PC's IP. The player's *Set up the Shortcut* page shows the exact address and the master key.
+
+   **If you sign in with an account** (rather than using the master key), make a key of your own instead: Settings → Account → **Siri** → *Make a key* shows this same recipe with your address and your key filled in. It acts as you — your queue, your limits, your block — and can ask for a song and nothing else, so a leaked one can't read the player, change a setting or delete anything. You can have a few, show one again, and remove any of them from the same place; it stops with your account.
 6. Add **"Get Dictionary Item"** action (input: URL response, key: `message`)
 7. Add **"Speak Text"** action (input: the message value)
 8. Optionally add **"Show Notification"** for visual feedback
@@ -630,6 +686,8 @@ itunes_request_server/
   setup.ps1              One-shot installer: prerequisites, cookies, config, verification
   launcher.pyw           Tray icon + the flyout player window
   MusicRequestServer.spec  PyInstaller build spec (-> standalone .exe)
+  client.pyw             The desktop app: the player in its own window, no server code
+  MusicClient.spec       PyInstaller build spec for it (build.ps1 builds both)
   src/mrs/
     config.py            One config file, typed defaults, atomic writes
     paths.py             Single data directory (+ migration from older layouts)
@@ -669,7 +727,13 @@ itunes_request_server/
       lyrics.py          LRCLIB
     web/
       api.py             FastAPI routes + SSE
-      templates/         player.html, remote.html, setup.html
+      accounts.py        Who has signed in: name, scope, consent, and nothing else
+      google.py          The Google sign-in, and the claim step for a new login
+      privacy.py         Everything held about a person: export, and the one erasure path
+      prefix.py          Serving from a path (/music) as well as from the root
+      security.py        Passes, sessions, Siri keys, bans
+      policy.py          Which routes are the owner's, an account's, or read-only
+      templates/         player.html, landing.html, privacy.html, switch.html, remote.html, setup.html
 ```
 
 Config and state live in `%LOCALAPPDATA%\MusicRequestServer\` — one location,
