@@ -1669,6 +1669,19 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
             you tell them the new address; anything pasted somewhere old stops working. Your
             music, playlists, accounts and settings are untouched.</div>
         </div>
+        <div class="seclbl">The address</div>
+        <div class="hint">Put Music at a path so another app can share the address, and say which
+          port the outside world uses (your router forwards it here). Google sign-in has to be told
+          the new address in its console before anybody can sign in on it.</div>
+        <div class="srow"><span class="slabel">Path<em>Where Music lives, like /music</em></span>
+          <input class="keyin" id="addrprefix" placeholder="/music" autocomplete="off" spellcheck="false"></div>
+        <div class="srow"><span class="slabel">Public port<em>What the outside uses, like 443. 0 means this computer's own</em></span>
+          <input class="keyin" id="addrport" placeholder="0" inputmode="numeric" autocomplete="off"></div>
+        <div class="srow"><span class="slabel">Movies address<em>Adds a Music / Movies choice at the bare address</em></span>
+          <input class="keyin" id="addrmovies" placeholder="https://host:port/" autocomplete="off" spellcheck="false"></div>
+        <div class="srow"><span class="slabel"><em id="addrhint"></em></span>
+          <button class="btn" id="addrsave">Save</button></div>
+
         <div class="seclbl">The link you give people</div>
         <div class="hint">Send anyone this address. They open it, sign in with
           Google, and they're in — no key, no per-person link to hand out or
@@ -3453,7 +3466,7 @@ document.querySelectorAll(".stab").forEach(tab => tab.onclick = () => {
   }
   if (tab.dataset.s === "account") { acctLoad(); siriLoad(); }
   if (tab.dataset.s === "sharing") {
-    loadNetwork(); loadDdns();
+    loadNetwork(); loadDdns(); addrHint();
     if (ME.owner) watchSharing();
   }
 });
@@ -3707,6 +3720,24 @@ $("acctforget").onclick = async e => {
   const r = await apiTry("/api/me/forget-taste");
   toast(!r.ok ? "That didn't go through"
     : r.body.cleared ? "Forgotten" : "There was nothing to forget");
+};
+
+/* The address: a path, a public port, and where Movies is. What Google has to be
+   told is whatever the server now says it will send people back to. */
+async function addrHint() {
+  const r = await api("/api/accounts");
+  if (r && r.redirect_uri) $("addrhint").textContent =
+    "Google needs this redirect address: " + r.redirect_uri;
+}
+$("addrsave").onclick = async () => {
+  const put = (k, v) => apiTry("/api/setting?key=" + k + "&value=" + encodeURIComponent(v));
+  for (const [k, v] of [["url_prefix", $("addrprefix").value.trim()],
+                        ["public_port", $("addrport").value.trim() || "0"],
+                        ["movies_url", $("addrmovies").value.trim()]]) {
+    const r = await put(k, v);
+    if (!r.ok) { toast((r.body && r.body.detail) || "That didn't go through"); return; }
+  }
+  toast("Saved"); loadSettings(); addrHint();
 };
 
 /* Siri: a key that can ask for songs as this account, and nothing else. It is
@@ -5662,6 +5693,9 @@ async function loadSettings() {
   $("blockguests").classList.toggle("on", !!s.block_full_guests);
   $("partymode").classList.toggle("on", !!s.party_mode);
   document.body.classList.toggle("party", !!s.party_mode);
+  if (document.activeElement !== $("addrprefix")) $("addrprefix").value = s.url_prefix || "";
+  if (document.activeElement !== $("addrport")) $("addrport").value = s.public_port || 0;
+  if (document.activeElement !== $("addrmovies")) $("addrmovies").value = s.movies_url || "";
   $("keyinurl").classList.toggle("on", !!s.allow_key_in_url);
   $("legacyget").classList.toggle("on", !!s.allow_legacy_get_mutations);
   $("aeqon").classList.toggle("on", s.device_eq_enabled !== false);

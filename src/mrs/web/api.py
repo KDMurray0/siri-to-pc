@@ -368,6 +368,14 @@ async def index(request: Request, key: str = Query(default=""),
     identity after the invitation has been checked.
     """
     from .security import is_home
+    # One address, two applications. With Music at a path and a Movies address
+    # written down, the bare address is a choice; each has its own door and its
+    # own sign-in. Reached through the path, it is Music as always.
+    movies = str(config.get("movies_url") or "").strip()
+    if _pfx.configured() and movies and not _pfx.base_of(request):
+        return templates.TemplateResponse(request, "switch.html", {
+            "server_name": config.get("server_name", "Music Request"),
+            "music": _pfx.configured() + "/", "movies": movies})
     ip = _client_ip(request)
     offered = (token or key
                or request.headers.get("X-Music-Key")
@@ -1767,6 +1775,7 @@ _SETTABLE = {
     "device_eq_enabled": bool, "device_eq_auto": bool,
     "google_client_id": str, "google_client_secret": str, "owner_email": str,
     "new_account_scope": str, "server_name": str,
+    "url_prefix": str, "public_port": int, "movies_url": str,
     "tailscale": str, "tailscale_exe": str, "cache_size_mb": int,
     "allow_key_in_url": bool, "port": int,
     "block_full_guests": bool, "lan_open": bool, "party_mode": bool,
@@ -1826,6 +1835,23 @@ def api_setting(request: Request, key: str, value: str = "", _: bool = Auth):
         raise HTTPException(400, "port must be between 1025 and 65535")
     elif key == "new_account_scope" and parsed not in accounts.NEW_ACCOUNT_SCOPES:
         raise HTTPException(400, "new accounts may be full, phone, or blocked")
+    elif key == "url_prefix":
+        parsed = str(parsed).strip().rstrip("/")
+        if parsed and not parsed.startswith("/"):
+            parsed = "/" + parsed
+        if parsed and not _pfx._OK.match(parsed):
+            raise HTTPException(400, "A path like /music: lower-case letters, "
+                                     "numbers, - or _")
+    elif key == "public_port" and not 0 <= int(parsed) <= 65535:
+        raise HTTPException(400, "port must be between 0 and 65535")
+    elif key == "movies_url":
+        import re as _re
+        parsed = str(parsed).strip()
+        # It becomes a link on the front page, so it has to be a web address
+        # and not, say, a javascript: one.
+        if parsed and not _re.match(r"^https?://[^\s<>\"']{3,200}$", parsed):
+            raise HTTPException(400, "That needs to be a web address starting "
+                                     "with http:// or https://")
     config.set(key, parsed)
     if key == "library_monitor_minutes" and parsed:
         library.start_monitor()

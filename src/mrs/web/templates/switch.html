@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0f0e13">
+<title>{{ server_name }}</title>
+<style>
+:root{--bg:#0f0e13;--ink:#f4f1ec;--sub:#a29d95;--line:#26242c;--panel:#17151c;--accent:#e8a262;--teal:#34b8a8;--coral:#ff6b4f;
+  --sans:ui-sans-serif,"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  --display:"Segoe UI Variable Display","Segoe UI",ui-sans-serif,system-ui,sans-serif}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans);min-height:100vh;min-height:100dvh;
+  display:grid;place-items:center;padding:24px;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+.wash{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+.wash i{position:absolute;border-radius:50%;filter:blur(110px);opacity:.28}
+.wash i:nth-child(1){width:55vmax;height:55vmax;left:-16vmax;top:-20vmax;background:var(--accent)}
+.wash i:nth-child(2){width:50vmax;height:50vmax;right:-18vmax;bottom:-22vmax;background:var(--teal);opacity:.22}
+main{position:relative;z-index:1;width:min(760px,100%)}
+h1{font:700 clamp(26px,4.4vw,38px)/1.1 var(--display);letter-spacing:-.03em;text-align:center}
+.sub{color:var(--sub);text-align:center;margin:8px 0 30px}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+a.tile{position:relative;display:flex;flex-direction:column;justify-content:flex-end;min-height:230px;padding:22px;
+  border-radius:20px;border:1px solid var(--line);background:color-mix(in srgb,var(--panel) 86%,transparent);
+  color:inherit;text-decoration:none;overflow:hidden;transition:transform .16s ease,border-color .16s ease}
+a.tile:hover,a.tile:focus-visible{transform:translateY(-3px);border-color:var(--c);outline:none}
+a.tile::before{content:"";position:absolute;inset:0;background:radial-gradient(120% 90% at 20% 0%,var(--c),transparent 62%);opacity:.22}
+a.tile b{position:relative;font:700 24px/1.15 var(--display);letter-spacing:-.02em}
+a.tile span{position:relative;color:var(--sub);font-size:14px;margin-top:4px}
+a.tile svg{position:absolute;top:20px;left:22px;width:38px;height:38px;stroke:var(--c);fill:none;stroke-width:1.6;
+  stroke-linecap:round;stroke-linejoin:round}
+.music{--c:var(--accent)}.movies{--c:var(--coral)}
+@media (max-width:560px){.tiles{grid-template-columns:1fr}a.tile{min-height:150px}}
+@media (prefers-reduced-motion:reduce){a.tile{transition:none}}
+</style>
+</head>
+<body>
+<div class="wash" aria-hidden="true"><i></i><i></i></div>
+<main>
+  <h1>What are we in the mood for?</h1>
+  <p class="sub">Pick one. You&rsquo;ll sign in on the next page.</p>
+  <div class="tiles">
+    <a class="tile music" href="{{ music }}">
+      <svg viewBox="0 0 24 24"><path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg>
+      <b>Music</b><span>Ask for a song, an artist or a vibe</span></a>
+    <a class="tile movies" href="{{ movies }}">
+      <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M8 5v4M16 5v4M10 13l4 2.5-4 2.5z"/></svg>
+      <b>Movies</b><span>Films and shows from the library</span></a>
+  </div>
+</main>
+</body>
+</html>

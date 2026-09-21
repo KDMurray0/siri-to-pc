@@ -3656,6 +3656,69 @@ def _run(verbose: bool = False) -> Result:
                 _bans.forgive("testclient")
             say("siri keys", c)
 
+            # -- 32. one address, two applications: the settings and the switch --
+            c = _Checker("the address settings")
+            _keep32 = {k: config.get(k) for k in
+                       ("url_prefix", "public_port", "movies_url",
+                        "google_client_id", "google_client_secret")}
+            config.set("google_client_id", "sw-test-id", save=False)
+            config.set("google_client_secret", "sw-test-secret", save=False)
+
+            def _put(k, v, who=None):
+                return client.post("/api/setting", json={"key": k, "value": v},
+                                   headers=who or owner_h)
+
+            try:
+                c("a path is stored the way it will be used",
+                  _put("url_prefix", "music").status_code == 200
+                  and config.get("url_prefix") == "/music")
+                for bad in ("/Bad Path", "//evil.example", "/a/b", "/x" * 40,
+                            "https://evil.example"):
+                    c(f"a path like {bad[:20]!r} is refused",
+                      _put("url_prefix", bad).status_code == 400
+                      and config.get("url_prefix") == "/music")
+                c("an empty path means the bare address",
+                  _put("url_prefix", "").status_code == 200 and config.get("url_prefix") == "")
+                c("a public port is a port", _put("public_port", "443").status_code == 200
+                  and config.get("public_port") == 443)
+                for bad in ("70000", "-1", "lots"):
+                    c(f"a port of {bad} is refused", _put("public_port", bad).status_code == 400)
+                for bad in ("javascript:alert(1)", "ftp://host/", "//host/", "https://a b/",
+                            'https://x/"onmouseover="y'):
+                    c(f"a movies address of {bad[:24]!r} is refused",
+                      _put("movies_url", bad).status_code == 400)
+                c("a web address is taken",
+                  _put("movies_url", "https://movies.example.test:8443/").status_code == 200)
+                c("none of it is a guest's to change",
+                  _put("url_prefix", "/mine", {"X-Music-Key": phone}).status_code == 403
+                  and config.get("url_prefix") == "")
+
+                with _patch("mrs.web.security.is_home", lambda ip: False):
+                    _put("url_prefix", "/music")
+                    sw = client.get("/")
+                    c("with a path and a movies address, the bare address is a choice",
+                      sw.status_code == 200 and "What are we in the mood for" in sw.text)
+                    c("...to Music at its path and to Movies where it lives",
+                      'href="/music/"' in sw.text
+                      and 'href="https://movies.example.test:8443/"' in sw.text)
+                    door = client.get("/music/")
+                    c("...and the path is still Music's own front door",
+                      door.status_code == 200 and "What are we in the mood for" not in door.text
+                      and "Log in with Google" in door.text, str(door.status_code))
+                    _put("movies_url", "")
+                    plain = client.get("/")
+                    c("without a movies address there is nothing to choose between",
+                      "What are we in the mood for" not in plain.text
+                      and "Log in with Google" in plain.text)
+                    _put("url_prefix", "")
+                    _put("movies_url", "https://movies.example.test:8443/")
+                    c("without a path the bare address is Music, whatever else is set",
+                      "Log in with Google" in client.get("/").text)
+            finally:
+                for k, v in _keep32.items():
+                    config.set(k, v, save=False)
+            say("the address settings", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json
