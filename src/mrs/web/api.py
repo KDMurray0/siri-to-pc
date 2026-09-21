@@ -217,6 +217,7 @@ def _person_row(request: Request, person: dict) -> dict:
 
 
 LINKS_OFF = "Personal links aren't used any more. Sign in instead."
+KEY_GONE = "That key or link has been removed, or has run out."
 
 
 SIRI_ONLY = "That key is only for Siri: it can ask for a song and nothing else."
@@ -247,6 +248,11 @@ def _link_row(expected: str, candidate: str, request: Request | None = None) -> 
     """
     row = sec.read_token(expected, candidate)
     if not row:
+        # Ours, once, and no longer good. That is somebody's old Shortcut or
+        # bookmark, not a guess -- and a Shortcut retries, so counting each one
+        # against the address would ban its owner from their own server.
+        if sec.was_issued(expected, candidate):
+            raise HTTPException(status_code=403, detail=KEY_GONE)
         return None
     if row.get("siri"):
         return _siri_row(row, request)

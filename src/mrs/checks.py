@@ -3285,6 +3285,16 @@ def _run(verbose: bool = False) -> Result:
                 c("a link or the owner's key isn't an account here",
                   client.get("/api/me", headers=owner_h).json().get("account") is False
                   and client.get("/api/me/export", headers=owner_h).status_code == 403)
+                SUB_N = "77009900"
+                _acc2.admit(SUB_N, "old@example.com", "Older Account")   # from before the notice
+                ck_n = {_COOKIE: sec.session_cookie(now_key(), SUB_N)}
+                c("an account from before the notice hasn't agreed to it",
+                  client.get("/api/me", cookies=ck_n).json()["consent"]
+                  ["privacy_notice"]["current"] is False)
+                c("...and can, from Settings",
+                  client.post("/api/me/consent", json={"accept": 1}, cookies=ck_n).json()
+                  ["consent"]["privacy_notice"]["current"] is True)
+                _acc2.forget(SUB_N)
                 r_on = client.post("/api/me/consent", json={"tracking": 1}, cookies=ck_c)
                 c("consent can be given", r_on.status_code == 200 and r_on.json()["consent"]["tracking"] is True,
                   str(r_on.status_code))
@@ -3545,6 +3555,19 @@ def _run(verbose: bool = False) -> Result:
                       all(row["id"] != tid for row in sec.list_passes())
                       and sec.extend(tid, 5).get("ok") is False)
 
+                    config.set("url_prefix", "/music", save=False)
+                    try:
+                        _bans.forgive("testclient")
+                        via = client.post("/music/", json={"input": "x"},
+                                          headers={"X-Music-Key": key_s})
+                        c("the key works through the path Music may live at",
+                          via.status_code == 200, str(via.status_code))
+                        c("...and the address it is told to use includes that path",
+                          client.get("/api/me/siri", cookies=ck_s).json()
+                          .get("address", "").endswith("/music/"))
+                    finally:
+                        config.set("url_prefix", "", save=False)
+
                     _seen31.clear()
                     r = client.post("/", json={"input": "play something"}, headers={"X-Music-Key": key_s})
                     c("the key asks for a song", r.status_code == 200 and _seen31, str(r.status_code))
@@ -3571,6 +3594,15 @@ def _run(verbose: bool = False) -> Result:
                     c("...and said so in words", "only for Siri" in client.get(
                         "/api/status", headers={"X-Music-Key": key_s}).text)
                     c("...and none of that touched the account", _acc2.get(SUB_S) is not None)
+
+                    # Being told no, over and over, is not being banned. A Shortcut
+                    # retries, and a key on the wrong route is a mistake, not a guess.
+                    _bans.forgive("testclient")
+                    for _ in range(8):
+                        client.get("/api/status", headers={"X-Music-Key": key_s})
+                    c("a key sent to the wrong route, again and again, bans nobody",
+                      client.post("/", json={"input": "x"},
+                                  headers={"X-Music-Key": key_s}).status_code == 200)
 
                     # Somebody else's account can't see or remove it.
                     c("another account can't show it",
@@ -3621,9 +3653,20 @@ def _run(verbose: bool = False) -> Result:
                     # Taking one back, and what it says when it's used.
                     gone = client.post("/api/me/siri/revoke", json={"id": tid}, cookies=ck_s)
                     _bans.forgive("testclient")
+                    dead = [client.post("/", json={"input": "x"}, headers={"X-Music-Key": key_s})
+                            for _ in range(8)]
                     c("removing a key kills it", gone.status_code == 200
+                      and all(d.status_code == 403 for d in dead))
+                    c("...and says it has gone, in words", "removed" in dead[0].text)
+                    c("...and a Shortcut still trying it doesn't get its owner banned",
+                      client.get("/api/status", headers=owner_h).status_code == 200
                       and client.post("/", json={"input": "x"},
-                                      headers={"X-Music-Key": key_s}).status_code == 403)
+                                      headers={"X-Music-Key": key_b}).status_code == 200)
+                    for _ in range(5):
+                        client.post("/", json={"input": "x"},
+                                    headers={"X-Music-Key": "a.0.phone.forged"})
+                    c("a made-up key is still a guess: a few of them and the address is banned",
+                      client.get("/api/status", headers=owner_h).status_code == 403)
                     _bans.forgive("testclient")
 
                     # The export lists them without the secret; deleting removes them.

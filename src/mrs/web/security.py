@@ -361,6 +361,22 @@ def read_token(key: str, token: str) -> dict | None:
             "siri": str(row.get("siri") or "")}
 
 
+def was_issued(key: str, token: str) -> bool:
+    """Whether this token carries our signature.
+
+    Somebody holding one had a real credential once, even if it has since been
+    revoked, removed with its account or run out -- which is not somebody
+    guessing, and shouldn't be treated as if they were.
+    """
+    if not key or not token:
+        return False
+    try:
+        tid, expires, scope, sig = token.split(".", 3)
+        return hmac.compare_digest(sig, _sign(key, f"{tid}.{expires}.{scope}"))
+    except Exception:
+        return False
+
+
 def check_token(key: str, token: str) -> bool:
     return read_token(key, token) is not None
 

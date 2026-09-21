@@ -1736,7 +1736,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         <div class="srow guestok"><span class="slabel">Download my data<em>Everything held about you, as one file</em></span>
           <a class="btn" id="acctexport" download>Download</a></div>
         <div class="srow guestok"><span class="slabel">Privacy notice<em id="acctnotice"></em></span>
-          <a class="btn" id="acctpriv" target="_blank" rel="noopener">Read</a></div>
+          <span class="acctname"><button class="btn primary" id="acctagree" hidden>Agree</button>
+            <a class="btn" id="acctpriv" target="_blank" rel="noopener">Read</a></span></div>
 
         <div class="acclbl">Siri</div>
         <div class="srow guestok"><span class="slabel">Ask Siri for songs<em>A key for a Shortcut on your iPhone. It can ask for music as you, and do nothing else, and you can take it back whenever you like.</em></span>
@@ -3684,6 +3685,7 @@ function acctPaint() {
     : n.current ? "You agreed to version " + n.version + ", the current one"
     : "You agreed to version " + n.version + "; it has changed since";
   $("acctpriv").href = BASE + "/privacy";
+  $("acctagree").hidden = !!(n.version && n.current);
   // Inside the app already there is nothing to fetch. pywebview puts its
   // object on the page, which a browser never has.
   $("acctclientrow").hidden = !CLIENT_AVAILABLE || typeof window.pywebview !== "undefined";
@@ -3695,6 +3697,12 @@ function acctPaint() {
     ? "This account runs the server, so it can't be deleted from here."
     : "Removes your account and everything under it, straight away. It can't be undone.";
 }
+$("acctagree").onclick = async () => {
+  const r = await apiTry("/api/me/consent?accept=1");
+  if (!r.ok) { toast((r.body && r.body.detail) || "That didn't go through"); return; }
+  if (ACCT) ACCT.consent = r.body.consent;
+  acctPaint(); toast("Thanks");
+};
 $("acctsave").onclick = async () => {
   const name = $("acctname").value.trim();
   if (name.length < 2) { toast("A name needs at least two characters"); return; }
