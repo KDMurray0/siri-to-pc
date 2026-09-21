@@ -211,6 +211,23 @@ def _account_row(request: Request) -> dict | None:
     return row
 
 
+LINKS_OFF = "Personal links aren't used any more. Sign in instead."
+
+
+def _link_row(expected: str, candidate: str) -> dict | None:
+    """The pass behind a token -- unless it is a personal link, and those are off.
+
+    Passes still exist for two things that are not links: the owner's own
+    device pass and the player's own pass for <audio> urls. Everything else
+    was handed to a person, which is what accounts replaced.
+    """
+    row = sec.read_token(expected, candidate)
+    if row and not (row.get("internal") or row.get("owner")
+                    or config.get("allow_shared_links", False)):
+        raise HTTPException(status_code=403, detail=LINKS_OFF)
+    return row
+
+
 def require_key(request: Request, key: str = Query(default=""),
                 token: str = Query(default="")) -> bool:
     expected = config.get("api_key") or ""
@@ -237,7 +254,7 @@ def require_key(request: Request, key: str = Query(default=""),
         bans.good_key(ip)
         return _check_ip_lock(ip)
     if header:
-        row = sec.read_token(expected, header)
+        row = _link_row(expected, header)
         if row:
             bans.good_key(ip)
             request.state.pass_row = row
@@ -247,7 +264,7 @@ def require_key(request: Request, key: str = Query(default=""),
     # send someone is a URL by definition. Those carry a signed token that
     # expires instead of the key itself.
     for candidate in (token, key):
-        row = sec.read_token(expected, candidate) if candidate else None
+        row = _link_row(expected, candidate) if candidate else None
         if row:
             bans.good_key(ip)
             request.state.pass_row = row      # scope is checked per-route
@@ -482,7 +499,14 @@ def _serve_page(request: Request, name: str, key: str, token: str):
     home = is_home(ip) and config.get("lan_open", True) and not offered
 
     if not home:
-        require_key(request, key, token)
+        try:
+            require_key(request, key, token)
+        except HTTPException as exc:
+            if exc.detail != LINKS_OFF:
+                raise
+            # Somebody following an old link is a person, not a bot: say what
+            # changed and give them the door, rather than a wall of JSON.
+            return _landing(request, error=LINKS_OFF, status_code=403)
     owner = home or is_owner(request, key)
     row = getattr(request.state, "pass_row", None) or {}
     creds = config.get("api_key", "") if owner else (token or key)
@@ -2302,6 +2326,9 @@ def api_pass_new(name: str = "", hours: float = 24, scope: str = "full",
     couldn't take over the speakers in your front room.
     """
     from ..core import net
+    if not config.get("allow_shared_links", False):
+        raise HTTPException(409, "Personal links are switched off. People "
+                                 "sign in with Google instead.")
     hours = _pass_hours(hours)
     key = config.get("api_key") or ""
     if not key:

@@ -280,6 +280,7 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
   {% else %}
     <h2 id="door-h">Not taking sign-ins yet</h2>
     <p class="lede">Whoever runs {{ server_name }} hasn&rsquo;t switched on Google sign-in. Ask them to.</p>
+    {% if error %}<p class="err" role="alert" style="margin-top:16px">{{ error }}</p>{% endif %}
     <div class="foot"><a href="{{ base }}/privacy">Privacy notice</a></div>
   {% endif %}
   </section>

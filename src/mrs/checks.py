@@ -151,6 +151,10 @@ def _run(verbose: bool = False) -> Result:
 
     try:
         with TestClient(app) as client:
+            # Personal links are off by default now; most of what follows is
+            # about how a pass behaves, so it runs with them back on. Group 29
+            # is the one that checks the default.
+            config.set("allow_shared_links", True, save=False)
             full = link("check-full", "full")
             phone = link("check-phone", "phone")
             here = {"X-Play-Here": "1"}
@@ -3372,6 +3376,55 @@ def _run(verbose: bool = False) -> Result:
                     _cfg.set(k, v if v is not None else "", save=False)
                 _acc2._path().unlink(missing_ok=True)
             say("taking a person away", c)
+
+            # -- 29. personal links: off, and said so kindly -----------------
+            c = _Checker("personal links")
+            from .config import DEFAULTS as _DEF
+            c("they are off unless somebody switches them on",
+              _DEF.get("allow_shared_links") is False)
+            config.set("allow_shared_links", False, save=False)
+            try:
+                given = issue(now_key(), name="check-dead", hours=1, scope="phone")
+                minted.append(given["id"])
+                dead = given["token"]                          # one handed to a person
+                inner = issue(now_key(), name="this player", hours=1, scope="full",
+                              internal=True)
+                minted.append(inner["id"])
+                mine = sec.owner_pass(now_key())
+                minted.append(mine.split(".")[0])
+                r = client.get("/api/status", headers={"X-Music-Key": dead})
+                c("a personal link no longer gets in", r.status_code == 403, str(r.status_code))
+                c("...and says why, in words", "Sign in instead" in r.text)
+                c("...in a url as well",
+                  client.get(f"/api/status?token={dead}").status_code == 403)
+                for _ in range(12):
+                    client.get(f"/api/status?token={dead}")
+                c("...without anybody being banned for holding an old bookmark",
+                  client.get("/api/status",
+                             headers={"X-Music-Key": now_key()}).status_code == 200)
+                page = client.get(f"/player?token={dead}")
+                c("an old link's page is the front door with the reason, not JSON",
+                  page.status_code == 403 and "<!doctype html>" in page.text.lower()
+                  and "Sign in instead" in page.text, str(page.status_code))
+                c("nobody can be given a new one",
+                  get("/api/passes/new?name=x&hours=1").status_code == 409)
+                c("the owner's own device pass is not a link, and still works",
+                  client.get("/api/status", headers={"X-Music-Key": mine}).status_code == 200)
+                c("nor is the player's own pass",
+                  client.get("/api/status", headers={"X-Music-Key": inner["token"]}).status_code == 200)
+                SUB_L = "99900111"
+                _acc2.admit(SUB_L, "linkless@example.com", "Linkless", terms=True)
+                c("a signed-in account never needed one",
+                  client.get("/api/status",
+                             cookies={_COOKIE: sec.session_cookie(now_key(), SUB_L)}
+                             ).status_code == 200)
+                _acc2.forget(SUB_L)
+                config.set("allow_shared_links", True, save=False)
+                c("switched back on, the same link works again",
+                  client.get("/api/status", headers={"X-Music-Key": dead}).status_code == 200)
+            finally:
+                config.set("allow_shared_links", True, save=False)
+            say("personal links", c)
 
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")

@@ -92,6 +92,13 @@ DEFAULTS: dict[str, Any] = {
     # are opt-in compatibility switches, off for new installs.
     "allow_key_in_url": False,
     "allow_legacy_get_mutations": False,
+    # Personalised links -- a url with a signed pass in it, one per person --
+    # were how people used to be let in. Accounts replaced them: people sign
+    # in, and the owner removes or blocks them by name. Off, a link does
+    # nothing (the owner's own QR pass and the player's own pass are not
+    # links and keep working). There is no switch for it in Settings; it is
+    # here for somebody who has to bring old links back for a while.
+    "allow_shared_links": False,
     "audit_log_days": 30,
     "library_monitor_minutes": 0,
     # Encrypt the connection with a self-signed certificate. The browser
