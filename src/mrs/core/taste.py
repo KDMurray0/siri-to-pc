@@ -486,6 +486,48 @@ class TasteEngine:
         return max(-1.0, min(1.0, s))
 
 
+class ExplicitTaste(TasteEngine):
+    """For somebody who hasn't agreed to be studied.
+
+    Everything they do *on purpose* still works and is kept: a heart and "never
+    play this again" are theirs, made with a click, and no different from a
+    playlist they built. What it will not do is learn from what they merely
+    happen to play -- no counts, no skips, no history, no Recent panel, nothing
+    to steer their radio from. Those reads are flat, as a guest's are.
+
+    Nothing it does touches play_stats.json. If an earlier answer left one
+    behind it is neither read nor overwritten: withdrawing consent stops the
+    learning, and clearing what was learned is its own deliberate action.
+    """
+
+    def _load(self) -> None:
+        super()._load()
+        self._song.clear()
+        self._artist.clear()
+        self._history, self._recent_meta, self._played_at = [], [], {}
+
+    def record(self, *a, **k) -> bool:
+        return False
+
+    def mark_queued(self, *a, **k) -> None:
+        return None
+
+    def unskip(self, *a, **k) -> None:
+        return None
+
+    def seed_from(self, *a, **k) -> int:
+        return 0
+
+    def save(self, *a, **k) -> None:
+        return None
+
+    def save_soon(self, *a, **k) -> None:
+        return None
+
+    def flush(self, *a, **k) -> None:
+        return None
+
+
 class NeutralTaste:
     """A taste store for somebody who isn't you.
 

@@ -32,7 +32,7 @@ a{color:var(--accent)}
   <div class="card" style="border-color:var(--accent)">
     <div class="muted">Control it from this phone</div>
     <div class="row" style="margin-top:10px">
-      <button onclick="location.href='/remote{% if key_in_url %}?key={{ api_key }}{% endif %}'">Open the remote</button>
+      <button onclick="location.href='{{ base }}/remote{% if key_in_url %}?key={{ api_key }}{% endif %}'">Open the remote</button>
       <span class="muted">Play, pause, skip, search, queue, playlists</span>
     </div>
   </div>

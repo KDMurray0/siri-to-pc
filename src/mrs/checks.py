@@ -1328,6 +1328,22 @@ def _run(verbose: bool = False) -> Result:
             r = row_for(other["id"])
             c("nought hours makes it permanent",
               r and not r["expires"] and r["hours_left"] is None, str(r))
+
+            # "Forget and wipe" is a privacy action. A failed filesystem
+            # removal must leave the pass in place so the owner can retry
+            # instead of receiving a false success response.
+            from .core.profile import profiles as _wipe_profiles
+            from unittest.mock import patch as _patch
+            privacy = issue(now_key(), name="check-wipe-failure", hours=0)
+            minted.append(privacy["id"])
+            with _patch.object(_wipe_profiles, "wipe", return_value=False):
+                rejected_wipe = client.post(
+                    "/api/passes/revoke",
+                    json={"id": privacy["id"], "forget": 1, "wipe": 1},
+                    headers={"X-Music-Key": now_key()})
+            c("a failed profile wipe keeps the link for retry",
+              rejected_wipe.status_code == 500 and row_for(privacy["id"]) is not None,
+              str(rejected_wipe.status_code))
             say("a lapsed link", c)
 
             # -- 9q. will it come back after a restart --------------------
@@ -2769,6 +2785,444 @@ def _run(verbose: bool = False) -> Result:
             _acc._path().unlink(missing_ok=True)
             say("people sign in", c)
 
+            # -- 26. what the request reader asks for, and what it does with the reply
+            c = _Checker("reader")
+            from .resolve import llm as _llm
+            from . import requests as _rq
+
+            def _reply(**fields):
+                row = dict(_llm._BLANK)
+                row.update(fields)
+                return lambda body, timeout: {"choices": [{"message": {"content": _json.dumps(row)}}]}
+
+            def _ask(said, **fields):
+                with _patch.object(_llm, "_post", _reply(**fields)), \
+                     _patch.object(_llm, "available", lambda: True):
+                    return _llm.parse(said)
+
+            # The prompt offers exactly the commands the app can do. A word it
+            # doesn't offer is a word the model invents, and the app answers
+            # "I don't know how to skip".
+            c("the prompt offers exactly the commands the app can carry out",
+              set(_llm.COMMANDS) == set(_rq._COMMANDS) | {"more_like_this", "save", "add_to_playlist"},
+              str(sorted(set(_llm.COMMANDS) ^ (set(_rq._COMMANDS) | {"more_like_this", "save", "add_to_playlist"}))))
+            c("...and says every one of them", all(w in _llm.SYSTEM for w in _llm.COMMANDS))
+            c("...and tells the model what to do when it isn't about music",
+              '"none"' in _llm.SYSTEM or "none" in _llm.SYSTEM)
+
+            # What the prompt teaches has to be something the parser accepts.
+            for said, f in _llm.EXAMPLES:
+                plan = _ask(said, **f)
+                if f["kind"] == "none":
+                    c(f"its own example {said[:28]!r} is declined, handing it back", plan is None)
+                else:
+                    c(f"its own example {said[:28]!r} parses as {f['kind']}",
+                      plan is not None and plan.kind == f["kind"], str(plan)[:70])
+
+            # Words a helpful model uses instead of the ones it was given.
+            for said_word, want in (("skip", "next"), ("stop", "pause"), ("play", "resume"),
+                                    ("back", "previous"), ("Silence", "mute"),
+                                    ("more like this", "more_like_this"), ("download", "save")):
+                plan = _ask("x", kind="command", title=said_word)
+                c(f"'{said_word}' is understood as {want}", plan is not None and plan.command == want,
+                  str(plan and plan.command))
+            c("a word the app doesn't have is still said plainly, not swallowed",
+              _ask("x", kind="command", title="teleport").command == "teleport")
+
+            # Numbers used to be dropped: "set the volume to forty" set it to 70.
+            for arg, want in (("40", "40"), ("150%", "150"), ("999", "150"), ("-5", "0")):
+                got = _ask("x", kind="command", title="volume", argument=arg)
+                c(f"volume '{arg}' becomes level {want}", got.query == want, got.query)
+            c("...and a number written as a number works too",
+              _ask("x", kind="command", title="volume", argument=55).query == "55")
+            c("a change with an amount keeps it",
+              _ask("x", kind="command", title="volume_delta", argument="-20").query == "-20")
+            c("a change with no amount is up for 'louder'",
+              _ask("crank it up", kind="command", title="volume_delta").query == "10")
+            c("...and down when what was said was down",
+              _ask("make it quieter please", kind="command", title="volume_delta").query == "-10")
+            c("'quieter' as the command word is a downward change",
+              _ask("x", kind="command", title="quieter").query == "-10")
+            c("a playlist needs a name", _ask("x", kind="command", title="add_to_playlist") is None)
+            c("...and gets the one it was given",
+              _ask("x", kind="command", title="add_to_playlist", argument="road trip").query == "road trip")
+
+            # And that the level really reaches the player.
+            calls = []
+            with _patch.object(_rq.player, "control",
+                               side_effect=lambda a, v=None: calls.append((a, v)) or {"message": "ok"}):
+                _rq._run_command(_ask("x", kind="command", title="volume", argument="40"))
+                _rq._run_command(_ask("x", kind="command", title="skip"))
+                _rq._run_command(_ask("turn it down", kind="command", title="volume_delta", argument="-10"))
+            c("'set the volume to forty' asks the player for 40, not its default",
+              calls[:1] == [("volume", 40)], str(calls))
+            c("'skip' does what 'next' does", calls[1:2] == [("next", None)], str(calls))
+            c("a quieter request goes down", calls[2:3] == [("volume_delta", -10)], str(calls))
+
+            # Declines and odd replies.
+            c("'none' hands the request back to the grammar", _ask("x", kind="none") is None)
+            c("an unknown kind does too", _ask("x", kind="poem") is None)
+            c("a model that says 'false' as a word doesn't turn shuffle on",
+              not _ask("x", kind="song", title="A", shuffle="false").shuffle)
+            c("...and 'true' as a word does", _ask("x", kind="genre", genre="chill", shuffle="true").shuffle)
+            multi = _ask("x", kind="artist", artist="Nirvana and Foo Fighters")
+            c("two artists are two seeds", multi.seeds == ["Nirvana", "Foo Fighters"], str(multi.seeds))
+            c("a song's artist is kept", _ask("x", kind="song", title="Coming Undone",
+                                              artist="Korn").artist == "Korn")
+            c("a null argument doesn't become the word 'None'",
+              _ask("x", kind="command", title="next", argument=None).query == "")
+            say("the request reader", c)
+
+            # -- 27. the address: /music, and no port ------------------------
+            c = _Checker("address")
+            from .web import prefix as _pfx
+            from .core import net as _n
+            from . import server as _s2
+            was = {k: _cfg.get(k) for k in ("url_prefix", "public_port", "ddns_hostname",
+                                            "google_client_id", "google_client_secret")}
+            try:
+                # The front door only has a button to inspect once sign-in is on.
+                _cfg.set("google_client_id", "addr-test-id", save=False)
+                _cfg.set("google_client_secret", "addr-test-secret", save=False)
+                for junk in ("//evil.example", "http://evil.example", "/a/b", "music",
+                             "/music/", "/", "/ music", "/" + "a" * 40, "/Music"):
+                    _cfg.set("url_prefix", junk, save=False)
+                    if junk == "music" or junk == "/music/":
+                        want = "/music"          # tolerated: a missing or trailing slash
+                    else:
+                        want = ""
+                    c(f"prefix {junk[:22]!r} is read as {want!r}", _pfx.configured() == want,
+                      _pfx.configured())
+                _cfg.set("url_prefix", "/music", save=False)
+                _cfg.set("ddns_hostname", "music.example.test", save=False)
+
+                # What the outside world is told.
+                _cfg.set("public_port", 0, save=False)
+                c("with nothing set, the link carries the real port",
+                  _n.public_base("h.test").endswith(f":{_n.live_port()}/music"))
+                _cfg.set("public_port", 443, save=False)
+                c("http on 443 keeps the port (it isn't http's)",
+                  _n.public_base("h.test") == "http://h.test:443/music")
+                _s2.runtime["tls"] = True
+                try:
+                    c("https on 443 has no port and a path: https://h.test/music",
+                      _n.public_base("h.test") == "https://h.test/music", _n.public_base("h.test"))
+                    _cfg.set("public_port", 8443, save=False)
+                    c("https on 8443 keeps it", _n.public_base("h.test") == "https://h.test:8443/music")
+                    _cfg.set("public_port", 443, save=False)
+                    c("the link handed out is that",
+                      _n.player_url("h.test") == "https://h.test/music", _n.player_url("h.test"))
+                    c("...but a device on this network still needs the real port",
+                      _n.player_url("192.168.1.5", outside=False)
+                      == f"https://192.168.1.5:{_n.live_port()}/music")
+                    c("Google is sent back to the same public spelling",
+                      _goog.redirect_uri() == "https://music.example.test/music/auth/google/callback",
+                      _goog.redirect_uri())
+                finally:
+                    _s2.runtime.pop("tls", None)
+                _cfg.set("public_port", 0, save=False)
+
+                # The server accepts both, and says what fits the door used.
+                r = client.get("/music/api/status", headers=owner_h)
+                c("the prefixed api answers", r.status_code == 200, str(r.status_code))
+                c("...and so does the bare one", client.get("/api/status", headers=owner_h).status_code == 200)
+                c("a look-alike prefix is not the prefix",
+                  client.get("/musical/api/status", headers=owner_h).status_code == 404)
+                with _patch("mrs.web.security.is_home", lambda ip: False):
+                    r = client.get("/music", follow_redirects=False)
+                    c("/music is the front door", r.status_code == 200
+                      and "Sign in" in r.text, str(r.status_code))
+                    c("...and its buttons go through the prefix",
+                      'href="/music/auth/google/start' in r.text)
+                    bare = client.get("/", follow_redirects=False)
+                    c("the bare front door's buttons don't",
+                      'href="/auth/google/start' in bare.text)
+                r = client.get("/music/", headers=owner_h, follow_redirects=False)
+                c("the owner is sent on to the player, inside the prefix",
+                  r.status_code == 302 and r.headers.get("location") == "/music/player",
+                  str(r.headers.get("location")))
+                r = client.get("/", headers=owner_h, follow_redirects=False)
+                c("...and to the bare player when they came in bare",
+                  r.headers.get("location") == "/player")
+                left = client.get("/music/auth/signout", follow_redirects=False)
+                c("signing out lands back at the front, inside the prefix",
+                  left.headers.get("location") == "/music/")
+                c("...and clears a cookie scoped to the application, not the whole address",
+                  "path=/music" in left.headers.get("set-cookie", "").lower().replace(" ", ""),
+                  left.headers.get("set-cookie", "")[:90])
+                bare_left = client.get("/auth/signout", follow_redirects=False)
+                c("the bare route still clears the site-wide one",
+                  "path=/;" in bare_left.headers.get("set-cookie", "").lower().replace(" ", "") + ";")
+
+                # The pages know how they were reached.
+                page = client.get("/music/player", headers=owner_h).text
+                c("the player is told its base", 'const BASE = "/music";' in page)
+                c("...and is told nothing when it came in bare",
+                  'const BASE = "";' in client.get("/player", headers=owner_h).text)
+                src = (Path(__file__).parent / "web" / "templates" / "player.html").read_text("utf-8")
+                for what, needle in (("requests", "fetch(BASE + url.pathname"),
+                                     ("the stream", 'BASE + "/api/output/stream/"'),
+                                     ("the event feed", 'new EventSource(BASE + "/api/events?"'),
+                                     ("sign out", 'BASE + "/auth/signout"')):
+                    c(f"the player's {what} carry the base", needle in src)
+            finally:
+                for k, v in was.items():
+                    _cfg.set(k, v if v is not None else "", save=False)
+            say("the address", c)
+
+            # -- 28. taking a person away: every store, then look for them -----
+            c = _Checker("erasure")
+            import logging as _logging
+            from .web import accounts as _acc2, privacy as _priv
+            from .core import stats as _st2, audit as _audit2
+            from .core.playlists import playlists as _pl2
+            from .core.profile import profiles as _profiles2
+            from .core.session import sessions as _sessions2
+            from .models import Track as _T2
+            from .paths import data_dir as _dd2
+
+            class _Grab(_logging.Handler):
+                def __init__(self):
+                    super().__init__()
+                    self.lines = []
+
+                def emit(self, rec):
+                    try:
+                        self.lines.append(rec.getMessage())
+                    except Exception:
+                        pass
+
+            ev_grab = _Grab()
+            ev_root = _logging.getLogger()
+            ev_old_level = ev_root.level
+            ev_root.addHandler(ev_grab)
+            ev_root.setLevel(_logging.DEBUG)
+            ev_was = {k: _cfg.get(k) for k in ("owner_email", "new_account_scope")}
+            try:
+                _acc2._path().unlink(missing_ok=True)
+                _cfg.set("owner_email", "", save=False)
+                _cfg.set("new_account_scope", "phone", save=False)
+
+                SUB_A, SUB_B = "77001100", "77002200"
+                EM_A, EM_B = "erase-a@example.com", "erase-b@example.com"
+                # Same display name on purpose: names are typed by people, and
+                # two of them can be Sam.
+                ev_a = _acc2.admit(SUB_A, EM_A, "Sam", terms=True, tracking=True)
+                ev_b = _acc2.admit(SUB_B, EM_B, "Sam", terms=True, tracking=False)
+                pa, pb = _acc2.profile_id(SUB_A), _acc2.profile_id(SUB_B)
+                c("an account records what it agreed to, and when",
+                  ev_a["terms_version"] == _acc2.TERMS_VERSION and ev_a["terms_at"] > 0
+                  and ev_a["tracking"] is True and ev_a["tracking_at"] > 0)
+                c("tracking is off unless it was said yes to",
+                  ev_b["tracking"] is False and _acc2.admit("77003300", "x@example.com", "X")["tracking"] is False)
+                c("a chosen name isn't overwritten by Google's on the next sign-in",
+                  _acc2.admit(SUB_A, EM_A, "Someone Else Entirely")["name"] == "Sam")
+
+                prof_a = _profiles2.for_row(_acc2.as_row(ev_a))
+                prof_b = _profiles2.for_row(_acc2.as_row(ev_b))
+                c("a tracked account gets a learning taste store", prof_a.tracking and
+                  type(prof_a.taste).__name__ == "TasteEngine")
+                c("one that declined gets one that only keeps what it did on purpose",
+                  not prof_b.tracking and type(prof_b.taste).__name__ == "ExplicitTaste")
+
+                t1 = _T2(video_id="erase-song-1", title="Erase Song", artist="Erase Band")
+                for prof in (prof_a, prof_b):
+                    prof.taste.record(t1, 200, 210)
+                    prof.taste.toggle_like(t1)
+                    prof.taste.save()
+                home_a, home_b = _dd2() / "profiles" / pa, _dd2() / "profiles" / pb
+                c("a tracked profile learns from what it played",
+                  prof_a.taste.history_ids() == ["erase-song-1"]
+                  and (home_a / "taste" / "play_stats.json").exists())
+                c("an untracked one learns nothing and writes no history",
+                  prof_b.taste.history_ids() == [] and not (home_b / "taste" / "play_stats.json").exists())
+                c("...but keeps a heart, because a heart was asked for",
+                  prof_b.taste.is_liked("erase-song-1")
+                  and (home_b / "taste" / "liked_songs.json").exists())
+                prof_a.lists.create("Sam's mix")
+                prof_a.lists.add("Sam's mix", t1)
+
+                # counters: the tracked person has a row, the other doesn't
+                _st2.set_tracked(pa, True)
+                _st2.set_tracked(pb, False)
+                _st2.note(pa, requests=3, plays=2, seconds=90, name="Sam")
+                _st2.note(pb, requests=2, plays=1)
+                _st2.flush()
+                ids_with_rows = {row["id"] for row in _st2.links()}
+                c("a tracked person has a usage row", pa in ids_with_rows)
+                c("one who declined has none, though the house still counts them",
+                  pb not in ids_with_rows and _st2.house()["totals"]["requests"] >= 5)
+                house_before = _st2.house()["totals"]["requests"]
+
+                # a shared list, credited by id and (from before ids) by name
+                _pl2.create("erase-shared")
+                _pl2.set_shared("erase-shared", True)
+                _pl2.add("erase-shared", _T2(video_id="ea1", title="A's song", artist="X"), by="Sam", by_id=pa)
+                _pl2.add("erase-shared", _T2(video_id="eb1", title="B's song", artist="X"), by="Sam", by_id=pb)
+                _pl2.add("erase-shared", _T2(video_id="el1", title="Old song", artist="X"), by="Sam")
+                c("two people called Sam are told apart by id",
+                  _pl2.is_credit_owner("erase-shared", "ea1", "Sam", pa)
+                  and not _pl2.is_credit_owner("erase-shared", "ea1", "Sam", pb))
+                c("...so one Sam can't take back the other's addition",
+                  _pl2.is_credit_owner("erase-shared", "eb1", "Sam", pb)
+                  and not _pl2.is_credit_owner("erase-shared", "eb1", "Sam", pa))
+                c("a row from before ids is a link's, and an account can't claim it by name",
+                  not _pl2.is_credit_owner("erase-shared", "el1", "Sam", pa)
+                  and _pl2.is_credit_owner("erase-shared", "el1", "Sam", ""))
+
+                _audit2.record("POST /api/setting", f"account:{pa}", 403)
+                _audit2.record("POST /api/setting", "owner", 200)
+                _sessions2.for_pass(pa, "Sam", "phone", prof_a)
+
+                # what they can be given back
+                got = _priv.export(SUB_A)
+                text = _json.dumps(got)
+                c("the export has what was signed up with", EM_A in text and "Sam" in text)
+                c("...their playlists and what it learned", "Erase Song" in text and "play_stats.json" in text)
+                c("...their part of a shared list", any(x["video_id"] == "ea1"
+                                                          for x in got["shared_playlist_additions"]))
+                c("...and none of anybody else's", EM_B not in text and SUB_B not in text and "eb1" not in text)
+                c("...and says usage isn't kept for someone who declined",
+                  "not kept" in str(_priv.export(SUB_B)["usage_counters"]))
+
+                # -- take them away --------------------------------------------
+                report = _priv.erase(SUB_A)
+                c("erasing reports what went",
+                  report.get("account") and report.get("profile") and report.get("usage")
+                  and report.get("credits") and report.get("audit") and report.get("session"),
+                  str(report))
+                c("the account is gone and the other one isn't",
+                  _acc2.get(SUB_A) is None and _acc2.get(SUB_B) is not None)
+                c("their profile folder is gone and the other's is not",
+                  not home_a.exists() and home_b.exists())
+                c("their usage row is gone, and the place's numbers didn't move",
+                  pa not in {row["id"] for row in _st2.links()}
+                  and _st2.house()["totals"]["requests"] == house_before)
+                after = _json.loads((_pl2._by_file("erase-shared")).read_text("utf-8"))
+                c("their name is off the shared list, by id",
+                  "ea1" not in after and pa not in after.get("@ids", {}).values())
+                c("...and off an old row that only had a name",
+                  "el1" not in after)
+                c("...but the other Sam keeps theirs",
+                  after.get("eb1") == "Sam" and after["@ids"].get("eb1") == pb)
+                c("a song they suggested is still in the list, without their name",
+                  any(t.video_id == "ea1" for t in _pl2.tracks("erase-shared")))
+                trail = _audit2.entries()
+                c("the owner's trail forgets them and keeps its own entries",
+                  not any(e["actor"] == f"account:{pa}" for e in trail)
+                  and any(e["actor"] == "owner" for e in trail))
+                c("their live session ended", pa not in getattr(_sessions2, "_rooms", {}))
+
+                # The test that matters: look for them everywhere.
+                strays = []
+                for path in _dd2().rglob("*"):
+                    if path.is_file():
+                        try:
+                            blob = path.read_bytes()
+                        except OSError:
+                            continue
+                        for needle in (EM_A, SUB_A):
+                            if needle.encode() in blob:
+                                strays.append(f"{path.name} still has {needle}")
+                c("no file in the data folder still holds their address or Google id",
+                  not strays, "; ".join(strays[:4]))
+                said = "\n".join(ev_grab.lines)
+                c("nothing logged carries an address, or a whole account id",
+                  not any(n in said for n in (EM_A, EM_B, SUB_A, SUB_B, "x@example.com")),
+                  [ln for ln in ev_grab.lines if any(n in ln for n in (EM_A, EM_B, SUB_A, SUB_B))][:2])
+
+                # -- through the door: what a person can do about themselves ------
+                SUB_C, EM_C = "77004400", "cee@example.com"
+                _acc2.admit(SUB_C, EM_C, "Cee", terms=True)
+                ck_c = {_COOKIE: sec.session_cookie(now_key(), SUB_C)}
+                me = client.get("/api/me", cookies=ck_c).json()
+                c("an account can ask who it is and what it agreed to",
+                  me.get("account") and me["consent"]["tracking"] is False
+                  and me["consent"]["privacy_notice"]["current"], str(me)[:80])
+                c("a link or the owner's key isn't an account here",
+                  client.get("/api/me", headers=owner_h).json().get("account") is False
+                  and client.get("/api/me/export", headers=owner_h).status_code == 403)
+                r_on = client.post("/api/me/consent", json={"tracking": 1}, cookies=ck_c)
+                c("consent can be given", r_on.status_code == 200 and r_on.json()["consent"]["tracking"] is True,
+                  str(r_on.status_code))
+                c("...and the profile is rebuilt to learn",
+                  _profiles2.for_row(_acc2.as_row(_acc2.get(SUB_C))).tracking is True)
+                r_off = client.post("/api/me/consent", json={"tracking": 0}, cookies=ck_c)
+                c("...and withdrawn as easily",
+                  r_off.status_code == 200 and r_off.json()["consent"]["tracking"] is False
+                  and _acc2.get(SUB_C)["tracking_at"] > 0)
+                c("the change of mind is on record", _acc2.get(SUB_C)["tracking_at"] >= _acc2.get(SUB_C)["created"])
+                c("a name can be changed", client.post("/api/me/rename", json={"name": "Cee Two"},
+                                                        cookies=ck_c).json().get("name") == "Cee Two")
+                c("...but not to nothing", client.post("/api/me/rename", json={"name": " "},
+                                                        cookies=ck_c).status_code == 400)
+                dl = client.get("/api/me/export", cookies=ck_c)
+                c("the export arrives as a file", dl.status_code == 200
+                  and "attachment" in dl.headers.get("content-disposition", "")
+                  and EM_C in dl.text, str(dl.status_code))
+
+                wrong = client.post("/api/me/delete", json={"confirm": "yes"}, cookies=ck_c)
+                c("deleting needs the sentence typed", wrong.status_code == 400
+                  and _acc2.get(SUB_C) is not None)
+                gone = client.post("/api/me/delete", json={"confirm": "Delete My Account"}, cookies=ck_c)
+                c("...and then it is done", gone.status_code == 200 and _acc2.get(SUB_C) is None,
+                  str(gone.status_code))
+                c("the cookie is thrown away", "mrs_account" in gone.headers.get("set-cookie", ""))
+                c("and what it was is nobody",
+                  client.get("/api/status", cookies=ck_c).status_code in (401, 403))
+
+                # the owner's account is not one you delete from a browser tab
+                _cfg.set("owner_email", "boss@example.com", save=False)
+                SUB_O = "77005500"
+                _acc2.admit(SUB_O, "boss@example.com", "Boss", terms=True)
+                ck_o = {_COOKIE: sec.session_cookie(now_key(), SUB_O)}
+                c("the owner can't delete the account that runs the server",
+                  client.post("/api/me/delete", json={"confirm": "delete my account"},
+                              cookies=ck_o).status_code == 409 and _acc2.get(SUB_O) is not None)
+                c("...nor be removed by a forget from the list",
+                  client.post("/api/accounts/forget", json={"sub": SUB_O},
+                              headers=owner_h).status_code == 409)
+
+                # Blocked from listening is not blocked from one's own data.
+                SUB_D = "77006600"
+                _acc2.admit(SUB_D, "dee@example.com", "Dee", terms=True)
+                _acc2.set_scope(SUB_D, "blocked")
+                ck_d = {_COOKIE: sec.session_cookie(now_key(), SUB_D)}
+                c("a blocked account can't listen", client.get("/api/status", cookies=ck_d).status_code == 403)
+                c("...but can still see what's held about it",
+                  client.get("/api/me/export", cookies=ck_d).status_code == 200)
+                c("...and have it deleted",
+                  client.post("/api/me/delete", json={"confirm": "delete my account"},
+                              cookies=ck_d).status_code == 200 and _acc2.get(SUB_D) is None)
+
+                # the owner removing somebody is the same erasure
+                SUB_E = "77007700"
+                _acc2.admit(SUB_E, "eee@example.com", "Eee", terms=True, tracking=True)
+                _st2.set_tracked(_acc2.profile_id(SUB_E), True)
+                _st2.note(_acc2.profile_id(SUB_E), requests=1, name="Eee")
+                _st2.flush()
+                rem = client.post("/api/accounts/forget", json={"sub": SUB_E}, headers=owner_h)
+                c("the owner's Forget erases the same things",
+                  rem.status_code == 200 and _acc2.get(SUB_E) is None
+                  and _acc2.profile_id(SUB_E) not in {row["id"] for row in _st2.links()}, str(rem.status_code))
+
+                # what the owner's trail shows
+                _audit2.record("POST /api/setting", f"account:{pb}", 403)
+                names = [e["actor"] for e in client.get("/api/audit", headers=owner_h).json()["entries"]]
+                c("the trail reads names, not ids, for accounts that exist",
+                  "guest:Sam" in names)
+                _acc2.forget(SUB_B)
+                names = [e["actor"] for e in client.get("/api/audit", headers=owner_h).json()["entries"]]
+                c("...and says so when the account is gone",
+                  "guest:a deleted account" in names and "guest:Sam" not in names)
+            finally:
+                ev_root.removeHandler(ev_grab)
+                ev_root.setLevel(ev_old_level)
+                for k, v in ev_was.items():
+                    _cfg.set(k, v if v is not None else "", save=False)
+                _acc2._path().unlink(missing_ok=True)
+            say("taking a person away", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json
@@ -2847,6 +3301,56 @@ def _run(verbose: bool = False) -> Result:
                 got = lists.tracks("Mixed")
                 c("valid playlist rows survive wrong types and partial records",
                   [t.video_id for t in got] == ["good-row"])
+
+                # A failed directory removal was previously suppressed by
+                # rmtree(ignore_errors=True), so the UI claimed a list was
+                # gone while all of its files remained.
+                with _patch("mrs.core.playlists.shutil.rmtree",
+                            side_effect=OSError("directory locked")):
+                    failed_delete = lists.delete("Mixed")
+                absent_delete = lists.delete("Never existed")
+                c("playlist deletion reports filesystem failure and does not invent lists",
+                  not failed_delete.get("ok") and folder.exists()
+                  and not absent_delete.get("ok")
+                  and not (lists.root() / "Never existed").exists())
+
+            # Long and filesystem-invalid labels are identifiers, not merely
+            # display text. They must never converge on one playlist folder.
+            with _tempfile.TemporaryDirectory(prefix="mrs-playlist-names-") as name_root:
+                named = _plmod.Playlists(home=_Path(name_root))
+                first_name = "Very long list " + "x" * 80 + " one"
+                second_name = "Very long list " + "x" * 80 + " two"
+                named.create(first_name)
+                named.create(second_name)
+                first_folder, second_folder = (named.folder(first_name),
+                                               named.folder(second_name))
+                named.delete(second_name)
+                c("distinct long list names cannot overwrite or delete each other",
+                  first_folder != second_folder and first_folder.is_dir()
+                  and not second_folder.exists())
+
+            # Read helpers service the GET tracks endpoint. They must not use
+            # the writer folder helper and materialise a list for a typo.
+            with _tempfile.TemporaryDirectory(prefix="mrs-playlist-read-") as read_root:
+                readonly = _plmod.Playlists(home=_Path(read_root))
+                missing_name = "This list is not here"
+                read_path = readonly.root() / missing_name
+                read_result = (readonly.tracks(missing_name) == []
+                               and readonly.credit(missing_name) == {}
+                               and not readonly.is_shared(missing_name)
+                               and not readonly.remove(missing_name, "nope").get("ok")
+                               and not readonly.set_shared(missing_name, True).get("ok"))
+                c("playlist reads and failed mutations do not create empty folders",
+                  read_result and not read_path.exists())
+
+            # Windows can decline a Run-key change. The stored preference is
+            # only trustworthy if that operation actually completed.
+            with _patch.object(_api_mod, "_set_run_at_boot", return_value=False), \
+                 _patch.object(_api_mod.config, "set") as save_boot:
+                failed_boot_set = _api_mod.api_boot(enabled=1, _=True)
+            c("a failed start-at-sign-in change does not claim or save success",
+              failed_boot_set.get("status") == "error"
+              and failed_boot_set.get("applied") is False and not save_boot.called)
 
             # Listener state is user-editable persistence. A failed write must
             # remain retryable, malformed counters must be ignored, and a

@@ -59,10 +59,10 @@ def redirect_uri() -> str:
     host = str(config.get("ddns_hostname") or "").strip()
     if not host:
         return ""
-    port = net.live_port()
-    scheme = net.scheme()
-    tail = "" if (scheme == "https" and port == 443) else f":{port}"
-    return f"{scheme}://{host}{tail}/auth/google/callback"
+    # The address the outside world uses: Google sends the browser there, so
+    # it has to be one that browser can reach, prefix and all, and it has to
+    # match what is registered in the Console character for character.
+    return net.public_base(host) + "/auth/google/callback"
 
 
 def start(next_path: str = "/player", invited_by: str = "",
@@ -168,7 +168,7 @@ def finish(code: str, row: dict) -> dict | None:
     # Workspace they control; the address is what an invitation is written
     # against, so it has to be one Google says it checked.
     if claims.get("email") and not claims.get("email_verified"):
-        log.warning("google has not verified %r", claims.get("email"))
+        log.warning("google has not verified an address")
         return None
     return {"sub": str(claims["sub"]), "email": str(claims.get("email", "")),
             "name": str(claims.get("name") or claims.get("given_name") or ""),

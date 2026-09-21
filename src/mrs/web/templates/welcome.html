@@ -237,6 +237,7 @@ li b{color:var(--fg)}
 
 <script>
 const KEY = "{{ api_key }}";
+const BASE = "{{ base }}";
 const $ = id => document.getElementById(id);
 // Reads GET; anything that changes something POSTs JSON (a strict install
 // refuses a GET that does).
@@ -245,10 +246,10 @@ const api = p => {
   const url = new URL(p, location.href);
   const headers = { "X-Music-Key": KEY };
   if (API_READ_ONLY.has(url.pathname))
-    return fetch(url.pathname + url.search, { headers })
+    return fetch(BASE + url.pathname + url.search, { headers })
       .then(r => r.json()).catch(() => null);
   headers["Content-Type"] = "application/json";
-  return fetch(url.pathname, { method: "POST", headers,
+  return fetch(BASE + url.pathname, { method: "POST", headers,
     body: JSON.stringify(Object.fromEntries(url.searchParams)) })
     .then(r => r.json()).catch(() => null);
 };
@@ -283,7 +284,7 @@ $("skip").onclick = finish;
 
 async function finish() {
   await api("/api/setup/done?done=1");
-  location.href = "/player";
+  location.href = BASE + "/player";
 }
 
 /* ── step 1: the tools ─────────────────────────────────────────── */

@@ -197,7 +197,35 @@ def live_port() -> int:
         return int(config.get("port", 5000))
 
 
-def player_url(host: str, pass_token: str = "") -> str:
+def public_port() -> int:
+    """The port the outside world uses to reach us.
+
+    Not the one this machine listens on. A router forwarding 443 to a random
+    local port is the ordinary way to have an address with no port in it, and
+    the address people are handed has to be the outside one.
+    """
+    try:
+        got = int(config.get("public_port") or 0)
+    except (TypeError, ValueError):
+        got = 0
+    return got if 0 < got < 65536 else live_port()
+
+
+def public_base(host: str, *, outside: bool = True) -> str:
+    """https://host[:port][/prefix], the way somebody else would type it.
+
+    The default port for the scheme is left off, which is the entire point:
+    https://host/music rather than https://host:29543/. `outside` False is for
+    an address on this network, where the real port is the only one that works.
+    """
+    from ..web import prefix
+    sch = scheme()
+    port = public_port() if outside else live_port()
+    tail = "" if (sch, port) in (("https", 443), ("http", 80)) else f":{port}"
+    return f"{sch}://{host}{tail}{prefix.configured()}"
+
+
+def player_url(host: str, pass_token: str = "", *, outside: bool = True) -> str:
     """The front door, and nothing else in the url.
 
     It used to carry a signed pass so a copied link worked for whoever you
@@ -205,7 +233,9 @@ def player_url(host: str, pass_token: str = "") -> str:
     you do at it is prove who you are. The argument stays for the callers that
     still pass one; it is ignored.
     """
-    return f"{scheme()}://{host}:{live_port()}/"
+    base = public_base(host, outside=outside)
+    from ..web import prefix
+    return base if prefix.configured() else base + "/"
 
 
 def addresses(pass_token: str = "") -> dict:
@@ -229,11 +259,14 @@ def addresses(pass_token: str = "") -> dict:
         rows.append({"kind": "wan", "label": "Anywhere (needs the port forwarded)",
                      "url": player_url(wan, pass_token), "host": wan})
     rows.append({"kind": "lan", "label": "Same wifi",
-                 "url": player_url(lan_ip(), pass_token), "host": lan_ip()})
+                 "url": player_url(lan_ip(), pass_token, outside=False),
+                 "host": lan_ip()})
     rows.append({"kind": "local", "label": "This machine",
-                 "url": player_url("127.0.0.1", pass_token), "host": "127.0.0.1"})
+                 "url": player_url("127.0.0.1", pass_token, outside=False),
+                 "host": "127.0.0.1"})
     wanted = int(config.get("port", 5000))
-    return {"addresses": rows, "port": port, "scheme": scheme(),
+    return {"addresses": rows, "port": port, "public_port": public_port(),
+            "scheme": scheme(),
             "wan_ip": wan, "https": scheme() == "https",
             # If these disagree, a port-forward rule aimed at the configured
             # port points at nothing. Worth saying out loud rather than

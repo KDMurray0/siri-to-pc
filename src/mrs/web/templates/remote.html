@@ -294,6 +294,7 @@ function phFail(el) {
   el.replaceWith(d);
 }
 const KEY = "{{ api_key }}";
+const BASE = "{{ base }}";
 const $ = id => document.getElementById(id);
 /* Credential in the header, never the URL. Reads GET; anything else POSTs its
    parameters as JSON, because a strict install refuses a GET that changes
@@ -303,10 +304,10 @@ const api = p => {
   const url = new URL(p, location.href);
   const headers = { "X-Music-Key": KEY };
   if (API_READ_ONLY.has(url.pathname))
-    return fetch(url.pathname + url.search, { headers })
+    return fetch(BASE + url.pathname + url.search, { headers })
       .then(r => r.ok ? r.json() : null).catch(() => null);
   headers["Content-Type"] = "application/json";
-  return fetch(url.pathname, { method: "POST", headers,
+  return fetch(BASE + url.pathname, { method: "POST", headers,
     body: JSON.stringify(Object.fromEntries(url.searchParams)) })
     .then(r => r.ok ? r.json() : null).catch(() => null);
 };
@@ -583,7 +584,7 @@ async function connect() {
   // EventSource can't send a header. The owner swaps the key for a pass
   // first; a shared link already is one.
   if (!pass) pass = ((await api("/api/token")) || {}).token || KEY;
-  es = new EventSource("/api/events?token=" + encodeURIComponent(pass));
+  es = new EventSource(BASE + "/api/events?token=" + encodeURIComponent(pass));
   es.onmessage = ev => {
     let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
     if (m.type === "status") apply(m.data);

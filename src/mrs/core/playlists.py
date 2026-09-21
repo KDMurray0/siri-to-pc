@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -40,6 +41,25 @@ def _safe_name(name: str) -> str:
     return clean
 
 
+def _playlist_leaf(name: str) -> str:
+    """A stable folder name that cannot merge two display names.
+
+    _safe_name is also used for downloaded audio filenames, where replacing
+    punctuation is fine. Playlist folders are identifiers, though: truncating
+    a long name or translating two different characters to the same underscore
+    used to make two lists address the same directory.
+    """
+    raw = (name or "").strip()
+    clean = _SAFE.sub("_", raw)
+    invalid = not clean or clean.strip(".") == "" or _RESERVED.match(clean)
+    if invalid:
+        clean = "untitled"
+    if clean == raw and len(clean) <= 80 and not invalid:
+        return clean
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+    return f"{clean[:67].rstrip('. ') or 'untitled'}-{digest}"
+
+
 class Playlists:
     """Saved lists. `home` is whose — the owner's, or one guest's folder."""
 
@@ -56,8 +76,21 @@ class Playlists:
         return p
 
     def folder(self, name: str) -> Path:
-        p = self._inside(_safe_name(name))
+        p = self._folder_path(name)
         p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def _folder_path(self, name: str) -> Path:
+        """Find a current folder, or an exact-name folder from an old build."""
+        p = self._inside(_playlist_leaf(name))
+        if p.exists():
+            return p
+        # Builds before DATA-017 used the lossy _safe_name form. Retain an
+        # old folder only when its saved display name exactly matches, so a
+        # new colliding spelling cannot target a different existing list.
+        legacy = self._inside(_safe_name(name))
+        if legacy != p and legacy.is_dir() and self._display_name(legacy) == (name or "").strip():
+            return legacy
         return p
 
     def _index(self, name: str) -> Path:
@@ -100,7 +133,11 @@ class Playlists:
 
     def tracks(self, name: str) -> list[Track]:
         try:
-            rows = json.loads(self._index(name).read_text("utf-8-sig"))
+            # This is used by read-only playlist endpoints. Never call the
+            # writer-oriented folder() here: a miss must remain a miss, not
+            # leave an empty directory behind for every typo or probe.
+            index = self._folder_path(name) / "tracks.json"
+            rows = json.loads(index.read_text("utf-8-sig"))
         except Exception:
             return []
         if not isinstance(rows, list):
@@ -154,7 +191,7 @@ class Playlists:
     # Track doesn't have a field for is lost on the next save.
 
     def _flag(self, name: str) -> Path:
-        return self.folder(name) / "shared"
+        return self._folder_path(name) / "shared"
 
     def is_shared(self, name: str) -> bool:
         try:
@@ -164,11 +201,12 @@ class Playlists:
 
     def set_shared(self, name: str, on: bool) -> dict:
         with self._lock:
-            if not self._index(name).exists():
+            folder = self._folder_path(name)
+            if not (folder / "tracks.json").exists():
                 return {"ok": False, "message": f"There's no list called {name}"}
-            flag = self._flag(name)
+            flag = folder / "shared"
             if on:
-                flag.write_text("", encoding="utf-8")
+                write_atomic(flag, "")
             else:
                 flag.unlink(missing_ok=True)
         self._save_event()
@@ -179,23 +217,95 @@ class Playlists:
         return [n for n in self.names() if self.is_shared(n)]
 
     def _by_file(self, name: str) -> Path:
-        return self.folder(name) / "by.json"
+        return self._folder_path(name) / "by.json"
+
+    # by.json is {video id: display name}, and one reserved key, "@ids", holding
+    # {video id: account id}. The name is what the list shows; the id is what
+    # decides whose an addition is. Names are typed by the people themselves
+    # and two of them can be "Sam", so a name can label a row but must never be
+    # what lets one Sam remove another's, or what erasing one Sam finds.
+    _IDS = "@ids"
 
     def credit(self, name: str) -> dict:
         """video id -> who added it. Empty for anything the owner put in."""
         try:
-            return json.loads(self._by_file(name).read_text("utf-8-sig"))
+            got = json.loads(self._by_file(name).read_text("utf-8-sig"))
         except Exception:
             return {}
+        if not isinstance(got, dict):
+            return {}
+        return {k: v for k, v in got.items() if k != self._IDS and isinstance(v, str)}
 
-    def _credit(self, name: str, tracks: list, who: str) -> None:
+    def credit_ids(self, name: str) -> dict:
+        try:
+            got = json.loads(self._by_file(name).read_text("utf-8-sig"))
+        except Exception:
+            return {}
+        ids = got.get(self._IDS) if isinstance(got, dict) else None
+        return ids if isinstance(ids, dict) else {}
+
+    def is_credit_owner(self, name: str, video_id: str, who: str, who_id: str = "") -> bool:
+        """Is this addition theirs to take back?
+
+        An addition made under an account id belongs to that account and to no
+        one who merely has the same name. One with no id was made under a link,
+        which is identified by its name and nothing else.
+        """
+        held = self.credit_ids(name).get(video_id)
+        if held:
+            return bool(who_id) and held == who_id
+        return bool(who) and not who_id and self.credit(name).get(video_id) == who
+
+    def scrub_person(self, who_id: str, who_name: str = "") -> int:
+        """Take a person's name off everything they added. Returns how many.
+
+        Their additions stay (a song somebody suggested is still a song in the
+        list) but they no longer say who. Anything credited by id goes by id.
+        Anything from before ids existed can only be matched by name, so those
+        go too if the name matches: it may cost another person of the same name
+        their credit, which errs the safe way round.
+        """
+        gone = 0
+        for list_name in self.names():
+            path = self._by_file(list_name)
+            if not path.exists():
+                continue
+            with self._lock:
+                try:
+                    raw = json.loads(path.read_text("utf-8-sig"))
+                except Exception:
+                    continue
+                if not isinstance(raw, dict):
+                    continue
+                ids = raw.get(self._IDS) if isinstance(raw.get(self._IDS), dict) else {}
+                hit = {v for v, i in ids.items() if i == who_id}
+                if who_name:
+                    hit |= {v for v, n in raw.items()
+                            if v != self._IDS and n == who_name and v not in ids}
+                if not hit:
+                    continue
+                for v in hit:
+                    raw.pop(v, None)
+                    ids.pop(v, None)
+                raw[self._IDS] = ids
+                write_atomic(path, json.dumps(raw, indent=1))
+                gone += len(hit)
+        return gone
+
+    def _credit(self, name: str, tracks: list, who: str, who_id: str = "") -> None:
         if not who:
             return
         with self._lock:
             rows = self.credit(name)
+            ids = self.credit_ids(name)
             for t in tracks:
                 if t and t.video_id:
                     rows[t.video_id] = who
+                    if who_id:
+                        ids[t.video_id] = who_id
+                    else:
+                        ids.pop(t.video_id, None)
+            rows[self._IDS] = ids
             try:
                 write_atomic(self._by_file(name), json.dumps(rows, indent=1))
             except Exception as exc:
@@ -221,7 +331,9 @@ class Playlists:
                 # Only when it really is new. add() calls this for every
                 # track, so logging unconditionally meant one line per track
                 # on an import.
-                log.info("created playlist %r at %s", name, folder)
+                # Neither the name (their own words) nor the folder (which is
+                # named after their account) belongs in a log that outlives it.
+                log.info("created a playlist")
         return name
 
     def _save_event(self) -> None:
@@ -237,7 +349,7 @@ class Playlists:
         write_atomic(self._index(name), json.dumps(rows, indent=1))
         self._save_event()
 
-    def add(self, name: str, track: Track, by: str = "") -> dict:
+    def add(self, name: str, track: Track, by: str = "", by_id: str = "") -> dict:
         if not track or not (track.video_id or track.url):
             return {"ok": False, "message": "Nothing to add"}
         with self._lock:
@@ -252,12 +364,12 @@ class Playlists:
                         "message": f"{track.title} is already in {name}"}
             rows.append(track.to_dict())
             self._save(name, rows)
-        self._credit(name, [track], by)
+        self._credit(name, [track], by, by_id)
         if config.get("playlist_download"):
             self.download_async(name)
         return {"ok": True, "message": f"Added to {name}", "count": len(rows)}
 
-    def add_many(self, name: str, tracks: list, by: str = "") -> dict:
+    def add_many(self, name: str, tracks: list, by: str = "", by_id: str = "") -> dict:
         """Add a batch in one pass.
 
         add() re-reads the whole index, rewrites it and republishes settings
@@ -284,7 +396,7 @@ class Playlists:
             if added:
                 self._save(name, rows)
         if added:
-            self._credit(name, good, by)
+            self._credit(name, good, by, by_id)
         if added and config.get("playlist_download"):
             self.download_async(name)
         return {"ok": True, "message": f"Added {added} to {name}",
@@ -292,20 +404,30 @@ class Playlists:
 
     def remove(self, name: str, video_id: str) -> dict:
         with self._lock:
-            rows = [t.to_dict() for t in self.tracks(name)
+            folder = self._folder_path(name)
+            if not (folder / "tracks.json").is_file():
+                return {"ok": False, "message": f"There's no list called {name}"}
+            current = self.tracks(name)
+            rows = [t.to_dict() for t in current
                     if t.video_id != video_id]
+            if len(rows) == len(current):
+                return {"ok": False, "message": "That track isn't in the list"}
             self._save(name, rows)
         return {"ok": True, "message": "Removed", "count": len(rows)}
 
     def delete(self, name: str, *, keep_files: bool = False) -> dict:
         with self._lock:
-            folder = self.folder(name)
+            # folder() creates its target for writers. A deletion must not
+            # manufacture an empty directory just to claim it deleted it.
+            folder = self._folder_path(name)
+            if not folder.is_dir() or not (folder / "tracks.json").is_file():
+                return {"ok": False, "message": f"There's no list called {name}"}
             try:
                 if keep_files:
-                    self._index(name).unlink(missing_ok=True)
+                    (folder / "tracks.json").unlink()
                 else:
-                    shutil.rmtree(folder, ignore_errors=True)
-            except Exception as exc:
+                    shutil.rmtree(folder)
+            except OSError as exc:
                 return {"ok": False, "message": str(exc)}
         return {"ok": True, "message": f"Deleted {name}"}
 

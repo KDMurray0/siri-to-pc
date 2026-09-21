@@ -25,7 +25,7 @@ import time
 
 from ..logging_setup import get
 from ..paths import data_dir, write_atomic
-from .taste import NeutralTaste, TasteEngine
+from .taste import ExplicitTaste, NeutralTaste, TasteEngine
 
 log = get("profile")
 
@@ -117,16 +117,24 @@ def coerce(key: str, value) -> object | None:
 class Profile:
     """One link's settings, taste and playlists."""
 
-    def __init__(self, pass_id: str, name: str = "", permanent: bool = False) -> None:
+    def __init__(self, pass_id: str, name: str = "", permanent: bool = False,
+                 tracking: bool = True) -> None:
         self.id = pass_id
         self.name = name or "guest"
         self.permanent = bool(permanent)
+        # Whether it may *learn* from what this person plays. Separate from
+        # permanent on purpose: somebody who declines tracking still keeps
+        # their settings and the playlists they made -- those are things they
+        # asked us to hold -- but nothing studies what they listen to.
+        self.tracking = bool(tracking)
         self._lock = threading.RLock()
         self._settings: dict[str, object] = dict(GUEST_SETTINGS)
         self.created = time.time()
 
         if self.permanent:
-            self.taste = TasteEngine(root=self.home(create=True) / "taste")
+            # Reads flat and writes nowhere unless they opted in.
+            self.taste = (TasteEngine if self.tracking else ExplicitTaste)(
+                root=self.home(create=True) / "taste")
             from .playlists import Playlists          # late: it imports paths
             self.lists = Playlists(home=self.home(create=True), session=pass_id)
             self._load()
@@ -267,27 +275,39 @@ class Profiles:
         """The profile for a pass row from security.read_token()."""
         pid = row.get("id", "")
         want_permanent = not row.get("expires")
+        # Links never asked, so they keep learning as they always did; an
+        # account says, and the answer defaults to no.
+        want_tracking = bool(row.get("tracking", True))
         with self._lock:
             got = self._by_id.get(pid)
             if got is None:
                 # expires == 0 means it never does, which is what makes this
                 # a person rather than an evening.
                 got = Profile(pid, row.get("name", ""),
-                              permanent=want_permanent)
+                              permanent=want_permanent, tracking=want_tracking)
                 self._by_id[pid] = got
-                log.info("profile for %r (%s)", got.name,
-                         "permanent" if got.permanent else "temporary")
+                log.info("profile for %s (%s%s)", pid[:8],
+                         "permanent" if got.permanent else "temporary",
+                         "" if got.tracking else ", not tracked")
+            elif got.tracking != want_tracking:
+                # Consent changed while they were here: the next thing they
+                # play must be judged by the new answer, not the one this
+                # object was built with.
+                got = Profile(pid, row.get("name", got.name),
+                              permanent=want_permanent, tracking=want_tracking)
+                self._by_id[pid] = got
+                log.info("reloaded profile %s after a consent change (%s)", pid[:8],
+                         "tracked" if got.tracking else "not tracked")
             elif got.permanent != want_permanent:
                 # A pass can be extended from temporary to permanent (or
                 # shortened again) while a session is still alive. Reusing
                 # the old object would retain the wrong TasteEngine and
                 # playlist persistence policy forever.
                 got = Profile(pid, row.get("name", got.name),
-                              permanent=want_permanent)
+                              permanent=want_permanent, tracking=want_tracking)
                 self._by_id[pid] = got
-                log.info("reloaded profile %r after permanence change (%s)",
-                         got.name,
-                         "permanent" if got.permanent else "temporary")
+                log.info("reloaded profile %s after permanence change (%s)",
+                         pid[:8], "permanent" if got.permanent else "temporary")
             elif row.get("name") and row.get("name") != got.name:
                 got.name = str(row.get("name"))[:40]
         return got
@@ -319,15 +339,22 @@ class Profiles:
         """
         import shutil
 
-        self.forget(pass_id)
         home = data_dir() / "profiles" / _safe(pass_id)
         if not home.exists():
-            return False
+            # There is nothing durable to remove (for example, a permanent
+            # link that was never opened).  Forgetting its optional in-memory
+            # profile is still a successful wipe.
+            self.forget(pass_id)
+            return True
         try:
             shutil.rmtree(home)
-            log.info("wiped the profile for %s", pass_id)
+            self.forget(pass_id)
+            log.info("wiped the profile for %s", pass_id[:8])
             return True
         except OSError as exc:
+            # Keep the cached profile available for a retry. Dropping it
+            # first made a failed privacy deletion look complete until a
+            # process restart rediscovered the files still on disk.
             log.warning("couldn't wipe %s: %s", pass_id, exc)
             return False
 

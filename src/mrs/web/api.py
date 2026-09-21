@@ -28,6 +28,7 @@ from .. import __version__
 from ..config import config
 from ..core import autoeq
 from . import accounts
+from . import prefix as _pfx
 from . import google
 from ..core import stats
 from ..core import cast as cast_mod
@@ -56,7 +57,11 @@ log = get("api")
 NEWLINE = chr(10)
 
 app = FastAPI(title="Music Request Server", docs_url=None, redoc_url=None)
-templates = Jinja2Templates(directory=str(Path(resource_dir()) / "web" / "templates"))
+templates = Jinja2Templates(
+    directory=str(Path(resource_dir()) / "web" / "templates"),
+    # Every page learns how it was reached, so it can put the same front on
+    # its own requests. "" when it came in bare.
+    context_processors=[lambda request: {"base": _pfx.base_of(request)}])
 _start = time.time()
 
 
@@ -107,6 +112,7 @@ async def _door(request: Request, call_next):
             from ..core.audit import record
             row = getattr(request.state, "pass_row", None) or {}
             actor = ("owner" if not row or row.get("owner") else
+                     "account:" + str(row["id"])[:40] if row.get("account") else
                      "guest:" + str(row.get("name") or "shared link")[:30])
             record(f"{request.method} {route.path}", actor, resp.status_code)
         except Exception as exc:
@@ -117,6 +123,11 @@ async def _door(request: Request, call_next):
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "SAMEORIGIN"
     return resp
+
+
+# Added after _door, so it is outside it and runs first: the front of the path
+# is gone before anything decides what the request is for.
+app.add_middleware(_pfx.PrefixMiddleware)
 
 
 def _same_origin(origin: str, request: Request) -> bool:
@@ -168,6 +179,9 @@ def _refuse(ip: str) -> None:
 
 
 SESSION_COOKIE = "mrs_account"
+# Being blocked from listening doesn't take away somebody's right to see what is
+# held about them or to have it deleted. Exactly these, and nothing else.
+_BLOCKED_MAY_REACH = {"/api/me", "/api/me/export", "/api/me/delete"}
 
 
 def _account_row(request: Request) -> dict | None:
@@ -187,6 +201,9 @@ def _account_row(request: Request) -> dict | None:
         return None
     accounts.seen(sub)
     row = accounts.as_row(person)
+    # Prime what the counters may keep about them, before anything counts.
+    from ..core import stats as _stats
+    _stats.set_tracked(row["id"], bool(person.get("tracking")))
     request.state.account = person
     if person.get("scope") == "blocked":
         row["blocked"] = True
@@ -205,7 +222,7 @@ def require_key(request: Request, key: str = Query(default=""),
     # they still hold shouldn't outrank that.
     row = _account_row(request)
     if row is not None:
-        if row.get("blocked"):
+        if row.get("blocked") and request.url.path not in _BLOCKED_MAY_REACH:
             raise HTTPException(status_code=403, detail="That account is blocked")
         bans.good_key(ip)
         request.state.pass_row = row
@@ -327,7 +344,7 @@ async def index(request: Request, key: str = Query(default=""),
         tail = (f"?key={urllib.parse.quote(key, safe='')}"
                 if key and row is None and _key_in_url_ok(request)
                 and same_key(key, config.get("api_key") or "") else "")
-        return RedirectResponse("/player" + tail, status_code=302)
+        return RedirectResponse(_pfx.at(request, "/player") + tail, status_code=302)
     return landing()
 
 
@@ -1486,6 +1503,18 @@ def _whoami(request: Request) -> str:
     return (row.get("name") or "guest").strip()
 
 
+def _whoid(request: Request) -> str:
+    """The account id behind what somebody adds, or "" for anything else.
+
+    A name labels an addition; an id is whose it is. Two people can both be
+    called Sam.
+    """
+    row = getattr(request.state, "pass_row", None)
+    if not row or row.get("internal") or row.get("owner") or not row.get("account"):
+        return ""
+    return str(row.get("id") or "")
+
+
 @app.get("/api/playlist/{op}")
 def api_playlist(request: Request, op: str, name: str = "",
                  shuffle: bool = False, video_id: str = "", title: str = "",
@@ -1500,6 +1529,7 @@ def api_playlist(request: Request, op: str, name: str = "",
     rows can say so, and so somebody can take back their own.
     """
     who = _whoami(request)
+    who_id = _whoid(request)
     mine = _lists_for(request)
     if shared:
         # The flag is the permission. A guest naming any other list of the
@@ -1527,20 +1557,21 @@ def api_playlist(request: Request, op: str, name: str = "",
         if _profile_for(request) is not None:
             raise HTTPException(403, "That's the owner's to do")
         got = playlists.set_shared(name, bool(on))
-        changed()
-        return {"status": "ok", **got}
+        if got.get("ok"):
+            changed()
+        return {"status": "ok" if got.get("ok") else "error", **got}
     if op == "add":
         from ..models import Track as _T
         if video_id:
             got = mine.add(
                 name, _T(video_id=video_id, title=title, artist=artist, art=art),
-                by=who)
+                by=who, by_id=who_id)
         elif room:
             # "add what's on" has to mean what's on *their* player.
             cur = room.current()
             if not cur:
                 return {"status": "ok", "ok": False, "message": "Nothing playing"}
-            got = mine.add(name, cur, by=who)
+            got = mine.add(name, cur, by=who, by_id=who_id)
         else:
             got = player.playlist_add_current(name)
         changed()
@@ -1549,15 +1580,17 @@ def api_playlist(request: Request, op: str, name: str = "",
         # On a shared list you can take back what you put in. Everything
         # else in it is somebody else's, and the owner's list is the
         # owner's to prune.
-        if shared and who and playlists.credit(name).get(video_id) != who:
+        if shared and who and not playlists.is_credit_owner(name, video_id, who, who_id):
             raise HTTPException(403, "You can only take out what you put in")
         got = mine.remove(name, video_id)
-        changed()
-        return {"status": "ok", **got}
+        if got.get("ok"):
+            changed()
+        return {"status": "ok" if got.get("ok") else "error", **got}
     if op == "delete":
         got = mine.delete(name)
-        changed()
-        return {"status": "ok", **got}
+        if got.get("ok"):
+            changed()
+        return {"status": "ok" if got.get("ok") else "error", **got}
     if op == "play":
         if room:
             tracks = list(mine.tracks(name))
@@ -2310,7 +2343,14 @@ def api_pass_revoke(id: str = "", restore: int = 0, forget: int = 0,
     if forget:
         if wipe:
             from ..core.profile import profiles
-            profiles.wipe(id)
+            # Do not claim the credential was forgotten when its personal
+            # record is still on disk. The pass stays in place so the owner
+            # can retry the privacy deletion instead of losing the handle to
+            # it altogether.
+            if not any(row["id"] == id for row in sec.list_passes()):
+                return {"status": "error", "message": "No such link"}
+            if not profiles.wipe(id):
+                raise HTTPException(500, "Couldn't remove that link's profile")
         ok = sec.forget_pass(id)
     elif restore:
         ok = sec.restore_pass(id)
@@ -2558,8 +2598,13 @@ def api_groqmodel(value: str = "", _: bool = Owner):
 @app.get("/api/boot")
 def api_boot(enabled: int = 0, _: bool = Owner):
     ok = _set_run_at_boot(bool(enabled))
-    config.set("start_on_boot", bool(enabled))
-    return {"status": "ok", "start_on_boot": bool(enabled), "applied": ok}
+    # A registry failure must not leave the saved checkbox claiming the app
+    # will start. Keep the last known-good preference until Windows accepts
+    # the requested state.
+    if ok:
+        config.set("start_on_boot", bool(enabled))
+    return {"status": "ok" if ok else "error",
+            "start_on_boot": bool(config.get("start_on_boot")), "applied": ok}
 
 
 def _set_run_at_boot(enable: bool) -> bool:
@@ -3087,16 +3132,16 @@ def auth_google_callback(request: Request, code: str = "", state: str = "",
                          error: str = ""):
     """Google sending somebody back. Everything here is checked, not trusted."""
     if error:
-        return _signin_page("Google says: " + error[:120])
+        return _signin_page("Google says: " + error[:120], base=_pfx.base_of(request))
     row = google.pending(state)
     if not row:
         # Also what an old tab, a refresh of this url, or somebody else's
         # forged link looks like.
         return _signin_page("That sign-in had already been used or has "
-                            "expired. Open the link again.")
+                            "expired. Open the link again.", base=_pfx.base_of(request))
     who = google.finish(code, row)
     if not who:
-        return _signin_page("Google couldn't confirm who that was.")
+        return _signin_page("Google couldn't confirm who that was.", base=_pfx.base_of(request))
     try:
         person = accounts.admit(
             who["sub"], who["email"], who["name"],
@@ -3105,26 +3150,31 @@ def auth_google_callback(request: Request, code: str = "", state: str = "",
             scope=str(row.get("scope") or ""))
     except accounts.AccountPersistenceError:
         # Do not issue a valid session for an identity we failed to remember.
-        return _signin_page("Couldn't save that sign-in. Please try again.", 503)
+        return _signin_page("Couldn't save that sign-in. Please try again.", 503, base=_pfx.base_of(request))
     if person.get("scope") == "blocked":
-        return _signin_page("That account is blocked here.")
-    resp = RedirectResponse(_safe_next(row.get("next", "/player")), status_code=302)
+        return _signin_page("That account is blocked here.", base=_pfx.base_of(request))
+    base = _pfx.base_of(request)
+    resp = RedirectResponse(base + _safe_next(row.get("next", "/player")),
+                            status_code=302)
     resp.set_cookie(
         SESSION_COOKIE,
         sec.session_cookie(config.get("api_key") or "", person["sub"]),
         max_age=30 * 86400, httponly=True, samesite="lax",
         # Only over TLS when there is TLS: marking it secure on a plain http
         # LAN means the browser never sends it and nobody can stay signed in.
-        secure=_net_scheme() == "https", path="/")
-    log.info("%s signed in (%s)", person.get("email") or person["sub"],
+        # Scoped to where this application lives: another one on the same
+        # address is a different application and gets none of it.
+        secure=_net_scheme() == "https", path=base or "/")
+    log.info("%s signed in (%s)", accounts.tag(person["sub"]),
              person.get("scope"))
     return resp
 
 
 @app.get("/auth/signout")
 def auth_signout(request: Request):
-    resp = RedirectResponse("/", status_code=302)
-    resp.delete_cookie(SESSION_COOKIE, path="/")
+    base = _pfx.base_of(request)
+    resp = RedirectResponse(base + "/", status_code=302)
+    resp.delete_cookie(SESSION_COOKIE, path=base or "/")
     return resp
 
 
@@ -3133,7 +3183,7 @@ def _net_scheme() -> str:
     return net.scheme()
 
 
-def _signin_page(message: str, status_code: int = 400):
+def _signin_page(message: str, status_code: int = 400, base: str = ""):
     """A plain sentence rather than a JSON error: people see this one."""
     body = ("<!doctype html><meta charset=utf-8>"
             "<meta name=viewport content='width=device-width,initial-scale=1'>"
@@ -3142,7 +3192,7 @@ def _signin_page(message: str, status_code: int = 400):
             "-apple-system,Segoe UI,Roboto,sans-serif;display:flex;"
             "min-height:100vh;align-items:center;justify-content:center;"
             "margin:0;padding:24px;text-align:center}a{color:#6d8bff}</style>"
-            f"<div><p>{_esc(message)}</p><p><a href='/'>Back to the "
+            f"<div><p>{_esc(message)}</p><p><a href='{_esc(base)}/'>Back to the "
             "start page</a></p></div>")
     return HTMLResponse(body, status_code=status_code)
 
@@ -3150,6 +3200,138 @@ def _signin_page(message: str, status_code: int = 400):
 def _esc(text: str) -> str:
     return (str(text).replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+# ── what an account can do about itself ──────────────────────────────────
+
+def _account_of(request: Request) -> dict:
+    """The signed-in account making this request, or a refusal.
+
+    Not the owner's key and not a link: these routes are about a person's own
+    record, so only that person's own session can reach them.
+    """
+    person = getattr(request.state, "account", None)
+    if not person:
+        raise HTTPException(403, "That is for a signed-in account")
+    return person
+
+
+def _consent_view(person: dict) -> dict:
+    return {
+        "privacy_notice": {"version": person.get("terms_version") or None,
+                           "accepted_at": person.get("terms_at") or None,
+                           "current": person.get("terms_version") == accounts.TERMS_VERSION},
+        "tracking": bool(person.get("tracking")),
+        "tracking_changed_at": person.get("tracking_at") or None,
+    }
+
+
+@app.get("/api/me")
+def api_me(request: Request, _: bool = Auth):
+    """Who this is, and what they have agreed to. Allowed even when blocked."""
+    person = getattr(request.state, "account", None)
+    if not person:
+        return {"status": "ok", "account": False}
+    return {"status": "ok", "account": True, "name": person.get("name"),
+            "email": person.get("email"), "picture": person.get("picture"),
+            "access": person.get("scope"), "owner": person.get("scope") == "owner",
+            "created": person.get("created"), "consent": _consent_view(person),
+            "notice_version": accounts.TERMS_VERSION}
+
+
+@app.get("/api/me/consent")
+def api_me_consent(request: Request, tracking: int | None = None,
+                   accept: int = 0, _: bool = Auth):
+    """Give or withdraw an agreement. Withdrawing is one call, same as giving.
+
+    tracking: whether it may learn from what this person plays. accept: they
+    have read the current privacy notice.
+    """
+    from ..core import stats as stats_mod
+    from ..core.profile import profiles
+    person = _account_of(request)
+    try:
+        got = accounts.set_consent(
+            person["sub"], tracking=None if tracking is None else bool(tracking),
+            terms=bool(accept))
+    except accounts.AccountPersistenceError:
+        raise HTTPException(503, "Couldn't save that. Nothing changed.")
+    if not got:
+        raise HTTPException(404, "no such account")
+    pid = accounts.profile_id(person["sub"])
+    # Rebuilt on their next request, judged by the new answer; and the
+    # counters stop (or start) keeping a row about them straight away.
+    profiles.forget(pid)
+    stats_mod.set_tracked(pid, bool(got.get("tracking")))
+    return {"status": "ok", "consent": _consent_view(got)}
+
+
+@app.get("/api/me/rename")
+def api_me_rename(request: Request, name: str = "", _: bool = Auth):
+    person = _account_of(request)
+    try:
+        got = accounts.rename(person["sub"], name)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except accounts.AccountPersistenceError:
+        raise HTTPException(503, "Couldn't save that. Nothing changed.")
+    if not got:
+        raise HTTPException(404, "no such account")
+    from ..core.profile import profiles
+    profiles.forget(accounts.profile_id(person["sub"]))
+    return {"status": "ok", "name": got.get("name")}
+
+
+@app.get("/api/me/export")
+def api_me_export(request: Request, _: bool = Auth):
+    """Everything held about this person, as a file they can keep."""
+    from . import privacy
+    person = _account_of(request)
+    return JSONResponse(
+        privacy.export(person["sub"]),
+        headers={"Content-Disposition": 'attachment; filename="my-music-data.json"',
+                 "Cache-Control": "no-store"})
+
+
+@app.get("/api/me/forget-taste")
+def api_me_forget_taste(request: Request, _: bool = Auth):
+    """Clear what has been learned from what they played. Keeps hearts and blocks."""
+    from . import privacy
+    person = _account_of(request)
+    return {"status": "ok", "cleared": privacy.forget_taste(person["sub"])}
+
+
+CONFIRM_DELETE = "delete my account"
+
+
+@app.get("/api/me/delete")
+def api_me_delete(request: Request, confirm: str = "", _: bool = Auth):
+    """Delete this account and everything held under it.
+
+    Guarded by typing the sentence, not by a checkbox: this cannot be undone.
+    The owner's account is refused -- it is the one that runs this server, and
+    removing it is done on the machine, not from a browser tab.
+    """
+    from . import privacy
+    person = _account_of(request)
+    if person.get("scope") == "owner":
+        raise HTTPException(409, "The owner account runs this server, so it "
+                                 "can't be deleted from here.")
+    if str(confirm).strip().lower() != CONFIRM_DELETE:
+        raise HTTPException(400, f"Type \"{CONFIRM_DELETE}\" to confirm")
+    try:
+        report = privacy.erase(person["sub"])
+    except (RuntimeError, accounts.AccountPersistenceError):
+        # Nothing is half-done in a way that loses the ability to retry: the
+        # account row goes last, so they still exist and can press it again.
+        raise HTTPException(503, "Couldn't finish deleting. Your account is "
+                                 "still here \u2014 try again.")
+    resp = JSONResponse({"status": "ok", "erased": report})
+    # Both the path it was set under and the site-wide one, so a cookie from
+    # before the prefix existed goes too.
+    for path in {_pfx.base_of(request) or "/", "/"}:
+        resp.delete_cookie(SESSION_COOKIE, path=path)
+    return resp
 
 
 @app.get("/api/accounts")
@@ -3180,25 +3362,21 @@ def api_accounts_scope(sub: str = "", scope: str = "", _: bool = Owner):
 @app.get("/api/accounts/forget")
 def api_accounts_forget(sub: str = "", _: bool = Owner):
     """Remove an account. Their next sign-in would start again as a stranger."""
-    from ..core.profile import profiles
-    from ..paths import data_dir
+    from . import privacy
 
-    if not accounts.get(sub):
+    person = accounts.get(sub)
+    if not person:
         raise HTTPException(404, "no such account")
-    profile_home = data_dir() / "profiles" / accounts.profile_id(sub)
-    # Wipe the durable listening record before the account row.  If that
-    # fails, retain the account so the owner can retry rather than claiming a
-    # privacy deletion that left the profile intact.
-    if profile_home.exists() and not profiles.wipe(accounts.profile_id(sub)):
-        raise HTTPException(500, "Couldn't remove that account's profile")
-    profiles.forget(accounts.profile_id(sub))
+    if person.get("scope") == "owner":
+        raise HTTPException(409, "The owner can't be removed from here")
+    # The same erasure the person gets for themselves: one implementation, so
+    # the two can't disagree about what "everything" is.
     try:
-        deleted = accounts.forget(sub)
-    except accounts.AccountPersistenceError:
-        raise HTTPException(503, "Couldn't save the account removal")
-    if not deleted:
-        raise HTTPException(404, "no such account")
-    return {"status": "ok"}
+        report = privacy.erase(sub)
+    except (RuntimeError, accounts.AccountPersistenceError):
+        raise HTTPException(503, "Couldn't finish removing that account; it is "
+                                 "still there, so try again")
+    return {"status": "ok", "erased": report}
 
 
 @app.get("/api/stats")
@@ -3248,7 +3426,17 @@ def api_diag(_: bool = Owner):
 def api_audit(_: bool = Owner):
     """Recent changes, without request bodies, URLs, tokens or secret values."""
     from ..core.audit import entries
-    return {"status": "ok", "entries": list(reversed(entries()))}
+    names = {accounts.profile_id(p["sub"]): p.get("name") or "someone"
+             for p in accounts.everyone()}
+    rows = []
+    for row in reversed(entries()):
+        actor = row["actor"]
+        if actor.startswith("account:"):
+            # By id in storage, by name on screen -- and once the account is
+            # gone the name goes with it, which is the point.
+            actor = "guest:" + names.get(actor[8:], "a deleted account")
+        rows.append({**row, "actor": actor})
+    return {"status": "ok", "entries": rows}
 
 
 # The install step validates the route inventory and creates the POST surface

@@ -61,6 +61,15 @@ DEFAULTS: dict[str, Any] = {
     # An uninvited Google sign-in is held until an owner explicitly admits
     # it.  Invited sign-ins inherit the scope of the pass that admitted them.
     "new_account_scope": "phone",
+    # How the public address is spelled. url_prefix puts this application at a
+    # path ("/music") so another can sit beside it on the same address;
+    # public_port is the port the *outside* world uses (443 through a router
+    # forward), which is not the one this machine listens on. Both are only
+    # about what links say -- the server accepts the bare paths as well.
+    "url_prefix": "",
+    "public_port": 0,
+    # Where the other application lives, for the switch on the front page.
+    "movies_url": "",
     "server_name": "Music Request",
     "crossfade": 0,
     "repeat": "off",          # off | all | one

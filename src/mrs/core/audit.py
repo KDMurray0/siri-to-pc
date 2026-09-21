@@ -21,6 +21,23 @@ def entries():
         return []
 
 
+def scrub(actor: str) -> int:
+    """Remove every entry made by one actor. Returns how many.
+
+    An account appears here as "account:<id>", never by name, so this finds
+    exactly that person and nobody who happens to share a name.
+    """
+    if not actor:
+        return 0
+    with _lock:
+        rows = entries()
+        keep = [r for r in rows if r["actor"] != actor]
+        gone = len(rows) - len(keep)
+        if gone:
+            write_atomic(data_dir() / "audit.json", json.dumps(keep))
+        return gone
+
+
 def record(action, actor="owner", status=200):
     with _lock:
         cutoff = time.time() - max(1, min(365, int(config.get("audit_log_days", 30)))) * 86400

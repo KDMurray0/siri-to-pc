@@ -147,7 +147,7 @@ class Session:
                     last, quiet = mark, 0
                     bus.publish(Ev.STATUS, now)
             except Exception as exc:
-                log.debug("%s heartbeat: %s", self.name, exc)
+                log.debug("%s heartbeat: %s", self.id[:8], exc)
 
     def touch(self) -> None:
         self.last_seen = time.time()
@@ -157,7 +157,7 @@ class Session:
         if self._dropped:
             self._dropped = False
             self.sink.set_paused(False)
-            log.info("%r is back — resuming", self.name)
+            log.info("%r is back — resuming", self.id[:8])
 
     def quiet_for(self) -> float:
         return time.time() - self.last_seen
@@ -177,7 +177,7 @@ class Session:
             if not self._dropped:
                 self._dropped = True
                 self.sink.set_paused(True)
-                log.info("%r went quiet after %ds — paused", self.name, int(quiet))
+                log.info("%r went quiet after %ds — paused", self.id[:8], int(quiet))
                 bus.publish(Ev.STATUS, self.status())
             return "paused"
         return "live"
@@ -217,7 +217,7 @@ class Session:
             if self.queue.taste.record(track, seconds, length):
                 self.plays += 1
         except Exception as exc:
-            log.debug("couldn't record a play for %s: %s", self.name, exc)
+            log.debug("couldn't record a play for %s: %s", self.id[:8], exc)
 
     def rewound(self) -> None:
         """A new track started, so the old position means nothing."""
@@ -230,11 +230,11 @@ class Session:
         try:
             self.queue.taste.flush()
         except Exception as exc:
-            log.debug("couldn't save %s's listening: %s", self.name, exc)
+            log.debug("couldn't save %s listening: %s", self.id[:8], exc)
         try:
             self.queue.stop()
         except Exception as exc:
-            log.debug("stopping %s: %s", self.name, exc)
+            log.debug("stopping %s: %s", self.id[:8], exc)
 
     # -- what the client and the owner's guest list both want --------------
     def current(self):
@@ -331,7 +331,7 @@ class Sessions:
             if room is None:
                 room = Session(pass_id, name, scope, profile)
                 self._rooms[pass_id] = room
-                log.info("opened a session for %r (%s)", room.name, room.scope)
+                log.info("opened a session for %r (%s)", room.id[:8], room.scope)
         if stale is not None:
             stale.stop()
             try:
@@ -367,7 +367,7 @@ class Sessions:
             bus.publish(Ev.QUEUE, {"rows": [], "session": pass_id})
         except Exception as exc:
             log.debug("couldn't announce the end of %s: %s", pass_id, exc)
-        log.info("closed the session for %r", room.name)
+        log.info("closed the session for %r", room.id[:8])
         return True
 
     def listing(self) -> list[dict]:

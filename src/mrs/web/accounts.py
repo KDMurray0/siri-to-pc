@@ -31,6 +31,25 @@ SCOPES = ("owner", "full", "phone", "blocked")
 # are promoted solely by the configured owner email or by an existing owner.
 NEW_ACCOUNT_SCOPES = ("full", "phone", "blocked")
 FILE = "accounts.json"
+# Bumped when the privacy notice changes in a way people should be asked about
+# again. Stored with each acceptance, so "who agreed to what" is a fact.
+TERMS_VERSION = "1"
+
+
+def tag(sub: str) -> str:
+    """How an account appears in a log: enough to follow one, not to name one.
+
+    A log outlives the account it mentions, and an address in a log is
+    personal data that deleting the account would leave behind.
+    """
+    return "acct-" + str(sub)[:6]
+
+
+def clean_name(raw: str) -> str:
+    """A display name somebody typed: printable, one line, not empty."""
+    import unicodedata
+    text = "".join(ch for ch in str(raw or "") if unicodedata.category(ch)[0] != "C")
+    return " ".join(text.split())[:40]
 _lock = threading.RLock()
 
 
@@ -65,6 +84,12 @@ def _read() -> dict:
                 "created": int(row.get("created") or 0),
                 "last_seen": int(row.get("last_seen") or 0),
                 "invited_by": str(row.get("invited_by", ""))[:60],
+                # Consent is recorded, not assumed: what was agreed, to which
+                # version of the notice, and when. Nothing here defaults to yes.
+                "terms_at": int(row.get("terms_at") or 0),
+                "terms_version": str(row.get("terms_version", ""))[:12],
+                "tracking": row.get("tracking") is True,
+                "tracking_at": int(row.get("tracking_at") or 0),
             }
     return out
 
@@ -115,7 +140,8 @@ def default_scope() -> str:
 
 
 def admit(sub: str, email: str, name: str, *, picture: str = "",
-          invited_by: str = "", scope: str = "") -> dict:
+          invited_by: str = "", scope: str = "", terms: bool = False,
+          tracking: bool = False) -> dict:
     """Record somebody who has just proved who they are.
 
     A new sign-in lands at the owner's chosen default -- their own device, or
@@ -133,16 +159,23 @@ def admit(sub: str, email: str, name: str, *, picture: str = "",
             # a local-network policy.  Do not accept owner here: OAuth alone
             # must not create an owner account.
             admitted_scope = scope if scope in NEW_ACCOUNT_SCOPES else default_scope()
-            row = {"sub": sub, "email": email, "name": name[:80],
+            row = {"sub": sub, "email": email,
+                   "name": clean_name(name) or "Listener",
                    "picture": picture[:400], "scope": admitted_scope,
-                   "created": now, "invited_by": invited_by[:60], "last_seen": now}
+                   "created": now, "invited_by": invited_by[:60], "last_seen": now,
+                   "terms_at": now if terms else 0,
+                   "terms_version": TERMS_VERSION if terms else "",
+                   "tracking": bool(tracking), "tracking_at": now if tracking else 0}
             if email and email == owner_email():
                 row["scope"] = "owner"
             people[sub] = row
-            log.info("new account: %s (%s)", email or sub, row["scope"])
+            log.info("new account: %s (%s)", tag(sub), row["scope"])
         else:
             row["email"] = email or row["email"]
-            row["name"] = name[:80] or row["name"]
+            # The name they chose is theirs. Google's is a starting point for
+            # an account that has none, never something to overwrite it with.
+            if not row.get("name"):
+                row["name"] = clean_name(name) or "Listener"
             if picture:
                 row["picture"] = picture[:400]
             row["last_seen"] = now
@@ -184,7 +217,42 @@ def set_scope(sub: str, scope: str) -> dict | None:
         row["scope"] = scope
         if not _write(people):
             raise AccountPersistenceError("couldn't save the account")
-        log.info("%s is now %s", row.get("email") or sub, scope)
+        log.info("%s is now %s", tag(sub), scope)
+        return dict(row)
+
+
+def set_consent(sub: str, *, tracking: bool | None = None,
+                terms: bool | None = None) -> dict | None:
+    """Record a change of mind, with when. Withdrawing is as easy as giving."""
+    with _lock, exclusive_file_lock(_path()):
+        people = _read()
+        row = people.get(sub)
+        if not row:
+            return None
+        now = int(time.time())
+        if tracking is not None and bool(tracking) != bool(row.get("tracking")):
+            row["tracking"] = bool(tracking)
+            row["tracking_at"] = now
+        if terms:
+            row["terms_at"], row["terms_version"] = now, TERMS_VERSION
+        if not _write(people):
+            raise AccountPersistenceError("couldn't save the account")
+        log.info("%s consent: tracking=%s", tag(sub), row["tracking"])
+        return dict(row)
+
+
+def rename(sub: str, name: str) -> dict | None:
+    name = clean_name(name)
+    if len(name) < 2:
+        raise ValueError("A name needs at least two characters")
+    with _lock, exclusive_file_lock(_path()):
+        people = _read()
+        row = people.get(sub)
+        if not row:
+            return None
+        row["name"] = name
+        if not _write(people):
+            raise AccountPersistenceError("couldn't save the account")
         return dict(row)
 
 
@@ -195,7 +263,7 @@ def forget(sub: str) -> bool:
         if row:
             if not _write(people):
                 raise AccountPersistenceError("couldn't save the account")
-            log.info("forgot the account %s", row.get("email") or sub)
+            log.info("forgot the account %s", tag(sub))
         return bool(row)
 
 
@@ -213,4 +281,7 @@ def as_row(account: dict) -> dict:
             "owner": scope == "owner",
             "account": account["sub"],
             "email": account.get("email", ""),
-            "picture": account.get("picture", "")}
+            "picture": account.get("picture", ""),
+            # Read by whatever would otherwise learn from this person: an
+            # account that hasn't opted in is heard, not studied.
+            "tracking": bool(account.get("tracking"))}

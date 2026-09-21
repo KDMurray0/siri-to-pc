@@ -351,6 +351,9 @@ body.reordering .q{transition:transform .12s ease}
 .pfp{width:26px;height:26px;border-radius:50%;object-fit:cover;background:var(--line);flex:0 0 auto;vertical-align:middle}
 .slabel.withpfp{display:flex;align-items:center;gap:9px}
 .linkstat .who{display:flex;align-items:center;gap:8px}
+.more{display:flex;align-items:center;gap:8px;padding:10px 0 4px;
+  font-size:10.5px;color:var(--sub)}
+.more span{margin-left:auto}
 .linkstat{display:grid;grid-template-columns:1fr auto;gap:4px 10px;
   padding:7px 0;border-bottom:1px solid var(--line);font-size:12px}
 .linkstat em{grid-column:1/-1;font-style:normal;font-size:10.5px;color:var(--sub)}
@@ -628,10 +631,25 @@ select,.keyin{background:var(--panel);border:1px solid var(--line);color:var(--f
 /* ── mini mode ─────────────────────────────────────────────────────────
    Constant width. Idle shows art + name; hovering lifts the text to the top
    of the cover and drops the transport into the space that makes. */
-body.mini .ambient,body.mini .prog,body.mini .search,
-body.mini .nav,body.mini .panel,body.mini .toast,body.mini .frame::after,
+body.mini .prog,body.mini .search,
+body.mini .nav,body.mini .panel,body.mini .toast,
 body.mini #shuffle,body.mini #repeat,body.mini .activity,
 body.mini .vol,body.mini .row2,body.mini .devpick{display:none}
+/* The wash, sideways. On the full player the cover's colour bleeds down from
+   the top; here the cover is a thumbnail on the left, so the colour has to
+   come out of *it* and travel right, or it reads as light from nowhere. The
+   blurred copy of the art sits behind the thumbnail and a scrim fades it into
+   the bar's own colour toward the right, so the text never sits on bright
+   colour. Same source image and same element as the big one -- only the
+   geometry changes. */
+body.mini .ambient{display:block;inset:-70% auto -70% -46px;width:260px;height:auto;
+  filter:blur(34px) saturate(1.5);opacity:.62;transform:none}
+body.mini .ambient img{border-radius:50%}
+body.mini .frame::after{display:block;
+  background:linear-gradient(to right,transparent 0,transparent 16%,
+    color-mix(in srgb,var(--bg) 70%,transparent) 46%,var(--bg) 88%)}
+/* paused is quieter, like the level meter it replaced */
+body.mini.paused .ambient{opacity:.34}
 body.mini .stage{display:grid;grid-template-columns:auto 1fr;
   grid-template-areas:"art meta" "art ctl";align-items:center;align-content:center;
   column-gap:12px;row-gap:0;padding:11px 14px 11px 12px}
@@ -1729,6 +1747,10 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 
 <script>
 const KEY = "{{ api_key }}";
+/* How this page was reached: "" bare, "/music" through the prefix. Every
+   request it makes puts the same front on, or it would ask the wrong
+   application. */
+const BASE = "{{ base }}";
 /* Who this page is, before it asks anything.
  *
  * It used to load neutral and find out from /api/whoami, which left a window
@@ -1776,9 +1798,9 @@ function apiFetch(path) {
   if (method === "POST") {
     headers["Content-Type"] = "application/json";
     options.body = JSON.stringify(Object.fromEntries(url.searchParams.entries()));
-    return fetch(url.pathname, options);
+    return fetch(BASE + url.pathname, options);
   }
-  return fetch(url.pathname + url.search, options);
+  return fetch(BASE + url.pathname + url.search, options);
 }
 const api = (path) => apiFetch(path)
   .then(r => r.ok ? r.json() : null).catch(() => null);
@@ -3435,7 +3457,7 @@ $("netaddrs").addEventListener("click", async e => {
     if (box.innerHTML) { box.innerHTML = ""; return; }   // second press hides it
     // The link carries the api key, so this is fetched with it and dropped
     // straight into the page rather than pointed at by a public url.
-    const r = await fetch("/api/qr?kind=" + encodeURIComponent(q.dataset.k),
+    const r = await fetch(BASE + "/api/qr?kind=" + encodeURIComponent(q.dataset.k),
                           { headers: { "X-Music-Key": KEY } });
     box.innerHTML = r.ok ? await r.text() : "";
     return;
@@ -3534,12 +3556,12 @@ function signInPaint() {
       "Signed in<em>" + esc(SIGNED_IN_NAME || SIGNED_IN) + "</em>";
     $("signinlabel").classList.add("withpfp");
     $("signinbtn").textContent = "Sign out";
-    $("signinbtn").onclick = () => { location.href = "/auth/signout"; };
+    $("signinbtn").onclick = () => { location.href = BASE + "/auth/signout"; };
   } else if (SIGN_IN_OFFERED) {
     row.hidden = false;
     $("signinlabel").innerHTML =
       "Sign in<em>Your queue, history and playlists follow you to any device</em>";
-    $("signinbtn").onclick = () => { location.href = "/auth/google/start?next=/player"; };
+    $("signinbtn").onclick = () => { location.href = BASE + "/auth/google/start?next=/player"; };
   }
 }
 signInPaint();
@@ -3558,7 +3580,7 @@ async function loadPeople() {
   if (!$("gowner").matches(":focus")) $("gowner").value = r.owner_email || "";
   if (!$("gscope").matches(":focus")) $("gscope").value = r.new_account_scope || "phone";
   const people = r.people || [];
-  $("peoplelist").innerHTML = people.length ? people.map(p =>
+  paged($("peoplelist"), people, p =>
     `<div class="linkstat"><span class="who">` +
     (p.picture ? `<img class="pfp" src="${esc(p.picture)}" alt="" referrerpolicy="no-referrer">` : "") +
     `<b>${esc(p.name || p.email || p.sub)}${p.scope === "owner" ? " · you" : ""}</b></span>` +
@@ -3572,9 +3594,9 @@ async function loadPeople() {
       `<button class="btn" data-person="${esc(p.sub)}" data-scope="phone">Their device</button>` +
       `<button class="btn" data-person="${esc(p.sub)}" data-scope="blocked">Block</button>` +
       `<button class="btn" data-person="${esc(p.sub)}" data-forget="1">Forget</button>`) +
-    `</span></div>`).join("")
-    : '<div class="hint">Nobody has signed in yet. Give someone the link from ' +
-      'the Sharing tab — they sign in there and appear here.</div>';
+    `</span></div>`,
+    { first: 10, empty: '<div class="hint">Nobody has signed in yet. Give someone ' +
+      'the link from the Sharing tab — they sign in there and appear here.</div>' });
 }
 $("peoplelist").addEventListener("click", async e => {
   const b = e.target.closest("[data-person]");
@@ -3598,6 +3620,38 @@ for (const [id, key] of [["gclient", "google_client_id"],
     toast("Saved");
     loadPeople();
   });
+}
+
+/* A long list that starts short.
+
+   Somebody looking at the System tab wants the last few things, not the last
+   nine hundred. Draws the first `first` rows and a button for `step` more,
+   and remembers how far it has been opened on the element itself, so the
+   eight-second refresh doesn't snap it shut again while somebody is reading
+   it. Fewer than `first` rows draws no button at all. */
+function paged(box, items, one, opts) {
+  const o = Object.assign({ first: 6, step: 20, empty: "" }, opts || {});
+  if (!items.length) { box.innerHTML = o.empty; box._shown = 0; return; }
+  const draw = () => {
+    const shown = Math.min(items.length, Math.max(o.first, box._shown || o.first));
+    let html = items.slice(0, shown).map(one).join("");
+    if (items.length > o.first) {
+      const left = items.length - shown;
+      html += '<div class="more">' +
+        (left > 0 ? `<button class="btn" data-more="1">Show ${Math.min(o.step, left)} more</button>` : "") +
+        (shown > o.first ? '<button class="btn" data-fewer="1">Show fewer</button>' : "") +
+        `<span>${shown} of ${items.length}</span></div>`;
+    }
+    box.innerHTML = html;
+  };
+  box._shown = Math.max(o.first, box._shown || 0);
+  box.onclick = e => {
+    const b = e.target.closest("[data-more],[data-fewer]");
+    if (!b) return;
+    box._shown = b.dataset.fewer ? o.first : (box._shown || o.first) + o.step;
+    draw();
+  };
+  draw();
 }
 
 /* What this place has done, and what each link has done in it. */
@@ -3652,7 +3706,7 @@ async function loadStats() {
   ).join("") || '<div class="hint">Nothing yet this month.</div>';
 
   const links = (r.links || []).filter(l => l.id !== "house");
-  $("statslinks").innerHTML = links.length ? links.map(l => {
+  paged($("statslinks"), links, l => {
     const gone = l.revoked || l.expired;
     const now = l.this_month || {};
     return `<div class="linkstat${gone ? " gone" : ""}">` +
@@ -3661,7 +3715,7 @@ async function loadStats() {
       `<em>${esc(NUM(l.totals.requests))} asked for, ${esc(NUM(l.totals.plays))} played` +
       ` · this month ${esc(NUM(now.requests || 0))} asked, ${esc(hours(now.seconds))}` +
       (l.last ? ` · last ${esc(ago(l.last))}` : "") + `</em></div>`;
-  }).join("") : '<div class="hint">No link has played anything yet.</div>';
+  }, { first: 5, empty: '<div class="hint">Nobody has played anything yet.</div>' });
 }
 
 /* The trail says "POST /api/passes/new". Nobody wants to read a route, so
@@ -3700,15 +3754,15 @@ async function loadAudit() {
   if (!box || !ME.owner) return;
   box.innerHTML = '<div class="hint">Loading…</div>';
   const r = await api("/api/audit");
-  const rows = ((r && r.entries) || []).slice(0, 40);
-  box.innerHTML = rows.length ? rows.map(row => {
+  const rows = (r && r.entries) || [];
+  paged(box, rows, row => {
     const at = new Date(Number(row.at) * 1000);
     const when = Number.isNaN(at.getTime()) ? "" : ago(at.getTime() / 1000);
     const who = row.actor === "owner" ? "you" : (row.actor || "").replace(/^guest:/, "");
     const bad = Number(row.status) >= 400;
     return `<div class="srow"><span class="slabel">${esc(auditSaid(row.action))}` +
-      `<em>${esc(who)} · ${esc(when)}${bad ? " · refused" : ""}</em></span></div>`;
-  }).join("") : '<div class="hint">Nothing has been changed yet.</div>';
+      `<em>${esc(who)} \u00b7 ${esc(when)}${bad ? " \u00b7 refused" : ""}</em></span></div>`;
+  }, { first: 8, empty: '<div class="hint">Nothing has been changed yet.</div>' });
 }
 $("auditrefresh").onclick = loadAudit;
 
@@ -4423,7 +4477,7 @@ function routeApply(route) {
 ["pointerdown", "keydown"].forEach(evt =>
   window.addEventListener(evt, () => { routeCheck(); }, { capture: true, passive: true }));
 
-const castSrc = v => "/api/output/stream/" + encodeURIComponent(v) +
+const castSrc = v => BASE + "/api/output/stream/" + encodeURIComponent(v) +
                      "?" + urlAuth() + "&fmt=" + FMT +
                      (tuneNow() ? "&tune=" + tuneNow() : "");
 
@@ -4791,7 +4845,7 @@ function applyAnnounce(d) {
   const generation = ++duckGeneration;
   duckState = { generation, el, volume: wasVol };
   try {
-    castSay.src = "/api/announce/" + encodeURIComponent(d.id) + ".mp3?" +
+    castSay.src = BASE + "/api/announce/" + encodeURIComponent(d.id) + ".mp3?" +
                   urlAuth();
     castSay.load();
     // Use the same dB policy as local mpv playback. iOS keeps volume
@@ -5256,7 +5310,7 @@ $("libadd").onclick = async () => {
 
 /* The guide, again. Same page the first run shows — it reads live state, so
    it's a status screen as much as an explanation. */
-$("reguide").onclick = () => { location.href = "/welcome?key=" + encodeURIComponent(KEY); };
+$("reguide").onclick = () => { location.href = BASE + "/welcome?key=" + encodeURIComponent(KEY); };
 
 /* Who has a profile, and the one genuinely fun thing in here. */
 /* Headphone correction for the PC's own output. */
@@ -5769,7 +5823,7 @@ function connect() {
   // `here` says which queue this page is watching. Same choice the capsule
   // makes, and the same one the X-Play-Here header carries on everything
   // else — an EventSource can't send a header, so it goes in the url.
-  es = new EventSource("/api/events?" + urlAuth() +
+  es = new EventSource(BASE + "/api/events?" + urlAuth() +
                        "&here=" + (cast.on ? "1" : "0"));
   es.onmessage = ev => {
     let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }

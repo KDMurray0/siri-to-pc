@@ -31,6 +31,24 @@ _lock = threading.RLock()
 _pending: dict[str, dict[str, float]] = {}
 _names: dict[str, str] = {}
 _due = 0.0
+# People who haven't agreed to be studied. Their events still count -- toward
+# the house, which is a number about the place rather than about anybody -- but
+# no row about them is kept. Filled in as their requests arrive.
+_untracked: set[str] = set()
+
+
+def set_tracked(who: str, tracked: bool) -> None:
+    """Say whether a person's own numbers may be kept."""
+    if not who or who == HOUSE:
+        return
+    with _lock:
+        if tracked:
+            _untracked.discard(who)
+        else:
+            _untracked.add(who)
+            # What was waiting to be written under their name is not written.
+            _pending.pop(who, None)
+            _names.pop(who, None)
 
 
 def _empty() -> dict:
@@ -105,11 +123,14 @@ def note(who: str = HOUSE, *, name: str = "", **counts) -> None:
         return
     now = time.time()
     with _lock:
-        for key in ({who, HOUSE} if who else {HOUSE}):
+        keys = {who, HOUSE} if who else {HOUSE}
+        if who in _untracked:
+            keys = {HOUSE}
+        for key in keys:
             acc = _pending.setdefault(key, {})
             for k, v in adds.items():
                 acc[k] = acc.get(k, 0.0) + v
-        if name and who and who != HOUSE:
+        if name and who and who != HOUSE and who not in _untracked:
             _names[who] = name[:60]
         if not _due:
             _due = now + FLUSH_EVERY
@@ -151,6 +172,31 @@ def flush() -> None:
             write_atomic(_path(), json.dumps(data))
         except OSError as exc:
             log.warning("couldn't write the stats: %s", exc)
+
+
+def erase(who: str) -> bool:
+    """Remove everything kept about one person. Returns whether there was any.
+
+    Their events are already inside the house totals -- every count lands
+    against the person and against the house -- so taking the person's row
+    away leaves the month adding up and the place's numbers unchanged. What
+    goes is the part that said *who*: the row, its name, and anything not yet
+    written.
+    """
+    if not who or who == HOUSE:
+        return False
+    with _lock:
+        had = bool(_pending.pop(who, None))
+        _names.pop(who, None)
+        data = _read()
+        row = data["links"].pop(who, None)
+        if row is not None:
+            try:
+                write_atomic(_path(), json.dumps(data))
+            except OSError as exc:
+                log.warning("couldn't write the stats: %s", exc)
+                raise
+        return had or row is not None
 
 
 def _merged(row: dict, who: str) -> dict:
