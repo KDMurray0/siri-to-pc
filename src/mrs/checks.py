@@ -1851,6 +1851,9 @@ def _run(verbose: bool = False) -> Result:
             ppage = client.get("/player", headers=owner_h).text
             c("the player's read list is the server's",
               "API_READ_ONLY = new Set([" in ppage and '"/api/status"' in ppage)
+            c("the Google form has one explicit secret-safe save action",
+              'id="gsave"' in ppage and "apiJsonTry(\"/api/accounts/setup\"" in ppage
+              and 'id="gsecret"' in ppage)
 
             # The owner's trail records machine changes, not every skip.
             from .core.audit import entries as _audit
@@ -1920,6 +1923,9 @@ def _run(verbose: bool = False) -> Result:
                          "-f", "lavfi", "-i", "sine=f=1000:d=4",
                          "-filter_complex", "amix=inputs=2", "-ac", "2",
                          "-c:a", "aac", str(src)], capture_output=True, timeout=60)
+                # Cache readers require the same completion proof yt-dlp
+                # publishes after a real download finishes.
+                src.with_name(src.name + ".complete").write_text("1", encoding="utf-8")
                 first, st = _cast.serve(vid, "iphone")
                 c("the phone isn't kept waiting for tuning",
                   st == "ready" and first == src, f"{st} {first}")
@@ -2181,6 +2187,7 @@ def _run(verbose: bool = False) -> Result:
                          "-f", "lavfi", "-i", "sine=f=440:d=3", "-ac", "2",
                          "-c:a", "libopus", "-b:a", "96k", str(src)],
                         capture_output=True, timeout=60)
+                src.with_name(src.name + ".complete").write_text("1", encoding="utf-8")
                 plain = not _cf.filter_chain("")
                 c("(this config processes nothing, so pass-through applies)", plain)
                 _cf._held.clear()
@@ -2317,7 +2324,9 @@ def _run(verbose: bool = False) -> Result:
             from . import server as _srv
             from .paths import data_dir as _dd
             was_cert, was_key = _cfg.get("tls_cert"), _cfg.get("tls_key")
+            was_https_mode = _cfg.get("https_mode")
             try:
+                _cfg.set("https_mode", "direct", save=False)
                 _cfg.set("tls_cert", "", save=False)
                 _cfg.set("tls_key", "", save=False)
                 c("nothing configured and nothing in the standard place is http",
@@ -2341,9 +2350,20 @@ def _run(verbose: bool = False) -> Result:
                   and ("MusicRequestServer" + chr(92) + "certs")
                   in (Path(__file__).resolve().parents[2] / "certificate.ps1")
                   .read_text("utf-8", "replace"))
+                # The normal certificate route deliberately leaves tls_cert
+                # blank, so expiry reporting must follow the conventional
+                # pair rather than falsely saying zero days forever.
+                with _patch.object(_srv, "tls_files",
+                                   return_value=(str(certs / "fullchain.pem"),
+                                                 str(certs / "privkey.pem"))), \
+                     _patch("ssl._ssl._test_decode_cert",
+                            return_value={"notAfter": "Jan 01 00:00:00 2038 GMT"}):
+                    c("the standard certificate location reports its expiry",
+                      _srv.cert_days_left() > 100.0)
             finally:
                 _cfg.set("tls_cert", was_cert or "", save=False)
                 _cfg.set("tls_key", was_key or "", save=False)
+                _cfg.set("https_mode", was_https_mode or "direct", save=False)
                 for leftover in ("fullchain.pem", "privkey.pem"):
                     (_dd() / "certs" / leftover).unlink(missing_ok=True)
             from .core import net as _net
@@ -2357,6 +2377,12 @@ def _run(verbose: bool = False) -> Result:
                   _net.scheme() == "https")
             finally:
                 _srv.runtime.pop("tls", None)
+            _cfg.set("https_mode", "proxy", save=False)
+            try:
+                c("a local TLS gateway makes public links https without a local certificate",
+                  _net.scheme() == "https" and _srv.proxy_tls())
+            finally:
+                _cfg.set("https_mode", was_https_mode or "direct", save=False)
             _srv.runtime["local_port"] = 41234
             try:
                 c("this machine talks to itself in plaintext",
@@ -2368,6 +2394,10 @@ def _run(verbose: bool = False) -> Result:
             raw = (Path(__file__).resolve().parents[2] / "certificate.ps1").read_bytes()
             c("certificate.ps1 is ASCII with a BOM, so PowerShell can read it",
               raw[:3] == bytes([0xEF, 0xBB, 0xBF]) and all(b < 128 for b in raw[3:]))
+            cert_script = raw[3:].decode("ascii")
+            name_resolution = cert_script.index("if (-not $Domain) {", cert_script.index("Configured-DynuName"))
+            c("a Dynu name discovered from settings is also used in the success line",
+              cert_script.rfind("$script:MainName = $Domain") > name_resolution)
             say("a real certificate", c)
 
             # -- 25. people sign in; a link is no longer the identity ------
@@ -2401,6 +2431,44 @@ def _run(verbose: bool = False) -> Result:
             mine = _acc.admit("9000000001", "ME@example.com", "Me")
             c("the address written down beforehand is the owner",
               mine["scope"] == "owner" and mine["email"] == "me@example.com")
+            setup = client.post("/api/accounts/setup", json={
+                "client_id": "setup-test.apps.googleusercontent.com",
+                "client_secret": "setup-test-secret", "owner_email": "me@example.com"},
+                headers=owner_h)
+            c("Google details save together through an owner-only JSON form",
+              setup.status_code == 200 and setup.json().get("configured")
+              and _cfg.get("google_client_id") == "setup-test.apps.googleusercontent.com"
+              and _cfg.get("google_client_secret") == "setup-test-secret"
+              and "google_client_secret" not in setup.json(), str(setup.json()))
+            c("a shared link cannot replace Google credentials",
+              client.post("/api/accounts/setup", json={
+                  "client_id": "attacker.apps.googleusercontent.com",
+                  "client_secret": "attacker-secret", "owner_email": "attacker@example.com"},
+                  headers={"X-Music-Key": phone}).status_code == 403)
+            before_setup = (_cfg.get("google_client_id"), _cfg.get("google_client_secret"),
+                            _cfg.get("owner_email"))
+            rejected_setup = client.post("/api/accounts/setup", json={
+                "client_id": "", "client_secret": "", "owner_email": "me@example.com"},
+                headers=owner_h)
+            c("an incomplete Google setup changes nothing",
+              rejected_setup.status_code == 400 and before_setup == (
+                  _cfg.get("google_client_id"), _cfg.get("google_client_secret"),
+                  _cfg.get("owner_email")))
+            was_legacy_google_setup = _cfg.get("allow_legacy_get_mutations")
+            _cfg.set("allow_legacy_get_mutations", True, save=False)
+            try:
+                legacy_setup = client.get("/api/accounts/setup?client_id=leaked-client"
+                                          "&client_secret=leaked-secret"
+                                          "&owner_email=me@example.com", headers=owner_h)
+                c("Google setup refuses a credential URL even in legacy mode",
+                  legacy_setup.status_code == 405, str(legacy_setup.status_code))
+            finally:
+                _cfg.set("allow_legacy_get_mutations", was_legacy_google_setup, save=False)
+            # The mocked OAuth token below deliberately names this original
+            # test client. The setup test proved its independent operation;
+            # restore the account-flow fixture before testing the callback.
+            _cfg.set("google_client_id", "test-client-id", save=False)
+            _cfg.set("google_client_secret", "test-secret", save=False)
             c("a made-up account id is refused",
               _acc.get("../../etc") is None and not _acc._ok_sub("../x"))
             try:
@@ -3051,6 +3119,7 @@ def _run(verbose: bool = False) -> Result:
             from .core import net as _n
             from . import server as _s2
             was = {k: _cfg.get(k) for k in ("url_prefix", "public_port", "ddns_hostname",
+                                            "ddns_user", "ddns_password", "ddns_provider",
                                             "google_client_id", "google_client_secret")}
             try:
                 # The front door only has a button to inspect once sign-in is on.
@@ -3069,6 +3138,53 @@ def _run(verbose: bool = False) -> Result:
                 _cfg.set("ddns_hostname", "music.example.test", save=False)
 
                 # What the outside world is told.
+                _cfg.set("public_port", 0, save=False)
+
+                # The browser's reachability button must probe the public
+                # port and Dynu hostname, not merely the high port this
+                # process happens to listen on after the router forward.
+                _cfg.set("public_port", 443, save=False)
+                network_stub = {"addresses": [], "port": 29543, "public_port": 443,
+                                "scheme": "http", "wan_ip": "198.51.100.8",
+                                "https": False, "configured_port": 29543,
+                                "port_moved": False, "hostname": "music.example.test"}
+                with _patch.object(_n, "addresses", return_value=network_stub), \
+                     _patch.object(_n, "port_open", return_value=False) as _port_probe:
+                    # The test client's cookie is intentionally rotated by
+                    # earlier account cases. Inject the owner dependency as
+                    # FastAPI does after it has authenticated a real owner;
+                    # this assertion is about the endpoint's port choice.
+                    checked = _api.api_network(check=1, _=True)
+                c("the public check probes the Dynu name on the outside port",
+                  checked.get("checked_port") == 443
+                  and _port_probe.call_args.args == (443, "music.example.test"),
+                  str(_port_probe.call_args))
+
+                # "nochg" means Dynu accepted an update; it does not prove an
+                # explicit stale record cannot still win the public lookup.
+                # The Sharing page must say so instead of treating a dead
+                # copied link as a successful DDNS update.
+                from .core import ddns as _ddns
+                class _DdnsReply:
+                    def __enter__(self): return self
+                    def __exit__(self, *_): return False
+                    def read(self): return b"nochg 203.0.113.9"
+                ddns_before = dict(_ddns._state)
+                _cfg.set("ddns_provider", "dynu", save=False)
+                _cfg.set("ddns_user", "check-user", save=False)
+                _cfg.set("ddns_password", "check-secret", save=False)
+                try:
+                    with _patch.object(_ddns.urllib.request, "urlopen",
+                                       return_value=_DdnsReply()), \
+                         _patch.object(_ddns, "_public_ipv4",
+                                       return_value={"198.51.100.9"}):
+                        ddns_got = _ddns.update(ip="203.0.113.9", force=True)
+                    c("DDNS exposes a public-DNS mismatch after an accepted update",
+                      ddns_got.get("ok") is True and ddns_got.get("dns_matches") is False
+                      and "public DNS still resolves to 198.51.100.9" in ddns_got.get("detail", ""),
+                      str(ddns_got))
+                finally:
+                    _ddns._state.clear(); _ddns._state.update(ddns_before)
                 _cfg.set("public_port", 0, save=False)
                 c("with nothing set, the link carries the real port",
                   _n.public_base("h.test").endswith(f":{_n.live_port()}/music"))
@@ -3731,7 +3847,7 @@ def _run(verbose: bool = False) -> Result:
             # -- 32. one address, two applications: the settings and the switch --
             c = _Checker("the address settings")
             _keep32 = {k: config.get(k) for k in
-                       ("url_prefix", "public_port", "movies_url",
+                       ("ddns_hostname", "url_prefix", "public_port", "movies_url", "https_mode",
                         "google_client_id", "google_client_secret")}
             config.set("google_client_id", "sw-test-id", save=False)
             config.set("google_client_secret", "sw-test-secret", save=False)
@@ -3741,6 +3857,29 @@ def _run(verbose: bool = False) -> Result:
                                    headers=who or owner_h)
 
             try:
+                master = client.post("/api/public-address", json={
+                    "url": "https://MUSIC.example.test:8443/music/player"}, headers=owner_h)
+                c("one public master link configures its hostname, port and path",
+                  master.status_code == 200
+                  and master.json().get("master_url") == "https://music.example.test:8443/music"
+                  and config.get("ddns_hostname") == "music.example.test"
+                  and config.get("public_port") == 8443
+                  and config.get("url_prefix") == "/music", str(master.json()))
+                master_before = (config.get("ddns_hostname"), config.get("public_port"),
+                                 config.get("url_prefix"))
+                bad_master = client.post("/api/public-address", json={
+                    "url": "https://other.example.test/?token=do-not-store"}, headers=owner_h)
+                c("a master link cannot carry a query or change settings when refused",
+                  bad_master.status_code == 400 and master_before == (
+                      config.get("ddns_hostname"), config.get("public_port"),
+                      config.get("url_prefix")))
+                c("a shared link cannot set the public master link",
+                  client.post("/api/public-address", json={
+                      "url": "https://attacker.example.test"},
+                      headers={"X-Music-Key": phone}).status_code == 403)
+                wizard = client.get("/welcome", headers=owner_h).text
+                c("the first-run guide and Sharing both offer the public master link",
+                  'id="masterurl"' in wizard and 'id="addrmaster"' in ppage)
                 c("a path is stored the way it will be used",
                   _put("url_prefix", "music").status_code == 200
                   and config.get("url_prefix") == "/music")
@@ -3751,6 +3890,17 @@ def _run(verbose: bool = False) -> Result:
                       and config.get("url_prefix") == "/music")
                 c("an empty path means the bare address",
                   _put("url_prefix", "").status_code == 200 and config.get("url_prefix") == "")
+                c("a local HTTPS gateway mode is stored explicitly",
+                  _put("https_mode", "proxy").status_code == 200
+                  and config.get("https_mode") == "proxy")
+                c("an invented HTTPS mode is refused",
+                  _put("https_mode", "internet").status_code == 400
+                  and config.get("https_mode") == "proxy")
+                _put("https_mode", "direct")
+                c("the built release includes the Dynu certificate helper",
+                  "('certificate.ps1', '.')" in
+                  (Path(__file__).resolve().parents[2] / "MusicRequestServer.spec")
+                  .read_text("utf-8"))
                 c("a public port is a port", _put("public_port", "443").status_code == 200
                   and config.get("public_port") == 443)
                 for bad in ("70000", "-1", "lots"):
@@ -3798,7 +3948,7 @@ def _run(verbose: bool = False) -> Result:
             from .web import google as _g33
             _keep33 = {k: config.get(k) for k in
                        ("google_client_id", "google_client_secret", "ddns_hostname",
-                        "url_prefix", "public_port")}
+                        "url_prefix", "public_port", "https_mode")}
             config.set("google_client_id", "chk-client", save=False)
             config.set("google_client_secret", "chk-secret", save=False)
             config.set("ddns_hostname", "music.example.test", save=False)
@@ -3837,16 +3987,20 @@ def _run(verbose: bool = False) -> Result:
                     c("...for the address as it would be, not as it is",
                       r["redirect_uri"].endswith("/music/auth/google/callback")
                       and config.get("url_prefix") == "" and config.get("public_port") == 0)
-                    with _patch("mrs.core.net.scheme", lambda: "https"):
-                        c("...and on https 443 the port is left off, which is the point",
-                          _g33.redirect_uri(prefix_override="music", port_override=443)
-                          == "https://music.example.test/music/auth/google/callback")
-                        c("...while any other port stays",
-                          _g33.redirect_uri(prefix_override="", port_override=8443)
-                          == "https://music.example.test:8443/auth/google/callback")
-                        c("...and a path that isn't one is dropped rather than trusted",
-                          _g33.redirect_uri(prefix_override="//evil.example", port_override=443)
-                          == "https://music.example.test/auth/google/callback")
+                with _patch("mrs.core.net.scheme", lambda: "https"):
+                    c("...and on https 443 the port is left off, which is the point",
+                      _g33.redirect_uri(prefix_override="music", port_override=443)
+                      == "https://music.example.test/music/auth/google/callback")
+                    c("...while any other port stays",
+                      _g33.redirect_uri(prefix_override="", port_override=8443)
+                      == "https://music.example.test:8443/auth/google/callback")
+                    c("...and a path that isn't one is dropped rather than trusted",
+                      _g33.redirect_uri(prefix_override="//evil.example", port_override=443)
+                      == "https://music.example.test/auth/google/callback")
+                c("a planned local gateway asks Google about its HTTPS callback before restart",
+                  _g33.redirect_uri(prefix_override="music", port_override=443,
+                                    https_mode_override="proxy")
+                  == "https://music.example.test/music/auth/google/callback")
                 with _patch.object(_g33, "_probe", _answer(_err("invalid_client The OAuth client was not found."))):
                     r = _chk().json()
                     c("a client id Google doesn't know is its own message",
@@ -3930,6 +4084,19 @@ def _run(verbose: bool = False) -> Result:
                     pass
                 c("anything else fails at once, not after eight tries", len(_calls34) == 1)
             say("replacing a file", c)
+
+            # -- 35. the speaker list belongs to the owner, not to a race ---------
+            c = _Checker("the speaker list")
+            from pathlib import Path as _Path
+            from .web.policy import OWNER as _owner35
+            _page35 = (_Path(__file__).parent / "web" / "templates" / "player.html").read_text("utf-8")
+            c("which speaker to use is shown to the owner, wherever the page is open",
+              'classList.toggle("nodevices", !r.owner)' in _page35)
+            c("...and doesn't hang off the desktop bridge, which arrives after the page does",
+              'classList.toggle("nodevices", !bridge())' not in _page35)
+            c("the routes behind it are the owner's, so a guest is never offered them",
+              all(name in _owner35 for name in ("audio/devices", "audio/device")))
+            say("the speaker list", c)
 
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
@@ -4051,6 +4218,49 @@ def _run(verbose: bool = False) -> Result:
                 c("playlist reads and failed mutations do not create empty folders",
                   read_result and not read_path.exists())
 
+            # shutil.copy2 creates its destination before all bytes have been
+            # copied.  An interrupted offline-list copy must not leave a
+            # final filename that the next pass mistakes for finished audio.
+            with _tempfile.TemporaryDirectory(prefix="mrs-playlist-copy-") as copy_root:
+                offline = _plmod.Playlists(home=_Path(copy_root))
+                source = _Path(copy_root) / "source.m4a"
+                destination = _Path(copy_root) / "offline.m4a"
+                source.write_bytes(b"complete audio")
+
+                def _partial_copy(_source, target, *args, **kwargs):
+                    _Path(target).write_bytes(b"partial")
+                    raise OSError("disk full")
+
+                with _patch("mrs.core.playlists.shutil.copy2",
+                            side_effect=_partial_copy):
+                    interrupted_copy = offline._copy_complete(source, destination)
+                cleaned_failure = (not interrupted_copy
+                                   and not destination.exists()
+                                   and not offline._complete_marker(destination).exists())
+                copied = offline._copy_complete(source, destination)
+                c("offline playlist copies cannot promote a partial audio file",
+                  cleaned_failure and copied
+                  and destination.read_bytes() == source.read_bytes()
+                  and offline._complete_marker(destination).is_file())
+
+            # Offline copies run in the background. Their original snapshot
+            # must not replace a list somebody edited or deleted meanwhile.
+            with _tempfile.TemporaryDirectory(prefix="mrs-playlist-race-") as race_root:
+                racing = _plmod.Playlists(home=_Path(race_root))
+                removed = _Track(video_id="removed", title="Removed", artist="Band")
+                kept = _Track(video_id="kept", title="Kept", artist="Band")
+                racing.add_many("Race", [removed, kept])
+                racing.remove("Race", "removed")
+                merged = racing._commit_downloaded_paths(
+                    "Race", {"removed": str(_Path(race_root) / "removed.m4a")})
+                survivors = [track.video_id for track in racing.tracks("Race")]
+                racing.delete("Race")
+                after_delete = racing._commit_downloaded_paths(
+                    "Race", {"kept": str(_Path(race_root) / "kept.m4a")})
+                c("background playlist copies cannot restore concurrent edits or deletion",
+                  merged and survivors == ["kept"] and not after_delete
+                  and not racing._folder_path("Race").exists())
+
             # Windows can decline a Run-key change. The stored preference is
             # only trustworthy if that operation actually completed.
             with _patch.object(_api_mod, "_set_run_at_boot", return_value=False), \
@@ -4059,6 +4269,41 @@ def _run(verbose: bool = False) -> Result:
             c("a failed start-at-sign-in change does not claim or save success",
               failed_boot_set.get("status") == "error"
               and failed_boot_set.get("applied") is False and not save_boot.called)
+
+            # A Windows username or an installation path can contain an
+            # apostrophe. It must stay data inside the privileged task script.
+            ps_literal = _api_mod._ps_literal("C:\\Users\\O'Connor\\Music")
+            c("elevated PowerShell arguments escape apostrophes as literals",
+              ps_literal == "'C:\\Users\\O''Connor\\Music'")
+
+            # The public desktop-app download endpoint cannot retain an
+            # unlimited one-hour list of every address that reaches it.
+            _api_mod._DL_SEEN.clear()
+            sample_now = time.time()
+            _api_mod._DL_SEEN.update({f"ip-{n}": [sample_now]
+                                      for n in range(_api_mod._DOWNLOAD_TRACKERS)})
+            slot = _api_mod._take_download_slot("new-ip", sample_now)
+            c("public download rate tracking remains bounded under many addresses",
+              slot and len(_api_mod._DL_SEEN) == _api_mod._DOWNLOAD_TRACKERS
+              and "new-ip" in _api_mod._DL_SEEN)
+            _api_mod._DL_SEEN.clear()
+
+            # Likewise, a distributed wrong-key scan cannot retain every
+            # address in either the in-memory strike table or blocked.json.
+            bounded_bans = sec.Bans()
+            bounded_bans._strikes = {
+                f"198.51.100.{n}": [1, sample_now] for n in range(sec.MAX_STRIKES)}
+            bounded_bans.wrong_key("203.0.113.1")
+            strikes_bounded = (len(bounded_bans._strikes) == sec.MAX_STRIKES
+                               and "203.0.113.1" in bounded_bans._strikes)
+            bounded_bans._until = {
+                f"198.51.100.{n}": sample_now + sec.BAN_SECONDS
+                for n in range(sec.MAX_BANS)}
+            for _ in range(sec.STRIKES):
+                bounded_bans.wrong_key("203.0.113.2")
+            c("failed-key tracking remains bounded under many addresses",
+              strikes_bounded and len(bounded_bans._until) == sec.MAX_BANS
+              and "203.0.113.2" in bounded_bans._until)
 
             # Listener state is user-editable persistence. A failed write must
             # remain retryable, malformed counters must be ignored, and a
@@ -4278,6 +4523,63 @@ def _run(verbose: bool = False) -> Result:
               and not temp_profile.permanent and permanent_profile.permanent
               and not expiring_profile.permanent)
 
+            # A close concurrent with activation must not remove the room and
+            # then leave its queue starting outside the registry.
+            rooms = _Sessions()
+            entered, release, close_done = (_threading.Event(), _threading.Event(),
+                                            _threading.Event())
+            opened, closed = [], []
+            def _blocked_start(self):
+                entered.set()
+                release.wait(1)
+            def _noticed_stop(self):
+                closed.append(self)
+            with _patch.object(_Session, "start", _blocked_start), \
+                 _patch.object(_Session, "stop", _noticed_stop):
+                opener = _threading.Thread(
+                    target=lambda: opened.append(rooms.for_pass("close-race", "check")))
+                opener.start()
+                entered.wait(1)
+                closer = _threading.Thread(
+                    target=lambda: (rooms.close("close-race"), close_done.set()))
+                closer.start()
+                close_while_starting = close_done.wait(0.15)
+                release.set()
+                opener.join(1); closer.join(1)
+            c("a closing session cannot leave an unregistered queue starting",
+              bool(opened) and not close_while_starting and close_done.is_set()
+              and rooms.find("close-race") is None and closed == opened)
+
+            # A session can be closed while its worker is waiting for yt-dlp.
+            # Letting that worker append afterwards resurrects a dead queue.
+            from .core import queue as _queuemod
+            from .core.queue import QueueManager as _QueueManager, WorkItem as _WorkItem
+            from .core.sink import ListSink as _ListSink
+            from .core.taste import NeutralTaste as _NeutralTaste
+            fetch_started, fetch_release = _threading.Event(), _threading.Event()
+            stopped_queue = _QueueManager(_ListSink(), _Ctx(), taste=_NeutralTaste(),
+                                          session_id="stopped-queue")
+            stopped_track = _Track(video_id="stopped-work", title="Stopped work")
+            def _held_fetch(*args, **kwargs):
+                fetch_started.set()
+                fetch_release.wait(1)
+                return "stopped-work.m4a"
+            with _patch.object(_dlmod.downloader, "fetch_with_fallbacks",
+                               side_effect=_held_fetch), \
+                 _patch.object(_dlmod.downloader, "cancel_all", return_value=0), \
+                 _patch.object(_queuemod.spectrum, "ensure", lambda path: None):
+                worker = _threading.Thread(
+                    target=stopped_queue._process,
+                    args=(_WorkItem(stopped_track, mode="now"),))
+                worker.start()
+                fetch_started.wait(1)
+                stopped_queue.stop()
+                fetch_release.set()
+                worker.join(1)
+            c("stopping a queue prevents an in-flight download from appending",
+              fetch_started.is_set() and not worker.is_alive()
+              and stopped_queue.sink.count() == 0)
+
             # Silent stdout cannot suspend the timeout, and cleanup must clear
             # the active process registry even after cancellation.
             class _SilentProcess:
@@ -4312,6 +4614,16 @@ def _run(verbose: bool = False) -> Result:
               code != 0 and "TIMEOUT" in output and elapsed < 1
               and proc not in _dlmod.downloader._procs)
 
+            # Workers publish sticky state while browsers connect and
+            # reconnect. A new subscriber must get one consistent snapshot.
+            from .events import EventBus as _EventBus
+            event_bus = _EventBus()
+            event_bus.publish("status", {"playing": "check"})
+            replay = event_bus.subscribe().get_nowait()
+            c("a new event subscriber receives a locked sticky snapshot",
+              replay == {"type": "status", "data": {"playing": "check"},
+                         "replay": True})
+
             failed_id = "cleanup-exception-check"
             failed_track = _Track(video_id=failed_id, title="Failure cleanup")
             _dlmod._note_inflight(failed_id, total=10)
@@ -4333,6 +4645,8 @@ def _run(verbose: bool = False) -> Result:
                 cache.mkdir(); pinned.mkdir()
                 partial = cache / "prune-check.m4a.part"
                 partial.write_bytes(b"partial")
+                unmarked = cache / "marker-check.m4a"
+                unmarked.write_bytes(b"not yet trusted")
                 active = cache / "active-check.m4a"
                 active.write_bytes(b"active")
                 with _dlmod._INFLIGHT_LOCK:
@@ -4340,14 +4654,61 @@ def _run(verbose: bool = False) -> Result:
                 try:
                     with _patch.object(_dlmod, "cache_dir", lambda: cache), \
                          _patch.object(_dlmod, "pinned_dir", lambda: pinned), \
+                         _patch.object(_cast2, "cache_dir", lambda: cache), \
                          _patch("mrs.core.cast.prune", lambda: 0):
                         partial_hit = _dlmod.downloader.cached("prune-check")
-                        removed = _dlmod.downloader.prune_cache(keep_mb=0)
+                        unmarked_hidden = (_dlmod.downloader.cached("marker-check") is None
+                                           and _cast2.source_for("marker-check") is None)
+                        marked = _dlmod.downloader._mark_complete(str(unmarked))
+                        marked_visible = (_dlmod.downloader.cached("marker-check")
+                                          == str(unmarked)
+                                          and _cast2.source_for("marker-check") == unmarked)
+                        removed = _dlmod.downloader.prune_cache(
+                            keep_mb=0, keep={str(unmarked)})
                     c("partial audio is not served and active files survive pruning",
                       partial_hit is None and active.is_file() and removed == 0)
+                    c("a final-name download is unusable until its completion marker exists",
+                      unmarked_hidden and marked and marked_visible)
                 finally:
                     with _dlmod._INFLIGHT_LOCK:
                         _dlmod._INFLIGHT.pop("active-check", None)
+
+            # A cache filename is an identity, not a friendly display label.
+            # Punctuation collisions and prefix-shaped IDs must not make one
+            # source serve another source's completed recording.
+            with _tempfile.TemporaryDirectory(prefix="mrs-cache-identity-") as root:
+                cache, pinned, cast_work = (_Path(root) / "cache",
+                                            _Path(root) / "pinned",
+                                            _Path(root) / "cast")
+                cache.mkdir(); pinned.mkdir(); cast_work.mkdir()
+                left_id, right_id = "source?one", "source:one"
+                plain_id, dotted_id = "source", "source.more"
+                samples = {}
+                for source_id in (left_id, right_id, plain_id, dotted_id):
+                    audio = cache / f"{_dlmod.downloader._safe_id(source_id)}.m4a"
+                    audio.write_bytes(source_id.encode())
+                    audio.with_name(audio.name + ".complete").write_text("1")
+                    samples[source_id] = audio
+                with _patch.object(_dlmod, "cache_dir", lambda: cache), \
+                     _patch.object(_dlmod, "pinned_dir", lambda: pinned), \
+                     _patch.object(_cast2, "cache_dir", lambda: cache), \
+                     _patch.object(_cast2, "work_dir", lambda: cast_work):
+                    identities_are_distinct = (
+                        _dlmod.downloader._safe_id(left_id)
+                        != _dlmod.downloader._safe_id(right_id))
+                    exact_hits = all(
+                        _dlmod.downloader.cached(source_id) == str(audio)
+                        and _cast2.source_for(source_id) == audio
+                        for source_id, audio in samples.items())
+                    cast_path = _cast2._converted(left_id)
+                    cast_path.write_bytes(b"converted")
+                    cast_identity_is_safe = (
+                        "?" not in cast_path.name and ":" not in cast_path.name
+                        and _cast2._vid_of(cast_path)
+                        == _dlmod.downloader._safe_id(left_id)
+                        and _cast2.prune() == 0 and cast_path.is_file())
+                c("distinct and prefix-shaped source ids cannot share cached audio",
+                  identities_are_distinct and exact_hits and cast_identity_is_safe)
 
             # Completed files have stable media types and byte-range behavior
             # for browser/Safari clients.

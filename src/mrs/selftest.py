@@ -124,13 +124,17 @@ def _run() -> int:
                          "/api/playlists", "/api/audio/devices"):
                 if c.get(path, headers=head).status_code != 200:
                     bad.append(path)
-            # A shared link must be able to listen and nothing more.
+            # The player uses an internal, non-owner pass because media and
+            # event URLs cannot carry a header. Personal links may be turned
+            # off, but that must not make the player's own credential unable
+            # to inspect playback state or able to change settings.
             if key:
                 from .web.security import issue, forget_pass
-                minted = issue(key, name="selftest", hours=1, scope="full")
+                minted = issue(key, name="selftest", hours=1, scope="full",
+                               internal=True)
                 tok = minted["token"]
                 if c.get(f"/api/status?token={tok}").status_code != 200:
-                    bad.append("token can't listen")
+                    bad.append("player token can't listen")
                 # POST: that is how a write arrives now, so it is the one
                 # that has to be refused for the right reason.
                 if c.post("/api/setting", json={"key": "volume", "value": "70"},

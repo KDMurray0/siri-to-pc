@@ -17,6 +17,7 @@ half where the address you forwarded to has changed.
 from __future__ import annotations
 
 import base64
+import socket
 import threading
 import time
 import urllib.error
@@ -52,8 +53,10 @@ PROVIDERS = {
     "afraid": "https://freedns.afraid.org/nic/update",
 }
 
-_state: dict = {"last": "", "at": 0.0, "detail": "not set up", "ok": None}
+_state: dict = {"last": "", "at": 0.0, "detail": "not set up", "ok": None,
+                "dns_matches": None}
 _lock = threading.Lock()
+_UNCHANGED = object()
 
 
 def configured() -> bool:
@@ -71,12 +74,31 @@ def status() -> dict:
     return out
 
 
-def _note(ok: bool | None, detail: str, ip: str = "") -> dict:
+def _note(ok: bool | None, detail: str, ip: str = "", *,
+          dns_matches=_UNCHANGED) -> dict:
     with _lock:
         _state.update({"ok": ok, "detail": detail, "at": time.time()})
         if ip:
             _state["last"] = ip
+        if dns_matches is not _UNCHANGED:
+            _state["dns_matches"] = dns_matches
     return status()
+
+
+def _public_ipv4(host: str) -> set[str]:
+    """The IPv4 addresses normal clients currently get for *host*.
+
+    A successful Dynamic DNS protocol reply only tells us that the provider
+    accepted an update for one service. It does not prove an older explicit
+    record, another Dynu product, or a wrong zone cannot still win public DNS.
+    Keep that distinction visible: a copied link is useful only when ordinary
+    DNS sends visitors to this machine.
+    """
+    try:
+        return {row[4][0] for row in socket.getaddrinfo(
+            host, None, socket.AF_INET, socket.SOCK_STREAM)}
+    except OSError:
+        return set()
 
 
 def update(ip: str = "", force: bool = False) -> dict:
@@ -118,8 +140,12 @@ def update(ip: str = "", force: bool = False) -> dict:
     word = body.split()[0].lower() if body else ""
     meaning = _MEANING.get(word, body[:60] or "no answer")
     if word in ("good", "nochg"):
+        resolved = _public_ipv4(host)
+        matches = ip in resolved if resolved else None
+        if matches is False:
+            meaning += "; public DNS still resolves to " + ", ".join(sorted(resolved))
         log.info("%s now points at %s (%s)", host, ip, meaning)
-        return _note(True, meaning, ip)
+        return _note(True, meaning, ip, dns_matches=matches)
     log.warning("ddns update refused: %s", meaning)
     return _note(False, meaning)
 

@@ -58,6 +58,9 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.88em;
 .btn.go:hover{background:#d89a6d;border-color:#d89a6d}
 .btn.quiet{background:none;border-color:transparent;color:var(--sub);padding-left:4px}
 .btn.quiet:hover{color:var(--fg);background:none}
+.textin{width:100%;background:#0a0b11;border:1px solid var(--line);border-radius:9px;
+  color:var(--fg);padding:9px 11px;font:inherit;font-size:14px;outline:none}
+.textin:focus{border-color:var(--accent)}
 
 .nav{display:flex;gap:10px;align-items:center;margin-top:26px;
   padding-top:18px;border-top:1px solid var(--line)}
@@ -120,7 +123,7 @@ li b{color:var(--fg)}
 
   <!-- 3 ─────────────────────────────────────────────────────────── -->
   <section class="step" data-step="2">
-    <div class="eyebrow">Step 2 of 4 · Recommended</div>
+    <div class="eyebrow">Step 2 of 5 · Recommended</div>
     <h1>Signing in to YouTube</h1>
     <p>YouTube increasingly refuses to hand audio to anything that doesn't look
       like a signed-in browser. Without this, some songs download fine and
@@ -145,7 +148,24 @@ li b{color:var(--fg)}
 
   <!-- 4 ─────────────────────────────────────────────────────────── -->
   <section class="step" data-step="3">
-    <div class="eyebrow">Step 3 of 4 · Optional</div>
+    <div class="eyebrow">Step 3 of 5 · Optional</div>
+    <h1>Your public master link</h1>
+    <p>Already have a public HTTPS address? Paste it here, for example
+      <code>https://musicrequestserver.dynu.com:29543</code>. This is the one
+      link the app hands out and gives Google for sign-in.</p>
+    <input class="textin" id="masterurl" placeholder="https://your-name.example:29543" autocomplete="url" spellcheck="false">
+    <div class="foot" style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
+      <button class="btn go" id="mastersave">Save public link</button>
+    </div>
+    <p id="masterhint">Optional — leave it blank if this player only stays on your Wi-Fi.</p>
+    <div class="note"><b>This only records the address.</b> It cannot register a domain,
+      open your router, or make an HTTPS certificate. Do those first; you can change this
+      later in <b>Settings → Sharing</b>.</div>
+  </section>
+
+  <!-- 5 ─────────────────────────────────────────────────────────── -->
+  <section class="step" data-step="4">
+    <div class="eyebrow">Step 4 of 5 · Optional</div>
     <h1>Extras, all of them skippable</h1>
     <p>None of these are needed. Each one is off until you turn it on, and
       each says plainly what it wants.</p>
@@ -184,9 +204,9 @@ li b{color:var(--fg)}
     </div>
   </section>
 
-  <!-- 5 ─────────────────────────────────────────────────────────── -->
-  <section class="step" data-step="4">
-    <div class="eyebrow">Step 4 of 4 · Worth reading</div>
+  <!-- 6 ─────────────────────────────────────────────────────────── -->
+  <section class="step" data-step="5">
+    <div class="eyebrow">Step 5 of 5 · Worth reading</div>
     <h1>Your key, and the links you hand out</h1>
     <p>There are two different credentials here and it's worth thirty seconds
       to know which is which.</p>
@@ -212,8 +232,8 @@ li b{color:var(--fg)}
     <div class="linkbox" id="reach">Working out how to reach this player…</div>
   </section>
 
-  <!-- 6 ─────────────────────────────────────────────────────────── -->
-  <section class="step" data-step="5">
+  <!-- 7 ─────────────────────────────────────────────────────────── -->
+  <section class="step" data-step="6">
     <div class="eyebrow">All set</div>
     <h1>Ask it for something</h1>
     <p class="lead">Type a song, a band, an album or a vibe into the box at the
@@ -275,7 +295,7 @@ function show(n) {
                         : at === LAST ? "Open the player" : "Next";
   $("skip").style.display = at === LAST ? "none" : "";
   window.scrollTo({ top: 0, behavior: "instant" });
-  if (at === 4) loadReach();
+  if (at === 5) loadReach();
 }
 
 $("next").onclick = () => (at === LAST ? finish() : show(at + 1));
@@ -329,14 +349,37 @@ $("cktest").onclick = async () => {
   setTimeout(() => { $("cktest").disabled = false; refresh(); }, 2500);
 };
 
-/* ── step 3: extras ────────────────────────────────────────────── */
+/* ── step 3: public master link ────────────────────────────────── */
+function paintMaster(s) {
+  if (!$("masterurl").matches(":focus")) $("masterurl").value = s.master_url || "";
+  $("masterhint").textContent = s.master_url
+    ? "Saved: " + s.master_url
+    : "Optional — leave it blank if this player only stays on your Wi-Fi.";
+}
+$("mastersave").onclick = async () => {
+  const value = $("masterurl").value.trim();
+  if (!value) { $("masterhint").textContent = "Paste the public HTTPS address first."; return; }
+  $("mastersave").disabled = true;
+  const r = await api("/api/public-address?url=" + encodeURIComponent(value));
+  $("mastersave").disabled = false;
+  if (!r || r.status !== "ok") {
+    $("masterhint").textContent = (r && r.detail) || "That address did not save."; return;
+  }
+  $("masterurl").value = r.master_url || value;
+  $("masterhint").textContent = r.https_ready
+    ? "Saved. Google callback: " + (r.redirect_uri || "add a hostname first.")
+    : "Saved, but HTTPS is not live yet — finish the certificate or gateway setup.";
+  refresh();
+};
+
+/* ── step 4: extras ────────────────────────────────────────────── */
 function paintExtras(s) {
   $("groqdot").className = "dot " + (s.groq ? "ok" : "");
   $("lfmdot").className = "dot " + (s.lastfm ? "ok" : "");
   $("spotdot").className = "dot " + (s.spotify ? "ok" : "");
 }
 
-/* ── step 4: how to reach it ───────────────────────────────────── */
+/* ── step 5: how to reach it ───────────────────────────────────── */
 async function loadReach() {
   const r = await api("/api/network");
   if (!r || !r.addresses) { $("reach").textContent = "Couldn't work that out."; return; }
@@ -355,7 +398,7 @@ async function refresh() {
     return;
   }
   $("rel").textContent = s.release ? "v" + s.release : "";
-  paintTools(s); paintCookies(s); paintExtras(s);
+  paintTools(s); paintCookies(s); paintMaster(s); paintExtras(s);
 }
 refresh();
 show(0);

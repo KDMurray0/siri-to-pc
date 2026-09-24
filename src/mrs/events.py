@@ -27,7 +27,11 @@ class EventBus:
         q: asyncio.Queue = asyncio.Queue(maxsize=256)
         with self._lock:
             self._subs.add(q)
-        for kind, payload in list(self._latest.items()):
+            # publish() can run on a downloader or player thread. Snapshot
+            # while it holds the same lock, otherwise a reconnect can hit
+            # "dictionary changed size during iteration" here.
+            latest = list(self._latest.items())
+        for kind, payload in latest:
             try:
                 q.put_nowait({"type": kind, "data": payload, "replay": True})
             except asyncio.QueueFull:
@@ -53,7 +57,8 @@ class EventBus:
     def publish(self, kind: str, data: Any = None, *, sticky: bool = True) -> None:
         """Fan an event out to every subscriber. Safe from any thread."""
         if sticky:
-            self._latest[kind] = data
+            with self._lock:
+                self._latest[kind] = data
         evt = {"type": kind, "data": data, "ts": time.time()}
         loop = self._loop
         if loop is None or loop.is_closed():

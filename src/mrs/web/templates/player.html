@@ -1587,15 +1587,20 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
       </section>
 
       <section class="spane" data-s="access">
-        <div class="seclbl">People</div>
+        <div class="seclbl">Google sign-in</div>
+        <div class="hint">Paste the OAuth details from Google Cloud here. The secret stays on this
+          computer and is never shown again. Save these three values together, then copy the redirect
+          URI into Google Cloud Console before trying a sign-in.</div>
         <div class="srow"><span class="slabel">Signing in with Google<em id="ghint">Let people in by who they are, not by which link they hold</em></span>
           <span class="sval" id="gstate">off</span></div>
         <div class="srow"><span class="slabel">Client ID<em>From the Google Cloud Console</em></span>
-          <input class="keyin" id="gclient" placeholder="...apps.googleusercontent.com"></div>
+          <input class="keyin" id="gclient" placeholder="...apps.googleusercontent.com" autocomplete="off" spellcheck="false"></div>
         <div class="srow"><span class="slabel">Client secret<em>Kept here, never shown again</em></span>
-          <input class="keyin" id="gsecret" type="password" placeholder="GOCSPX-..."></div>
+          <input class="keyin" id="gsecret" type="password" placeholder="GOCSPX-..." autocomplete="new-password" spellcheck="false"></div>
         <div class="srow"><span class="slabel">Your own email<em>The account that gets to be the owner</em></span>
-          <input class="keyin" id="gowner" type="email" placeholder="you@gmail.com"></div>
+          <input class="keyin" id="gowner" type="email" placeholder="you@gmail.com" autocomplete="email"></div>
+        <div class="srow"><span class="slabel"><em id="gsetuphint">Enter the three details, then save them together.</em></span>
+          <button class="btn primary" id="gsave">Save Google sign-in</button></div>
         <div class="srow"><label class="slabel" for="gscope">New home-network sign-ins<em>Shared links keep the access level they were given</em></label>
           <select class="keyin" id="gscope"><option value="blocked">Hold for approval</option><option value="phone">Their own device</option><option value="full">Speakers too</option></select></div>
         <div class="srow"><span class="slabel">Redirect URI<em>Paste this into the Console, exactly</em></span>
@@ -1670,10 +1675,20 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
             you tell them the new address; anything pasted somewhere old stops working. Your
             music, playlists, accounts and settings are untouched.</div>
         </div>
+        <div class="seclbl">Your public master link</div>
+        <div class="hint">Paste the complete HTTPS address you want people and Google to use, such as
+          <code>https://musicrequestserver.dynu.com:29543</code>. It updates the hostname, public
+          port and optional Music path below in one go.</div>
+        <div class="srow"><span class="slabel">Public link<em>Must be HTTPS; an optional /music path is allowed</em></span>
+          <span class="acctname"><input class="keyin" id="addrmaster" placeholder="https://your-name.example:29543" autocomplete="url" spellcheck="false">
+            <button class="btn primary" id="addrmastersave">Save link</button></span></div>
+        <div class="hint" id="addrmasterhint"></div>
         <div class="seclbl">The address</div>
         <div class="hint">Put Music at a path so another app can share the address, and say which
           port the outside world uses (your router forwards it here). Google sign-in has to be told
           the new address in its console before anybody can sign in on it.</div>
+        <div class="srow"><label class="slabel" for="addrhttps">HTTPS<em>Use the direct certificate route for Dynu. A Dynu Web Redirect may forward a separate HTTP alias here, but it must never replace this hostname's HTTPS service.</em></label>
+          <select class="keyin" id="addrhttps"><option value="direct">Direct certificate (Dynu / router)</option><option value="proxy">Local HTTPS gateway (not Dynu Web Redirect)</option></select></div>
         <div class="srow"><span class="slabel">Path<em>Where Music lives, like /music</em></span>
           <input class="keyin" id="addrprefix" placeholder="/music" autocomplete="off" spellcheck="false"></div>
         <div class="srow"><span class="slabel">Public port<em>What the outside uses, like 443. 0 means this computer's own</em></span>
@@ -1898,6 +1913,19 @@ function apiFetch(path) {
 }
 const api = (path) => apiFetch(path)
   .then(r => r.ok ? r.json() : null).catch(() => null);
+
+/* A few forms carry secrets. Keep their values in a JSON body from the
+   outset rather than serialising them into an address and then relying on the
+   generic URL-to-POST bridge to move them back out. */
+async function apiJsonTry(path, body) {
+  try {
+    const r = await fetch(BASE + path, { method: "POST", headers: {
+      "Content-Type": "application/json", "X-Music-Key": KEY,
+      "X-Play-Here": (typeof cast !== "undefined" && cast.on) ? "1" : "0",
+    }, body: JSON.stringify(body) });
+    return { ok: r.ok, status: r.status, body: await r.json().catch(() => ({})) };
+  } catch (e) { return { ok: false, status: 0, body: {} }; }
+}
 
 /* A refusal the user should hear about, rather than a request that silently
    does nothing. 429 is the rate limiter; 403 is a link that's been revoked or
@@ -3512,14 +3540,27 @@ async function loadNetwork() {
       `A forward rule aimed at ${r.configured_port} points at nothing — ` +
       `forward ${r.port} instead, or restart with the other port free.`;
   }
-  $("nethint").textContent = (r.https
-    ? `Encrypted. The certificate has ${Math.round(r.cert_days)} days left and ` +
-      "renews itself; links work by name, not by address."
-    : "Traffic is not encrypted — anything reaching this over the internet " +
-      "should go through a VPN, or run certificate.ps1 to get a real " +
-      "certificate for your name. ") +
-    (wan ? ` Forward port ${r.port} to this machine for the first one to work.`
-         : " Couldn't work out your public address.");
+  const publicPort = r.public_port || r.port;
+  const forward = wan
+    ? ` Map public TCP ${publicPort} to this computer's TCP ${r.port}.`
+    : " Couldn't work out your public address.";
+  if (r.https && r.https_mode === "proxy") {
+    $("nethint").textContent = "HTTPS is supplied by a local gateway. Its origin must be " +
+      `http://127.0.0.1:${r.port}; Dynu Web Redirect cannot be that gateway. ` +
+      "A separate HTTP-only alias may forward visitors to the real HTTPS address." + forward;
+  } else if (r.https) {
+    $("nethint").textContent = `Encrypted. The certificate has ${Math.round(r.cert_days)} days left ` +
+      "and renews itself; links work by name, not by address." + forward;
+  } else if (r.ddns_provider === "dynu" && r.hostname) {
+    $("nethint").textContent = `Dynu is keeping ${r.hostname} pointed here, but DDNS does not add HTTPS. ` +
+      `Run .\\certificate.ps1 -Domain ${r.hostname} -ClientId YOUR_DYNU_API_CLIENT_ID, ` +
+      "then restart. Public port must match the external TCP port (0 keeps this app's own port). " +
+      `Never enable Dynu Web Redirect or Port Forwarding on ${r.hostname}: it is HTTP-only. ` +
+      "A separately named alias may use non-masked URL Forwarding to this HTTPS address." + forward;
+  } else {
+    $("nethint").textContent = "Traffic is not encrypted - run certificate.ps1 to get a real " +
+      "certificate for your name." + forward;
+  }
 }
 /* navigator.clipboard only exists in a secure context, so on plain http
    over the LAN it is simply absent — which is why copying did nothing at
@@ -3732,31 +3773,55 @@ $("acctforget").onclick = async e => {
     : r.body.cleared ? "Forgotten" : "There was nothing to forget");
 };
 
-/* The address: a path, a public port, and where Movies is. What Google has to be
+/* The address: HTTPS ownership, a path, a public port, and where Movies is. What Google has to be
    told is whatever the server now says it will send people back to. */
 async function addrHint() {
   const r = await api("/api/accounts");
   if (r && r.redirect_uri) $("addrhint").textContent =
     "Google needs this redirect address: " + r.redirect_uri;
 }
+async function loadMasterAddress() {
+  const r = await api("/api/public-address");
+  if (!r) return;
+  if (!$("addrmaster").matches(":focus")) $("addrmaster").value = r.master_url || "";
+  $("addrmasterhint").textContent = r.master_url
+    ? (r.https_ready ? "Saved and ready to hand out." : "Saved, but HTTPS is not live yet.")
+    : "Optional — leave this blank when the player is only for your home network.";
+}
+$("addrmastersave").onclick = async () => {
+  const url = $("addrmaster").value.trim();
+  if (!url) { toast("Paste the public HTTPS address first"); return; }
+  $("addrmastersave").disabled = true;
+  const r = await apiTry("/api/public-address?url=" + encodeURIComponent(url));
+  $("addrmastersave").disabled = false;
+  if (!r.ok) { toast((r.body && r.body.detail) || "That address did not save"); return; }
+  $("addrmaster").value = r.body.master_url || url;
+  await loadSettings();
+  await loadDdns();
+  await loadNetwork();
+  await addrHint();
+  toast(r.body.https_ready ? "Public link saved" : "Saved — finish HTTPS before handing it out");
+};
 /* Whether Google would accept the address as it would be once saved. A change
    Google hasn't been told about means nobody can sign in, so the first Save
    asks, and only a second one -- which says what it is -- goes ahead anyway. */
 let addrForce = false;
 const addrProposed = () => ({ prefix: $("addrprefix").value.trim(),
-                              port: $("addrport").value.trim() || "0" });
+                              port: $("addrport").value.trim() || "0",
+                              https: $("addrhttps").value });
 async function addrAsk() {
   const p = addrProposed();
   $("addrhint").textContent = "Asking Google\u2026";
   const r = await apiTry("/api/accounts/check?url_prefix=" + encodeURIComponent(p.prefix) +
-                         "&public_port=" + encodeURIComponent(p.port));
+                         "&public_port=" + encodeURIComponent(p.port) +
+                         "&https_mode=" + encodeURIComponent(p.https));
   if (!r.ok) { $("addrhint").textContent = (r.body && r.body.detail) || "Couldn't check"; return null; }
   $("addrhint").textContent = r.body.message;
   $("addrhint").style.color = r.body.verdict === "accepted" ? "var(--ok)"
     : r.body.verdict === "unset" ? "" : "var(--bad)";
   return r.body;
 }
-["addrprefix", "addrport"].forEach(id => $(id).addEventListener("input", () => {
+["addrprefix", "addrport", "addrhttps"].forEach(id => $(id).addEventListener("input", () => {
   addrForce = false; $("addrsave").textContent = "Save";
 }));
 $("addrcheck").onclick = () => addrAsk();
@@ -3769,14 +3834,16 @@ $("addrsave").onclick = async () => {
     }
   }
   const put = (k, v) => apiTry("/api/setting?key=" + k + "&value=" + encodeURIComponent(v));
-  for (const [k, v] of [["url_prefix", $("addrprefix").value.trim()],
+  for (const [k, v] of [["https_mode", $("addrhttps").value],
+                        ["url_prefix", $("addrprefix").value.trim()],
                         ["public_port", $("addrport").value.trim() || "0"],
                         ["movies_url", $("addrmovies").value.trim()]]) {
     const r = await put(k, v);
     if (!r.ok) { toast((r.body && r.body.detail) || "That didn't go through"); return; }
   }
   addrForce = false; $("addrsave").textContent = "Save";
-  toast("Saved"); await loadSettings(); addrHint();
+  toast("Saved — restart Music Request Server to apply the HTTPS origin mode");
+  await loadSettings(); addrHint();
 };
 
 /* Siri: a key that can ask for songs as this account, and nothing else. It is
@@ -3890,19 +3957,37 @@ $("peoplelist").addEventListener("click", async e => {
   if (!r) { toast("That didn't go through"); return; }
   loadPeople();
 });
-for (const [id, key] of [["gclient", "google_client_id"],
-                         ["gsecret", "google_client_secret"],
-                         ["gowner", "owner_email"],
-                         ["gscope", "new_account_scope"]]) {
-  $(id).addEventListener("change", async () => {
-    const r = await api("/api/setting?key=" + key + "&value=" +
-                        encodeURIComponent($(id).value.trim()));
-    if (!r) { toast("That needs the key"); return; }
-    if (id === "gsecret") $(id).value = "";
-    toast("Saved");
-    loadPeople();
-  });
+function paintGoogleSetup(s) {
+  if (!$("gclient").matches(":focus")) $("gclient").value = s.google_client_id || "";
+  $("gsecret").placeholder = s.google_set
+    ? "•••••••• saved — leave blank to keep it" : "GOCSPX-...";
+  if (!$("gowner").matches(":focus")) $("gowner").value = s.owner_email || "";
+  $("gsetuphint").textContent = s.google_set
+    ? "Saved here. Copy the redirect URI below into Google Cloud Console."
+    : "Enter the three details, then save them together.";
 }
+$("gsave").onclick = async () => {
+  const client_id = $("gclient").value.trim();
+  const client_secret = $("gsecret").value.trim();
+  const owner_email = $("gowner").value.trim();
+  if (!client_id || !owner_email) {
+    toast("Enter the Client ID and the email address that owns this server"); return;
+  }
+  $("gsave").disabled = true;
+  const r = await apiJsonTry("/api/accounts/setup", { client_id, client_secret, owner_email });
+  $("gsave").disabled = false;
+  if (!r.ok) { toast((r.body && r.body.detail) || "Google setup did not save"); return; }
+  $("gsecret").value = "";
+  toast("Google sign-in saved — now add the redirect URI in Google Cloud Console");
+  await loadSettings();
+  await loadPeople();
+};
+$("gscope").addEventListener("change", async () => {
+  const r = await api("/api/setting?key=new_account_scope&value=" +
+                      encodeURIComponent($("gscope").value));
+  if (!r) { toast("That needs the key"); return; }
+  toast("Saved"); loadPeople();
+});
 
 /* A long list that starts short.
 
@@ -4085,9 +4170,11 @@ async function loadDdns() {
   if (r.hostname) $("ddnshost").value = r.hostname;
   if (r.provider) $("ddnsprov").value = r.provider;
   if (!r.configured) { box.className = "reach"; box.innerHTML = ""; return; }
-  box.className = "reach " + (r.ok ? "good" : r.ok === false ? "bad" : "");
+  const mismatch = r.dns_matches === false;
+  box.className = "reach " + (r.ok && !mismatch ? "good" : (r.ok === false || mismatch) ? "bad" : "");
   box.innerHTML = `<b>${esc(r.hostname)}</b>` +
-    (r.ok ? `Pointing at ${esc(r.last || "here")} — ${esc(r.detail)}`
+    (r.ok && mismatch ? `Dynu accepted ${esc(r.last || "the update")}, but public DNS is different — ${esc(r.detail)}`
+          : r.ok ? `Pointing at ${esc(r.last || "here")} — ${esc(r.detail)}`
           : `Not updating: ${esc(r.detail)}`) +
     (r.minutes_ago != null ? ` · checked ${r.minutes_ago}m ago` : "");
 }
@@ -4115,7 +4202,7 @@ $("portcheck").onclick = async () => {
   box.innerHTML = "Asking…";
   const r = await api("/api/network?check=1");
   if (!r) { box.innerHTML = "Couldn't check just now."; return; }
-  const port = r.port, open = r.port_open;
+  const port = r.checked_port || r.public_port || r.port, target = r.port, open = r.port_open;
   if (open === true) {
     box.className = "reach good";
     box.innerHTML = `<b>Reachable.</b> Port ${port} is open from outside — ` +
@@ -4128,7 +4215,7 @@ $("portcheck").onclick = async () => {
     ` Your router isn't sending port <code>${port}</code> to this computer yet.` +
     `<ol>` +
     `<li>Open your router's admin page and find <em>Port forwarding</em>.</li>` +
-    `<li>Forward external port <code>${port}</code> to <code>${r.addresses.find(a => a.kind === "lan").host}</code> port <code>${port}</code>, TCP.</li>` +
+    `<li>Forward external port <code>${port}</code> to <code>${r.addresses.find(a => a.kind === "lan").host}</code> port <code>${target}</code>, TCP.</li>` +
     `<li>Come back and press Check again.</li>` +
     `</ol>` +
     `<div style="margin-top:6px;color:var(--sub)">Two things that catch people out: ` +
@@ -4418,10 +4505,13 @@ async function loadWhoami() {
   //                  including on a phone; that choice is the whole point of
   //                  a full link. Only a phone-only pass loses it.
   //   the device list — *which* PC speaker. That is the computer's own
-  //                  business and stays in the desktop app.
+  //                  business, so it is the owner's. It used to hang off
+  //                  whether the desktop bridge existed, but that arrives a
+  //                  moment after the page loads: whenever the page won the
+  //                  race the list was hidden for good, in the desktop app too.
   const canSwitch = r.scope !== "phone";
   document.body.classList.toggle("nopc", !canSwitch);
-  document.body.classList.toggle("nodevices", !bridge());
+  document.body.classList.toggle("nodevices", !r.owner);
   if (!canSwitch) {
     segShow(true);
     $("ph-note").textContent = "This link plays here and nowhere else";
@@ -5734,6 +5824,7 @@ async function loadSettings() {
   document.body.classList.toggle("party", !!s.party_mode);
   if (document.activeElement !== $("addrprefix")) $("addrprefix").value = s.url_prefix || "";
   if (document.activeElement !== $("addrport")) $("addrport").value = s.public_port || 0;
+  if (document.activeElement !== $("addrhttps")) $("addrhttps").value = s.https_mode || "direct";
   if (document.activeElement !== $("addrmovies")) $("addrmovies").value = s.movies_url || "";
   $("keyinurl").classList.toggle("on", !!s.allow_key_in_url);
   $("legacyget").classList.toggle("on", !!s.allow_legacy_get_mutations);
@@ -5755,6 +5846,8 @@ async function loadSettings() {
     ? "Optional. Without it, requests use the built-in parser."
     : (g.working ? "Connected — " + (s.groq_model || "") : "Not working: " + (g.last_error || ""));
   applyCookies(Object.assign({ path: (s.cookies && s.cookies.path) || "" }, s.cookies));
+  paintGoogleSetup(s);
+  loadMasterAddress();
   $("libcount").textContent = s.library_count
     ? s.library_count + " indexed" : "none indexed";
   const li = s.listener || {};

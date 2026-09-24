@@ -16,6 +16,10 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_sub
 # gone missing, even if the copy beside the exe was deleted or never unzipped.
 datas = [('src/mrs/web/templates', 'web/templates'),
          ('setup.ps1', '.'),
+         # Direct Dynu HTTPS is part of the shipped product; the certificate
+         # bootstrapper must be beside the built executable, not stranded in
+         # a source checkout the release user may no longer have.
+         ('certificate.ps1', '.'),
          ('config.example.json', '.')]
 binaries = []
 hiddenimports = [

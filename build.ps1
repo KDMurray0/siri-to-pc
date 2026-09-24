@@ -84,6 +84,15 @@ if ($LASTEXITCODE -ge 8) { Write-Host "Install failed (robocopy $LASTEXITCODE)."
 # After the mirror, which would otherwise delete it.
 New-Item -ItemType Directory -Force "$dst\downloads" | Out-Null
 Copy-Item "$stage\MusicClient.zip" "$dst\downloads\MusicClient.zip" -Force
+# PyInstaller puts data files under _internal in a one-dir build. The Dynu
+# certificate helper is an operator-facing command, so it must be visibly
+# beside the executable rather than technically present but undiscoverable in
+# the runtime internals.
+Copy-Item (Join-Path $root "certificate.ps1") "$dst\certificate.ps1" -Force
+if (-not (Test-Path -LiteralPath "$dst\certificate.ps1")) {
+    Write-Host "Couldn't install the Dynu certificate helper." -ForegroundColor Red
+    exit 1
+}
 
 if ($NoRestart) {
     Say "Done. Start it yourself when you're ready:"

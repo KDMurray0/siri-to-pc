@@ -368,7 +368,7 @@ For maximum security, scope to just your phone:
 New-NetFirewallRule -DisplayName "Music Request Server" -Direction Inbound -LocalPort 7420 -Protocol TCP -Action Allow -Profile Private -RemoteAddress 192.168.1.50
 ```
 
-## HTTPS with a real certificate
+## Dynu HTTPS with a real certificate
 
 A certificate this machine signs for itself is worthless — Safari refuses it
 outright, iOS offers no exception for a bare IP, and the desktop window needs
@@ -376,30 +376,58 @@ a browser flag to load its own player. A certificate signed by an authority,
 for a name that points at your house, works everywhere with no warnings.
 `certificate.ps1` gets one from Let's Encrypt and keeps it renewed.
 
-You need a name first. The Sharing tab's **A name that follows you** keeps a
-Dynu hostname pointed at your address; set that up before this.
+This is a **Dynu direct-certificate** deployment. Dynu keeps the hostname
+pointed at the changing home address; it is not the HTTPS server and it does
+not proxy this app. Leave **HTTPS** set to **Direct certificate (Dynu /
+router)** in Settings → Access.
 
-1. **Dynu API credentials.** Dynu control panel → **API Credentials**. That
+1. **Use the real application endpoint, not a Dynu HTTP redirect.** A non-
+   standard public HTTPS port is valid and is the simplest setup when one is
+   already forwarded: for example, public `29543` → local `29543`, with
+   **Public port** left at `0` (which means this app's actual port). Links and
+   Google callbacks then include `:29543`.
+
+   Port 443 is optional. If you prefer a portless address, forward public
+   **TCP 443** to this computer's local app port, set **Public port** to `443`,
+   and disable Dynu **Web Redirect / Port Forwarding** for this hostname. That
+   Dynu feature is an HTTP port-80 redirect; it cannot terminate HTTPS or
+   carry a Google OAuth callback. Seeing a Dynu page or an *origin gateway
+   refused* error on port 443 means it still owns that connection instead of
+   the music server.
+
+   A **different, secondary hostname** may use Dynu **URL Forwarding** as a
+   non-masked HTTP convenience redirect to the real address -- for example,
+   `http://listen.example.org` →
+   `https://music.example.org:29543/music/`. Do not put that redirect on the
+   actual application hostname, do not use the alias as the Google callback,
+   and do not advertise `https://listen.example.org`: the redirect happens
+   only after HTTP and cannot make that alias's TLS certificate valid.
+
+2. **Dynu API credentials.** Dynu control panel → **API Credentials**. That
    page gives an OAuth2 **Client ID** and **Secret** — not your account
    password, and not the older API key.
 
-2. **Get the certificate.** In PowerShell, in the project folder:
+3. **Get the certificate.** In PowerShell beside `MusicRequestServer.exe`
+   (or in the project folder), run:
 
    ```powershell
-   .\certificate.ps1 -Domain music.example.dynu.net -ClientId YOUR_CLIENT_ID
+   .\certificate.ps1 -ClientId YOUR_CLIENT_ID
    ```
 
-   It asks for the secret without echoing it, installs Posh-ACME if it isn't
-   there, proves the name is yours through a DNS record Dynu writes for it,
-   and puts the certificate in `%LOCALAPPDATA%\MusicRequestServer\certs`.
-   Nothing needs to be reachable from the internet while this runs, and no
-   port has to be open.
+   It reads the Dynu hostname already saved in Settings, asks for the secret
+   without echoing it, installs Posh-ACME if needed, proves the name through a
+   DNS record Dynu writes, and puts the certificate in
+   `%LOCALAPPDATA%\MusicRequestServer\certs`. Nothing needs to be reachable
+   while it issues the certificate. To use a different name explicitly, add
+   `-Domain music.example.dynu.net`.
 
    Add `-Staging` for a rehearsal: it proves the DNS side works without
    spending one of the five certificates a week Let's Encrypt allows per
    name. A staging certificate is not trusted, so switch it off again.
+   Dynu-provided names can refuse new TXT records for their first 30 days; in
+   that case use an older Dynu name or a domain whose DNS you control.
 
-3. **Restart the player once.** It finds the files by itself and serves
+4. **Restart the player once.** It finds the files by itself and serves
    https on its own port; links and QR codes change to `https://` and the
    Sharing tab says how many days are left on the certificate.
 
@@ -411,6 +439,26 @@ What still uses plain http: this machine, on loopback only. A certificate
 belongs to a name, and the desktop window asking for it at `127.0.0.1` would
 be a name mismatch — so the window, the tray and the app's own health checks
 talk to a plaintext port bound to `127.0.0.1` that nothing else can reach.
+
+### HTTPS through a local gateway or tunnel (not Dynu Web Redirect)
+
+If Cloudflare Tunnel, Caddy, nginx, or another **local** gateway is the thing
+that owns the public certificate, do not make both it and Music Request Server
+try to speak TLS on the origin port. That mismatch is what produces messages
+such as *origin gateway refused request* or `Invalid HTTP request received`.
+
+In Settings → Access → The address, select **Local gateway or tunnel**, save,
+and restart Music Request Server. It then listens only at:
+
+```text
+http://127.0.0.1:<Music Request Server port>
+```
+
+Configure the gateway/tunnel to use that **HTTP** origin (not
+`https://localhost:...`) and to preserve the public `Host` plus
+`X-Forwarded-Proto: https` headers. Public links, Google redirect URIs, and
+session cookies remain HTTPS. This mode trusts forwarding headers only from
+loopback and cannot be used with a gateway running on another machine.
 
 **Devices on your own wifi** have to resolve the name to reach it. Most
 routers handle a LAN device asking for your public address (NAT hairpinning);
@@ -442,6 +490,15 @@ them in).
 
 Needs HTTPS first: Google will not send anybody back to a plain http address
 that isn't localhost.
+
+For the normal Dynu setup, follow the direct certificate steps above and use
+the exact redirect URI generated in Settings. With Public port at `0` and a
+server listening on `29543`, it is
+`https://your-dynu-name:29543/auth/google/callback`; with an external 443
+forward it is `https://your-dynu-name/auth/google/callback`.
+For a genuine local gateway/tunnel, select **Local HTTPS gateway** in Settings
+→ Access, save, restart, and confirm its HTTP origin is
+`http://127.0.0.1:<port>` before adding the redirect URI below.
 
 1. **Write down your own address first.** Settings → Access → *Your own
    email*. The account matching it becomes the owner. Being the first person

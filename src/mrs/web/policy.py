@@ -20,7 +20,8 @@ passes/extend passes/revoke lockdown port/shuffle blocked ddns network qr cache
 theme announce sleep download pin lockips groqkey groqmodels groqmodel boot
 boot/status boot/early cookies cookies/find cookies/extension cookies/signedin
 cookies/import cookies/grab openfolder library/scan library/paths lastfm alarms
-cast diag audit policy stats accounts accounts/scope accounts/forget accounts/check
+cast diag audit policy stats accounts accounts/setup accounts/scope accounts/forget accounts/check
+public-address
 stream/{video_id}
 autoeq/status autoeq/assign'''.split())
 SCOPED = set('''status play play/video/{video_id} control/{action} session/ended

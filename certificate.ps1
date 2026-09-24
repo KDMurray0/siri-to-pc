@@ -1,6 +1,6 @@
-﻿# A real certificate for this server, and a job that keeps it renewed.
+# A real certificate for this server, and a job that keeps it renewed.
 #
-#   .\certificate.ps1 -Domain music.example.dynu.net -ClientId xxxx
+#   .\certificate.ps1 -ClientId xxxx
 #   .\certificate.ps1 -Domain music.example.dynu.net -ClientId xxxx -Staging
 #   .\certificate.ps1 -Renew        # what the scheduled task runs
 #
@@ -42,6 +42,23 @@ function Install-PoshAcme {
     }
 }
 
+function Configured-DynuName {
+    # The normal release has only an exe and its config in LocalAppData. Read
+    # just the public hostname so the operator cannot accidentally issue a
+    # certificate for an example name from this script's help text. The Dynu
+    # update password is deliberately never read or used here.
+    $configPath = Join-Path $env:LOCALAPPDATA "MusicRequestServer\config.json"
+    try {
+        $settings = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json -ErrorAction Stop
+        if ([string]$settings.ddns_provider -ine "dynu") { return "" }
+        $name = ([string]$settings.ddns_hostname).Trim()
+        if ($name -match '^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$') {
+            return $name
+        }
+    } catch { }
+    return ""
+}
+
 # Copy whatever Posh-ACME just issued into the folder the server reads.
 function Publish-Cert($order) {
     if (-not $order) { Fail "No certificate order to publish." }
@@ -74,9 +91,19 @@ if ($Renew) {
     exit 0
 }
 
-if (-not $Domain) { Fail "Give me the name this server answers to: -Domain music.example.dynu.net" }
-if (-not $ClientId) { Fail "Give me the Dynu API client id: -ClientId xxxx" }
+if (-not $Domain) {
+    $Domain = Configured-DynuName
+    if ($Domain) { Say "Using the Dynu hostname saved in Music Request Server: $Domain" }
+}
+if (-not $Domain) { Fail "Give me the Dynu name this server answers to: -Domain music.example.dynu.net" }
+# The name can be discovered from config after the initial module setup. Keep
+# the final status text in step with that resolved value rather than printing
+# the empty pre-resolution parameter.
+$script:MainName = $Domain
+if (-not $ClientId) { $ClientId = [string]$env:DYNU_CLIENT }
+if (-not $ClientId) { Fail "Give me the Dynu API client id: -ClientId xxxx (or the DYNU_CLIENT environment variable)" }
 
+if (-not $Secret) { $Secret = [string]$env:DYNU_SECRET }
 if (-not $Secret) {
     $secure = Read-Host "Dynu API secret" -AsSecureString
 } else {

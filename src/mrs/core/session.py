@@ -332,6 +332,12 @@ class Sessions:
                 room = Session(pass_id, name, scope, profile)
                 self._rooms[pass_id] = room
                 log.info("opened a session for %r (%s)", room.id[:8], room.scope)
+            # Keep registration and activation as one transaction.  Otherwise
+            # close() can remove the room after this lock is released but
+            # before start(), leaving an orphaned queue and heartbeat running
+            # for a session the registry says no longer exists.
+            room.start()
+            room.touch()
         if stale is not None:
             stale.stop()
             try:
@@ -342,8 +348,6 @@ class Sessions:
             except Exception as exc:
                 log.debug("couldn't reset %s after profile change: %s",
                           pass_id, exc)
-        room.start()
-        room.touch()
         return room
 
     def find(self, pass_id: str) -> Session | None:

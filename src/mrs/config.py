@@ -50,6 +50,12 @@ DEFAULTS: dict[str, Any] = {
     # worth having, and that lesson is written into run().
     "tls_cert": "",
     "tls_key": "",
+    # "direct" serves the certificate from this process. "proxy" is for a
+    # local HTTPS gateway/tunnel (for example Cloudflare Tunnel) that serves
+    # the public certificate and connects to this process over loopback HTTP.
+    # It is deliberately explicit: accepting forwarded HTTPS headers while
+    # exposed directly lets an internet client forge the security boundary.
+    "https_mode": "direct",            # direct | proxy
 
     # Signing in with Google. The id and secret come from the Google Cloud
     # Console; owner_email is written down first so that being the first

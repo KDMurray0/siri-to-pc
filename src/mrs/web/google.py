@@ -62,7 +62,8 @@ def configured() -> bool:
                 and str(config.get("google_client_secret") or "").strip())
 
 
-def redirect_uri(prefix_override=None, port_override=None) -> str:
+def redirect_uri(prefix_override=None, port_override=None,
+                 https_mode_override=None) -> str:
     """Where Google sends them back. Must match the Console exactly.
 
     The overrides answer "what would it be if the path or port were changed",
@@ -75,8 +76,13 @@ def redirect_uri(prefix_override=None, port_override=None) -> str:
     # The address the outside world uses: Google sends the browser there, so
     # it has to be one that browser can reach, prefix and all, and it has to
     # match what is registered in the Console character for character.
+    # A local gateway owns public TLS even before this process is restarted,
+    # so the pre-save Google check must ask about https rather than the
+    # current direct-origin runtime state.
+    edge_scheme = "https" if https_mode_override == "proxy" else None
     return net.public_base(host, prefix_override=prefix_override,
-                           port_override=port_override) + "/auth/google/callback"
+                           port_override=port_override,
+                           scheme_override=edge_scheme) + "/auth/google/callback"
 
 
 class _Stay(urllib.request.HTTPRedirectHandler):

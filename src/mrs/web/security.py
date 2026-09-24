@@ -41,6 +41,8 @@ TOKEN_TTL = 12 * 3600          # how long a minted token stays good
 MAX_LINK_HOURS = 365 * 24       # links longer than a year should be permanent
 STRIKES = 3                    # wrong keys before the door shuts
 BAN_SECONDS = 24 * 3600
+MAX_STRIKES = 2048
+MAX_BANS = 2048
 
 
 def _b64(raw: bytes) -> str:
@@ -677,6 +679,11 @@ class Bans:
         except Exception as exc:
             log.debug("couldn't write the ban list: %s", exc)
 
+    def _trim(self, now: float) -> None:
+        """Drop expired attacker-controlled address state."""
+        for ip in [ip for ip, until in self._until.items() if until <= now]:
+            self._until.pop(ip, None)
+
     # -- the two questions worth asking --
     def blocked(self, ip: str) -> bool:
         if not ip or _is_local(ip):
@@ -697,6 +704,11 @@ class Bans:
             return False
         now = time.time()
         with self._lock:
+            self._trim(now)
+            if ip not in self._strikes and len(self._strikes) >= MAX_STRIKES:
+                oldest = min(self._strikes,
+                             key=lambda item: self._strikes[item][1])
+                self._strikes.pop(oldest, None)
             count, first = self._strikes.get(ip, [0, now])
             # Strikes age out, so an honest client with a stale key months
             # apart isn't treated as an attack.
@@ -707,6 +719,9 @@ class Bans:
             if count < STRIKES:
                 log.info("bad key from %s (%d/%d)", ip, count, STRIKES)
                 return False
+            if ip not in self._until and len(self._until) >= MAX_BANS:
+                earliest = min(self._until, key=self._until.get)
+                self._until.pop(earliest, None)
             self._until[ip] = now + BAN_SECONDS
             self._strikes.pop(ip, None)
             self._save()

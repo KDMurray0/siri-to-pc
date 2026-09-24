@@ -1790,7 +1790,7 @@ _SETTABLE = {
     "device_eq_enabled": bool, "device_eq_auto": bool,
     "google_client_id": str, "google_client_secret": str, "owner_email": str,
     "new_account_scope": str, "server_name": str,
-    "url_prefix": str, "public_port": int, "movies_url": str,
+    "url_prefix": str, "public_port": int, "movies_url": str, "https_mode": str,
     "tailscale": str, "tailscale_exe": str, "cache_size_mb": int,
     "allow_key_in_url": bool, "port": int,
     "block_full_guests": bool, "lan_open": bool, "party_mode": bool,
@@ -1850,6 +1850,8 @@ def api_setting(request: Request, key: str, value: str = "", _: bool = Auth):
         raise HTTPException(400, "port must be between 1025 and 65535")
     elif key == "new_account_scope" and parsed not in accounts.NEW_ACCOUNT_SCOPES:
         raise HTTPException(400, "new accounts may be full, phone, or blocked")
+    elif key == "https_mode" and parsed not in ("direct", "proxy"):
+        raise HTTPException(400, "HTTPS mode must be direct or proxy")
     elif key == "url_prefix":
         parsed = str(parsed).strip().rstrip("/")
         if parsed and not parsed.startswith("/"):
@@ -1998,6 +2000,57 @@ def api_audio_device(request: Request, name: str = "auto", client: str = "",
 
 # ── the first-run guide ───────────────────────────────────────────────
 
+def _master_link() -> str:
+    """The configured public HTTPS address, without credentials or guesses."""
+    from ..core import net
+
+    host = str(config.get("ddns_hostname") or "").strip()
+    if not host:
+        return ""
+    base = net.public_base(host, scheme_override="https")
+    return base if _pfx.configured() else base + "/"
+
+
+def _split_master_link(value: str) -> tuple[str, int, str]:
+    """Turn a public HTTPS address into the three settings that define it."""
+    raw = str(value or "").strip()
+    if not raw:
+        raise HTTPException(400, "Paste the public HTTPS address")
+    if "://" not in raw:
+        raw = "https://" + raw
+    try:
+        got = urllib.parse.urlsplit(raw)
+        asked_port = got.port
+    except ValueError:
+        raise HTTPException(400, "That address has an invalid port")
+    try:
+        host = (got.hostname or "").rstrip(".").encode("idna").decode("ascii").lower()
+    except UnicodeError:
+        raise HTTPException(400, "That address has an invalid hostname")
+    port = 443 if asked_port is None else int(asked_port)
+    if got.scheme.lower() != "https":
+        raise HTTPException(400, "The public address must start with https://")
+    if (not host or got.username or got.password or got.query or got.fragment
+            or len(host) > 253 or not 1 <= port <= 65535):
+        raise HTTPException(400, "Paste only an HTTPS hostname, optional port and one app path")
+    labels = host.split(".")
+    if (len(labels) < 2 or any(not label or len(label) > 63
+                               or label.startswith("-") or label.endswith("-")
+                               or any(not (ch.isascii() and (ch.isalnum() or ch == "-"))
+                                      for ch in label) for label in labels)):
+        raise HTTPException(400, "Use a public hostname, such as music.example.com")
+    # This application only serves one optional path segment. Let people paste
+    # its normal /player suffix, but never turn an arbitrary URL path into a
+    # redirect or a cookie scope.
+    path = got.path.rstrip("/")
+    if path.endswith("/player"):
+        path = path[:-7]
+    prefix = _pfx.normalize(path)
+    if path not in ("", "/") and prefix != path:
+        raise HTTPException(400, "Use only one path, such as /music")
+    return host, int(port), prefix
+
+
 @app.get("/welcome", response_class=HTMLResponse)
 async def welcome_page(request: Request, key: str = Query(default=""),
                        token: str = Query(default="")):
@@ -2033,6 +2086,7 @@ def api_setup_state(_: bool = Owner):
         "announce": bool(config.get("announce", True)),
         "key_set": bool(config.get("api_key")),
         "port": net.live_port(),
+        "master_url": _master_link(),
         "release": __version__,
     }
 
@@ -2579,11 +2633,40 @@ def api_network(pass_id: str = "", check: int = 0, _: bool = Owner):
     if not token:
         raise HTTPException(503, "Couldn't save the owner credential")
     out = net.addresses(token)
+    # The machine's listening port and the public port are often deliberately
+    # different: the normal Dynu direct-TLS setup maps public 443 to a high
+    # port here. The old check tested the latter and could therefore bless a
+    # public HTTPS endpoint that did not lead back to this process.
+    out["https_mode"] = str(config.get("https_mode") or "direct")
+    out["ddns_provider"] = str(config.get("ddns_provider") or "")
+    out["checked_port"] = net.public_port()
     if check:
-        out["port_open"] = net.port_open(net.live_port())
-    from ..server import cert_days_left
-    out["cert_days"] = round(cert_days_left(), 1) if out.get("https") else 0
+        out["port_open"] = net.port_open(out["checked_port"],
+                                          str(out.get("hostname") or ""))
+    from ..server import cert_days_left, tls_files
+    cert = tls_files() if out["https_mode"] == "direct" else None
+    out["certificate_loaded"] = bool(cert)
+    out["cert_days"] = round(cert_days_left(cert[0]), 1) if cert else 0
     return {"status": "ok", **out}
+
+
+@app.get("/api/public-address")
+def api_public_address(url: str = "", _: bool = Owner):
+    """Read or set the single public address shown in setup and Sharing.
+
+    A master link is presentation over the existing hostname, external-port
+    and optional-path settings; keeping a fourth independent copy would drift
+    and hand Google a callback that the app does not actually serve.
+    """
+    if url:
+        host, port, prefix = _split_master_link(url)
+        config.update({"ddns_hostname": host, "public_port": port,
+                       "url_prefix": prefix})
+    from . import google
+    from ..core import net
+    return {"status": "ok", "master_url": _master_link(),
+            "https_ready": net.scheme() == "https",
+            "redirect_uri": google.redirect_uri()}
 
 
 @app.get("/api/qr")
@@ -2773,6 +2856,11 @@ def _run_ps(script: str) -> tuple[bool, str]:
     return got.returncode == 0, out
 
 
+def _ps_literal(value: object) -> str:
+    """A PowerShell single-quoted literal, including embedded apostrophes."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 def _run_ps_elevated(script: str) -> tuple[bool, str]:
     """Same, but through UAC.
 
@@ -2807,12 +2895,13 @@ def _run_ps_elevated(script: str) -> tuple[bool, str]:
     except Exception as exc:
         return False, str(exc)
     try:
+        arguments = ",".join(_ps_literal(value) for value in (
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(path)))
         got = subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-Command",
              "Start-Process powershell -Verb RunAs -Wait -ArgumentList "
-             "'-NoProfile','-ExecutionPolicy','Bypass','-File',"
-             f"'{path}'"],
+             + arguments],
             capture_output=True, text=True, timeout=300,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except Exception as exc:
@@ -2857,14 +2946,14 @@ def _set_run_before_signin(enable: bool) -> tuple[bool, str]:
         user = f"{domain}\\{getpass.getuser()}" if domain else getpass.getuser()
         script = f"""
 $ErrorActionPreference = 'Stop'
-$a = New-ScheduledTaskAction -Execute '{exe}' -Argument '{args.strip()}'
+$a = New-ScheduledTaskAction -Execute {_ps_literal(exe)} -Argument {_ps_literal(args.strip())}
 $t = New-ScheduledTaskTrigger -AtStartup
 # Half a minute of grace. The task fires the moment Windows will let it,
 # which is before the network has an address — and the app now retries on
 # its own, but not starting into a broken machine is cheaper than
 # recovering from one.
 $t.Delay = 'PT30S'
-$p = New-ScheduledTaskPrincipal -UserId '{user}' -LogonType S4U -RunLevel Limited
+$p = New-ScheduledTaskPrincipal -UserId {_ps_literal(user)} -LogonType S4U -RunLevel Limited
 $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries -StartWhenAvailable `
         -DontStopOnIdleEnd `
@@ -2874,11 +2963,11 @@ $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
 # task is killed after three days, which is the sort of thing you discover
 # by finding the music off on a Thursday.
 $s.MultipleInstances = 2          # IgnoreNew: never two of these at once
-Register-ScheduledTask -TaskName '{TASK_NAME}' -Action $a -Trigger $t `
+Register-ScheduledTask -TaskName {_ps_literal(TASK_NAME)} -Action $a -Trigger $t `
         -Principal $p -Settings $s -Force | Out-Null
 """
     else:
-        script = (f"Unregister-ScheduledTask -TaskName '{TASK_NAME}' "
+        script = (f"Unregister-ScheduledTask -TaskName {_ps_literal(TASK_NAME)} "
                   f"-Confirm:$false -ErrorAction SilentlyContinue")
     _run_ps_elevated(script)
     # Ask Windows what actually happened. The elevated shell is a separate
@@ -3306,6 +3395,25 @@ def _client_zip():
 _DL_SEEN: dict[str, list[float]] = {}
 _DL_LOCK = threading.Lock()
 DOWNLOADS_PER_HOUR = 8
+_DOWNLOAD_TRACKERS = 512
+
+
+def _take_download_slot(ip: str, now: float) -> bool:
+    """Reserve one public client-download slot without retaining every IP."""
+    with _DL_LOCK:
+        for who in [who for who, seen in _DL_SEEN.items()
+                    if not seen or now - seen[-1] >= 3600]:
+            _DL_SEEN.pop(who, None)
+        recent = [at for at in _DL_SEEN.get(ip, []) if now - at < 3600]
+        if len(recent) >= DOWNLOADS_PER_HOUR:
+            return False
+        # This route is public. A one-off request from every address must not
+        # turn its in-memory limiter into an unbounded address collection.
+        if ip not in _DL_SEEN and len(_DL_SEEN) >= _DOWNLOAD_TRACKERS:
+            oldest = min(_DL_SEEN, key=lambda who: _DL_SEEN[who][-1])
+            _DL_SEEN.pop(oldest, None)
+        _DL_SEEN[ip] = recent + [now]
+        return True
 
 
 @app.get("/download/client")
@@ -3322,15 +3430,9 @@ def download_client(request: Request):
         return _signin_page("The desktop app isn't available from this server yet.",
                             404, base=base)
     ip, now = _client_ip(request), time.time()
-    with _DL_LOCK:
-        if len(_DL_SEEN) > 512:
-            for who in [w for w, seen in _DL_SEEN.items() if now - seen[-1] > 3600]:
-                _DL_SEEN.pop(who, None)
-        recent = [t for t in _DL_SEEN.get(ip, []) if now - t < 3600]
-        if len(recent) >= DOWNLOADS_PER_HOUR:
-            return _signin_page("That's a lot of downloads. Try again in a while.",
-                                429, base=base)
-        _DL_SEEN[ip] = recent + [now]
+    if not _take_download_slot(ip, now):
+        return _signin_page("That's a lot of downloads. Try again in a while.",
+                            429, base=base)
     return FileResponse(built, media_type="application/zip", filename="MusicClient.zip",
                         headers={"Cache-Control": "no-store"})
 
@@ -3724,13 +3826,15 @@ def api_me_siri_revoke(request: Request, id: str = "", _: bool = Auth):
 
 @app.get("/api/accounts/check")
 def api_accounts_check(url_prefix: str | None = None, public_port: int | None = None,
+                       https_mode: str | None = None,
                        _: bool = Owner):
     """Ask Google whether it would accept this install's sign-in address.
 
     With a path or port given, the answer is for what the address *would* be
     once they are saved -- so a change can be checked before it is made.
     """
-    uri = google.redirect_uri(prefix_override=url_prefix, port_override=public_port)
+    uri = google.redirect_uri(prefix_override=url_prefix, port_override=public_port,
+                              https_mode_override=https_mode)
     return {"status": "ok", **google.check(uri if google.configured() else None)}
 
 
@@ -3744,6 +3848,44 @@ def api_accounts(_: bool = Owner):
             "new_account_scope": accounts.default_scope(),
             "new_account_scopes": accounts.NEW_ACCOUNT_SCOPES,
             "signed_in_count": accounts.count()}
+
+
+@app.get("/api/accounts/setup")
+def api_accounts_setup(request: Request, client_id: str = "", client_secret: str = "",
+                       owner_email: str = "", _: bool = Owner):
+    """Save the three Google setup values as one owner-only operation.
+
+    The POST variant registered by ``policy.install`` receives these values in
+    a JSON body, rather than leaving a client secret in a URL. A blank secret
+    intentionally keeps the one already on this machine: the browser must
+    never be able to read it back merely to repaint this form.
+    """
+    # Settings may retain a legacy GET compatibility switch, but a credential
+    # endpoint must never accept its secret as part of an address.
+    if request.method != "POST":
+        raise HTTPException(405, "Use POST with a JSON body for Google setup")
+    client_id = str(client_id or "").strip()
+    owner_email = str(owner_email or "").strip().lower()
+    # Google makes the final identity decision, but catch the common local
+    # typo before public sign-in can be saved without any designated owner.
+    local, at, domain = owner_email.partition("@")
+    if not client_id or len(client_id) > 300:
+        raise HTTPException(400, "Enter the Google OAuth client ID")
+    if (not owner_email or not local or not at or not domain
+            or any(ch.isspace() for ch in owner_email) or len(owner_email) > 254):
+        raise HTTPException(400, "Enter the email address that should own this server")
+    saved_secret = str(config.get("google_client_secret") or "").strip()
+    secret = str(client_secret or "").strip() or saved_secret
+    if not secret or len(secret) > 500:
+        raise HTTPException(400, "Enter the Google OAuth client secret")
+    # Config.update makes one atomic on-disk replacement, instead of leaving a
+    # half-configured public sign-in system behind after a field blur.
+    config.update({"google_client_id": client_id,
+                   "google_client_secret": secret,
+                   "owner_email": owner_email})
+    return {"status": "ok", "configured": google.configured(),
+            "owner_email": accounts.owner_email(),
+            "redirect_uri": google.redirect_uri()}
 
 
 @app.get("/api/accounts/scope")

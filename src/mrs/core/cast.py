@@ -38,7 +38,7 @@ from pathlib import Path
 
 from ..config import config
 from ..logging_setup import get
-from ..paths import cache_dir, pinned_dir
+from ..paths import cache_dir
 
 log = get("cast")
 
@@ -160,13 +160,12 @@ def source_for(video_id: str) -> Path | None:
     """The file the downloader already fetched, whatever extension it got."""
     if not video_id or "/" in video_id or "\\" in video_id or ".." in video_id:
         return None
-    sid = re.sub(r"[^A-Za-z0-9_.-]", "_", video_id or "unknown")[:100]
-    for folder in (pinned_dir(), cache_dir()):
-        for path in folder.glob(f"{sid}.*"):
-            if (path.is_file() and path.stat().st_size > 0
-                    and not path.name.endswith((".part", ".ytdl", ".complete"))):
-                return path
-    return None
+    # The downloader owns cache identity and completion markers. Duplicating
+    # its filename transformation here made casting disagree with playback
+    # for punctuated IDs and prefix-shaped cache names.
+    from .downloader import downloader
+    path = downloader.cached(video_id)
+    return Path(path) if path else None
 
 
 def _codec(src: Path) -> str:
@@ -234,11 +233,18 @@ def _stamp(tune: str = "", fmt: str = "aac") -> str:
     return hashlib.sha1(key.encode()).hexdigest()[:8] if key else ""
 
 
+def _cache_id(video_id: str) -> str:
+    """The shared, Windows-safe identity for a source and its transcodes."""
+    from .downloader import Downloader
+    return Downloader._safe_id(video_id)
+
+
 def _converted(video_id: str, tune: str = "", fmt: str = "aac") -> Path:
     stamp = _stamp(tune, fmt)
     ext = FORMATS[fmt_name(fmt)]["ext"]
-    return work_dir() / (f"{video_id}~{stamp}{ext}" if stamp
-                         else f"{video_id}{ext}")
+    leaf = _cache_id(video_id)
+    return work_dir() / (f"{leaf}~{stamp}{ext}" if stamp
+                         else f"{leaf}{ext}")
 
 
 def _vid_of(path: Path) -> str:
@@ -247,7 +253,7 @@ def _vid_of(path: Path) -> str:
 
 
 def _job(video_id: str, tune: str, fmt: str = "aac") -> str:
-    return f"{video_id}~{_stamp(tune, fmt)}{FORMATS[fmt_name(fmt)]['ext']}"
+    return f"{_cache_id(video_id)}~{_stamp(tune, fmt)}{FORMATS[fmt_name(fmt)]['ext']}"
 
 
 def playable(video_id: str, tune: str = "",
@@ -400,6 +406,7 @@ def prune() -> int:
     playing.
     """
     from . import autoeq
+    from .downloader import downloader
     live = {_stamp(t, f) for t in ("", *TUNES, *autoeq.cached_tunes())
             for f in FORMATS}
     with _lock:
@@ -418,7 +425,10 @@ def prune() -> int:
             stale = time.time() - path.stat().st_mtime > 3600
             if not stale:
                 continue
-        if stale or not source_for(vid):
+        # `vid` is a canonical cache leaf, not necessarily the original
+        # source ID. Asking source_for(vid) would lose punctuated IDs and
+        # incorrectly delete their freshly made transcodes.
+        if stale or not downloader.has_cached_leaf(vid):
             try:
                 path.unlink()
                 gone += 1

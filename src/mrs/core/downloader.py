@@ -6,6 +6,7 @@ handed the file.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import queue as queue_mod
 import re
@@ -26,6 +27,7 @@ log = get("download")
 CREATE_NO_WINDOW = 0x08000000
 _PCT = re.compile(r"\[download\]\s+(\d+(?:\.\d+)?)%")
 _SAFE = re.compile(r"[^A-Za-z0-9_.-]")
+_RESERVED = re.compile(r"^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)", re.I)
 
 
 class DownloadError(Exception):
@@ -203,28 +205,81 @@ class Downloader:
     # -- cache ---------------------------------------------------------
     @staticmethod
     def _safe_id(video_id: str) -> str:
-        return _SAFE.sub("_", video_id or "unknown")[:100]
+        """A filename identity, not a lossy display-name cleanup.
 
-    def cached(self, video_id: str) -> str | None:
-        sid = self._safe_id(video_id)
-        for folder in (pinned_dir(), cache_dir()):
+        A cache key must distinguish IDs.  Replacing punctuation or scanning
+        with a prefix glob made `source?one` and `source:one` share a file;
+        it also let `source` pick up `source.more`.  Ordinary YouTube IDs
+        retain their historical readable filename, while every ambiguous or
+        Windows-invalid spelling receives a stable digest suffix.
+        """
+        raw = str(video_id or "unknown")
+        clean = _SAFE.sub("_", raw)
+        ordinary = (clean == raw and len(clean) <= 100 and "." not in raw
+                    and clean.rstrip(". ") == clean and not _RESERVED.match(clean))
+        if ordinary:
+            return clean
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+        stem = clean[:87].rstrip(". ") or "unknown"
+        return f"{stem}-{digest}"
+
+    @staticmethod
+    def _cached_leaf(sid: str, folders: tuple[Path, ...],
+                     *, require_complete: bool = True) -> str | None:
+        """Find one completed cache file with the exact derived leaf name."""
+        for folder in folders:
             for f in folder.glob(f"{sid}.*"):
                 # `.part` and `.ytdl` are downloader-owned temporary state,
                 # never a playable cache hit. A short legitimate file should
                 # not be rejected merely because it is under 100 KB.
-                if (f.is_file() and f.stat().st_size > 0
-                        and not f.name.endswith((".part", ".ytdl", ".complete"))):
+                if (f.stem == sid and f.is_file() and f.stat().st_size > 0
+                        and not f.name.endswith((".part", ".ytdl", ".complete"))
+                        and (not require_complete
+                             or f.with_name(f.name + ".complete").is_file())):
                     return str(f)
 
+    def _cached_in(self, video_id: str, folders: tuple[Path, ...],
+                   *, require_complete: bool = True) -> str | None:
+        return self._cached_leaf(self._safe_id(video_id), folders,
+                                 require_complete=require_complete)
+
+    def cached(self, video_id: str, *, require_complete: bool = True) -> str | None:
+        """A cached audio file, never a final-name partial by default."""
+        return self._cached_in(video_id, (pinned_dir(), cache_dir()),
+                               require_complete=require_complete)
+
+    def has_cached_leaf(self, leaf: str) -> bool:
+        """Whether a derived cache filename still has a completed source."""
+        return bool(self._cached_leaf(leaf, (pinned_dir(), cache_dir())))
+
     @staticmethod
-    def _mark_complete(path: str | None) -> None:
+    def _mark_complete(path: str | None) -> bool:
         if not path:
-            return
+            return False
         try:
             write_atomic(Path(path).with_name(Path(path).name + ".complete"), "1")
-        except OSError:
-            pass
-        return None
+            return True
+        except Exception as exc:
+            log.warning("couldn't mark a download complete: %s", exc)
+            return False
+
+    def _discard_unmarked(self, video_id: str) -> None:
+        """Remove a pre-marker final file before asking yt-dlp to replace it."""
+        sid = self._safe_id(video_id)
+        # yt-dlp writes only to the ordinary cache. Explicitly pinned files
+        # can predate completion markers and must not be deleted as a side
+        # effect of fetching another copy.
+        for folder in (cache_dir(),):
+            for path in folder.glob(f"{sid}.*"):
+                if (path.stem != sid or not path.is_file() or path.name.endswith(
+                        (".part", ".ytdl", ".complete"))
+                        or path.with_name(path.name + ".complete").is_file()):
+                    continue
+                try:
+                    path.unlink()
+                except OSError as exc:
+                    log.debug("couldn't remove incomplete cache file %s: %s",
+                              path.name, exc)
 
     def pin(self, path: str) -> str | None:
         """Copy a cached file somewhere cache cleanup won't touch it."""
@@ -281,8 +336,7 @@ class Downloader:
         files = [f for f in every
                  if f.parent == root
                  and not f.name.endswith((".part", ".ytdl", ".complete"))
-                 and not any(f.name.startswith(f"{self._safe_id(vid)}.")
-                             for vid in active_ids)
+                 and f.stem not in {self._safe_id(vid) for vid in active_ids}
                  and os.path.normcase(str(f.resolve())) not in spare]
 
         def worth(f: Path) -> tuple:
@@ -556,6 +610,10 @@ class Downloader:
         last = ""
 
         _note_inflight(track.video_id, total=0)
+        # yt-dlp may accept an existing final filename as already downloaded.
+        # A crash before its marker was written must therefore be removed
+        # before it has a chance to bless the old prefix as a cache hit.
+        self._discard_unmarked(track.video_id)
         for client in clients:
             args = [self.exe, "-f", self._format(), "--no-playlist", "--part",
                     "--newline", "--no-warnings", "-o", out_tmpl]
@@ -572,9 +630,15 @@ class Downloader:
                                       vid=track.video_id)
                 last = out
                 if code == 0:
-                    path = self.cached(track.video_id)
+                    path = self._cached_in(track.video_id, (cache_dir(),),
+                                           require_complete=False)
                     if path:
-                        self._mark_complete(path)
+                        if not self._mark_complete(path):
+                            try:
+                                Path(path).unlink(missing_ok=True)
+                            except OSError:
+                                pass
+                            return None
                         if client != clients[0]:
                             log.info("%r needed the %s client", track.title,
                                      client or "default")

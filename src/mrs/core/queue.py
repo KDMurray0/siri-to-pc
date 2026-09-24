@@ -321,8 +321,17 @@ class QueueManager:
         threading.Thread(target=self._maintain, daemon=True, name="queue").start()
 
     def stop(self) -> None:
+        # Stopping a session is stronger than replacing its request. A worker
+        # may already have a cache hit or be finishing yt-dlp; invalidate that
+        # work before it can append to a queue that has been torn down.
+        with self._lock:
+            self._era += 1
+            self._work.clear()
+            self._pool.clear()
+            self._claimed.clear()
         self._stop.set()
         self._wake.set()
+        downloader.cancel_all(self.session_id)
         # Whatever was learned in the last few seconds, before the timer that
         # would have written it gets cancelled by the process ending. This is
         # the difference between a cache that remembers its covers across a
@@ -674,6 +683,8 @@ class QueueManager:
 
     def _process(self, item: WorkItem) -> None:
         track = item.track
+        if self._stop.is_set():
+            return
         # What was being asked for when this job was picked up. Clearing the
         # work list stops jobs that haven't started; this is what stops the
         # one already downloading — or, worse, already downloaded, because a
@@ -734,7 +745,7 @@ class QueueManager:
         # if the request that wanted this has been replaced, changing it is
         # the bug. A cached track reaches this point in milliseconds, which is
         # why clearing the work list alone never closed the window.
-        if era != self._era and not item.imported:
+        if self._stop.is_set() or (era != self._era and not item.imported):
             log.info("dropped %s — a newer request replaced it", track.title)
             with self._lock:
                 if track.key():

@@ -31,6 +31,16 @@ log = get("server")
 runtime = {"port": None, "wanted_port": None, "error": ""}
 
 
+def proxy_tls() -> bool:
+    """Whether a local gateway owns public HTTPS for this server.
+
+    The gateway and this process must be on the same machine. This is not a
+    generic 'trust any forwarded header' switch: the proxy-mode server binds
+    loopback only and accepts forwarded headers only from loopback.
+    """
+    return config.get("https_mode") == "proxy"
+
+
 def _port_free(port: int) -> bool:
     s = socket.socket()
     try:
@@ -103,6 +113,13 @@ def cert_days_left(cert: str = "") -> float:
     """Days until the certificate expires, or 0 if it can't be read."""
     import ssl
     path = cert or str(config.get("tls_cert") or "")
+    # certificate.ps1 deliberately leaves the explicit config fields empty:
+    # it atomically renews the conventional pair under the data directory.
+    # Looking only at tls_cert made the Sharing page claim every such valid
+    # Dynu certificate had zero days left.
+    if not path:
+        pair = tls_files()
+        path = pair[0] if pair else ""
     if not path:
         return 0.0
     try:
@@ -455,15 +472,31 @@ def run() -> None:
             app, log_config=None, access_log=False, loop="asyncio", **kw))
 
     tls = tls_files()
-    runtime["tls"] = bool(tls)
+    edge_tls = proxy_tls()
+    runtime["proxy_tls"] = edge_tls
+    runtime["tls"] = bool(tls) and not edge_tls
     try:
-        if tls:
+        if edge_tls:
+            # Cloudflared/nginx/Caddy terminates TLS and must use this plain
+            # loopback origin. Pointing a gateway at https://127.0.0.1:PORT
+            # when the app is in proxy mode sends TLS bytes to an HTTP server
+            # and produces the opaque 'origin gateway refused' failure.
+            runtime.pop("local_port", None)
+            log.info("public https is handled by a local gateway; origin is "
+                     "http://127.0.0.1:%d", port)
+            loop.run_until_complete(server_for(
+                host="127.0.0.1", port=port, proxy_headers=True,
+                forwarded_allow_ips="127.0.0.1").serve())
+        elif tls:
             loop.run_until_complete(_serve_secure(server_for, port, tls))
         else:
             runtime.pop("local_port", None)
+            runtime.pop("proxy_tls", None)
             loop.run_until_complete(
-                server_for(host=config.get("host", "0.0.0.0"), port=port).serve())
+                server_for(host=config.get("host", "0.0.0.0"), port=port,
+                           proxy_headers=False).serve())
     finally:
+        runtime.pop("proxy_tls", None)
         player.stop()
 
 

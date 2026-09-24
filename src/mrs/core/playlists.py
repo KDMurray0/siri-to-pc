@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -15,7 +16,7 @@ from ..config import config
 from ..events import Ev, bus
 from ..logging_setup import get
 from ..models import Track, norm_title
-from ..paths import data_dir, write_atomic
+from ..paths import data_dir, write_atomic, replace_file
 
 log = get("playlists")
 
@@ -432,49 +433,144 @@ class Playlists:
         return {"ok": True, "message": f"Deleted {name}"}
 
     # -- offline copies ------------------------------------------------
+    @staticmethod
+    def _complete_marker(path: Path) -> Path:
+        """The marker distinguishes an atomically published offline copy.
+
+        The downloader uses the same convention.  A filename alone is not
+        evidence that a previous copy completed: ``copy2`` creates its target
+        before it has transferred every byte.
+        """
+        return path.with_name(path.name + ".complete")
+
+    def _copy_complete(self, source: str | Path, destination: Path) -> bool:
+        """Stage an offline copy and publish it only when it is complete."""
+        temporary: Path | None = None
+        marker = self._complete_marker(destination)
+        published = False
+        try:
+            handle, temporary_name = tempfile.mkstemp(
+                prefix=destination.name + ".", suffix=".part",
+                dir=destination.parent)
+            os.close(handle)
+            temporary = Path(temporary_name)
+            shutil.copy2(source, temporary)
+            replace_file(temporary, destination)
+            write_atomic(marker, "1")
+            published = True
+            return True
+        except Exception as exc:
+            log.debug("offline playlist copy failed: %s", exc)
+            return False
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            # A destination without the marker is deliberately retried on a
+            # later run.  This also makes a marker-write failure recoverable.
+            if not published:
+                try:
+                    marker.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _track_key(track: Track) -> str:
+        """The stable list identity used when a background copy finishes."""
+        return track.video_id or track.url
+
+    def _commit_downloaded_paths(self, name: str, paths: dict[str, str]) -> bool:
+        """Merge finished paths into the list as it exists *now*.
+
+        A download can take minutes. Saving the snapshot it began with used
+        to put back tracks removed while it was running and could recreate a
+        list deleted before the copy completed.
+        """
+        with self._lock:
+            index = self._folder_path(name) / "tracks.json"
+            if not index.is_file():
+                return False
+            if not paths:
+                return True
+            current = self.tracks(name)
+            changed = False
+            for track in current:
+                path = paths.get(self._track_key(track))
+                if path and track.path != path:
+                    track.path = path
+                    changed = True
+            if changed:
+                self._save(name, [track.to_dict() for track in current])
+        return True
+
     def download_async(self, name: str) -> None:
-        if name in self._downloading:
-            return
-        threading.Thread(target=self.download, args=(name,), daemon=True).start()
+        with self._lock:
+            if name in self._downloading:
+                return
+            self._downloading.add(name)
+        try:
+            threading.Thread(target=self._download_claimed, args=(name,),
+                             daemon=True).start()
+        except Exception:
+            with self._lock:
+                self._downloading.discard(name)
+            raise
 
     def download(self, name: str) -> dict:
         """Copy every track in the playlist into its folder."""
+        with self._lock:
+            if name in self._downloading:
+                return {"ok": False, "message": "Already downloading"}
+            self._downloading.add(name)
+        return self._download_claimed(name)
+
+    def _download_claimed(self, name: str) -> dict:
+        """Run a download after the caller has atomically claimed its name."""
         from .downloader import downloader
-        if name in self._downloading:
-            return {"ok": False, "message": "Already downloading"}
-        self._downloading.add(name)
-        folder = self.folder(name)
+        folder = self._folder_path(name)
+        if not (folder / "tracks.json").is_file():
+            with self._lock:
+                self._downloading.discard(name)
+            return {"ok": False, "message": f"There's no list called {name}"}
         saved = 0
+        completed: dict[str, str] = {}
         try:
             rows = self.tracks(name)
             for i, track in enumerate(rows, 1):
                 if track.path and Path(track.path).is_file() and \
-                        Path(track.path).parent == folder:
+                        Path(track.path).parent == folder and \
+                        self._complete_marker(Path(track.path)).is_file():
                     continue
                 bus.publish(Ev.ACTIVITY, {"stage": "downloading",
                                           "detail": f"{name}: {track.title}",
                                           "progress": i / max(1, len(rows))})
-                src = downloader.fetch_with_fallbacks(track)
+                try:
+                    src = downloader.fetch_with_fallbacks(track)
+                except Exception as exc:
+                    log.debug("offline playlist fetch failed: %s", exc)
+                    continue
                 if not src:
                     continue
                 stem = _safe_name(f"{track.artist} - {track.title}".strip(" -"))
                 dest = folder / (stem + Path(src).suffix)
-                try:
-                    if not dest.exists():
-                        shutil.copy2(src, dest)
+                if self._copy_complete(src, dest):
                     track.path = str(dest)
+                    completed[self._track_key(track)] = track.path
                     saved += 1
-                except Exception as exc:
-                    log.debug("copy failed: %s", exc)
                 time.sleep(0.2)      # be gentle on YouTube
-            with self._lock:
-                self._save(name, [t.to_dict() for t in rows])
+            kept = self._commit_downloaded_paths(name, completed)
             log.info("playlist %r: %d files on disk", name, saved)
+            if not kept:
+                return {"ok": False, "saved": saved,
+                        "message": "That list was removed while it downloaded"}
             bus.publish(Ev.TOAST, f"{name}: {saved} tracks saved offline")
-            bus.publish(Ev.ACTIVITY, {"stage": "idle"})
             return {"ok": True, "saved": saved, "folder": str(folder)}
         finally:
-            self._downloading.discard(name)
+            with self._lock:
+                self._downloading.discard(name)
+            bus.publish(Ev.ACTIVITY, {"stage": "idle"})
 
 
 playlists = Playlists()

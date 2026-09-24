@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import socket
+import ssl
 import threading
 import time
 import urllib.parse
@@ -46,17 +47,21 @@ _WAN_SOURCES = (
 
 
 def scheme() -> str:
-    """https once a real certificate is loaded, http otherwise.
+    """The public scheme, including a trusted local TLS gateway.
 
-    Read from the running server rather than from the setting: a certificate
-    that didn't load leaves it serving plain http, and a link that says
-    https then points at nothing.
+    Direct TLS is read from the running server rather than assumed from a
+    setting: a certificate that didn't load leaves it serving plain HTTP. A
+    deliberately configured local proxy is different: it is the HTTPS edge,
+    while this process receives only loopback HTTP and must still issue HTTPS
+    links and secure session cookies.
     """
     try:
         from ..server import runtime
-        return "https" if runtime.get("tls") else "http"
+        if runtime.get("tls") or runtime.get("proxy_tls"):
+            return "https"
     except Exception:
-        return "http"
+        pass
+    return "https" if config.get("https_mode") == "proxy" else "http"
 
 
 def lan_ip() -> str:
@@ -99,15 +104,18 @@ def wan_ip(force: bool = False) -> str:
         return found or _wan_cache["ip"]
 
 
-def port_open(port: int, timeout: float = 4.0) -> bool | None:
+def port_open(port: int, host: str = "", timeout: float = 4.0) -> bool | None:
     """Is the port actually reachable from outside?
 
     Answering this honestly needs something outside the network to try the
-    connection, so it asks a port-checking service. None means we couldn't
-    find out, which is different from a no.
+    connection. First try the exact public hostname and port we hand out: a
+    TCP-only probe can say "open" even when Dynu Web Redirect, a router admin
+    page, or another service is answering there instead of this application.
+    None means we couldn't find out, which is different from a no.
     """
     ip = wan_ip()
-    if not ip:
+    target = (host or ip).strip()
+    if not target:
         return None
 
     # Ask ourselves first, over the public address. Most home routers loop
@@ -116,17 +124,33 @@ def port_open(port: int, timeout: float = 4.0) -> bool | None:
     # with nobody else involved and nobody to rate-limit us. Only if that
     # fails do we need somebody outside to try the door.
     try:
-        url = f"{scheme()}://{ip}:{int(port)}/api/ping"
+        url = f"{scheme()}://{target}:{int(port)}/api/ping"
         req = urllib.request.Request(url, headers={"User-Agent": "mrs"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             if b"music-request-server" in r.read(200):
-                log.debug("port %s answered on %s — the forward rule is live",
-                          port, ip)
+                log.debug("public endpoint %s answered on port %s", target, port)
                 return True
+            log.debug("public endpoint %s:%s answered, but not as this app",
+                      target, port)
+            return False
+    except urllib.error.HTTPError as exc:
+        # A concrete HTTP response proves that something owns the address,
+        # just not this server. Do not let a later TCP-only probe turn that
+        # into a misleading green "reachable" result.
+        log.debug("public endpoint %s:%s returned HTTP %s", target, port, exc.code)
+        return False
+    except ssl.SSLError as exc:
+        # The route reached a TLS endpoint, but its certificate/protocol did
+        # not validate for the Dynu name. That is a setup failure, not an
+        # excuse to say the public address works.
+        log.debug("public endpoint %s:%s has unusable TLS: %s", target, port, exc)
+        return False
     except Exception as exc:
         # Not a no: plenty of routers simply don't hairpin.
-        log.debug("no loopback via %s: %s", ip, exc)
+        log.debug("no loopback via %s: %s", target, exc)
 
+    if not ip:
+        return None
     try:
         req = urllib.request.Request(
             f"https://ports.yougetsignal.com/check-port.php?remoteAddress={ip}"
@@ -212,7 +236,7 @@ def public_port() -> int:
 
 
 def public_base(host: str, *, outside: bool = True, prefix_override=None,
-                port_override=None) -> str:
+                port_override=None, scheme_override: str | None = None) -> str:
     """https://host[:port][/prefix], the way somebody else would type it.
 
     The default port for the scheme is left off, which is the entire point:
@@ -223,7 +247,7 @@ def public_base(host: str, *, outside: bool = True, prefix_override=None,
     changed: the same arithmetic on values that aren't saved yet.
     """
     from ..web import prefix
-    sch = scheme()
+    sch = scheme_override if scheme_override in ("http", "https") else scheme()
     if not outside:
         port = live_port()
     elif port_override is not None:

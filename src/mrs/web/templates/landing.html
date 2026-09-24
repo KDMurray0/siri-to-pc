@@ -85,11 +85,20 @@ h1 em{font-style:normal;color:var(--accent)}
 .facts b{color:var(--ink);font-weight:600}
 
 /* ── the door ────────────────────────────────────────────────────────── */
-.door{background:color-mix(in srgb,var(--panel) 88%,transparent);border:1px solid var(--line);border-radius:22px;
-  padding:clamp(20px,3vw,30px);box-shadow:0 30px 70px -30px rgba(0,0,0,.7);
-  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
-.door h2{font:700 21px/1.2 var(--display);letter-spacing:-.02em}
-.door .lede{margin-top:6px;color:var(--sub);font-size:14px}
+/* The same face as the player's sign-in: no box, no blur — the mark, the
+   name, and one clear way in, centred on the colour. */
+.door{display:grid;justify-items:center;text-align:center;max-width:min(420px,100%);margin:0 auto}
+.door>*{width:100%}
+.mark56{display:flex;align-items:flex-end;justify-content:center;gap:3px;height:36px;margin:0 auto 18px}
+.mark56 b{display:block;width:4px;border-radius:2px;background:var(--accent);transform-origin:bottom;
+  animation:eq 1.15s ease-in-out infinite}
+.mark56 b:nth-child(1){height:15px;animation-delay:-.4s}
+.mark56 b:nth-child(2){height:26px;animation-delay:-.9s}
+.mark56 b:nth-child(3){height:19px;animation-delay:-.2s}
+.mark56 b:nth-child(4){height:32px;animation-delay:-.7s}
+h1.display{font:900 clamp(30px,4.6vw,40px)/1 var(--display);letter-spacing:-.045em;
+  text-transform:uppercase;margin:0 0 10px}
+.door .lede{margin:0 auto 24px;color:var(--sub);font-size:14.5px;line-height:1.55;max-width:36ch}
 
 /* Log in / Sign up. Real radio inputs, so it works with scripting off and the
    keyboard behaves; the labels are just the styled face of them. */
@@ -114,7 +123,7 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
 .fld:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}
 
 .chk{display:grid;grid-template-columns:22px 1fr;gap:11px;align-items:start;margin-top:14px;
-  font-size:13.5px;line-height:1.5;color:var(--sub);cursor:pointer}
+  font-size:13.5px;line-height:1.5;color:var(--sub);cursor:pointer;text-align:left}
 .chk input{appearance:none;-webkit-appearance:none;width:20px;height:20px;margin-top:1px;border-radius:6px;
   background:var(--bg);border:1.5px solid var(--faint);display:grid;place-content:center;cursor:pointer;
   transition:border-color .15s,background .15s}
@@ -127,26 +136,28 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
 .chk .opt{font:600 10.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-left:6px}
 .chk a,.foot a{color:var(--accent);text-underline-offset:3px}
 
-.gbtn{display:flex;align-items:center;justify-content:center;gap:12px;width:100%;height:48px;margin-top:20px;
-  border:0;border-radius:11px;background:#fff;color:#1f1f1f;font:600 15px var(--sans);cursor:pointer;
-  text-decoration:none;transition:transform .08s ease,box-shadow .2s ease,background .15s}
-.gbtn:hover{box-shadow:0 8px 24px -8px rgba(255,255,255,.35)}
+.gbtn{display:inline-flex;align-items:center;gap:12px;margin:20px auto 0;height:52px;padding:0 22px 0 16px;
+  border:0;border-radius:10px;background:#fff;color:#1f1f1f;font:600 15px var(--sans);cursor:pointer;
+  text-decoration:none;box-shadow:0 1px 3px #0006;
+  transition:transform .14s ease,box-shadow .2s ease,background .15s}
+.gbtn:hover{box-shadow:0 4px 14px #0007;transform:translateY(-1px)}
 .gbtn:active{transform:translateY(1px)}
 .gbtn:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-.gbtn svg{width:19px;height:19px;flex:none}
+.gbtn svg{width:22px;height:22px;flex:none}
 .gbtn.quiet{background:transparent;color:var(--ink);border:1px solid var(--line);margin-top:12px;font-weight:500}
 .gbtn.quiet:hover{border-color:var(--sub);box-shadow:none}
 .gbtn.warn{background:var(--bad);color:#210a07}
 
-.err,.ok{margin:0 0 14px;padding:10px 13px;border-radius:10px;font-size:13.5px;line-height:1.45}
+.err,.ok{margin:0 0 14px;padding:10px 13px;border-radius:10px;font-size:13.5px;line-height:1.45;width:100%}
 .err{background:color-mix(in srgb,var(--bad) 13%,transparent);border:1px solid color-mix(in srgb,var(--bad) 40%,transparent);color:#ffb3a8}
 .ok{background:color-mix(in srgb,var(--ok) 13%,transparent);border:1px solid color-mix(in srgb,var(--ok) 40%,transparent);color:#bfe9d2}
-.pic{display:flex;align-items:center;gap:12px;margin:18px 0 4px}
+.pic{display:flex;align-items:center;justify-content:center;gap:12px;margin:18px 0 4px}
 .pic img{width:44px;height:44px;border-radius:50%;object-fit:cover;background:var(--line)}
 .pic span{font-size:13.5px;color:var(--sub)}
 
-.foot{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:22px;padding-top:16px;border-top:1px solid var(--line);
-  font-size:13px;color:var(--faint)}
+.foot{display:flex;flex-wrap:wrap;justify-content:center;gap:6px 18px;margin-top:22px;padding-top:16px;
+  border-top:1px solid var(--line);font-size:13px;color:var(--faint)}
+.signin-fine{font-size:12.5px;color:var(--faint);max-width:34ch;margin:14px auto 0;line-height:1.45}
 .app{display:inline-flex;align-items:center;gap:7px}
 .app[hidden]{display:none}
 .app svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
@@ -166,7 +177,7 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
   .demo,.facts{display:none}
 }
 @media (prefers-reduced-motion:reduce){
-  .wash i,.mark b,.caret{animation:none}
+  .wash i,.mark b,.mark56 b,.caret{animation:none}
   .queue li{transition:none}
 }
 </style>
@@ -204,9 +215,10 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
     </ul>
   </section>
 
-  <section class="door" aria-labelledby="door-h">
+  <section class="door signin" aria-labelledby="door-h">
+  <span class="mark56" aria-hidden="true"><b></b><b></b><b></b><b></b></span>
+  <h1 class="display" id="door-h">{{ server_name }}</h1>
   {% if blocked %}
-    <h2 id="door-h">This account can&rsquo;t listen here</h2>
     <p class="lede">Whoever runs {{ server_name }} has turned this account off. If you think that&rsquo;s a mistake, ask them.</p>
     <p class="lede" style="margin-top:14px">It&rsquo;s still your data. You can take a copy or have it deleted whenever you like.</p>
     <a class="gbtn quiet" href="{{ base }}/api/me/export" download>Download my data</a>
@@ -223,7 +235,6 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
     <div class="foot"><a href="{{ base }}/auth/signout">Sign out</a><a href="{{ base }}/privacy">Privacy notice</a></div>
 
   {% elif claim %}
-    <h2 id="door-h">One last thing</h2>
     <p class="lede">You&rsquo;re signed in with Google, but we haven&rsquo;t met. Choose a name and you&rsquo;re in.</p>
     {% if claim.picture %}<div class="pic"><img src="{{ claim.picture }}" alt="" referrerpolicy="no-referrer"><span>Signed in with Google</span></div>{% endif %}
     {% if error %}<p class="err" role="alert">{{ error }}</p>{% endif %}
@@ -239,7 +250,6 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
     <div class="foot"><a href="{{ base }}/auth/signout">Cancel</a></div>
 
   {% elif google %}
-    <h2 id="door-h">Come in</h2>
     <p class="lede">Sign in with Google. No password to make or forget.</p>
     {% if error %}<p class="err" role="alert" style="margin-top:16px">{{ error }}</p>{% endif %}
     <div class="sw">
@@ -273,13 +283,13 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
         </div>
       </div>
     </div>
+    <p class="signin-fine">It only learns your taste if you say so.</p>
     <div class="foot">
       {% if client_available %}<a class="app" id="getapp" href="{{ base }}/download/client"><svg viewBox="0 0 24 24"><path d="M12 4v10m0 0l-4-4m4 4l4-4M5 19h14"/></svg>Get the Windows app</a>{% endif %}
       <a href="{{ base }}/privacy">Privacy notice</a>
     </div>
 
   {% else %}
-    <h2 id="door-h">Not taking sign-ins yet</h2>
     <p class="lede">Whoever runs {{ server_name }} hasn&rsquo;t switched on Google sign-in. Ask them to.</p>
     {% if error %}<p class="err" role="alert" style="margin-top:16px">{{ error }}</p>{% endif %}
     <div class="foot"><a href="{{ base }}/privacy">Privacy notice</a></div>

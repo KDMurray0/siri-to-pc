@@ -1,0 +1,2340 @@
+# Music Request Server — issue register
+
+Audit date: 2026-09-14
+Scope: current worktree at HEAD `7163979` plus the changes made while resuming
+this task. Existing commits and user changes were preserved.
+
+Status values:
+
+- `NOT FIXED`: observed during this audit; no application fix was made.
+- `FIXED`: implemented and verified by a named regression check or a
+  documented, reproducible live check.
+- `PARTIAL`: the narrow implementation exists, but part of the stated scope
+  remains intentionally unimplemented or unverified.
+
+There was no `issues.txt` or `missing.txt` in the repository. `ideas.md` is a
+feature backlog, not an issue log, so this file was created without removing or
+rewriting any existing issue entries.
+
+## Audit plan and critique
+
+1. Inventory the entry points, configuration/data paths, HTTP routes, and trust
+   boundaries.
+2. Check persistence, identity, filesystem safety, and process lifecycle paths.
+3. Review the current download/casting changes for race conditions and protocol
+   correctness.
+4. Run the compile, access-check, and self-test paths, then compare their claims
+   with what they actually exercise.
+5. Record each actionable defect with evidence, impact, and a concrete fix/test
+   specification.
+
+The existing route check is not sufficient as a security plan: it verifies that
+most routes have *some* dependency, but it does not verify that a route which
+changes machine state uses the owner dependency rather than the general-auth
+dependency. The current self-test also claims to be read-only/offline while it
+executes mutating request paths and reaches the configured LLM. Those are test
+design flaws, not evidence that the implementation is safe.
+
+## Findings
+
+### SEC-001 — A guest can mint the owner's full-access pass through the QR endpoint
+
+Priority: P0
+Status: FIXED — commit f2ba411, 2026-09-13, deployed and verified live
+
+Resolution: `/api/qr` now requires `Owner`. 17 regression checks added and run
+against the vulnerable `Auth` guard first (6 failures: full and phone links got
+HTTP 200 and an SVG), then against the fix (all pass). Live server: guest 403,
+owner 200. NOT covered by the fix: any owner pass already extracted before
+f2ba411 remains valid — the vulnerable path reissued the two existing permanent
+owner passes (`REVCd57Z`, `1i3hJxO8`, both `expires=0`). Rotating them is a
+separate decision for the owner, since it unpairs their own devices.
+
+Evidence:
+
+- `src/mrs/web/api.py:1923-1938` protects `/api/qr` with `Auth`, not `Owner`.
+- The handler calls `sec.owner_pass(key)` when no pass id is supplied, then puts
+  the resulting owner credential into `net.addresses(token)` and returns it as
+  an SVG QR code.
+- A temporary-data test with a normal full guest token received
+  `GET /api/qr?kind=lan` as HTTP 200 (`image/svg+xml`); the request also caused
+  an owner pass row to be created.
+
+Impact: anyone holding any shared link can read the QR response, extract the
+owner pass, and then call every owner-only route. This bypasses the intended
+credential boundary and makes all other pass scoping ineffective.
+
+Fix specification:
+
+- Require `Owner` for `/api/qr` unless there is a narrowly defined, separately
+  authenticated use case that does not return an owner credential.
+- Do not mint or reissue an owner pass during a guest request.
+- Add regression tests for full guest, phone guest, expired guest, owner key,
+  and owner pass. Guest requests must return 403 and must not modify the pass
+  registry.
+
+### SEC-002 — General-auth routes bypass the documented owner/guest isolation
+
+Priority: P1
+Status: FIXED (7e94fc1) — verified by test and live. Hijack proven first: corrected check run against the old guard gets HTTP 200 for a phone link sending the shared player to cast:browser.
+
+Evidence:
+
+The code explicitly says that guests should receive only their own settings in
+`src/mrs/web/api.py:1253-1262` and correctly enforces that policy in
+`/api/settings` and `/api/setting`. Several adjacent routes instead accept only
+`Auth` and directly mutate or expose owner state:
+
+- Playback and machine state: `/api/unskip` (`442-445`), `/api/restart`
+  (`707-710`), `/api/audio` (`1298-1311`), `/api/audio/devices`
+  (`1373-1376`), `/api/audio/device` (`1453-1464`), `/api/theme`
+  (`1950-1953`), `/api/announce` (`1956-1959`), `/api/sleep` (`1962-1964`),
+  `/api/download` (`1967-1969`), and `/api/pin` (`1972-1974`).
+- Owner integrations and persistent credentials: `/api/cookies*`
+  (`2351-2420`), `/api/openfolder` and `/api/library/scan` (`2425-2440`),
+  `/api/lastfm` (`2456-2466`), `/api/alarms` (`2469-2479`), and `/api/cast`
+  (`2482-2491`).
+- External-service calls and global model state: `/api/groqmodels` and
+  `/api/groqmodel` (`2010-2031`).
+- `/api/health` and `/api/diag` also expose machine/service diagnostics to any
+  valid guest token.
+
+A direct probe with a full guest token returned HTTP 200 and changed the
+  global theme, announce flag, audio normalization/crossfade, alarms, Last.fm
+  credentials, and cast peers. The same token could read cookie path, cookie
+  health, and installed-browser information. This is separate from the
+  intentional ability of a full guest to queue/control the shared player.
+
+Impact: a shared link can change what the owner hears, alter persistent machine
+configuration, poison or replace YouTube credentials, close browsers when the
+opt-in is enabled, trigger scans, alter external-service settings, or spend
+remote API quota. A revoked or short-lived guest link is still too powerful
+while it is valid.
+
+Fix specification:
+
+- Use `Owner` for machine, credential, integration, diagnostic, and owner-data
+  routes.
+- For settings that are intentionally guest-local, require `Request` and write
+  through the caller's profile/session, as `/api/setting` does.
+- Define a route authorization matrix (`owner`, `shared-player`, `guest-profile`,
+  `read-only`) and test every route against owner key, owner pass, full guest,
+  phone guest, and revoked/expired credentials. The current dependency-presence
+  check is not enough.
+
+### TEST-001 — The access/self-test suite is neither hermetic nor read-only
+
+Priority: P1
+Status: FIXED (5f45dcb plus this pass) — checks and self-test run inside `isolated()` + `offline()`: disposable data/cache roots, loopback-only sockets, catalog/request stubs, and explicit offline-attempt detection. Clean CPython 3.12 venv run: 504 checks passed with the new `httpx2` dependency and no Starlette deprecation warning.
+
+Evidence:
+
+- `src/mrs/checks.py:11-15` claims the checks use no network and no mpv.
+- `src/mrs/checks.py:1561-1610` posts several requests to the real Shortcut
+  endpoint. Those requests call `handle_request`, which can resolve, queue, and
+  download music.
+- `src/mrs/selftest.py:116-134` calls `/api/theme`, whose GET handler changes
+  persistent configuration. The test does not restore the user's theme.
+- The checks create profiles/passes and touch the live stores. They remove pass
+  rows at the end but do not provide a disposable data directory or reliably
+  undo all profile/store side effects.
+- Running the checks in this working tree passed 346 access checks but emitted
+  Groq HTTP 400/429 traffic. Running the self-test also emitted the same
+  external traffic and took roughly 22 seconds. This is direct evidence that
+  the “offline” claim is false when Groq is configured.
+
+Impact: CI or an owner running `--check` can consume paid/rate-limited API quota,
+depend on remote availability, alter the live queue/configuration, create test
+data, and still report a green result. The tests can also interfere with a
+currently running player.
+
+Fix specification:
+
+- Run tests with a disposable `MRS_DATA_DIR` and an isolated cache directory.
+- Inject or monkeypatch the LLM, catalog, downloader, mpv/player, and request
+  handler for the offline suite. Assert that no socket/subprocess download is
+  attempted.
+- Split hermetic authorization tests from explicit external integration tests.
+- Make read-only checks actually read-only; use direct unit calls for mutation
+  tests and restore every changed setting/store.
+- Add coverage for SEC-001 and SEC-002 rather than only checking that a route
+  has a dependency.
+
+### RUN-001 — Source installation instructions point at a missing entry point and stale configuration
+
+Priority: P1
+Status: FIXED (5f45dcb) — README/setup.ps1/config.example.json corrected; an install-instructions drift check (35 assertions) keeps them matched to the code.
+
+Evidence:
+
+- `README.md:107-113`, `README.md:183`, `README.md:215`, and
+  `README.md:395` refer to `app.py`; there is no `src/app.py` in the repository.
+  The actual source entry points are `launcher.pyw` and `src/mrs/server.py`.
+- `README.md:116`, the example config, and `setup.ps1:182-185` use port 5000,
+  while `src/mrs/config.py:16-20` defaults to port 7420.
+- The example and setup script configure `player_client` as `tv`, while
+  `src/mrs/config.py:104-111` says that `tv` is dead and defaults to
+  `web_embedded` with fallbacks.
+- `setup.ps1:350-363` verifies only the single configured player client; it does
+  not use the application's fallback chain.
+- The README documents a Groq default and `history_size` that disagree with the
+  current code defaults (`src/mrs/config.py:145-154`).
+
+Impact: a source user following the documented command gets a file-not-found
+failure. A user who bypasses that can be sent to the wrong port, can seed a dead
+YouTube client, and can receive a false setup failure even though the app has a
+working fallback. This is a release/install blocker, not cosmetic documentation
+drift.
+
+Fix specification:
+
+- Choose one supported source command and make it real; update README, setup,
+  scheduled-task examples, and build scripts together.
+- Generate examples from the same defaults/schema used by `config.py`, or add a
+  config-version migration step that makes stale examples harmless.
+- Make setup verification use the same client/format fallback logic as the
+  application and add a clean-machine smoke test.
+
+### DL-001 — Download timeout does not apply while yt-dlp is silent
+
+Priority: P1
+Status: FIXED (7e94fc1 plus this pass) — a fake silent child now verifies the 0.1-second deadline, termination/reaping, and removal from the process registry. Included in the final 505-check suite.
+
+Evidence:
+
+- `src/mrs/core/downloader.py:290-334` iterates directly over
+  `proc.stdout` and checks the deadline only after a line is received.
+- A child process that produced no output for 1.2 seconds, passed to `_run`
+  with `timeout=0.1`, took about 1.28 seconds and returned code 0. The timeout
+  was therefore not enforced during the silent interval.
+
+Impact: a DNS stall, blocked socket, or hung yt-dlp process can hold a queue
+worker indefinitely. The in-memory arriving record and duplicate-request waiters
+can remain active, and the UI can report a download that will never finish.
+
+Fix specification:
+
+- Poll the process or read output on a separate thread/queue so the monotonic
+  deadline is checked independently of stdout activity.
+- Kill the process tree on timeout, reap it, clear both in-flight registries,
+  and return a distinct timeout reason.
+- Test silent processes, delayed output, a child that ignores termination, and
+  duplicate callers.
+
+### DL-002 — Final-name partial downloads can be mistaken for complete files and pruned while active
+
+Priority: P1
+Status: FIXED (7e94fc1 plus this pass) — verified that `.part` is not a cache hit, active IDs are protected from pruning, and an exception clears both in-flight registries. A hard process kill/cold-restart integration test is still not simulated; yt-dlp's atomic `.part` publication and age-based stale-part cleanup remain the recovery boundary.
+
+Evidence:
+
+- The current downloader change deliberately uses `--no-part` and writes to
+  the final output template (`src/mrs/core/downloader.py:424-436`).
+- `Downloader.cached()` (`186-192`) and `cast.source_for()`
+  (`src/mrs/core/cast.py:55-63`) treat any file larger than 100 KB as ready.
+- The in-flight registry is process memory only. After a restart, a truncated
+  final-name file has no marker distinguishing it from a completed download.
+- Automatic pruning scans all root cache files (`src/mrs/core/downloader.py:228-265`).
+  An active download is not inserted into queue metadata until after completion
+  (`src/mrs/core/queue.py:700-730`), so the normal keep-path set does not protect
+  it.
+- `_fetch_locked` drops the global in-flight record on its expected return paths,
+  but an unexpected exception can bypass those calls; `fetch` only clears its
+  separate per-instance event (`downloader.py:357-385`).
+
+Impact: a server restart or cache-prune pass can expose/delete a growing or
+truncated file. The player or phone can then receive corrupt audio, and an
+unexpected exception can leave a permanent `arriving` state for that id.
+
+Fix specification:
+
+- Download to an unambiguous temporary extension/name and atomically rename only
+  after successful validation; remove stale temporary files at startup.
+- Protect active paths/IDs in the cache cleaner and put `_drop_inflight` in a
+  `finally` covering the entire fetch attempt.
+- Test cancellation, process crash, restart recovery, prune during download,
+  and a download failure raised before the normal return paths.
+
+### CAST-001 — The growing-file HTTP response is not a valid media implementation for all clients/formats
+
+Priority: P1
+Status: FIXED (7e94fc1 plus this pass) — regression checks cover full-file `200`, suffix `206`, invalid `416`, multipart ranges, and the content type for all supported native audio extensions. Growing-file serving remains removed. A physical Safari/iOS client check is still unavailable in this test environment.
+
+Evidence:
+
+- `src/mrs/web/api.py:1566-1644` sends a prefix of a file as `206`, invents a
+  `Content-Range` total from a yt-dlp progress estimate, and ends the response
+  at the current file length. The browser is expected to issue later ranges.
+- The range parser mishandles suffix ranges such as `bytes=-500` and does not
+  support multi-range requests. A request without a Range header also receives
+  `206` rather than a normal complete-file response.
+- The partial response always uses `audio/mp4`, even when the source is `.mp3`,
+  `.aac`, `.wav`, or another native format.
+- Completed non-MP4 output is returned as `application/octet-stream` by
+  `api_output_stream` (`1675-1678`), which also prevents reliable media-type
+  selection.
+- A prefix is not guaranteed to be independently decodable or seekable merely
+  because the total byte count is known. Container metadata/fragment layout must
+  be valid for the target browser.
+
+Impact: Safari/iOS and other media clients can reject the response, show an
+incorrect duration, fail to seek, stop after the first prefix, or refuse to
+play a non-MP4 file. The feature is not covered by an integration test against
+the actual browser range behavior.
+
+Fix specification:
+
+- Either serve only completed, correctly typed files, or implement a format
+  designed for progressive/fragmented delivery and validate it with target
+  clients.
+- Use a standards-compliant single-range parser, correct suffix-range behavior,
+  correct `Content-Type` per extension, and a trustworthy final size. Do not
+  advertise a guessed total as final unless the downloader guarantees it.
+- Add tests for no range, open-ended range, suffix range, invalid/multi-range,
+  every native extension, and a stalled/failed download.
+
+### RUN-002 — Port fallback starts the server on one port while the launcher opens another
+
+Priority: P1
+Status: FIXED (7e94fc1 plus this pass) — forced fallback test verifies selection of the next available port, the preferred-port warning state, URL construction, and that launcher actions read the live port.
+
+Evidence:
+
+- `src/mrs/server.py:119-126` deliberately returns a fallback candidate and
+  stores the configured value in `runtime["wanted_port"]`.
+- `src/mrs/server.py:352-353` records the actual port in `runtime["port"]`.
+- Tray and desktop-browser actions in `launcher.pyw:710-715` and
+  `launcher.pyw:736-754` continue to build URLs from `config.get("port")`, not
+  `srv.runtime["port"]`.
+- The server itself logs that links and router forwarding will not reach the
+  fallback port, but the launcher does not surface or reconcile that state.
+
+Impact: when the preferred port is occupied, the server can be healthy on the
+fallback port while tray actions, desktop opening, and user-facing links still
+target the occupied/wrong port. The result looks like a dead server or a bare
+404 and can also hit an unrelated process on the configured port.
+
+Fix specification:
+
+- Centralize live-port resolution and use it in every launcher action, local URL,
+  QR/link generator, readiness check, and shutdown/handover path.
+- Show a clear fallback warning and make the actual port discoverable.
+- Add a test that occupies the preferred port, starts the server, and verifies
+  every generated URL uses the bound candidate.
+
+### DATA-001 — Local-library IDs change every process because they use Python’s randomized hash
+
+Priority: P1
+Status: FIXED (7e94fc1 plus this pass) — normalized deterministic SHA-256 IDs are checked in two fresh Python interpreters; scan also builds a single path index and preserves old local IDs at the same path.
+
+Evidence:
+
+- `src/mrs/core/library.py:84-88` creates IDs with
+  `abs(hash(str(path)))`.
+- Two separate Python processes produced different hashes for the same path
+  during this audit.
+
+Impact: after every restart, the same local file receives a new `video_id`.
+History, likes, blocks, dedupe, queue references, and persisted UI selections no
+longer identify the same track. The bug is silent because the library still
+appears to scan successfully.
+
+Fix specification:
+
+- Derive the ID from a deterministic normalized path (for example a versioned
+  SHA-256 scheme), optionally including a file identity/stat component if that
+  is desired.
+- Define a migration/compatibility rule for existing `local:` IDs.
+- Test two separate interpreter processes, path case/separator normalization,
+  moved files, and replacement files.
+
+### DATA-002 — Cached profiles/sessions do not reflect pass permanence changes
+
+Priority: P1
+Status: FIXED (7e94fc1 plus this pass) — regression test changes a pass temporary→permanent→temporary while its session is live and verifies the cached profile and session are replaced in each direction.
+
+Evidence:
+
+- `src/mrs/core/profile.py:266-279` constructs a `Profile` once and caches it;
+  `permanent` is derived only from the first row seen.
+- `src/mrs/web/security.py:384-408` can change an expiring pass to permanent or
+  a permanent pass to expiring through `extend`.
+- `src/mrs/core/session.py:319-329` also caches a `Session`, which retains the
+  old profile/taste/queue object.
+
+Impact: extending a temporary link permanently can leave it using the in-memory
+neutral/non-persistent profile for the existing session. Converting a permanent
+link to temporary can leave it writing to disk. The owner UI says one policy is
+active while the running session uses another.
+
+Fix specification:
+
+- Invalidate/rebuild the profile and session whenever pass permanence changes,
+  or make the persistence policy dynamic rather than copied at construction.
+- Define behavior for an already-playing session and for a pass extended while
+  expired.
+- Add tests for both transition directions with an existing profile and session,
+  including whether prior data is retained or intentionally discarded.
+
+### BACKUP-001 — Windows-style mixed separators can escape the backup restore root
+
+Priority: P2
+Status: FIXED (7e94fc1 plus this pass) — a Windows-style mixed-separator member is restored alongside a valid playlist file; the valid file is retained and the sentinel outside the playlist remains unchanged.
+
+Evidence:
+
+- `src/mrs/core/backup.py:104-120` checks `..` only after splitting archive
+  names on `/`, then writes `root / n`.
+- A crafted archive member such as `playlists/..\\config.json` contains a
+  backslash traversal component that the string check does not recognize. On
+  Windows, `Path` treats the backslash as a separator and the output resolves
+  outside the intended playlist directory, potentially overwriting a root data
+  file.
+
+Impact: an owner restoring a malicious or tampered backup can overwrite files
+outside the intended archive member directory. The route is owner-only, but the
+backup file itself may have come from an untrusted source.
+
+Fix specification:
+
+- Normalize both slash types before validation, reject absolute/UNC/device
+  paths, resolve the candidate, and require it to remain under the intended
+  data root.
+- Bound total uncompressed bytes and per-member bytes to avoid zip bombs.
+- Add Windows-style traversal, absolute path, symlink, duplicate-member, and
+  oversized-member tests.
+
+### DATA-003 — Spectrum cache filenames collide for different files with the same stem
+
+Priority: P2
+Status: FIXED (7e94fc1 plus this pass) — regression coverage confirms same-stem files in different folders and a replaced file map to distinct content-cache paths.
+
+Evidence: `src/mrs/core/spectrum.py:43-45` stores every analysis as
+`<Path(path).stem>.bin`, and `analyse()` returns any existing non-empty cache
+without checking the full path, file identity, or modification time.
+
+Impact: `Album A/song.mp3` and `Album B/song.mp3` share one visualizer. Replacing
+an audio file under the same name also leaves stale spectrum data. This is a
+silent UI correctness bug that becomes common as soon as a library has multiple
+albums containing the same track name.
+
+Fix specification: hash a normalized full path plus a file version/stat marker,
+or store metadata next to the cache and invalidate on mismatch. Add same-stem,
+replacement-file, and concurrent-analysis tests.
+
+### DATA-004 — One malformed playlist row can make the whole playlist endpoint fail
+
+Priority: P2
+Status: FIXED (7e94fc1 plus this pass) — mixed valid, non-object, wrong-type, invalid-duration, and incomplete rows are covered; malformed rows are logged and skipped without losing valid tracks.
+
+Evidence: `src/mrs/core/playlists.py:101-106` catches file-level JSON errors but
+then maps every row directly through `Track.from_dict`; `src/mrs/models.py:159-162`
+assumes every row is a mapping and calls `.items()`.
+
+Impact: one hand-edited, partially migrated, or corrupt row can raise an
+`AttributeError` and break playlist listing/tracks/queue operations instead of
+returning the valid tracks. A user has no repair path through the UI.
+
+Fix specification: validate each row independently, skip and log malformed rows,
+preserve valid rows, and expose a repair/export diagnostic. Add malformed-row,
+wrong-type, and partial-write recovery tests.
+
+### BUILD-001 — The dependency manifest does not guarantee all advertised runtime/test paths
+
+Priority: P2
+Status: FIXED (5f45dcb plus this pass) — runtime/test requirements are separate, `httpx2` is explicit, build runs checks, and a Windows CPython 3.12 clean-venv install/compile/504-check run passed. Added a Windows GitHub Actions workflow for the same test path.
+
+Evidence:
+
+- `src/mrs/core/net.py:139-148` imports `qrcode` for the runtime QR endpoint,
+  but `requirements.txt` does not list `qrcode`.
+- `src/mrs/selftest.py:99-106` and `src/mrs/checks.py:94-99` require
+  `fastapi.testclient`; `requirements.txt` does not list the compatible
+  `httpx`/`httpx2` test dependency.
+- The current environment emitted a `StarletteDeprecationWarning` saying the
+  installed `httpx` path is deprecated in favor of `httpx2`.
+
+Impact: a clean source install can fail only when a user opens QR generation or
+runs the advertised self-test. Dependency resolution can also change the test
+client behavior independently of the application runtime.
+
+Fix specification:
+
+- Add the runtime QR dependency to the runtime requirements.
+- Put test-only dependencies in an explicit test requirements file and pin or
+  constrain the supported TestClient/httpx combination.
+- Run a clean-environment install plus QR and self-test smoke tests in CI.
+
+### BUILD-002 — The requested PyPy executable is incompatible with this Windows dependency/build stack
+
+Priority: P2
+Status: NOT FIXED AS REQUESTED — the installed PyPy 7.3.20 can run Python 3.11,
+but no supported packager in the current stack accepts it, and the Windows
+dependency set cannot be resolved unchanged. The installed/restarted release
+therefore uses CPython 3.12; it is not represented as a PyPy build.
+
+Evidence: PyInstaller's own compatibility check raises
+`ERROR: PyInstaller does not support {sys.implementation.name}. Only CPython is
+supported.` See
+https://github.com/pyinstaller/pyinstaller/blob/develop/PyInstaller/compat.py#L2780-L2783.
+The official Nuitka manual likewise requires CPython, and PyOxidizer's
+documented targets are CPython 3.8–3.10:
+https://nuitka.net/user-documentation/user-manual.html#python
+https://pyoxidizer.readthedocs.io/en/stable/pyoxidizer_getting_started.html#python-requirements
+A PyPy `pip --dry-run` against `requirements.txt` also fails at the Windows
+`PyAudioWPatch>=0.2.12` dependency (`No matching distribution found`); this
+module provides the WASAPI loopback meter and is explicitly collected by the
+current spec.
+
+Impact: forcing a PyPy bundle would mean changing the packaging architecture
+and dropping or porting the WASAPI listener dependency, then revalidating the
+webview/native stack and all release checks. The current CPython executable is
+the only verified release artifact.
+
+Fix specification: use CPython with the checked-in PyInstaller spec for the
+current release. If PyPy remains a hard requirement, first replace or port
+PyAudioWPatch and select a packager/runtime bundle that explicitly supports
+PyPy on Windows, then pass the complete install, self-test, and audio-device
+acceptance checks before replacing the release pipeline.
+
+### SEC-003 — Sensitive mutations and credentials are exposed through GET query strings
+
+Priority: P2
+Status: FIXED (2026-09-13 work plus this pass) — writes are POST+JSON, credentials in `X-Music-Key`, cross-origin POSTs refused, and raw-key URLs are limited to compatibility mode or loopback. New installs are strict; legacy installs migrate deliberately. The 19 focused SEC-003 checks remain green within the 505-check suite. Owner audit is now visible in Settings → System. A real iOS Shortcut using the new POST shape has not been exercised.
+
+Evidence: `allow_key_in_url` defaults to true in `src/mrs/config.py:49-53`, the
+README teaches `?key=...` URLs, and multiple mutating endpoints accept secrets or
+state changes through GET parameters, including `/api/lastfm`, `/api/groqkey`,
+pass creation/extension, cookie import, and machine settings.
+
+Impact: raw keys, pass tokens, Last.fm secrets, and configuration values can land
+in browser history, proxy/access logs, Referer headers, screenshots, and link
+scanner requests. GET prefetching can also trigger state changes without a clear
+user action.
+
+Fix specification: move state-changing actions and secret submission to POST with
+appropriate origin/CSRF protection, use headers for owner credentials, default
+raw-key-in-URL compatibility off for new installs, and scrub/redact sensitive
+query parameters from logs and generated links. Preserve a deliberate, tested
+compatibility mode for old Shortcuts rather than making it the default security
+posture.
+
+### DATA-005 — Taste writes can be lost, and blocking mutates unsaved state
+
+Priority: P1
+Status: FIXED (2026-09-15 audit) — a failed play-stats write remains dirty for
+the next flush, block removal runs under the taste lock, block removal is saved
+durably, and unblocking no longer performs a second destructive history delete.
+
+Evidence: `TasteEngine.save()` caught a disk/permission/temporary-lock failure
+and then unconditionally cleared `_dirty`; the next flush therefore skipped the
+retry. `block()` also called `_drop_ids()` outside the lock and never persisted
+the resulting play-stat/history deletion. The old block path also ran that
+deletion when turning a block off.
+
+Impact: a full or transiently locked disk could silently lose listening history,
+and concurrent ranking/player activity could race a block operation. A restart
+could restore evidence that the user had blocked, while an unblock could mutate
+history unexpectedly.
+
+Fix specification: keep failed writes dirty and retryable, protect taste-state
+deletions with the same lock as reads/writes, save the deletion, and only remove
+scoring evidence when a recording is newly blocked. Regression checks cover a
+failed write, malformed counters, durable block removal, and the complete suite.
+
+### DATA-006 — Corrupt listening state can crash rankings and smart playlists
+
+Priority: P1
+Status: FIXED (2026-09-15 audit) — persisted song/artist counters, history,
+recent rows, liked rows, and played timestamps are filtered on load; smart-list
+count sorting ignores invalid values and tolerates a failing count provider.
+
+Evidence: `play_counts()` converted arbitrary saved values with `int()` and
+`_smart_rows()` converted them again while sorting. A row such as
+`{"video_id":"x","plays":"not-a-number"}` made the most-played endpoint
+raise `ValueError` and return a server error instead of omitting one bad row.
+
+Impact: hand-edited or partially corrupted state could make radio/cache ranking
+or the dynamic playlist panel fail for the whole listener.
+
+Fix specification: validate count rows at the persistence boundary and treat
+invalid dynamic-playlist counts as absent. Keep valid sibling rows available.
+The issue-regression section includes a mixed valid/corrupt state and a broken
+most-played provider.
+
+### DATA-007 — One malformed local-library row discarded the entire index
+
+Priority: P1
+Status: FIXED (2026-09-15 audit) — the library index now validates and skips
+bad rows individually while retaining valid local tracks.
+
+Evidence: `_load()` used one list comprehension inside one broad `try`. A single
+non-object row or invalid field raised and replaced the whole in-memory library
+with an empty list.
+
+Impact: one damaged row made every indexed local song disappear, especially on
+startup when no library scan was configured to repair it.
+
+Fix specification: validate the same string/duration/playable-file boundaries
+used for playlists, log and skip bad rows, then publish the valid subset. A
+mixed-row startup regression is covered.
+
+### DL-003 — Cache eviction left non-AAC transcodes and could delete a prefix match
+
+Priority: P1
+Status: FIXED (2026-09-15 audit) — source eviction removes all configured cast
+formats, but only when the transcode stem is exactly the source ID or begins
+with the cast stamp separator (`~`).
+
+Evidence: `prune_cache()` only searched for `*.m4a`, even though WebM, Ogg, and
+MP4 Opus outputs are supported. Its broad filename glob also treated an ID such
+as `abc2` as belonging to source ID `abc`.
+
+Impact: disk usage stayed above the configured limit after an Ogg/WebM/MP4 cast
+source was evicted, and a coincidental ID prefix could remove another song's
+cast file.
+
+Fix specification: enumerate the cast work directory, filter by the declared
+output extensions, and match `id`/`id~stamp` rather than an unrestricted prefix.
+Regression coverage includes a non-AAC orphan and a similarly prefixed file.
+
+### CODE-001 — Two API handlers shared the same Python symbol
+
+Priority: P2
+Status: FIXED (2026-09-15 audit) — the spoken-media handler is named
+`api_announce_file`; the owner toggle remains `api_announce`, and a route check
+asserts that FastAPI still points the media route at the media handler.
+
+Evidence: `/api/announce/{aid}.mp3` and `/api/announce` were both defined as
+`api_announce`. FastAPI retained the first endpoint object in its route table,
+but the module symbol was silently rebound to the second function.
+
+Impact: direct imports, introspection, future tests, and maintenance tools could
+call the toggle when they meant to serve audio, while the route table appeared
+to work by accident.
+
+Fix specification: give the two handlers distinct names and lock that identity
+down with a regression check. No route behavior was expanded.
+
+### UI-001 — Malformed browser format state could stop the player script
+
+Priority: P2
+Status: FIXED (2026-09-15 audit) — `fmtBad()` now accepts only a string array
+from local storage and falls back to an empty list for every other JSON shape.
+
+Evidence: a valid JSON object or scalar in `localStorage.fmtbad` was returned
+unchanged, then `fmtPick()` called `.includes()` on it during page startup.
+
+Impact: one stale/corrupt browser preference could throw before the player
+initialized, leaving the page unusable until storage was manually cleared.
+
+Fix specification: validate the storage shape and filter its members before
+format selection. The page-source regression check protects this bootstrap
+boundary.
+
+## Additional ideas and status (not current defects)
+
+These are common hardening/features worth considering after the P0/P1 findings
+are fixed. They are deliberately separate from the defect list.
+
+- `FIXED`: the authorization policy is explicit at route registration, and the
+  hermetic route-inventory check fails for an unclassified API route. Full
+  OpenAPI generation from that table remains unnecessary while docs are disabled.
+- `FIXED`: an owner-visible, bounded audit trail is available in Settings →
+  System. It stores route, actor, status and time, never request bodies/tokens.
+- `PARTIAL`: the offline check runner provides disposable data/cache roots,
+  catalog/request stubs and network tripwires. There is no user-facing demo
+  catalog or full fake-download desktop demo.
+- `PARTIAL`: local-library IDs are versioned, and configuration has an explicit
+  compatibility migration. A unified versioned schema/migration framework for
+  playlist and profile stores remains follow-up work.
+- `PARTIAL`: downloads use yt-dlp `.part` files, atomic publication, in-flight
+  protection and stale-part pruning. A durable checksum/container-validity
+  index and resumable-download ownership ledger are not implemented.
+- `FIXED`: three listener-scoped dynamic playlists (liked, recent, most played)
+  and opt-in periodic local-library refresh are implemented. Both use local
+  state only; no new service is required.
+- `FIXED`: researched AutoEq headphone correction is now available per Windows
+  output, with user confirmation for ambiguous matches.
+
+## Implementation plan for the requested change
+
+The defect list is broad enough that a single ad-hoc patch would make the
+system less reliable. The work is therefore staged around shared boundaries:
+
+1. `DONE`: establish one authorization policy table and use it for owner-only routes;
+   move secret/state mutations behind POST and add compatibility tests for
+   legacy callers.
+2. `DONE`: make tests hermetic before using them as a safety net: disposable data and
+   cache roots, dependency injection for network/LLM/download/audio work, and
+   explicit external-integration tests.
+3. `DONE`: repair download lifecycle and media serving together: timeout independent of
+   stdout, temporary files plus atomic completion, active-file protection, and
+   standards-compliant completed-file/range responses.
+4. `DONE`: repair durable identity and persistence: deterministic local IDs, live
+   profile/session policy, safe backup extraction, collision-free spectrum
+   caches, malformed-row tolerance, and dependency/docs/setup drift.
+5. `DONE`: implement announcement volume as an audio policy rather than a percentage
+   hack: preserve the music mixer level, apply configurable dB ducking, use
+   the same base level for speech, serialize overlapping announcements, and
+   restore state in all exit paths.
+6. `DONE`: add the researched, local features that fit existing boundaries:
+   an owner audit trail, listener-scoped smart playlists, periodic library
+   refresh, and the already-landed AutoEq headphone correction. Larger
+   integrations such as ListenBrainz, hardware transcoding, and per-client
+   bitrate negotiation remain follow-up items.
+
+Plan critique: implementing broad integrations before fixing the auth and
+download boundaries would multiply the attack surface and make failures hard
+to attribute. The selected additions are local, testable, and useful without
+introducing a new service dependency; the integration ideas are recorded
+instead of pretending that a shallow adapter is production-ready.
+
+## Research notes used for scope
+
+- yt-dlp documents `.part` files as the default and provides separate temporary
+  and final paths, so the downloader should retain an unambiguous temporary
+  name and publish the final name only after success:
+  https://github.com/yt-dlp/yt-dlp#filesystem-options
+- RFC 9110 defines single-range responses, suffix ranges, `206`, `416`, and
+  `Content-Range`; the server should follow those rules and should not invent a
+  final size for a still-growing file:
+  https://www.rfc-editor.org/rfc/rfc9110.html
+- mpv exposes an internal mixer volume and a separate `volume-gain` dB control;
+  this is the correct primitive for configurable narrator ducking rather than
+  multiplying a percentage:
+  https://mpv.io/manual/stable/
+- Navidrome’s documented feature set makes smart/dynamic playlists, library
+  monitoring, scrobbling, sharing, and per-user controls common expectations
+  for a self-hosted music server:
+  https://www.navidrome.org/docs/overview/
+- Jellyfin documents client capability profiles and user policies such as
+  library access, bitrate limits, and transcoding permission. These are useful
+  follow-up directions, but this codebase needs a capability/policy boundary
+  before they can be added safely:
+  https://jellyfin.org/docs/general/post-install/transcoding/
+- AutoEq publishes measured headphone response data and correction profiles;
+  this project caches the selected profile, applies it per Windows output, and
+  asks before using ambiguous device-name matches:
+  https://github.com/jaakkopasanen/AutoEq
+
+## AUDIO-001 — Announcement playback ignores the music dB policy and can race restoration
+
+Priority: P1
+Status: FIXED (7e94fc1 plus this pass) — local speech now has direct tests at mixer volume 0, low, normal and high, verifies existing dB gain plus configured narrator gain, confirms exception restoration and serialized overlapping announcements. Cast generation ordering is also checked; settings can be changed in the owner UI without reload.
+
+Evidence: `src/mrs/player.py:_speak` reduces the music `volume` by multiplying
+the percentage by `0.25`, forces a minimum of `8`, launches speech with a
+separate fixed mixer invocation, and restores the old value only on the normal
+path. Overlapping announcements can each save and restore a different value;
+an exception can leave the player ducked. The browser cast path also needs one
+shared ducking state so an older `ended` callback cannot restore music while a
+new announcement is speaking.
+
+Impact: speech loudness is inconsistent with the configured music level, quiet
+or muted music can be raised unexpectedly, announcements overlap, and music
+can remain at the wrong level after a failed narration.
+
+Fix specification: use the music mixer level as the speech base, expose
+configurable `announce_duck_db` and `announce_voice_gain_db` values, apply the
+duck with mpv’s dB gain control, serialize local announcements, restore every
+changed property in `finally`, and make browser announcements generation-safe.
+Add tests for volume 0/low/normal/high, custom existing gain, failure,
+overlapping requests, and cast start/end ordering.
+
+## Verification performed
+
+- `python -m compileall -q src launcher.pyw`: PASS after resumed changes.
+- `python launcher.pyw --check`: 505 checks PASS in the current environment.
+- Clean CPython 3.12 virtual environment, installed from
+  `requirements-test.txt`: compile PASS and 504 checks PASS; no Starlette/httpx
+  deprecation warning and no outbound network activity.
+- Targeted regression checks cover QR/route authorization, POST/CSRF policy,
+  silent download timeout and in-flight cleanup, active-cache pruning, completed
+  byte ranges/media types, local ID stability, pass/session transitions, mixed
+  separator restore traversal, spectrum cache collisions, malformed playlist
+  rows, port fallback, listener-scoped smart lists, audit access, periodic
+  library refresh, and local/cast announcement volume and overlap.
+- `git diff --check`: PASS after the final documentation update.
+- Windows packaged build: PASS with CPython 3.12 / PyInstaller; installed and
+  restarted the app using `build.ps1` on 2026-09-14. The active process is the
+  workspace `dist\MusicRequestServer\MusicRequestServer.exe`.
+- Live executable smoke check: PASS; `/api/ping` returned status `ok`, release
+  `3.14.0` from the restarted process.
+- PyPy packaging request: not fulfilled. PyInstaller explicitly supports only
+  CPython; the build uses CPython because the selected packaging pipeline
+  refuses PyPy. See BUILD-002 for evidence and the alternative required if
+  PyPy itself is a hard requirement.
+- A real iPhone Safari stream and a real Shortcut migration remain manual-device
+  checks, not claims made by this test suite.
+
+## Current resumed bug-fix audit — 2026-09-15
+
+- `python -m compileall -q src launcher.pyw`: PASS.
+- `python launcher.pyw --check`: **527 checks PASS**, including the new
+  persistence, malformed-state, cast-cache, handler-identity, and browser-state
+  regressions.
+- `git diff --check`: PASS.
+- Confirmed and fixed DATA-005, DATA-006, DATA-007, DL-003, CODE-001, and
+  UI-001. No new feature work was added in this audit.
+- CPython 3.12/PyInstaller packaging was rerun after the fixes, installed to
+  `dist\\MusicRequestServer`, and restarted on 2026-09-15. The live executable
+  smoke check passed: `/api/ping` returned HTTP 200 and release `3.14.0` on
+  port `29543`.
+- PyPy packaging remains unresolved and is not claimed: PyInstaller and the
+  Windows `PyAudioWPatch` dependency are incompatible with the requested PyPy
+  pipeline. BUILD-002 retains the evidence and required alternative.
+
+## GUI/UX audit — 2026-09-15 (live review at 1280×800, 1920×1080, 2560×1080, 768×1024)
+
+### UI-002 — Destructive block fires with no confirmation and no danger styling
+
+Priority: P1
+Status: FIXED — 2026-09-20 bug-fix pass. The first press now visibly arms the
+button for 2.6 seconds; only a second press blocks it. The block toast carries
+an exact Undo action, including after the player advances to the next song.
+
+Evidence: `player.html:2140-2148` — `blockThis()` calls `/api/block?on=1` on the first click of the "⃠" icons (`blocksong` at 1320, `blockartist` at 1322, both `class="ib small"`, titled "Never play this song/artist again") and only then toasts. There is no `confirm()`, no armed state, and no undo, and the icons rest styled identically to the benign like/download/add-list icons in the same row. A single mis-tap removes the song or the whole artist from rotation (the block is persisted; see DATA-005).
+
+Impact: the app's most irreversible listener action is its least protected; the icon language does not distinguish "never again" from "like this".
+
+Fix specification: make the first tap ask — turn the button into a short-lived armed "sure?" state (about two seconds) or show a small inline confirm — give the two block icons the danger hover treatment, and add a brief undo to the block toast. Keep the block one server call; the protection belongs in the page, not the API.
+
+Verification: `player.html` has shared `armDanger()` handling, danger styling,
+and `toastUndo()`; the block route returns only the exact just-blocked artist or
+song ID as an undo target and refuses arbitrary-ID blocking. Regression checks
+exercise that the undo removes the originally blocked song, not the one that
+became current after the skip.
+
+### UI-003 — Destructive icon buttons are visually identical to benign ones
+
+Priority: P2
+Status: FIXED — 2026-09-20 bug-fix pass. Queue/list removals, stop sharing,
+session end, and link ban/forget use the common danger language. Delete-list,
+end-session, and ban/forget require the visible second press; reversible queue
+removal remains immediate.
+
+Evidence: Remove from the queue (`player.html:2655`, `class="qc"`, title "Remove"), Delete a list (3093, `class="qc"`, title "Delete"), Stop sharing (3091, `class="qc"`, ⇄), End this session (3552, `class="pickx sesskick"`, ✕) and Ban this link (3673, `class="pickx passkill"`, ✕) all rest at the same visual weight as Play, Add and Download, and none of them asks before acting.
+
+Impact: "remove this item" and "ban the whole link" carry identical visual weight to "play", so the eye has no way to rank the row; a mis-tap on the ✕ beside Play is as likely as one on Play.
+
+Fix specification: give destructive actions one shared visual language — a danger tint on hover or a red glyph on press — and a confirmation step on the irreversible ones (End this session, Ban this link, Delete list); keep the reversible queue Remove confirm-free but still recognisable as destructive.
+
+Verification: source regression checks assert the shared arming control is
+attached to the irreversible actions and that every reviewed destructive icon
+uses the danger class.
+
+### UI-004 — Ultra-wide leaves the right side of the window dead
+
+Priority: P2
+Status: FIXED — verified live on 2026-09-20 at 2560×1080 and 3440×1440. The
+desktop stage is a three-zone grid: the player stays left, lyrics take the
+middle, and the persistent queue occupies the right column.
+
+Evidence: at 2560×1080 the app keeps a fixed content column anchored to the left and the right ~40% of the window is empty page background; at 1280×800 the same content fills the frame. The layout has no wide mode.
+
+Impact: on the very screens bought for music and video, most of the surface is furniture; the app reads as a mobile page that was allowed to sit on a desktop.
+
+Fix specification: past ~1920px either centre the composition with balanced margins and a slightly larger art/lyrics scale, or grow into a three-column layout (art left, lyrics centre, queue as a permanent right panel). One decision, one breakpoint, verified by re-shooting at 2560×1080 and 3440×1440.
+
+Verification: live DOM measurements confirmed the right queue/nav column and
+the central lyrics column at both target widths; no fixed left-only player
+column remains.
+
+### UI-005 — A stray black block sits in the "Nothing playing" state at narrow widths
+
+Priority: P2
+Status: FIXED — verified live on 2026-09-20 at 768×1024 in the idle state.
+The screen has no unpainted black rectangle; the empty art and queue states
+render cleanly against the intended background.
+
+Evidence: in the idle "Nothing playing" state at 768×1024, a solid black rectangle occupies the lower-left of the content area, in a darker shade than the surrounding surface — a layer that rendered without its content.
+
+Impact: the state the user sees most often (nothing playing) is the one that looks broken; an idle screen shows a rendering scar.
+
+Fix specification: audit the fixed/absolutely-positioned layers that render in the idle state at ≤800px width, find the one with no content in that state, and either give it a background or hide it; re-shoot the 768×1024 idle state to confirm the scar is gone.
+
+Verification: a fresh 768×1024 capture of `/player` showed no dark rendering
+scar, so no speculative hide/show rule was added.
+
+### UI-006 — Status line and queue rows truncate mid-word
+
+Priority: P2
+Status: FIXED — 2026-09-20 bug-fix pass. Queue titles may use two natural
+lines and retain the complete title as a tooltip; the activity line wraps at
+word boundaries and also exposes its complete text as a tooltip.
+
+Evidence: the downloading/status line shows "Downloading · I Made For Lo…" and the queue row shows "I Don't Want to Miss a Thing (From \"Arma…" — both cut inside a word, with the ellipsis landing mid-syllable.
+
+Impact: the app names the song and then stops; a cut mid-word reads as a bug even when it is only a width limit.
+
+Fix specification: ellipsize at word boundaries, let long queue titles wrap to a second line (the title-over-artist row already has the room), and carry the full title in the hover tooltip.
+
+Verification: source checks cover the two-line queue rule, full-title tooltip,
+and activity-label tooltip.
+
+### UI-007 — The output-device button starts iconless
+
+Priority: P2
+Status: FIXED — 2026-09-20 bug-fix pass. `volicon` now includes a speaker SVG
+in the initial markup; the existing script still replaces it with the
+appropriate dynamic volume/device glyph when ready.
+
+Evidence: `player.html:1325` — the `volicon` button ("Choose output device") is empty in the markup and only receives an icon once the page script runs; if the script is late, slow or fails, the control row carries a blank button between the mute icon and the volume slider.
+
+Impact: a mystery control in the player's most-trusted row, and one more silent failure mode for a page whose job is to keep playing.
+
+Fix specification: put a static speaker glyph in the markup from the start and let the script swap in the device-specific icon once it knows one; the button should never be iconless.
+
+Verification: regression checks require both the static `volicon` SVG and its
+accessible device-picker label.
+
+## Bug-fix continuation — 2026-09-20
+
+- Fixed UI-002, UI-003, UI-006, and UI-007 in the source tree without adding
+  product features.
+- UI-004 and UI-005 were rechecked against the running player rather than
+  guessed from the old capture: the three-column wide layout is active at
+  2560×1080 and 3440×1440, and the 768×1024 idle state has no black scar.
+- `python -m compileall -q src launcher.pyw`, targeted duplicate/syntax lint,
+  template JavaScript syntax validation, and `git diff --check` pass.
+- `python launcher.pyw --check`: **593 checks passed**. The check suite now
+  verifies exact post-skip block undo, arbitrary-ID block refusal, dangerous
+  control coverage, title visibility, and the static device glyph.
+- Windows release build: PASS with CPython 3.12 and PyInstaller. The staged
+  build replaced `dist\\MusicRequestServer`, restarted the exact installed
+  executable, and `/api/ping` returned `status: ok`, release `3.14.0`.
+  The live rendered player response contains the arming logic, danger buttons,
+  and static device glyph; its rendered JavaScript parses successfully.
+- PyPy is still not claimed for this release; BUILD-002 remains the recorded
+  incompatibility and the reason this verified CPython package was used.
+
+## Continued defect audit — 2026-09-20
+
+### SEC-004 — A guest `GET` can perform an unbounded AutoEq network fetch and persistent write
+
+Priority: P2
+Status: FIXED — 2026-09-20. Resolution: AutoEq profile warming is POST-only in
+strict mode; compatibility GETs are cache-only, guest work is metered, writes
+are atomic, and the profile cache is capped at 128 files.
+
+Evidence: `/api/autoeq/profile` is listed in `READ_ONLY` in
+`src/mrs/web/policy.py`, so the request middleware accepts
+`GET /api/autoeq/profile?id=...` even with legacy GET mutations disabled.
+The handler in `src/mrs/web/api.py` calls `autoeq.profile(id)`. On a cache
+miss, `src/mrs/core/autoeq.py:profile()` downloads the selected profile from
+GitHub and writes it to `MRS_DATA_DIR/autoeq/profiles/`. The route has no
+per-pass rate or storage bound. An isolated regression probe confirmed that
+the policy treats the request as read-only while one GET invokes `_fetch` and
+creates the profile file.
+
+Impact: any holder of a valid shared link can use what the application calls a
+read-only GET to make the server perform remote requests and permanently fill
+the profile cache. This also bypasses the POST/JSON-only mutation boundary that
+the security policy is intended to enforce; browser prefetching and crawlers
+can trigger the same work unintentionally.
+
+Fix specification: a GET must only report an already-cached profile (or a
+not-ready result) and never initiate a download or write. Move cache warming to
+an explicit POST operation, meter it by pass/account, and bound/prune the
+profile cache. Add coverage that a cache-miss GET makes no fetch and no file,
+while an authorised POST performs exactly one bounded warm.
+
+### DATA-008 — Account updates lose data when two server processes share a data directory
+
+Priority: P1
+Status: FIXED — 2026-09-20. Resolution: every account read-modify-write now
+holds a conservative inter-process file lock as well as the in-process lock.
+Two isolated Python processes admitting different identities retain both rows.
+
+Evidence: `src/mrs/web/accounts.py` protects `_read()` → mutation → `_write()`
+only with a process-local `threading.RLock`. The file is atomically replaced,
+but there is no lock spanning that whole read-modify-write transaction across
+processes. A deterministic two-process probe paused both `accounts.admit()`
+calls after they read the same empty `accounts.json`, then released them to
+write distinct Google subjects. Both exited successfully, but the final file
+contained only `useralpha`; `userbravo` was silently discarded.
+
+Impact: starting a second copy during an upgrade, recovery, or diagnostic run
+can silently erase a newly admitted account or overwrite a concurrent scope,
+last-seen, or forget operation. Atomic file replacement prevents malformed
+JSON, not lost updates.
+
+Fix specification: add an inter-process lock that covers each account
+read-modify-write transaction (`admit`, `seen`, `set_scope`, and `forget`),
+or move accounts to a transaction-capable store. Keep the existing in-process
+lock, make stale-lock recovery conservative, and add a two-process regression
+test that admits two identities at the same time and retains both rows.
+
+### DATA-009 — Concurrent configuration saves still discard unrelated settings
+
+Priority: P1
+Status: FIXED — 2026-09-20. Resolution: config read/merge/replace is one
+inter-process transaction, including concurrent first-run bootstrap. A
+two-process probe preserves independently written `theme` and `volume` keys.
+
+Evidence: `src/mrs/config.py:Config.save()` re-reads `config.json` and merges
+only this process's dirty keys, but the read and subsequent atomic replacement
+are protected only by the process-local `_lock`. Two independent processes can
+therefore read the same base document, each build a correct-looking merged
+document, and then overwrite one another. A deterministic probe paused both
+processes immediately before `write_atomic`: one set `theme` to `audit-dark`,
+the other set `volume` to `13`. Both returned success; the final configuration
+had `theme: audit-dark` and the old `volume: 70`.
+
+Impact: a second instance, updater, recovery process, or diagnostic tool can
+make legitimate settings changes vanish without warning. This is especially
+dangerous for security and connectivity settings because the UI reports its
+own successful write even when a different process immediately discards it.
+
+Fix specification: hold an inter-process lock from the on-disk read through
+the atomic replacement, then refresh the losing process's in-memory view from
+the committed document. Do not solve this with a fixed temporary filename or
+best-effort retry. Add a two-process test that commits disjoint settings at the
+same time and asserts both values survive, plus a deliberate same-key conflict
+test with defined last-writer/conflict behavior.
+
+### DATA-010 — An interrupted like or block save destroys the entire preference file
+
+Priority: P1
+Status: FIXED — 2026-09-20. Resolution: likes and blocks are snapshotted under
+their lock and written atomically, preserving the prior parseable file on a
+failed replacement.
+
+Evidence: `src/mrs/core/taste.py:_save_liked()` and `_save_blocks()` write
+directly to `liked_songs.json` and `blocked_music.json` with `Path.write_text`
+instead of the repository's `write_atomic()` helper. The exceptions are logged
+but the now-truncated file is retained. In an isolated probe, a valid
+`liked_songs.json` containing `keep-this-like` was truncated to `[` during a
+simulated interrupted save; a fresh `TasteEngine` then correctly rejected the
+invalid JSON but recovered an empty like list. The same direct-write pattern is
+used for the persistent block list.
+
+Impact: a power loss, disk-full condition, antivirus/file-lock failure, or
+process termination at the wrong moment can erase every saved like or every
+"never play this" block. The application continues with an empty preference
+set, so the loss can be mistaken for a normal change rather than a recoverable
+storage failure.
+
+Fix specification: snapshot the lists under the existing lock and persist both
+files with `write_atomic()`; retain the previous parseable file on every failed
+replacement. Add fault-injection tests for likes and blocks that fail after
+the temporary file is written and assert a new `TasteEngine` still loads the
+last committed data.
+
+### SEC-005 — A shared link can make unlimited paid lyric-identification requests
+
+Priority: P1
+Status: FIXED — 2026-09-20. Resolution: lyric identification is now a
+POST-shaped, length-bounded operation and every query capable of remote work
+uses the per-pass hourly limiter before it calls the resolver.
+
+Evidence: `/api/lyrics/search` is authenticated but calls `lyrics_mod.hunt()`
+without `_guard_rate()` or any route-specific limiter. For a non-trivial query,
+`src/mrs/resolve/lyrics.py:hunt()` calls the configured LLM and may then make
+up to four LRCLIB lookups. The route is also classified as `READ_ONLY`, so its
+work remains available as GET. An isolated API probe made 45 distinct
+`GET /api/lyrics/search` requests with one phone pass; all returned HTTP 200
+and all 45 reached the lyric-identification work, despite the configured
+40-requests-per-hour guest playback limit.
+
+Impact: anyone holding a valid shared link can repeatedly consume the owner's
+LLM quota and third-party lyric-service capacity without affecting their music
+request allowance. The work happens before any useful result is known, so
+empty or deliberately nonsensical queries still spend the remote call when the
+LLM is configured.
+
+Fix specification: make lyric identification an explicit POST operation,
+bound the input length, and apply a dedicated per-pass rate/cost limit before
+calling the LLM. Return cached or local results freely if desired, but do not
+let a read-shaped endpoint initiate unmetered remote work. Add a regression
+test that exceeds the limit with a phone pass and verifies the LLM stub is not
+called after the rejection.
+
+### SEC-006 — A shared link can launch unlimited multi-source catalog searches
+
+Priority: P1
+Status: FIXED — 2026-09-20. Resolution: catalog search is POST-shaped in
+strict mode, limits query/result size, and reserves the shared per-pass budget
+before it starts SoundCloud or catalog lanes.
+
+Evidence: `/api/search` is authenticated but never calls `_guard_rate()`.
+Each request starts a SoundCloud worker and synchronously invokes the catalog
+artist, album, song, and station search paths. An isolated API probe sent 45
+different searches using one phone pass. Every request returned HTTP 200 and
+all 225 downstream lanes ran: 45 each for SoundCloud, artists, albums, songs,
+and stations. The ordinary `guest_requests_hour` limit did not apply.
+
+Impact: a shared-link holder can consume YouTube/SoundCloud/catalog capacity,
+create search-cache writes, and occupy the server's search workers without
+requesting a song or paying against their guest request allowance. Repeated
+searches can also delay legitimate queue resolution because they compete for
+the same external-service and process resources.
+
+Fix specification: add a dedicated per-pass/account search budget and a short
+input limit before launching any worker. Cache hits should not spend the
+remote budget, while a miss should reserve one bounded search operation rather
+than five unlimited downstream calls. Add a regression test that one pass is
+rate-limited and that no SoundCloud/catalog work starts after the limit.
+
+### API-001 — Non-finite pass lifetimes turn valid owner requests into HTTP 500
+
+Priority: P2
+Status: FIXED — 2026-09-20. Resolution: API and security-layer validation
+reject NaN, infinities, negative values, and values over one year before pass
+expiry arithmetic; zero remains the explicit permanent-link value.
+
+Evidence: `/api/passes/new` accepts `hours: float` and passes it directly to
+`security.issue()`. `/api/passes/extend` passes the same unvalidated value to
+`security.extend()`. Python and the request validator accept the non-finite
+values `NaN` and `Infinity`; both security functions then evaluate
+`int(time.time() + hours * 3600)`, which raises instead of returning a client
+error. Isolated owner-authenticated probes sent JSON `{ "hours": "nan" }`
+and `{ "hours": "inf" }`; both pass creation and extension returned HTTP 500.
+
+Impact: malformed or automated owner input can produce an unhandled server
+exception and a generic failure page. This is also a bad boundary for a
+credential-minting route: non-finite values must never reach expiry arithmetic
+or be able to leave a partially-created pass record.
+
+Fix specification: reject non-finite lifetimes with a 400/422 response before
+calling the security layer, define an explicit maximum lifetime, and test
+`NaN`, positive infinity, negative infinity, negative values, zero, and a
+normal finite lifetime. The failure tests must also assert that no pass row was
+created.
+
+### BACKUP-002 — An interrupted restore leaves the live data file truncated
+
+Priority: P1
+Status: FIXED — 2026-09-20. Resolution: archives now fully validate and stage
+before live files change; each replacement is atomic and a later failure rolls
+back every earlier replacement from a private snapshot.
+
+Evidence: `src/mrs/core/backup.py:restore()` correctly creates a safety backup
+with `make_backup()`, but then writes each restored member directly with
+`out.write_bytes(fh.read())`. There is no staging directory, atomic replacement
+or rollback if a later member fails. An isolated restore probe made
+`config.json` valid before the operation, simulated an interruption after the
+target was truncated, and received `{ "ok": false }`; the active file was
+left containing only `{`, while the safety zip existed separately.
+
+Impact: a failed restore can make the running installation unable to parse its
+configuration or state. The backup that could recover it is not automatically
+selected, and a user who retries or restarts first may see a fresh/default
+configuration and believe the restore destroyed the data.
+
+Fix specification: unpack recognised members into a staging directory, fsync
+and atomically replace each target only after the entire archive validates, or
+restore the safety copy automatically on any write failure. Add fault-injection
+coverage for the first and a later member, asserting the active files remain
+parseable and unchanged when restore returns `ok: false`.
+
+### COOKIE-001 — An interrupted cookie import corrupts the active master file
+
+Priority: P1
+Status: FIXED — 2026-09-20. Resolution: master-cookie import and filtering use
+atomic replacement, and session/config changes happen only after the durable
+master write succeeds.
+
+Evidence: `src/mrs/core/cookies.py:save_master()` copies the existing master to
+`cookies_master.bak`, then writes the new export directly with
+`master.write_text()`. `filter_to_youtube()` later rewrites that same live
+file directly as part of an import. If either write fails after truncation, the
+exception or logged error leaves the live master damaged. An isolated probe
+interrupted the `save_master()` write after the header: the operation raised
+`OSError`, the active cookie file was left with one line, and the backup was
+valid but unused.
+
+Impact: an antivirus lock, disk-full condition, or process termination during
+cookie import can make YouTube authentication fail on the next check. The
+previous working credentials exist only in a manually discoverable backup, so
+the UI reports an import failure without automatically preserving a usable
+master.
+
+Fix specification: write both the imported master and the filtered result
+through `write_atomic()` and update the working session only after the
+replacement succeeds. Keep the backup as a second recovery layer. Add
+fault-injection tests that fail during either replacement and verify the
+original master remains parseable and the session copy is untouched.
+
+### SEC-007 — A shared link can start unmetered cast conversions
+
+Priority: P1
+Status: FIXED — 2026-09-20. Resolution: warm and direct-stream conversion
+paths reserve the pass budget before work starts, and the cast engine permits
+at most three distinct ffmpeg jobs globally while coalescing duplicates.
+
+Evidence: `/api/output/prepare/{video_id}` is a state-changing route that
+calls `cast_mod.warm()` whenever `playable()` reports `needs conversion`, but
+it never calls `_guard_rate()` or any cast-specific admission limit. The
+`warm()` implementation starts a new daemon thread for each distinct
+conversion job; the existing `_converting` set prevents duplicate work for
+the same job, not a burst of different jobs. In an isolated API probe, one
+phone pass submitted 50 distinct video IDs. All 50 POSTs returned HTTP 200
+and all 50 reached `warm()` after `playable()` reported conversion required.
+
+Impact: a holder of one valid shared link can turn cached source files into a
+large number of simultaneous ffmpeg processes. That can exhaust CPU, memory,
+file handles, and disk space, delaying or interrupting the owner's playback.
+The endpoint is especially easy to abuse because it is presented as a
+preparation/read operation even though it starts background work.
+
+Fix specification: require a bounded cast-conversion budget per pass and a
+small global worker limit, reserve work before starting a thread, and reject
+or coalesce new jobs when the budget is exhausted. Validate `video_id`,
+`tune`, and `fmt` against the known formats before admission. Add a test with
+many distinct IDs proving the per-pass and global limits prevent unbounded
+`warm()` calls while a ready cached file remains cheap to prepare.
+
+### INPUT-002 — Radio count is forwarded to the upstream API without a cap
+
+Priority: P2
+Status: FIXED — 2026-09-20. Resolution: the API and catalog layers both clamp
+related-track requests to 1–20, so direct callers cannot bypass the boundary.
+
+Evidence: `/api/radio` accepts `count: int = 8` and passes it directly to
+`catalog.related()`. That function uses the value in the cache key, sends it
+as the YouTube Music related-playlist limit, and only slices the returned
+rows afterwards. A direct isolated probe with `count=1000000` reached
+`catalog.related(video_id="VID", limit=1000000)` unchanged and then queued
+the result. Negative values are also accepted even though they have no
+meaning as a requested track count.
+
+Impact: an authenticated caller can request an unnecessarily large upstream
+response and create oversized catalog/cache/queue work. A large number of
+distinct count values also defeats the normal related-result cache. This is
+an input-validation failure even when the upstream service eventually
+returns fewer rows.
+
+Fix specification: clamp `count` to a small documented range before the
+catalog call, reject or normalize non-positive values, and keep the catalog
+layer defensive so callers cannot bypass the route limit. Add tests for
+negative, zero, normal, and very large counts and assert the upstream limit
+never exceeds the configured maximum.
+
+### DATA-011 — A partial spectrum cache is treated as a valid finished result
+
+Priority: P2
+Status: FIXED — 2026-09-20. Resolution: spectra are atomically written and a
+cache hit must contain a non-empty whole number of seven-band frames; partial
+files are deleted and rebuilt.
+
+Evidence: `src/mrs/core/spectrum.py:analyse()` writes the derived binary
+envelope directly with `cache.write_bytes(data)`. `cached()` considers any
+non-empty file valid and returns it without checking its frame length or
+rebuilding it. An isolated fault-injection probe let the write persist one
+byte and then raised `OSError`; `analyse()` returned the full in-memory
+result, but the next `cached()` call returned only that one byte as if the
+cache were complete.
+
+Impact: a power loss, disk-full condition, antivirus interruption, or process
+termination during analysis can leave a non-empty but unusable spectrum file
+that survives indefinitely. The API reports `ready: true`, and the browser
+then receives malformed frame data until the cache is manually removed or
+pruned.
+
+Fix specification: write spectrum files atomically, validate the byte count
+against the expected frame/band shape before accepting a cache hit, and
+delete or regenerate invalid entries. Add a fault-injection test that leaves
+a truncated file and verifies the next request recomputes it instead of
+returning `ready` with corrupt data.
+
+### API-002 — Non-finite numeric settings persist and then crash their response
+
+Priority: P1
+Status: FIXED — 2026-09-20. Resolution: every float setting is checked with
+`math.isfinite()` before configuration mutation, preventing non-JSON numeric
+values from reaching persistence or the response serializer.
+
+Evidence: `/api/setting` converts several owner-controlled values with plain
+`float()` and does not check `math.isfinite()`. An isolated owner-authenticated
+probe submitted `artist_cohesion=nan`, `anchor_pull=inf`, and
+`completion_ratio=-inf`. Each request changed the in-memory configuration,
+wrote the non-finite value into `config.json`, and then failed while
+`JSONResponse` tried to serialize the returned value, producing HTTP 500.
+The ducking and voice-gain fields happen to clamp these particular values,
+but the other float settings do not.
+
+Impact: a malformed settings request produces an unhandled server error and
+can poison the persistent configuration with non-standard JSON values. A
+restart or another language/tool reading that file may fail, while queue
+ranking and completion calculations can silently become NaN/Infinity-driven
+and stop making meaningful decisions.
+
+Fix specification: reject non-finite values before `config.set()`, define
+per-setting finite ranges, and return a client error without mutating memory
+or disk. Add tests for `nan`, `inf`, `-inf`, empty, out-of-range, and normal
+values for every float setting; assert failed requests leave both the live
+configuration and the file unchanged.
+
+### API-003 — The generic settings route accepts ports that crash startup
+
+Priority: P1
+Status: FIXED — 2026-09-20. Resolution: the settings API accepts only ports
+1025–65535, and server startup defensively falls back to 7420 for corrupted
+persisted values instead of raising from socket binding.
+
+Evidence: `api_setting()` exposes `port` in `_SETTABLE` and applies only
+`int(value)`, so an owner can persist `port=70000`, `65536`, or `-1` with an
+HTTP 200 response. On the next start, `server.pick_port()` calls
+`_port_free(preferred)`, whose socket bind catches `OSError` but not the
+`OverflowError` raised for a port outside `0..65535`. An isolated probe
+confirmed `_port_free(70000)` and `_port_free(-1)` raise `OverflowError`.
+
+Impact: one invalid settings write can leave the server apparently configured
+successfully but unable to start after a restart or reboot. This bypasses the
+range validation already present in `/api/port/shuffle` and turns a recoverable
+bad input into a manual data-file repair or command-line recovery task.
+
+Fix specification: validate `port` at the API/config boundary against the
+allowed service range (the same range used by port shuffle), return 400/422
+without saving invalid values, and make `_port_free()` defensive against
+invalid persisted data so startup fails with a clear logged configuration
+error rather than an uncaught exception. Add tests for both API rejection and
+startup behavior at the lower bound, upper bound, and out-of-range values.
+
+### CHECK-001 — The bulk access check exits non-zero on stale landing assertions and an external setup probe
+
+Priority: P2
+Status: FIXED — 2026-09-20.
+
+Resolution: the stale checks now exercise `/setup` rather than treating the
+public landing page as the setup endpoint, and the successful setup-page
+probe uses a local socket double under offline checks. `launcher.pyw --check`
+now exits cleanly with 615 passing checks and no unintended network attempt.
+
+Evidence: the current run completed 518 checks successfully, but the
+`setup page` section still calls the public `/` landing page and expects a
+shared link or wrong key to receive HTTP 403. The current front-door contract
+deliberately returns the sign-in landing page with HTTP 200, so those two
+assertions fail even though the route inventory and the dedicated `/setup`
+owner/guest checks pass. The same run then records an unintended network
+attempt from `setup_page()` calling `socket.connect(("8.8.8.8", 53))` to
+discover the local address; the offline harness catches the exception but
+fails the process because the attempt was made. The rest of the suite reports
+35 focused regression checks passed, but the command still exits 1.
+
+Impact: CI, release checks, and a maintainer using `--check` receive a false
+failure after otherwise passing the relevant security tests. The setup page
+also makes a public DNS-route probe during a request, which can be blocked,
+logged, or delayed in restricted environments and is not represented by the
+offline test contract.
+
+Fix specification: update the stale `/` assertions to test the public landing
+contract and retain explicit `/setup` credential checks. Move local-address
+discovery behind an injectable/local helper or stub it in the offline harness,
+then assert that the check suite performs zero external network attempts.
+Re-run the complete suite and require a zero exit code, not merely a high
+passed-check count.
+
+### SEC-008 — Configuring Google sign-in opens listening access to every Google account
+
+Priority: P0
+Status: FIXED — 2026-09-20.
+
+Resolution: OAuth now requires an existing account, valid pass, owner
+credential, or explicitly open home-network request. New identities inherit
+the validated pass scope; anonymous non-home starts return 403.
+
+Evidence: `auth_google_start()` previously required an existing account, a
+valid shared link, or a home-network request before it created an OAuth state.
+The current implementation explicitly allows anyone to start at
+`/auth/google/start` and calls `google.start()` with no invitation or scope.
+`accounts.admit()` then gives a first-time identity
+`new_account_scope`, whose default is `phone`. In an isolated probe with
+Google configured and `is_home()` forced false, an unauthenticated caller
+received HTTP 302 to Google, completed a valid mocked callback, received
+HTTP 302 to `/player`, and was stored as a new `phone` account.
+
+Impact: exposing the configured hostname lets any person who discovers it
+create an account and stream the server's music to their own device without
+ever receiving a link or owner approval. This removes the access-control
+boundary the pass system was built to provide. The default is active access,
+not an approval queue, so discovery alone is sufficient.
+
+Fix specification: restore an admission requirement before starting OAuth:
+an existing signed-in account, a valid invitation/pass, or a local trusted
+network request. If public sign-in is deliberately wanted, make the safe
+default `blocked`, require explicit owner approval before any playback route,
+and make that exposure a separate opt-in with a visible warning. Add tests
+that an anonymous non-home caller is refused, while an invited caller can
+complete OAuth and receives no more scope than the invitation permits.
+
+### PASS-001 — Newly minted share links no longer carry the pass that grants access
+
+Priority: P0
+Status: FIXED — 2026-09-20.
+
+Resolution: shared player URLs now use `/player?token=<signed-pass>` with
+proper URL escaping, so minted links again carry the credential they grant.
+
+Evidence: `api_pass_new()` still calls `net.addresses(got["token"])` to
+produce the URL that is handed to a guest. However, `net.player_url()` now
+ignores its `pass_token` argument and always returns the bare `/` front-door
+URL. An isolated probe issued a valid phone pass and built its player URL:
+the token was absent from `http://music.example.test:7420/`. With Google
+sign-in unconfigured, an unauthenticated visitor received HTTP 200 for the
+generic landing page and HTTP 403 for `/player`; the valid pass was never
+offered to the server. When Google is configured, the recipient instead
+becomes an account with the public default scope rather than the scope the
+pass creator selected.
+
+Impact: the normal "make a link and send it" access path is broken. Existing
+links routed through the new URL builder no longer work, new passes cannot
+grant the requested phone/full/permanent access, and the owner receives a
+plausible-looking URL that has silently lost its credential. This is both a
+functional regression and an access-control mismatch.
+
+Fix specification: preserve the signed pass token in the share URL until an
+equivalent invitation mechanism binds the OAuth result to that exact pass and
+scope. Do not silently ignore the argument. Add end-to-end tests for a newly
+minted phone and full pass with Google disabled and enabled, asserting the
+recipient obtains only the selected scope and that the URL is actually
+usable.
+
+### PRIV-001 — Forgetting an account leaves its profile and listening data behind
+
+Priority: P1
+Status: FIXED — 2026-09-20.
+
+Resolution: account deletion wipes `g-<sub>` profile data before removing the
+account row and reports an error if the durable profile wipe fails.
+
+Evidence: `/api/accounts/forget` calls `accounts.forget(sub)` but never calls
+`profiles.forget()` or `profiles.wipe()`. Google account profiles use the
+predictable, permanent id `g-<Google-sub>`. In an isolated probe, an account
+set its `theme` to `remember-me`; after being forgotten and admitted again
+with the same Google subject, its profile folder still existed, the exact same
+cached `Profile` object was returned, and the new account immediately saw
+`theme == remember-me`. A process restart does not repair this: the permanent
+settings, taste history, and playlists are all still stored in that same
+folder and are loaded for the deterministic id.
+
+Impact: an owner cannot actually remove a person's local listening data.
+Someone removed for a privacy request, an accidental admission, or an account
+handover silently regains old preferences, taste history, and playlists on
+their next sign-in. This contradicts the route's "start again as a stranger"
+promise and the profile module's own definition of revocation.
+
+Fix specification: make account removal explicitly choose and implement the
+right lifecycle. For a true forget/delete operation, call
+`profiles.wipe(accounts.profile_id(sub))` after the account write succeeds,
+and surface an error if the wipe fails. If an owner needs a reversible
+block/remove action, give it a different name and preserve data only with a
+clear retention policy. Add tests covering deletion, a fresh process, and
+re-admission of the same Google subject, asserting no settings, taste, or
+playlists reappear.
+
+### SEC-009 — The public-account admission policy is not configurable in the interface
+
+Priority: P1
+Status: FIXED — 2026-09-20.
+
+Resolution: Access settings now expose the active new-home-network scope and
+persist only `blocked`, `phone`, or `full` through the normal UI/API path.
+
+Evidence: the new Google admission design says an owner can set
+`new_account_scope` to `blocked` before exposing the sign-in page. The server
+does include that API-only key in `_SETTABLE`, but the Access/Sharing UI has
+controls and save handlers only for `google_client_id`,
+`google_client_secret`, and `owner_email`. It does not render the returned
+`new_account_scope` value or provide an input that writes it. The shipped
+default remains `phone`, so an owner who configures Google through the
+documented interface has no way to select the supposedly safe review-first
+policy.
+
+Impact: this makes SEC-008 materially worse in normal use. Setting up Google
+sign-in through the application silently exposes immediate phone playback to
+any Google identity that reaches the hostname; the claimed block-first
+mitigation exists only for someone who discovers and manually calls an
+undocumented API endpoint.
+
+Fix specification: until invitation-bound admission is restored, make the
+safe default `blocked` and render an explicit default-account-access selector
+next to the Google configuration. The screen must display the active value,
+explain its consequences, and refuse/save only `blocked`, `phone`, or `full`.
+Add browser-level coverage that configuration through the UI can choose and
+persist `blocked`, and that a newly authenticated account is blocked under
+that policy.
+
+### SEC-010 — Public OAuth starts allocate unbounded in-memory state with quadratic work
+
+Priority: P1
+Status: FIXED — 2026-09-20.
+
+Resolution: pending OAuth state is capped at 128 globally and 8 per client
+address; expiry cleanup is therefore bounded even during abuse.
+
+Evidence: every unauthenticated request to `/auth/google/start` reaches
+`google.start()` after the public-admission rewrite. It inserts a six-field
+record into the process-global `_PENDING` dictionary for ten minutes. There
+is no per-client limit, global cap, or queue bound. Before every insertion it
+also scans every pending record for expiry, so a sustained burst does
+increasingly expensive O(n) work per request. An isolated configured-Google
+probe made 1,000 anonymous starts in 0.160 seconds and left exactly 1,000
+live pending entries; nothing was reclaimed until the ten-minute timeout.
+
+Impact: a remote client can consume memory and CPU without even completing a
+Google redirect. Because SEC-008 makes the endpoint deliberately public,
+this is exposed whenever the server is reachable from the internet. The
+linear cleanup scan turns a large burst into quadratic server work and can
+degrade normal playback/API traffic well before the process exhausts memory.
+
+Fix specification: restore invitation-bound OAuth starts, enforce a small
+per-IP and global in-flight-state limit, and reject excess starts before
+allocating state. Expire entries with a bounded structure (for example an
+expiry queue) rather than scanning the whole dictionary on every request.
+Add stress tests that prove a capped number of states, correct expiry, and
+that one client cannot starve another client's legitimate sign-in.
+
+### SEC-011 — The new-account default can silently make every public Google visitor an owner
+
+Priority: P0
+Status: FIXED — 2026-09-20.
+
+Resolution: owner was removed from assignable new-account scopes, invalid
+stored defaults fail closed to `blocked`, and the settings API rejects it.
+
+Evidence: `new_account_scope` is documented as only `blocked`, `phone`, or
+`full`, but `accounts.default_scope()` accepts every member of `SCOPES`,
+including `owner`. The generic settings endpoint accepts any string for this
+key and does not impose the documented subset. In an isolated probe setting
+`new_account_scope` to `owner`, the next non-owner email admitted with scope
+`owner`; `accounts.as_row()` then returned `owner: True` and full access.
+
+Impact: once Google sign-in is public (SEC-008), one invalid/default-policy
+configuration can make every person who discovers the hostname a server
+administrator. That includes the ability to view credentials, change security
+settings, mint passes, restore backups, and control the machine's playback.
+It is an unacceptable fail-open privilege boundary even if the triggering
+setting is normally owner-controlled.
+
+Fix specification: separate assignable account scopes from the owner role.
+Permit only `blocked`, `phone`, and `full` as `new_account_scope`, reject any
+other saved/API value, and fail closed to `blocked` rather than `phone`.
+Retain owner assignment exclusively for an existing account whose verified
+email matches the configured owner email, or through an explicit protected
+owner-transfer flow. Add admission tests for every accepted and rejected
+default value, especially proving a visitor can never become owner via the
+default policy.
+
+### UI-008 — Signing out sends an external listener to an unauthorised-error page
+
+Priority: P2
+Status: FIXED — 2026-09-20.
+
+Resolution: sign-out clears the session and redirects to the public `/`
+start page instead of the protected player route.
+
+Evidence: the new unauthenticated front door is `/`, but `auth_signout()`
+still redirects to `/player`, a page that requires a key, pass, or signed-in
+account. In an isolated client with a configured server key, `/auth/signout`
+returned HTTP 302 to `/player`; following it after the session-cookie removal
+returned HTTP 403 with `{"detail":"Not authorised"}`. This applies to both the
+sign-out button in the player and the blocked-account landing page.
+
+Impact: a normal sign-out presents an error rather than the sign-in screen,
+which looks like the service has failed and leaves a blocked person with no
+obvious route back to the public front door. It is a direct functional
+regression from moving the landing page off the player route.
+
+Fix specification: redirect sign-out to `/`, where the landing page can
+offer Google sign-in or the appropriate unavailable message. Add route tests
+with a configured key that assert sign-out clears the cookie and arrives at
+an HTTP 200 landing page, never a protected player response.
+
+### API-004 — The new front door ignores a valid owner key supplied in the normal header
+
+Priority: P2
+Status: FIXED — 2026-09-20.
+
+Resolution: the front door now evaluates `is_owner()` independently of the
+query parameter, while propagating a raw key only from an allowed URL source.
+
+Evidence: the root route correctly includes `X-Music-Key` and `X-API-Key` in
+its `offered` calculation, but its redirect condition is
+`key and is_owner(request, key)`. The `key` parameter only contains the query
+value, so the condition is false before `is_owner()` can recognise either
+supported header. In an isolated client configured with `audit-key`, `GET /`
+with `X-Music-Key: audit-key` returned the landing page (HTTP 200); a
+query-string key with URL-key compatibility enabled redirected as expected to
+`/player?key=audit-key`.
+
+Impact: API clients, reverse proxies, and normal header-authenticated owner
+requests get an anonymous front door despite presenting valid credentials.
+It contradicts the route's stated owner-arrival behavior and encourages use
+of the less safe query-string compatibility mode just to reach the player.
+
+Fix specification: determine owner status independently of the query
+parameter (for example `is_owner(request, key)` without guarding it behind
+`key`) and preserve a credential only when it actually came from an allowed
+URL source. Add route tests for `X-Music-Key`, `X-API-Key`, a valid URL key
+when compatibility is enabled, and an invalid header, asserting only valid
+credentials receive the owner redirect.
+
+### DATA-012 — Failed account saves still produce a successful Google sign-in
+
+Priority: P1
+Status: FIXED — 2026-09-20.
+
+Resolution: account writes return a durable success result; admission and
+scope changes raise a typed persistence error, and OAuth issues no cookie on
+a failed admission save.
+
+Evidence: `accounts._write()` catches and only logs `OSError`; it does not
+return success/failure. `accounts.admit()` always returns the new in-memory
+row, and the Google callback creates a session cookie from that return value.
+In an isolated probe with `write_atomic` forced to raise `OSError("disk
+full")`, `accounts.admit()` returned a phone-scope account while a subsequent
+`accounts.get()` returned `None` because no file had been written. The OAuth
+callback follows exactly this path.
+
+Impact: on a full, locked, or unwritable data directory, a person appears to
+sign in successfully and is redirected to the player with a cookie that no
+request can authenticate. The user sees a confusing access failure, while the
+owner has only a log line and cannot tell that the admission was discarded.
+
+Fix specification: make `_write()` return a clear success value or propagate
+a typed persistence error. Do not issue the OAuth session or report admission
+success unless the account update is durable; return a clear temporary error
+page and retain/retry the pending admission where practical. Add tests for
+new-account and scope-update write failures, asserting neither produces a
+valid session or a false `status: ok` response.
+
+### DATA-013 — Failed pass saves hand out credentials that never work
+
+Priority: P1
+Status: FIXED — 2026-09-20.
+
+Resolution: pass writes now return success/failure; issuance returns no token
+on failure and the token/link APIs return a clear 503 instead of false success.
+
+Evidence: `security._save_passes()` catches every write exception and returns
+no status. `security.issue()` then returns the signed token as though it were
+registered, even though `read_token()` requires an on-disk registry row. In
+an isolated probe with the atomic writer forced to raise `OSError("disk
+full")`, `issue()` returned a non-empty phone pass token, but immediately
+calling `read_token()` on that exact token returned `None`.
+
+Impact: an owner is shown a plausible share URL, may send it to a guest, and
+has no indication that it was never valid. The same failure mode affects
+owner/internal passes and can leave a player unable to obtain a replacement
+credential after storage trouble.
+
+Fix specification: make pass-registry writes transactional from the caller's
+point of view. Propagate a persistence failure from `_save_passes()` and do
+not return a token, URL, or success response until the registry is durable.
+Keep the existing atomic writer and add failures tests for pass creation,
+reissue/revocation, and API responses so no unusable credential is ever
+presented as successful.
+
+### SEC-012 — A shared listener can fan one “about this song” lookup into unlimited external work
+
+Priority: P1
+Status: FIXED — 2026-09-20.
+
+Resolution: insight lookup has one in-flight claim per record; concurrent
+callers return not-ready and reuse the eventual cache, while guest misses are
+charged to the existing request limit before external work begins.
+
+Evidence: `/api/about?wait=1` is a scoped guest route with no `_guard_rate`.
+It calls `insights.about(..., fetch=True)`, which invokes `lookup()` directly
+whenever the cache is empty. The background `warm()` path has a `_busy` set,
+but the synchronous path does not use it or any per-key lock. In an isolated
+12-worker probe held at the lookup boundary, twelve simultaneous `about()`
+calls for the same uncached track started twelve lookups; all passed the empty
+cache check before any result could be stored. A real lookup can issue two
+Wikipedia requests, Last.fm, an LLM request, and a persistent cache write.
+
+Impact: a holder of any shared link can multiply third-party traffic and
+paid/limited LLM calls for one currently playing track merely by refreshing
+or parallelising a read-looking URL. It can tie up the web worker pool and
+make the metadata panel itself slow or unstable, independently of the normal
+play-request quota.
+
+Fix specification: make all insight fetching share one per-track in-flight
+future/lock, including `wait=1`, so concurrent callers either await the same
+bounded result or receive a quick `ready: false` response. Apply a guest
+metadata rate/concurrency budget before starting remote work, with timeouts
+and an explicit cache-failure cooldown. Add concurrency tests asserting many
+calls for one key perform exactly one upstream lookup.
+
+### SEC-013 — Concurrent lyric-panel refreshes duplicate LRCLIB work without limit
+
+Priority: P2
+Status: FIXED — 2026-09-20.
+
+Resolution: lyrics now uses a per-record in-flight event and bounded negative
+cache. Concurrent panels share one LRCLIB fetch and shared callers are rate
+limited before lookup.
+
+Evidence: `/api/lyrics` is available to every shared listener and has no
+rate/concurrency guard. It calls `lyrics.get_lyrics()` directly. That function
+uses a plain dictionary cache but no in-flight lock, so concurrent misses all
+fetch before any caller inserts its result. In an isolated 12-worker probe
+with one cache key held at the LRCLIB fetch boundary, twelve lyric requests
+started twelve upstream fetches and all later stored the same answer.
+
+Impact: refreshing the lyrics panel or opening it from several tabs can
+multiply third-party traffic for one song, occupy server workers, and add
+avoidable latency to playback-adjacent requests. Unlike SEC-005 this path
+does not use the LLM, but it is a separate unrestricted route and can be
+abused even when lyric identification is disabled or rate-limited.
+
+Fix specification: add a per-recording in-flight future/lock and short
+negative-cache cooldown to `get_lyrics()`, so concurrent callers share a
+single bounded fetch. Apply a modest guest metadata concurrency limit at the
+route. Add a concurrency test asserting many calls for the same title,
+artist, and duration result in one LRCLIB request.
+
+### SEC-014 — A full-access guest can make the server-side media player load arbitrary URLs
+
+Priority: P1
+Status: FIXED — 2026-09-20.
+
+Resolution: station playback accepts only a recent, exact Radio Browser
+result with a safe HTTP(S), non-local URL; both the HTTP route and core helper
+enforce the allowlist.
+
+Evidence: `/api/station` accepts a caller-controlled `url` and passes it to
+`play_station()` without checking scheme, hostname, origin, or whether it was
+one of the radio-directory results. For a full-scope guest targeting the
+shared speakers, `QueueManager._play_station()` hands that exact value to
+`MpvSink.load()`, which makes the server-side mpv process open it. A capture
+probe showed `play_station()` accepting and preserving each of
+`http://127.0.0.1:8080/private`, `file:///C:/sensitive.wav`, and
+`smb://attacker.example/share/stream.mp3` as a radio track.
+
+Impact: someone with a full shared link can use the music server as an
+arbitrary media-fetch client against loopback, LAN, file, or protocol-handler
+targets that their own device cannot reach. Even where the response is not
+directly returned, this enables internal service probing and can expose local
+media through the shared output, trigger unwanted network authentication, or
+make the server connect to attacker-controlled endpoints. The guest request
+quota limits volume but does not make the trust-boundary violation safe.
+
+Fix specification: never accept a free-form stream URL from a shared client.
+Give radio-directory results an opaque, short-lived server-issued identifier
+and resolve it server-side, or strictly allow only vetted `https` stream URLs
+from recently returned directory entries after DNS/IP validation that rejects
+loopback, private, link-local, file, SMB, and redirect-bypass destinations.
+Add security tests for private HTTP, `file:`, UNC/SMB, non-HTTP schemes, and
+an unrecognised public URL.
+
+### DATA-014 — A failed backup could appear as a usable archive
+
+Priority: P2
+Status: FIXED — 2026-09-20.
+
+Evidence: `make_backup()` wrote the final `.zip` directly. If the process or
+disk failed before the ZIP central directory was written, the partial file
+still had the normal backup name and could later be selected for restore.
+
+Resolution: backup generation now writes to a same-directory temporary file
+and atomically publishes the final archive only after the ZIP is closed.
+Failures remove only the temporary file and leave existing backups untouched.
+
+### SEC-015 — Several routes called “read-only” could persist state on GET
+
+Priority: P2
+Status: FIXED — 2026-09-20.
+
+Evidence: `/api/backup` writes an archive, while `/api/network` and `/api/qr`
+may mint and save an owner pass when one does not exist. All three were listed
+as read-only, allowing compatibility GET requests to cause persistent changes.
+
+Resolution: they are now POST-shaped under strict policy. The browser client
+already selects POST from the server-provided read list, so normal UI use is
+unchanged while prefetch/legacy GET does not mutate a new installation.
+
+### DATA-015 — Recovery and playlist metadata were still susceptible to torn writes
+
+Priority: P2
+Status: FIXED — 2026-09-20.
+
+Evidence: the API-key recovery shadow, playlist display-name metadata, and
+download-complete marker used direct `write_text()` calls. A failed write could
+erase the recovery fallback or make saved metadata inconsistent.
+
+Resolution: all three now use the shared atomic writer, retaining the prior
+durable content if replacement fails.
+
+### SEC-016 — A shared link could download arbitrary cached media by ID
+
+Priority: P1
+Status: FIXED — 2026-09-20.
+
+Evidence: `/api/stream/{video_id}` returns `FileResponse(downloader.cached())`
+and was available to any authenticated shared pass, despite its documentation
+saying it serves trusted peer machines. It has no player-page caller; peer
+coordination uses the separately authenticated request API.
+
+Resolution: the raw cache-file route now requires owner credentials and is
+classified as an owner route. Phone playback continues to use the scoped
+range-aware output stream route for tracks it is actually playing.
+
+### SEC-017 — Cache-miss GET requests could still start metadata work
+
+Priority: P2
+Status: FIXED — 2026-09-20.
+
+Evidence: `/api/lyrics` and `/api/about` were classified as read-only. A
+lyrics cache miss called LRCLIB; an about-panel miss started insight lookup.
+Worse, `insights.about(fetch=False)` also called tag and era getters, which
+queue Last.fm and MusicBrainz workers on misses. Compatibility GET therefore
+still initiated third-party traffic and later cache writes despite the verb
+policy claiming it was passive.
+
+Resolution: both routes are POST-shaped under the strict policy. Their legacy
+GET handlers now use only cache readers: lyrics has a cache-only accessor,
+and insight cache reads avoid tag/era queueing. The browser derives POST from
+the same server policy table, so normal panels retain their existing refresh
+behaviour without allowing prefetches or compatibility GETs to perform work.
+
+### SEC-018 — Read-only administration pages could alter server state
+
+Priority: P2
+Status: FIXED — 2026-09-21.
+
+Evidence: `/api/passes` called both pass deletion and session reaping, while
+the ordinary GET branch of `/api/sessions` also reaped sessions. `/api/boot/status`
+silently rewrote the owner's startup preferences when Windows entries were
+missing. `/api/groqmodels` made a Groq API request whenever its 15-minute
+memory cache was cold, despite being marked read-only.
+
+Resolution: list endpoints now only list; pass cleanup runs hourly on the
+existing session lifecycle watchdog. Boot status reports missing startup
+entries without overwriting the preference. Model discovery is POST-shaped,
+with the legacy GET path returning only the already-cached model list.
+
+### PRIV-001 — Failed pass-profile wipes were reported as successful forgetting
+
+Priority: P1
+Status: FIXED — 2026-09-21.
+
+Evidence: `/api/passes/revoke` accepted `forget=1&wipe=1`, called
+`profiles.wipe(id)`, ignored its false return, then deleted the pass and
+returned success. A locked profile directory or filesystem error therefore
+left listening history, settings, and playlists on disk with no remaining
+pass row through which the owner could retry the intended deletion.
+
+Resolution: profile wiping now retains its in-memory profile until filesystem
+removal succeeds and treats an absent profile directory as a successful empty
+wipe. The API stops before pass deletion when a wipe fails and returns a clear
+error; its regression test asserts the pass remains available for retry.
+
+### DATA-016 — Playlist deletion could report success after doing nothing
+
+Priority: P2
+Status: FIXED — 2026-09-21.
+
+Evidence: `Playlists.delete()` called `folder()`, which creates a missing
+directory, then used `shutil.rmtree(..., ignore_errors=True)` and always
+returned `ok: true`. A locked folder or a typo therefore produced a successful
+"Deleted" message even though the list remained (or never existed).
+
+Resolution: deletion now addresses the already-existing, validated folder
+without creating one, propagates filesystem errors as `ok: false`, and the
+API reports `status: error` without broadcasting a phantom playlist change.
+
+### DATA-017 — Different playlist names could resolve to the same directory
+
+Priority: P1
+Status: FIXED — 2026-09-21.
+
+Evidence: playlist folders were made with a lossy filename transformation:
+invalid characters became underscores and names were truncated to 80
+characters. Two different labels such as long names sharing their first 80
+characters therefore addressed one `tracks.json`; adding, deleting, or
+sharing either list could alter the other.
+
+Resolution: new playlist folders use a stable digest suffix whenever a label
+would otherwise be transformed or truncated. Existing legacy folders remain
+reachable only when their saved display name exactly matches the requested
+label, preventing a colliding spelling from gaining access to another list.
+
+### BOOT-001 — Failed start-at-sign-in changes were saved as enabled
+
+Priority: P2
+Status: FIXED — 2026-09-21.
+
+Evidence: `/api/boot` called the Windows Run-key update, then unconditionally
+saved `start_on_boot` to the requested value and returned `status: ok`. If
+Windows denied the registry write, Settings still displayed the feature as
+enabled despite there being no startup entry.
+
+Resolution: the preference is written only after the registry operation
+succeeds. A failure retains the previous saved value and returns `status:
+error`; the regression test forces that failure and asserts no config save.
+
+### DATA-018 — Playlist reads and failed operations created phantom folders
+
+Priority: P2
+Status: FIXED — 2026-09-21.
+
+Evidence: playlist reads (`tracks`, credits, and shared-state checks) reused
+the writer helper `folder()`, which creates its directory. Thus a read-only
+`/api/playlist/tracks` request for an unknown name, or a failed remove/share
+operation, left an empty filesystem folder behind. Repeated malformed or
+curious requests could accumulate arbitrary directories in a profile.
+
+Resolution: read helpers now resolve paths without creating them. Remove and
+share validate that a real index exists, return an error when it does not, and
+emit no playlist-change event on failure. Regression coverage verifies that
+all read and failed-operation paths leave no folder behind.
+
+### DATA-019 — Interrupted offline playlist copies could be promoted as complete audio
+
+Priority: P1
+Status: FIXED — 2026-09-21.
+
+Evidence: playlist offline download copied audio directly to its final
+filename. A copy failure can leave that filename containing only a prefix of
+the source; on the next pass, `dest.exists()` skipped copying and the code
+saved that partial path into `tracks.json` as though it were complete.
+
+Resolution: each playlist copy now goes to a unique same-directory `.part`
+file and is atomically replaced into place only after copying succeeds. A
+`.complete` marker is written after publication; unmarked files are retried
+instead of trusted. Regression coverage forces a partial copy failure, then
+verifies no final file or completion marker survives and that a retry safely
+publishes the complete source.
+
+### TEST-001 — The packaged HTTP smoke test contradicted the configured link policy
+
+Priority: P2
+Status: FIXED — 2026-09-21.
+
+Evidence: the self-test always minted an ordinary shared pass and required
+`/api/status?token=...` to return 200. The authentication policy deliberately
+refuses ordinary shared passes when `allow_shared_links` is disabled, which is
+the default isolated-test configuration. Consequently, a healthy default
+build consistently failed its own HTTP smoke test with `token can't listen`.
+
+Resolution: the smoke test now uses the non-owner internal player credential
+that the browser actually needs for audio and event URLs. It remains able to
+read status but is still forbidden from changing settings, so the test covers
+the intended capability without overriding the owner's shared-link policy.
+
+### DATA-020 — Background playlist downloads could overwrite newer list changes
+
+Priority: P1
+Status: FIXED — 2026-09-21.
+
+Evidence: `download_async()` checked and added the in-progress name without a
+lock, allowing duplicate jobs to start. Each job later saved the complete
+track snapshot it read at the beginning. Removing a track while its audio was
+copying made the final save put the track back; deleting the list could make
+the final writer recreate its directory and index.
+
+Resolution: download names are now claimed under the playlist lock before a
+thread starts. Completed paths are merged only into the then-current index,
+and no save occurs if that index has been removed. Per-track download failures
+also leave the rest of the list running and always reset the activity state.
+Regression coverage removes a track and deletes the list between snapshot and
+commit, verifying that neither operation is undone.
+
+### DL-004 — Main cache readers ignored the downloader completion marker
+
+Priority: P1
+Status: FIXED — 2026-09-21.
+
+Evidence: the downloader wrote `<audio>.complete` only after yt-dlp had
+published the final filename, but both `Downloader.cached()` and the cast
+source lookup accepted any non-empty final-looking filename without checking
+that marker. A crash after yt-dlp's rename and before marker publication could
+therefore make the next server process play or transcode an incomplete file.
+
+Resolution: normal downloader and cast cache reads now require the completion
+marker. The download worker clears unmarked ordinary-cache files before asking
+yt-dlp to retry, finds a just-produced file only within that ordinary cache,
+and refuses to return it if marker publication fails. Regression coverage
+verifies that an unmarked final name is invisible to both readers until it is
+explicitly marked complete.
+
+### RACE-001 — Event-stream reconnects could race a worker publishing sticky state
+
+Priority: P2
+Status: FIXED — 2026-09-21.
+
+Evidence: `EventBus.subscribe()` added the new queue under its lock, released
+it, then iterated `_latest.items()`. Worker threads call `publish()` and
+mutated `_latest` without that lock. A page reconnect concurrent with any
+sticky status, queue, or settings publication could therefore raise
+`RuntimeError: dictionary changed size during iteration` before the SSE stream
+was established.
+
+Resolution: sticky writes and the subscriber's replay snapshot now use the
+same lock. The queue receives a stable copy after registration, and a
+regression check verifies the replay contract.
+
+### SEC-019 — Elevated Windows startup-task construction did not quote PowerShell literals
+
+Priority: P1
+Status: FIXED — 2026-09-21.
+
+Evidence: before-sign-in setup interpolated the executable path, launcher
+arguments, Windows username, temporary script path, and task name into
+PowerShell single-quoted strings. An apostrophe in an ordinary name such as
+`O'Connor` broke the script; in a privileged UAC flow, treating that value as
+code rather than data was also an unnecessary command-injection boundary.
+
+Resolution: privileged command construction now uses one PowerShell literal
+encoder that doubles embedded apostrophes. It is used for every dynamic value
+passed to `Start-Process` and ScheduledTasks, and regression coverage locks
+down the escaping rule.
+
+### DOS-001 — Public desktop-download rate tracking could grow without bound
+
+Priority: P2
+Status: FIXED — 2026-09-21.
+
+Evidence: `/download/client` kept a one-hour list for each remote IP in
+`_DL_SEEN`. Its cleanup ran only when the dictionary already exceeded 512
+entries and removed only stale addresses. A burst of distinct current
+addresses therefore removed nothing and could grow the process's memory for
+as long as public traffic continued.
+
+Resolution: the rate limiter now removes stale rows on every reservation and,
+when full, evicts the oldest current address before accepting a new one. Each
+active address still receives its own hourly cap, while the public tracker is
+strictly capped at 512 rows; regression coverage fills the table and verifies
+that the next address does not expand it.
+
+### DOS-002 — Failed-key and ban maps could retain unbounded attacker-controlled IPs
+
+Priority: P1
+Status: FIXED — 2026-09-21.
+
+Evidence: every remote wrong key created a `_strikes` row, and every third
+wrong key created a persisted `_until` ban row. Neither map had a capacity;
+expired bans that were never queried again also remained resident. A
+distributed scanner could consequently grow memory and `blocked.json` without
+limit simply by rotating addresses.
+
+Resolution: strike and ban stores now expire old bans during failed-key
+handling and cap each map at 2,048 entries, evicting the least useful oldest
+entry when necessary. Regression coverage fills both tables and verifies a new
+address is admitted without expanding either map.
+
+### DL-005 — Cache filenames could collide or return a prefix-matched recording
+
+Priority: P1
+Status: FIXED — 2026-09-21.
+
+Evidence: cache IDs were built by replacing every filename-invalid character
+with `_`, so distinct source IDs such as `source?one` and `source:one` mapped
+to the same file. Cache discovery then used a `source.*` glob without
+requiring an exact filename stem, so a request for `source` could accept
+`source.more.m4a`. The cast module also duplicated a different sanitisation
+rule, making its view of a cache entry disagree with normal playback.
+
+Resolution: non-ordinary or Windows-invalid IDs now receive a stable SHA-256
+suffix after the readable portion, cache scans require the exact derived stem,
+and casting delegates source lookup to the downloader. Regression coverage
+creates collision- and prefix-shaped IDs and verifies each playback path gets
+only its own marked audio file.
+
+### CAST-003 — Casting still used raw source IDs as Windows output filenames
+
+Priority: P1
+Status: FIXED — 2026-09-21.
+
+Evidence: after cache lookup was made safe for IDs containing filename-invalid
+characters, `_converted()` and conversion job names still embedded the raw ID.
+An ID such as `source?one` could therefore be downloaded and played from the
+cache but fail when ffmpeg tried to create its cast output. Cleanup also tried
+to resolve the transformed filename as though it were the original ID.
+
+Resolution: cast output and conversion job names now use the downloader's
+canonical cache leaf. The downloader exposes an exact completed-leaf check
+for cast cleanup, so a valid transformed source retains its transcode while
+an evicted source still removes it. Regression coverage verifies that the
+cast output has no invalid characters and survives pruning while its source
+is complete.
+
+### RACE-002 — A guest session could start after it had been closed
+
+Priority: P1
+Status: FIXED — 2026-09-21.
+
+Evidence: `Sessions.for_pass()` registered a new room, released the session
+lock, then called `start()`. A concurrent `close()` could remove and stop that
+room in the gap. The first caller then started its queue and heartbeat anyway,
+leaving background work running for a session no longer present in the
+registry and unable to be stopped by a later close.
+
+Resolution: room activation and the initial touch now occur while the session
+registry lock is held, making registration and activation one transaction.
+The close operation can only run after activation, at which point it sees and
+stops the registered room. Regression coverage blocks activation, attempts a
+concurrent close, and verifies it cannot complete until the room is live.
+
+### RACE-003 — An in-flight worker could append to a stopped queue
+
+Priority: P1
+Status: FIXED — 2026-09-21.
+
+Evidence: `QueueManager.stop()` only set the worker-loop stop event. A worker
+already inside `_process()` could finish a cache hit or download afterwards
+and load the track into its sink. Closing a guest session could therefore
+leave its now-unregistered queue consuming audio/download work, while process
+shutdown could still mutate the owner's stopped queue.
+
+Resolution: stopping a queue now invalidates its work generation, clears
+pending state, cancels only that queue's downloader lane, and `_process()`
+rejects work both before it begins and immediately before it touches the sink.
+Regression coverage blocks a fetch, stops the queue, releases the fetch, and
+verifies no track is appended.
+
+### HTTPS-001 — HTTPS gateways/tunnels had no compatible origin mode
+
+Priority: P1
+Status: FIXED — 2026-09-21.
+
+Evidence: the server could either speak direct TLS from a local certificate or
+plain HTTP publicly. It had no mode for a local gateway/tunnel that terminates
+public HTTPS. Sending a gateway to `https://127.0.0.1:<port>` while the app
+served HTTP produced `Invalid HTTP request received` locally and an opaque
+origin-gateway-refused response outside. The active log showed that exact TLS-
+to-HTTP protocol mismatch. Google callback URLs and secure cookies also relied
+only on direct-TLS runtime state, so a correctly terminated proxy could still
+generate HTTP callback URLs and reject same-origin form posts.
+
+Resolution: `https_mode=proxy` creates a loopback-only HTTP origin, trusts
+forwarded HTTPS headers only from `127.0.0.1`, and makes public links, Google
+redirect URIs, and session cookies HTTPS. The Access UI explains the two TLS
+modes, validates the planned Google callback before restart, and documents the
+required `http://127.0.0.1:<port>` gateway origin. Direct certificate mode
+remains the default and keeps untrusted proxy headers disabled. Regression
+checks cover mode validation, HTTPS URL derivation, and gateway callback URI
+generation.
+
+### TEST-002 — The access-check suite used a local import before binding it
+
+Priority: P2
+Status: FIXED — 2026-09-21.
+
+Evidence: the speaker-list check referenced `_Path` before the later
+function-local `from pathlib import Path as _Path`. Python therefore marked
+the name local for the whole check runner and raised `UnboundLocalError`,
+preventing the remainder of the suite from running.
+
+Resolution: the import now appears before its first use. The full 916-check
+suite runs to completion again.
+
+### HTTPS-002 — The Dynu direct-HTTPS route checked and explained the wrong endpoint
+
+Priority: P1
+Status: FIXED — 2026-09-21.
+
+Evidence: the installed deployment uses Dynu (`KDMV.webredirect.org`), not a
+generic local tunnel. The server checked its local listening port rather than
+the configured public port, and the browser instructed a router to forward one
+port to the same port. That is wrong for the normal secure arrangement:
+external TCP 443 maps to a high local application port. A generic TCP checker
+could also report success when Dynu Web Redirect or some unrelated service
+answered instead of Music Request Server. Separately, certificates installed
+at the standard `certificate.ps1` location always displayed as zero days left
+because expiry reporting looked only at the optional explicit certificate path.
+
+Resolution: reachability now probes the advertised Dynu hostname on the actual
+outside port and requires this application's `/api/ping` signature; concrete
+HTTP/TLS failures are failures rather than false green results. The API and
+UI carry distinct public and local ports and state the correct router mapping.
+The Dynu-specific interface explains that DDNS is not HTTPS, gives the exact
+certificate command, and rejects Dynu Web Redirect as an HTTPS origin. Expiry
+reporting follows the automatically managed certificate pair.
+
+### HTTPS-003 — The packaged release omitted the certificate bootstrapper
+
+Priority: P1
+Status: FIXED — 2026-09-21.
+
+Evidence: `certificate.ps1` existed only in the source checkout. The PyInstaller
+release included neither the script nor a way to obtain the direct Dynu
+certificate documented by the app, leaving an exe-only user unable to complete
+HTTPS or Google sign-in.
+
+Resolution: `certificate.ps1` is now bundled beside `MusicRequestServer.exe`.
+When `-Domain` is omitted it reads only the configured public Dynu hostname,
+never the Dynamic DNS password, and asks for the separate Dynu OAuth secret
+securely. The release documentation now gives the direct Dynu sequence:
+disable Dynu Web Redirect, forward public TCP 443 to the local app port, issue
+the certificate, restart, then register the HTTPS Google callback.
+
+### HTTPS-004 — PyInstaller placed the operator-facing certificate helper under `_internal`
+
+Priority: P1
+Status: FIXED — 2026-09-21.
+
+Evidence: post-build verification found that declaring `certificate.ps1` as a
+PyInstaller data file made it available under the release's `_internal`
+runtime directory, not beside `MusicRequestServer.exe`. The prior release
+claim therefore failed its actual usability requirement: an exe-only user
+could not reasonably find the command they needed for Dynu HTTPS.
+
+Resolution: the release installer now explicitly copies and verifies
+`certificate.ps1` at the root of `dist\\MusicRequestServer` after mirroring the
+one-dir build. The next release verification checks the root copy's hash
+against the source script before accepting the build.
+
+### HTTPS-005 — Automatic Dynu-name discovery left the certificate success line blank
+
+Priority: P2
+Status: FIXED — 2026-09-21.
+
+Evidence: a live certificate issue correctly discovered `KDMV.webredirect.org`
+from the saved Dynu configuration and issued the certificate, but the final
+status line printed `https://:<port>/player`. The script copied the optional
+`-Domain` parameter into its display variable before it had resolved the
+configured hostname.
+
+Resolution: the display variable is now updated immediately after resolving
+the supplied or configured domain. The rebuilt release will report the actual
+Dynu hostname after a successful issue.
+
+### HTTPS-006 — Dynu setup guidance incorrectly required external port 443
+
+Priority: P1
+Status: FIXED — 2026-09-21.
+
+Evidence: the active Dynu deployment already forwarded public TLS traffic on
+port 29543, and the new certificate served a valid trusted HTTPS response at
+`https://KDMV.webredirect.org:29543`. Google permits a non-default port when
+it is explicitly present in the authorized HTTPS redirect URI. The prior
+documentation and unencrypted-state hint instead required a 443 router
+forward, even though that address was still owned by a separate Dynu HTTP
+redirect and would break the working deployment.
+
+Resolution: setup now treats the active public application port as the normal
+path (`0` means the server's own port) and states the exact callback including
+that port. A 443 forward is documented as an optional portless-address setup
+only, with the required removal of Dynu Web Redirect.
+
+### AUTH-009 — Google setup fields silently saved separately and hid their state
+
+Priority: P1
+Status: FIXED — 2026-09-21.
+
+Evidence: the Access tab had individual Client ID, client-secret and owner-email
+inputs, but no actual setup action. Each field saved only on blur; the saved
+Client ID was never restored into the form and the secret field could not show
+whether a secret was already stored. This made a completed setup appear empty,
+while leaving a partially completed OAuth configuration behind after a browser
+refresh or accidental field change.
+
+Resolution: Access now presents one Google sign-in setup section with explicit
+instructions, a persistent Client ID, a clear "secret saved" placeholder and a
+single Save action. The owner-only `/api/accounts/setup` operation accepts a
+JSON body, validates all required values before changing anything, writes the
+three values atomically, never returns the secret, and preserves an existing
+secret when the form deliberately leaves it blank. It rejects GET even when
+the optional legacy-mutation mode is on, so a secret cannot be stored in a URL.
+Regression checks cover owner-only access, incomplete submissions, response
+redaction and the visible save action.
+
+### SETUP-001 — First-run setup had no single public address input
+
+Priority: P2
+Status: FIXED — 2026-09-21.
+
+Evidence: the wizard explained how links work but required a new owner to find
+and coordinate a Dynu hostname, external port and optional application path in
+separate Sharing controls afterwards. That is especially error-prone before
+Google OAuth, whose redirect URI must use the exact same spelling.
+
+Resolution: the first-run guide and Sharing tab now both offer a public master
+link field. It accepts a public HTTPS hostname with an optional port and one
+application path, validates it, and atomically updates the existing hostname,
+public-port and path settings. It never persists URL queries/fragments or
+credentials, does not duplicate configuration, and clearly states that DNS,
+router forwarding and HTTPS must already exist. Regression checks cover
+canonicalisation, rejection without changes, owner-only access and both UI
+entry points.
+
+### HTTPS-007 — Changing the configured hostname left the old certificate active
+
+Priority: P1
+Status: BLOCKED BY LET'S ENCRYPT RATE LIMIT — retry after 2026-09-22 01:56 UTC.
+
+Evidence: the live configuration now names `music.xubi.org`, while the
+installed certificate's subject alternative name is only the prior Dynu
+hostname. A browser correctly rejects that mismatch before the application
+can load or Google OAuth can return to it.
+
+Resolution: issue a fresh Let's Encrypt certificate through Dynu DNS-01 for
+the configured primary hostname, atomically replace the live certificate pair,
+restart the server, and verify the public HTTPS player and callback route with
+normal certificate validation. A production request was attempted and Let's
+Encrypt refused it because `xubi.org` has reached its hard 50-certificates-per-
+registered-domain limit. A staging certificate would not be trusted and was
+not installed.
+
+### DDNS-004 — Primary hostname did not resolve to this server after the domain change
+
+Priority: P1
+Status: BLOCKED ON THE DYNU ACCOUNT THAT OWNS THE `xubi.org` ZONE.
+
+Evidence: public resolvers returned `162.216.242.206` for `music.xubi.org`,
+while the server's WAN address is `51.7.56.108`. The saved Dynu updater reports
+that it submitted the latter address, so the record being served by Dynu must
+be inspected and corrected rather than treating a successful updater response
+as proof that visitors reach the right machine.
+
+Resolution: correct the primary Dynu DNS record to the current WAN address,
+allow its TTL to expire, then verify an external TLS request reaches Music
+Request Server on the configured public port. The supplied API identity can
+read the separate Music DDNS service (which already says `51.7.56.108`) but
+cannot read or alter the authoritative `xubi.org` zone that currently serves
+the stale address, so the Dynu control-panel account that owns that zone must
+be used.
+
+The Sharing screen now independently resolves the configured hostname after a
+successful update. It clearly marks the result as a public-DNS mismatch rather
+than reporting a false "Pointing at" success when Dynu accepted an update for
+a different service or a stale explicit record still wins.
+
+### DYNU-001 — Guidance treated every Dynu Web Redirect as invalid
+
+Priority: P2
+Status: FIXED — 2026-09-21.
+
+Evidence: the earlier wording was correct for the primary HTTPS hostname but
+incorrectly ruled out the safe, useful case of a separate non-masked HTTP
+alias forwarding to it.
+
+Resolution: Sharing and the deployment guide now distinguish the two cases:
+the real application hostname must serve its own direct TLS certificate, while
+a separately named Dynu URL-forwarding alias may perform a plain HTTP redirect
+to that address. The alias is never a Google callback or HTTPS endpoint.
+
+### AUTH-010 — Requested Google-account reset had no local accounts to remove
+
+Priority: P3
+Status: FIXED — 2026-09-21.
+
+Evidence: the local account store was empty and there were no `g-*` profile
+folders. There was therefore no attached Google identity, profile, consent,
+or account data to delete.
+
+Resolution: retained the OAuth configuration so the next legitimate sign-in
+can start cleanly. Browser-wide Google sessions are not application data and
+were not touched.
+
+### DYNU-002 — Requested `musics.xubi.org` redirect has no destination
+
+Priority: P1
+Status: BLOCKED ON DYNU CONTROL-PANEL SIGN-IN.
+
+Evidence: `http://musics.xubi.org/` is answered by Dynu with `501 Not
+Implemented`, rather than a redirect. The desired target is the configured
+primary address, `https://music.xubi.org:29543/`; `/music` is not currently a
+configured application path.
+
+Resolution: in Dynu's Web Redirect screen, create or correct the `musics`
+alias as **URL Forwarding**, destination `https://music.xubi.org:29543/`,
+**Mask/Cloak disabled**, **301 Redirect enabled**, and query-string inclusion
+enabled. This produces a plain HTTP redirect only; `https://musics.xubi.org`
+cannot be represented as secure until a valid certificate exists for that
+alias, so neither the master link nor Google OAuth will use it.
