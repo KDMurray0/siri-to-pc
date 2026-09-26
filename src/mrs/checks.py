@@ -4098,6 +4098,29 @@ def _run(verbose: bool = False) -> Result:
               all(name in _owner35 for name in ("audio/devices", "audio/device")))
             say("the speaker list", c)
 
+            # -- 36. booting before sign-in, and running inside somebody else's box --
+            c = _Checker("boot and containers")
+            import os as _os36, tempfile as _tf36
+            _launch36 = (_Path(__file__).resolve().parents[2] / "launcher.pyw").read_text(encoding="utf-8")
+            c("the desktop copy takes over from the headless one rather than deferring to it",
+              "if srv._is_ours(port) and not _serving_copy_is_headless(port):" in _launch36)
+            c("...which it recognises by its marker or by living in another session",
+              "_session_of(owner)" in _launch36 and "marked == owner" in _launch36)
+            c("a copy started inside a packaged app's AppData relaunches outside it",
+              "_escape_app_container()" in _launch36
+              and "LocalCache" in _launch36 and "explorer.exe" in _launch36)
+            _s36 = _launch36.index("def _in_app_container")
+            _e36 = _launch36.index("def _escape_app_container")
+            _ns36 = {"os": _os36}
+            exec(_launch36[_s36:_e36], _ns36)
+            with _tf36.TemporaryDirectory() as _base36:
+                with _patch.dict(_os36.environ, {"LOCALAPPDATA": _base36}):
+                    c("...and outside one it finds nothing to escape",
+                      _ns36["_in_app_container"]() == ""
+                      and not any(n.startswith(".container-probe")
+                                  for n in _os36.listdir(_os36.path.join(_base36, "MusicRequestServer"))))
+            say("boot and containers", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json

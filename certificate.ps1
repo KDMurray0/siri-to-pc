@@ -1,4 +1,4 @@
-# A real certificate for this server, and a job that keeps it renewed.
+﻿# A real certificate for this server, and a job that keeps it renewed.
 #
 #   .\certificate.ps1 -ClientId xxxx
 #   .\certificate.ps1 -Domain music.example.dynu.net -ClientId xxxx -Staging

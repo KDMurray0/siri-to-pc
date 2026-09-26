@@ -96,6 +96,7 @@ h1 em{font-style:normal;color:var(--accent)}
 .mark56 b:nth-child(2){height:26px;animation-delay:-.9s}
 .mark56 b:nth-child(3){height:19px;animation-delay:-.2s}
 .mark56 b:nth-child(4){height:32px;animation-delay:-.7s}
+.door h2.state{font:700 19px/1.25 var(--display);letter-spacing:-.02em;margin:0 0 8px}
 h1.display{font:900 clamp(30px,4.6vw,40px)/1 var(--display);letter-spacing:-.045em;
   text-transform:uppercase;margin:0 0 10px}
 .door .lede{margin:0 auto 24px;color:var(--sub);font-size:14.5px;line-height:1.55;max-width:36ch}
@@ -206,12 +207,12 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
     </div>
 
     <ul class="facts">
-      <li><svg viewBox="0 0 24 24"><path d="M4 7h11M4 12h11M4 17h7"/><path d="M19 9v8"/><circle cx="17" cy="17.5" r="2"/></svg>
-        <span><b>Your own queue.</b> Nobody else&rsquo;s song interrupts yours, and yours never interrupts theirs.</span></li>
+      <li><svg viewBox="0 0 24 24"><path d="M12 3v11m0 0l-4-4m4 4l4-4"/><path d="M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg>
+        <span><b>Bring your playlists.</b> Paste a Spotify or Apple Music playlist and it&rsquo;s here, every song, ready to play.</span></li>
+      <li><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M9 9.5c0-1.4 1.3-2.3 3-2.3s3 .9 3 2.2c0 2.7-6 1.5-6 4.5 0 1.3 1.3 2.4 3 2.4s3-1 3-2.3M12 5.5v1.7m0 9.6v1.7"/></svg>
+        <span><b>Free, and no adverts.</b> No subscription and nothing cutting in between songs.</span></li>
       <li><svg viewBox="0 0 24 24"><rect x="3" y="5" width="13" height="10" rx="1.5"/><path d="M7 19h5M9.5 15v4"/><rect x="18" y="8" width="3.5" height="9" rx="1"/></svg>
-        <span><b>Any device.</b> Play on your phone, your laptop or the desktop app, and pick up where you left off.</span></li>
-      <li><svg viewBox="0 0 24 24"><path d="M5 6h14M5 11h9M5 16h12"/></svg>
-        <span><b>Words that keep time.</b> Lyrics that follow the song, line by line.</span></li>
+        <span><b>Play it anywhere.</b> Your phone, your laptop or the desktop app, and your queue and playlists come with you.</span></li>
     </ul>
   </section>
 
@@ -219,6 +220,7 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
   <span class="mark56" aria-hidden="true"><b></b><b></b><b></b><b></b></span>
   <h1 class="display" id="door-h">{{ server_name }}</h1>
   {% if blocked %}
+    <h2 class="state">This account can&rsquo;t listen here</h2>
     <p class="lede">Whoever runs {{ server_name }} has turned this account off. If you think that&rsquo;s a mistake, ask them.</p>
     <p class="lede" style="margin-top:14px">It&rsquo;s still your data. You can take a copy or have it deleted whenever you like.</p>
     <a class="gbtn quiet" href="{{ base }}/api/me/export" download>Download my data</a>
@@ -235,6 +237,7 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
     <div class="foot"><a href="{{ base }}/auth/signout">Sign out</a><a href="{{ base }}/privacy">Privacy notice</a></div>
 
   {% elif claim %}
+    <h2 class="state">One last thing</h2>
     <p class="lede">You&rsquo;re signed in with Google, but we haven&rsquo;t met. Choose a name and you&rsquo;re in.</p>
     {% if claim.picture %}<div class="pic"><img src="{{ claim.picture }}" alt="" referrerpolicy="no-referrer"><span>Signed in with Google</span></div>{% endif %}
     {% if error %}<p class="err" role="alert">{{ error }}</p>{% endif %}
@@ -290,6 +293,7 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
     </div>
 
   {% else %}
+    <h2 class="state">Not taking sign-ins yet</h2>
     <p class="lede">Whoever runs {{ server_name }} hasn&rsquo;t switched on Google sign-in. Ask them to.</p>
     {% if error %}<p class="err" role="alert" style="margin-top:16px">{{ error }}</p>{% endif %}
     <div class="foot"><a href="{{ base }}/privacy">Privacy notice</a></div>

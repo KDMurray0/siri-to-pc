@@ -65,6 +65,75 @@ def _trace(note: str) -> None:
 _trace(f"process start, argv={sys.argv[1:]}, frozen={FROZEN}")
 
 
+def _in_app_container() -> str:
+    """The packaged app whose private AppData this process writes into, or "".
+
+    Started from inside a packaged app -- a terminal in the Claude desktop app
+    is one -- a process can have its AppData writes quietly redirected into
+    that app's LocalCache without carrying the package's identity, so asking
+    Windows "am I packaged?" says no. It then runs on a private fork of the
+    data folder: its own config, accounts, likes and playlists, invisible to
+    the copy the tray or the boot task start. That happened for weeks. The only
+    honest test is to write something and see where it lands.
+    """
+    base = os.environ.get("LOCALAPPDATA") or ""
+    if not base:
+        return ""
+    folder = os.path.join(base, "MusicRequestServer")
+    name = f".container-probe-{os.getpid()}"
+    probe = os.path.join(folder, name)
+    try:
+        os.makedirs(folder, exist_ok=True)
+        with open(probe, "w", encoding="ascii") as fh:
+            fh.write("x")
+    except OSError:
+        return ""
+    try:
+        import glob
+        pattern = os.path.join(base, "Packages", "*", "LocalCache", "Local",
+                               "MusicRequestServer", name)
+        hits = glob.glob(pattern)
+        return hits[0].split(os.sep)[-5] if hits else ""
+    finally:
+        try:
+            os.remove(probe)
+        except OSError:
+            pass
+
+
+def _escape_app_container() -> None:
+    """Start again through Explorer, which is outside every container.
+
+    Guarded by a file beside the exe -- not under AppData, so both sides of a
+    container see the same one -- in case Explorer ever turns out to be inside
+    one too; a relaunch loop would be worse than a forked data folder.
+    """
+    box = _in_app_container()
+    if not box:
+        return
+    guard = os.path.join(_HERE, ".escaped")
+    try:
+        import time as _t
+        if os.path.exists(guard) and _t.time() - os.path.getmtime(guard) < 30:
+            _trace(f"still inside {box}'s AppData after a relaunch -- carrying on")
+            return
+        with open(guard, "w", encoding="ascii") as fh:
+            fh.write(str(os.getpid()))
+        import subprocess as _sp
+        _sp.Popen(["explorer.exe", sys.executable], close_fds=True)
+        _trace(f"started inside {box}'s private AppData -- relaunched through "
+               "Explorer so the real data folder is used")
+        sys.exit(0)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        _trace(f"inside {box}'s AppData and couldn't relaunch ({exc})")
+
+
+if __name__ == "__main__" and FROZEN:
+    _escape_app_container()
+
+
 def _reexec_if_needed() -> bool:
     """Relaunch under the interpreter that actually has pywebview."""
     if FROZEN:
@@ -847,6 +916,47 @@ def _port_busy(port: int) -> bool:
             return True
 
 
+def _session_of(pid: int) -> int | None:
+    """Which Windows session a process is in. None if it can't be told."""
+    import ctypes
+    sid = ctypes.c_ulong()
+    try:
+        if ctypes.windll.kernel32.ProcessIdToSessionId(int(pid), ctypes.byref(sid)):
+            return int(sid.value)
+    except Exception:
+        pass
+    # A limited process can't open one in session 0; tasklist can still say.
+    try:
+        row = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH", "/FI", f"PID eq {int(pid)}"],
+            capture_output=True, text=True, timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip()
+        cells = [c.strip('"') for c in row.splitlines()[0].split('","')] if row else []
+        return int(cells[3]) if len(cells) >= 4 and cells[3].isdigit() else None
+    except Exception:
+        return None
+
+
+def _serving_copy_is_headless(port: int) -> bool:
+    """Is the copy answering on our port the one from before sign-in?
+
+    That copy lives in another session with no desktop and no speakers, so it
+    is there to be replaced, not deferred to. Another copy on this desktop is
+    a real one and keeps the port.
+    """
+    try:
+        marked = int(_headless_marker().read_text(encoding="utf-8").strip())
+    except Exception:
+        marked = 0
+    owner = _port_owner(port)
+    if marked and owner and marked == owner:
+        return True
+    if not owner:
+        return bool(marked)
+    theirs, mine = _session_of(owner), _session_of(os.getpid())
+    return theirs is not None and mine is not None and theirs != mine
+
+
 def _port_owner(port: int) -> int:
     """Which process is listening on this port, asked of Windows directly.
 
@@ -1339,10 +1449,16 @@ def main() -> None:
         # and wedges, and the copy with a desktop, speakers and a tray backs
         # out of its way. Answering our ping is the difference between a
         # colleague and a squatter.
-        if srv._is_ours(port):
+        # The copy from before sign-in answers too, and it is the one thing
+        # that must not win: no tray, no window, no speakers. Deferring to it
+        # left the machine headless for the whole session.
+        if srv._is_ours(port) and not _serving_copy_is_headless(port):
             mark(f"a working copy is already serving on {port} — leaving it to that one")
             sys.exit(0)
-        mark(f"port {port} is held by something that isn't answering — taking it back")
+        if srv._is_ours(port):
+            mark(f"the copy on {port} is the one from before sign-in — taking over")
+        else:
+            mark(f"port {port} is held by something that isn't answering — taking it back")
         if _stand_down_headless():
             mark(f"got {port} back")
         elif _port_busy(port) and _seize_port(port):
