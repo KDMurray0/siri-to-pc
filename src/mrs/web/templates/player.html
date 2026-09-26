@@ -523,16 +523,38 @@ body.expand .prog{margin-top:10px}
 .sheet-head{display:flex;align-items:center;justify-content:space-between;
   padding:18px 18px 10px}
 .sheet-head h2{font-size:17px;font-weight:800;letter-spacing:-.01em}
-.sheet-tabs{display:flex;gap:4px;padding:0 16px 8px;border-bottom:1px solid var(--line);
-  overflow-x:auto;scrollbar-width:none}
-.sheet-tabs::-webkit-scrollbar{display:none}
-.stab{flex:1 0 auto;background:none;border:0;color:var(--sub);font-family:inherit;
-  font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
-  padding:7px 9px;cursor:pointer;border-radius:8px}
+/* Sections down the side when there's room; a list to tap into when not --
+   the 400px desktop window and a phone. */
+.sheet-main{flex:1;display:flex;min-height:0}
+.setnav{width:224px;flex:none;display:flex;flex-direction:column;gap:2px;overflow-y:auto;
+  padding:4px 10px 18px;border-right:1px solid var(--line)}
+.navlbl{font-size:10px;color:var(--sub);text-transform:uppercase;letter-spacing:.08em;
+  font-weight:700;margin:14px 10px 4px}
+.stab{display:grid;grid-template-columns:20px 1fr auto;align-items:center;gap:11px;width:100%;
+  background:none;border:0;color:var(--sub);font:600 12.5px/1.3 inherit;font-family:inherit;
+  text-align:left;padding:9px 10px;cursor:pointer;border-radius:10px}
+.stab svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;
+  stroke-linecap:round;stroke-linejoin:round}
+.stab small{display:none;font-weight:400;font-size:11px;color:var(--sub);margin-top:1px}
+.stab .chev{display:none;width:7px;height:7px;border:solid var(--sub);border-width:2px 2px 0 0;
+  transform:rotate(45deg)}
 .stab[hidden],.srow[hidden]{display:none}
-.stab:hover{color:var(--fg)}
-.stab.on{color:var(--accent-ink);background:var(--accent)}
-.sheet-body{flex:1;overflow-y:auto;padding:8px 18px 24px}
+.stab:hover{color:var(--fg);background:color-mix(in srgb,var(--fg) 5%,transparent)}
+.stab.on{color:var(--fg);background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.stab.on svg{color:var(--accent)}
+.setback{display:none}
+.sheet-body{flex:1;overflow-y:auto;padding:8px 22px 28px;min-width:0}
+@media (max-width:640px){
+  .setnav{width:100%;border:0;padding:0 12px 18px}
+  .stab{grid-template-columns:22px 1fr 10px;padding:12px 8px;font-size:14px;border-radius:0;
+    border-bottom:1px solid var(--line)}
+  .stab.on{background:none}
+  .stab small,.stab .chev{display:block}
+  .sheet-body{display:none}
+  .sheet.picked .setnav{display:none}
+  .sheet.picked .sheet-body{display:block}
+  .sheet.picked .setback{display:grid}
+}
 .health{display:none;margin:2px 0 10px;font-size:11.5px;line-height:1.55;
   border:1px solid var(--line);border-radius:9px;padding:9px 11px}
 .health.on{display:block}
@@ -1081,7 +1103,6 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
     border:1px solid var(--line);border-radius:18px;overflow:hidden;
     box-shadow:0 30px 90px rgba(0,0,0,.55),0 0 0 100vmax rgba(0,0,0,.5)}
   body:not(.mini) .sheet-head,
-  body:not(.mini) .sheet-tabs,
   body:not(.mini) .sheet-body{width:100%;max-width:none}
 
   /* ── the queue, out of the way ──────────────────────────────────────
@@ -1516,228 +1537,26 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 
   <div class="sheet" id="sheet">
     <div class="sheet-head">
-      <h2>Settings</h2>
+      <button class="ib small setback" id="setback" aria-label="Back to settings"><svg viewBox="0 0 24 24"><path d="M15.4 5.4L14 4l-8 8 8 8 1.4-1.4L8.8 12z"/></svg></button>
+      <h2 id="settitle">Settings</h2>
       <button class="ib small" id="closeSettings" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M19 6.4L17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg></button>
     </div>
-    <div class="sheet-tabs" id="sheettabs">
-      <button class="stab on guestok" data-s="sound">Sound</button>
-      <button class="stab guestok" data-s="queue">Queue</button>
-      <button class="stab" data-s="access">Access</button>
-      <button class="stab" data-s="extras">Extras</button>
-      <button class="stab" data-s="sharing">Sharing</button>
-      <button class="stab" data-s="system">System</button>
-      <button class="stab guestok" id="tabacct" data-s="account" hidden>Account</button>
-    </div>
+    <div class="sheet-main">
+    <nav class="setnav" id="sheettabs" aria-label="Settings sections">
+      <button class="stab guestok" data-s="account" id="tabacct" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.6"/><path d="M4.8 19.5c1.3-3.3 4-5 7.2-5s5.9 1.7 7.2 5"/></svg><span>You<small>Your account, privacy and Siri</small></span><i class="chev" aria-hidden="true"></i></button>
+      <div class="navlbl guestok">Listening</div>
+      <button class="stab guestok" data-s="sound"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4.5 4.5 0 010 6M18 6.5a8 8 0 010 11"/></svg><span>Playback<small>Sound, equaliser, timers</small></span><i class="chev" aria-hidden="true"></i></button>
+      <button class="stab guestok" data-s="look"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5a8.5 8.5 0 100 17c1.2 0 1.8-.8 1.8-1.7 0-1.3-1.1-1.6-1.1-2.7 0-1 .8-1.6 1.9-1.6h2.1c2 0 3.8-1.6 3.8-3.9C20.5 6.8 16.7 3.5 12 3.5z"/><circle cx="7.8" cy="11" r="1.1"/><circle cx="10.5" cy="7.4" r="1.1"/><circle cx="15" cy="7.6" r="1.1"/></svg><span>Look<small>Theme and what's on screen</small></span><i class="chev" aria-hidden="true"></i></button>
+      <button class="stab guestok" data-s="queue"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11M4 12h11M4 17h7"/><path d="M19 9v8"/><circle cx="17" cy="17.5" r="2"/></svg><span>Radio &amp; queue<small>What plays next</small></span><i class="chev" aria-hidden="true"></i></button>
+      <button class="stab " data-s="library"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5v15M9.5 4.5v15"/><path d="M13.5 5.2l4.2-1 3 14.8-4.2 1z"/></svg><span>Library<small>Folders and downloads</small></span><i class="chev" aria-hidden="true"></i></button>
+      <div class="navlbl">This server</div>
+      <button class="stab " data-s="access"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="9" r="3.2"/><path d="M3.5 19c.9-3 3-4.6 5.5-4.6s4.6 1.6 5.5 4.6"/><circle cx="16.8" cy="9.8" r="2.5"/><path d="M15.8 14.6c2.2.1 3.9 1.5 4.7 4.1"/></svg><span>People<small>Who's in, and who's listening</small></span><i class="chev" aria-hidden="true"></i></button>
+      <button class="stab " data-s="sharing"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 018 0v3"/></svg><span>Address &amp; security<small>Links, HTTPS and locks</small></span><i class="chev" aria-hidden="true"></i></button>
+      <button class="stab " data-s="connections"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/></svg><span>Connections<small>Google, YouTube, Groq, Last.fm</small></span><i class="chev" aria-hidden="true"></i></button>
+      <button class="stab " data-s="system"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="11" rx="1.6"/><path d="M8.5 19.5h7M12 16v3.5"/></svg><span>System<small>Start-up, restart, diagnostics</small></span><i class="chev" aria-hidden="true"></i></button>
+      <button class="stab " data-s="stats"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19.5V11M10 19.5V5M15 19.5v-6M20 19.5V8.5"/></svg><span>Stats<small>What the place has done</small></span><i class="chev" aria-hidden="true"></i></button>
+    </nav>
     <div class="sheet-body">
-
-      <section class="spane open" data-s="sound">
-        <div class="kept" id="keptnote"></div>
-        <div class="srow guestok" id="signinrow" hidden>
-          <span class="slabel" id="signinlabel">Signed in</span>
-          <button class="btn" id="signinbtn">Sign in with Google</button></div>
-        <div class="srow guestok"><span class="slabel">Theme</span><div class="swatches" id="swatches"></div></div>
-        <div class="srow guestok"><span class="slabel">Equaliser</span><select id="eq"></select></div>
-        <div class="srow owneronly"><span class="slabel">Headphone correction<em id="aeqdev">Measured corrections from AutoEq, per output</em></span>
-          <div class="toggle" id="aeqon"></div></div>
-        <div class="aeqcard owneronly" id="aeqcard"></div>
-        <div class="srow owneronly"><span class="slabel">Recognise by name<em>When Windows names the model, use it without asking</em></span>
-          <div class="toggle" id="aeqauto"></div></div>
-        <div class="owneronly"><input class="keyin" id="aeqq" placeholder="Search 8,000+ headphone models"
-               autocomplete="off" spellcheck="false"></div>
-        <div class="aeqlist owneronly" id="aeqres"></div>
-        <div class="srow"><span class="slabel">Visualiser<em>The bars across the artwork</em></span>
-          <div class="toggle" id="viz"></div></div>
-        <div class="srow guestok"><span class="slabel">Even out volume<em>Keeps quiet and loud songs level</em></span>
-          <div class="toggle" id="normalize"></div></div>
-        <div class="srow"><span class="slabel">Follow the clock<em id="autovolnote">Quieter late at night, back up in the morning</em></span>
-          <div class="toggle" id="autovol"></div></div>
-        <div class="srow guestok"><span class="slabel">Crossfade<em>Overlap between tracks</em></span>
-          <div class="chips" id="crossfade"></div></div>
-        <div class="srow guestok"><span class="slabel">Announce songs<em>Says the track name out loud</em></span>
-          <div class="toggle" id="announce"></div></div>
-        <div class="srow owneronly"><label class="slabel" for="announceDuck">Lower music while speaking<em>Perceptual level change, in decibels</em></label>
-          <span style="display:flex;align-items:center;gap:8px"><input class="keyin" id="announceDuck" type="range" min="-60" max="0" step="1" style="width:115px"><output id="announceDuckValue">−12 dB</output></span></div>
-        <div class="srow owneronly"><label class="slabel" for="announceVoice">Narrator level<em>Relative to the music's normal mixer level</em></label>
-          <span style="display:flex;align-items:center;gap:8px"><input class="keyin" id="announceVoice" type="range" min="-24" max="12" step="1" style="width:115px"><output id="announceVoiceValue">0 dB</output></span></div>
-        <div class="srow guestok"><span class="slabel">Sleep timer</span><div class="chips" id="sleep"></div></div>
-      </section>
-
-      <section class="spane" data-s="queue">
-        <div class="srow guestok"><span class="slabel">Stay on the artist<em>How hard the radio sticks to the band you asked for</em></span>
-          <div class="chips" id="cohesion"></div></div>
-        <div class="srow guestok"><span class="slabel">Remember the first song<em>Stops a long session wandering off — every step is close to the last, but the end isn't close to the start</em></span>
-          <div class="chips" id="anchor"></div></div>
-        <div class="srow guestok"><span class="slabel">Where songs come from</span>
-          <select id="source"><option value="youtube">YouTube</option><option value="soundcloud">SoundCloud</option><option value="bandcamp">Bandcamp</option></select></div>
-        <div class="srow"><span class="slabel">Keep playlists on disk<em>Downloads them into their folder</em></span>
-          <div class="toggle" id="pldl"></div></div>
-        <div class="srow"><span class="slabel">Queue right now</span><span class="sval" id="queuestats">—</span></div>
-        <div class="srow"><span class="slabel">Meter source<em>Reads the speakers directly when it can</em></span>
-          <span class="sval" id="meterinfo">—</span></div>
-        <div class="srow"><span class="slabel">Your music folders</span>
-          <span class="sval" id="libcount">none indexed</span></div>
-        <div class="srow"><span class="slabel">Index local files<em>Owned songs play instantly, no download</em></span>
-          <button class="btn" id="libscan">Scan now</button></div>
-        <div class="srow owneronly"><label class="slabel" for="libmonitor">Refresh music folders<em>Automatically rescan folders on this interval</em></label>
-          <select class="keyin" id="libmonitor">
-            <option value="0">Off</option><option value="5">Every 5 minutes</option>
-            <option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option>
-            <option value="60">Every hour</option><option value="360">Every 6 hours</option>
-          </select></div>
-      </section>
-
-      <section class="spane" data-s="access">
-        <div class="seclbl">Google sign-in</div>
-        <div class="hint">Paste the OAuth details from Google Cloud here. The secret stays on this
-          computer and is never shown again. Save these three values together, then copy the redirect
-          URI into Google Cloud Console before trying a sign-in.</div>
-        <div class="srow"><span class="slabel">Signing in with Google<em id="ghint">Let people in by who they are, not by which link they hold</em></span>
-          <span class="sval" id="gstate">off</span></div>
-        <div class="srow"><span class="slabel">Client ID<em>From the Google Cloud Console</em></span>
-          <input class="keyin" id="gclient" placeholder="...apps.googleusercontent.com" autocomplete="off" spellcheck="false"></div>
-        <div class="srow"><span class="slabel">Client secret<em>Kept here, never shown again</em></span>
-          <input class="keyin" id="gsecret" type="password" placeholder="GOCSPX-..." autocomplete="new-password" spellcheck="false"></div>
-        <div class="srow"><span class="slabel">Your own email<em>The account that gets to be the owner</em></span>
-          <input class="keyin" id="gowner" type="email" placeholder="you@gmail.com" autocomplete="email"></div>
-        <div class="srow"><span class="slabel"><em id="gsetuphint">Enter the three details, then save them together.</em></span>
-          <button class="btn primary" id="gsave">Save Google sign-in</button></div>
-        <div class="srow"><label class="slabel" for="gscope">New home-network sign-ins<em>Shared links keep the access level they were given</em></label>
-          <select class="keyin" id="gscope"><option value="blocked">Hold for approval</option><option value="phone">Their own device</option><option value="full">Speakers too</option></select></div>
-        <div class="srow"><span class="slabel">Redirect URI<em>Paste this into the Console, exactly</em></span>
-          <button class="btn" id="gcopyuri">Copy</button></div>
-        <div class="hint" id="guri"></div>
-        <div id="peoplelist"></div>
-        <div class="srow"><span class="slabel"><span class="status-dot" id="ckdot"></span> YouTube cookies</span>
-          <button class="btn" id="findck">Test cookies</button></div>
-        <div class="hint" id="ckhint"></div>
-        <div class="srow"><span class="slabel">Sign in to YouTube<em>Opens a Google login here — no browser to close, no files to export</em></span>
-          <button class="btn" id="cksignin">Sign in</button></div>
-        <div class="srow"><span class="slabel">Get cookies from your browser<em>Install the extension, click Export, I pick it up automatically</em></span>
-          <button class="btn" id="ckext">Set up</button></div>
-        <div class="srow"><span class="slabel">Re-check cookies hourly</span>
-          <div class="toggle" id="ckauto"></div></div>
-
-
-        <div class="seclbl">Understanding requests</div>
-        <div class="srow"><span class="slabel"><span class="status-dot" id="groqdot"></span> Groq key<em>Optional — improves messy dictation</em></span>
-          <input class="keyin" id="groqkey" type="password" placeholder="gsk_…"></div>
-        <div class="srow"><span class="slabel">Model<em>Which Groq model reads your requests</em></span>
-          <select class="keyin" id="groqmodel" style="width:168px"></select></div>
-        <div class="hint" id="groqhint"></div>
-      </section>
-
-      <section class="spane" data-s="extras">
-        <div class="seclbl">Alarms</div>
-        <div id="alarmlist"></div>
-        <div class="srow"><span class="slabel">New alarm</span>
-          <span style="display:flex;gap:6px">
-            <input class="keyin" id="alarmtime" type="time" style="width:96px">
-            <input class="keyin" id="alarmq" placeholder="what to play" style="width:118px">
-            <button class="btn" id="alarmadd">Add</button>
-          </span></div>
-
-        <div class="seclbl">Scrobbling</div>
-        <div class="srow"><span class="slabel"><span class="status-dot" id="lfmdot"></span> Last.fm</span>
-          <span style="display:flex;gap:6px">
-            <input class="keyin" id="lfmkey" placeholder="API key" style="width:104px">
-            <input class="keyin" id="lfmsec" placeholder="secret" style="width:88px">
-          </span></div>
-        <div class="srow"><span class="slabel">Connect<em>Opens Last.fm to approve, then press Finish</em></span>
-          <span style="display:flex;gap:6px">
-            <button class="btn" id="lfmauth">Approve</button>
-            <button class="btn" id="lfmdone">Finish</button>
-          </span></div>
-
-        <div class="seclbl">Other machines</div>
-        <div id="peerlist"></div>
-        <div class="srow"><span class="slabel">Add a peer<em>host:port of another copy of this app</em></span>
-          <span style="display:flex;gap:6px">
-            <input class="keyin" id="peerhost" placeholder="192.168.1.20:7420" style="width:150px">
-            <button class="btn" id="peeradd">Add</button>
-          </span></div>
-        <div class="srow"><span class="slabel">Send requests to peers too</span>
-          <div class="toggle" id="castall"></div></div>
-
-        <div class="seclbl">Music folders</div>
-        <div id="libpaths"></div>
-        <div class="srow"><span class="slabel">Add a folder</span>
-          <span style="display:flex;gap:6px">
-            <input class="keyin" id="libpath" placeholder="D:\Music" style="width:150px">
-            <button class="btn" id="libadd">Add</button>
-          </span></div>
-      </section>
-
-      <section class="spane" data-s="sharing">
-        <div class="panic">
-          <button class="btn danger" id="lockdown">Reset access &amp; shuffle port</button>
-          <div class="hint">Ends every session, wipes any old links still lying around, and
-            moves the server to a new random port. Signed-in people come straight back once
-            you tell them the new address; anything pasted somewhere old stops working. Your
-            music, playlists, accounts and settings are untouched.</div>
-        </div>
-        <div class="seclbl">Your public master link</div>
-        <div class="hint">Paste the complete HTTPS address you want people and Google to use, such as
-          <code>https://musicrequestserver.dynu.com:29543</code>. It updates the hostname, public
-          port and optional Music path below in one go.</div>
-        <div class="srow"><span class="slabel">Public link<em>Must be HTTPS; an optional /music path is allowed</em></span>
-          <span class="acctname"><input class="keyin" id="addrmaster" placeholder="https://your-name.example:29543" autocomplete="url" spellcheck="false">
-            <button class="btn primary" id="addrmastersave">Save link</button></span></div>
-        <div class="hint" id="addrmasterhint"></div>
-        <div class="seclbl">The address</div>
-        <div class="hint">Put Music at a path so another app can share the address, and say which
-          port the outside world uses (your router forwards it here). Google sign-in has to be told
-          the new address in its console before anybody can sign in on it.</div>
-        <div class="srow"><label class="slabel" for="addrhttps">HTTPS<em>Use the direct certificate route for Dynu. A Dynu Web Redirect may forward a separate HTTP alias here, but it must never replace this hostname's HTTPS service.</em></label>
-          <select class="keyin" id="addrhttps"><option value="direct">Direct certificate (Dynu / router)</option><option value="proxy">Local HTTPS gateway (not Dynu Web Redirect)</option></select></div>
-        <div class="srow"><span class="slabel">Path<em>Where Music lives, like /music</em></span>
-          <input class="keyin" id="addrprefix" placeholder="/music" autocomplete="off" spellcheck="false"></div>
-        <div class="srow"><span class="slabel">Public port<em>What the outside uses, like 443. 0 means this computer's own</em></span>
-          <input class="keyin" id="addrport" placeholder="0" inputmode="numeric" autocomplete="off"></div>
-        <div class="srow"><span class="slabel">Movies address<em>Adds a Music / Movies choice at the bare address</em></span>
-          <input class="keyin" id="addrmovies" placeholder="https://host:port/" autocomplete="off" spellcheck="false"></div>
-        <div class="srow"><span class="slabel"><em id="addrhint"></em></span>
-          <span class="acctname"><button class="btn" id="addrcheck">Check with Google</button>
-            <button class="btn primary" id="addrsave">Save</button></span></div>
-
-        <div class="seclbl">The link you give people</div>
-        <div class="hint">Send anyone this address. They open it, sign in with
-          Google, and they're in — no key, no per-person link to hand out or
-          take back. Who may stay, and what they can do, is under People in the
-          Access tab.</div>
-        <div id="netaddrs"></div>
-        <div class="hint" id="nethint"></div>
-        <div class="srow"><span class="slabel">Can the outside world reach it?<em>Asks something outside your network to try the door</em></span>
-          <button class="btn" id="portcheck">Check</button></div>
-        <div class="reach" id="reachbox"></div>
-
-        <div class="seclbl">A name that follows you</div>
-        <div class="hint">Your home address is public but not permanent — it moves on a
-          reconnect, and every link you've handed out dies with it. A hostname survives that.</div>
-        <div class="mk">
-          <select class="keyin" id="ddnsprov">
-            <option value="dynu">Dynu</option>
-            <option value="duckdns">Duck DNS</option>
-            <option value="noip">No-IP</option>
-            <option value="afraid">FreeDNS</option>
-          </select>
-          <input class="keyin" id="ddnshost" placeholder="yourname.freeddns.org" autocomplete="off">
-          <div class="mk-opts">
-            <input class="keyin" id="ddnsuser" placeholder="Username" autocomplete="off">
-            <input class="keyin" id="ddnspass" type="password" placeholder="Password">
-          </div>
-          <button class="btn mk-go" id="ddnssave">Point it here</button>
-        </div>
-        <div class="reach" id="ddnsbox"></div>
-
-        <div class="seclbl">While people are round</div>
-        <div class="srow"><span class="slabel">Party mode<em>Requests queue up in order — no radio, and nobody skips the line</em></span>
-          <div class="toggle" id="partymode"></div></div>
-        <div class="srow"><span class="slabel">Keep guests off the speakers<em>They can still play on their own phones</em></span>
-          <div class="toggle" id="blockguests"></div></div>
-
-        <div class="seclbl">Listening now</div>
-        <div id="whoslistening"></div>
-      </section>
 
       <section class="spane" data-s="account">
         <div class="acctcard guestok" id="acctcard"></div>
@@ -1789,19 +1608,240 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         </div>
       </section>
 
+      <section class="spane" data-s="sound">
+        <div class="kept" id="keptnote"></div>
+        <div class="srow guestok" id="signinrow" hidden>
+          <span class="slabel" id="signinlabel">Signed in</span>
+          <button class="btn" id="signinbtn">Sign in with Google</button></div>
+        <div class="srow guestok"><span class="slabel">Equaliser</span><select id="eq"></select></div>
+        <div class="srow owneronly"><span class="slabel">Headphone correction<em id="aeqdev">Measured corrections from AutoEq, per output</em></span>
+          <div class="toggle" id="aeqon"></div></div>
+        <div class="aeqcard owneronly" id="aeqcard"></div>
+        <div class="srow owneronly"><span class="slabel">Recognise by name<em>When Windows names the model, use it without asking</em></span>
+          <div class="toggle" id="aeqauto"></div></div>
+        <div class="owneronly"><input class="keyin" id="aeqq" placeholder="Search 8,000+ headphone models"
+               autocomplete="off" spellcheck="false"></div>
+        <div class="aeqlist owneronly" id="aeqres"></div>
+        <div class="srow guestok"><span class="slabel">Even out volume<em>Keeps quiet and loud songs level</em></span>
+          <div class="toggle" id="normalize"></div></div>
+        <div class="srow"><span class="slabel">Follow the clock<em id="autovolnote">Quieter late at night, back up in the morning</em></span>
+          <div class="toggle" id="autovol"></div></div>
+        <div class="srow guestok"><span class="slabel">Crossfade<em>Overlap between tracks</em></span>
+          <div class="chips" id="crossfade"></div></div>
+        <div class="srow guestok"><span class="slabel">Announce songs<em>Says the track name out loud</em></span>
+          <div class="toggle" id="announce"></div></div>
+        <div class="srow owneronly"><label class="slabel" for="announceDuck">Lower music while speaking<em>Perceptual level change, in decibels</em></label>
+          <span style="display:flex;align-items:center;gap:8px"><input class="keyin" id="announceDuck" type="range" min="-60" max="0" step="1" style="width:115px"><output id="announceDuckValue">−12 dB</output></span></div>
+        <div class="srow owneronly"><label class="slabel" for="announceVoice">Narrator level<em>Relative to the music's normal mixer level</em></label>
+          <span style="display:flex;align-items:center;gap:8px"><input class="keyin" id="announceVoice" type="range" min="-24" max="12" step="1" style="width:115px"><output id="announceVoiceValue">0 dB</output></span></div>
+        <div class="seclbl">Timers</div>
+        <div class="srow guestok"><span class="slabel">Sleep timer</span><div class="chips" id="sleep"></div></div>
+        <div class="seclbl owneronly">Alarms</div>
+        <div id="alarmlist"></div>
+        <div class="srow"><span class="slabel">New alarm</span>
+          <span style="display:flex;gap:6px">
+            <input class="keyin" id="alarmtime" type="time" style="width:96px">
+            <input class="keyin" id="alarmq" placeholder="what to play" style="width:118px">
+            <button class="btn" id="alarmadd">Add</button>
+          </span></div>
+      </section>
+
+      <section class="spane" data-s="look">
+        <div class="srow guestok"><span class="slabel">Theme</span><div class="swatches" id="swatches"></div></div>
+        <div class="srow"><span class="slabel">Visualiser<em>The bars across the artwork</em></span>
+          <div class="toggle" id="viz"></div></div>
+      </section>
+
+      <section class="spane" data-s="queue">
+        <div class="srow guestok"><span class="slabel">Stay on the artist<em>How hard the radio sticks to the band you asked for</em></span>
+          <div class="chips" id="cohesion"></div></div>
+        <div class="srow guestok"><span class="slabel">Remember the first song<em>Stops a long session wandering off — every step is close to the last, but the end isn't close to the start</em></span>
+          <div class="chips" id="anchor"></div></div>
+        <div class="srow guestok"><span class="slabel">Where songs come from</span>
+          <select id="source"><option value="youtube">YouTube</option><option value="soundcloud">SoundCloud</option><option value="bandcamp">Bandcamp</option></select></div>
+        <div class="srow"><span class="slabel">Queue right now</span><span class="sval" id="queuestats">—</span></div>
+        <div class="seclbl">While people are round</div>
+        <div class="srow"><span class="slabel">Party mode<em>Requests queue up in order — no radio, and nobody skips the line</em></span>
+          <div class="toggle" id="partymode"></div></div>
+        <div class="srow"><span class="slabel">Keep guests off the speakers<em>They can still play on their own phones</em></span>
+          <div class="toggle" id="blockguests"></div></div>
+      </section>
+
+      <section class="spane" data-s="library">
+        <div class="seclbl">Your music folders</div>
+        <div class="srow"><span class="slabel">Your music folders</span>
+          <span class="sval" id="libcount">none indexed</span></div>
+        <div id="libpaths"></div>
+        <div class="srow"><span class="slabel">Add a folder</span>
+          <span style="display:flex;gap:6px">
+            <input class="keyin" id="libpath" placeholder="D:\Music" style="width:150px">
+            <button class="btn" id="libadd">Add</button>
+          </span></div>
+        <div class="srow"><span class="slabel">Index local files<em>Owned songs play instantly, no download</em></span>
+          <button class="btn" id="libscan">Scan now</button></div>
+        <div class="srow owneronly"><label class="slabel" for="libmonitor">Refresh music folders<em>Automatically rescan folders on this interval</em></label>
+          <select class="keyin" id="libmonitor">
+            <option value="0">Off</option><option value="5">Every 5 minutes</option>
+            <option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option>
+            <option value="60">Every hour</option><option value="360">Every 6 hours</option>
+          </select></div>
+        <div class="seclbl">Playlists</div>
+        <div class="srow"><span class="slabel">Keep playlists on disk<em>Downloads them into their folder</em></span>
+          <div class="toggle" id="pldl"></div></div>
+        <div class="seclbl">Downloaded music</div>
+        <div class="srow"><span class="slabel">Cache limit<em>Least-played goes first; favourites and likes stay</em></span>
+          <span style="display:flex;gap:6px;align-items:center">
+            <input class="keyin" id="cachemb" type="number" min="200" step="100"
+                   style="width:86px"><span class="sval">MB</span>
+          </span></div>
+        <div class="srow"><span class="slabel">On disk now<em id="cacheuse">checking…</em></span>
+          <button class="btn" id="cachetrim">Trim now</button></div>
+      </section>
+
+      <section class="spane" data-s="access">
+        <div class="seclbl">Who's signed in</div>
+        <div id="peoplelist"></div>
+        <div class="srow"><label class="slabel" for="gscope">New home-network sign-ins<em>Shared links keep the access level they were given</em></label>
+          <select class="keyin" id="gscope"><option value="blocked">Hold for approval</option><option value="phone">Their own device</option><option value="full">Speakers too</option></select></div>
+        <div class="seclbl">Listening now</div>
+        <div id="whoslistening"></div>
+        <div class="seclbl">Shut out</div>
+        <div class="srow"><span class="slabel">Shut out<em id="blockedwho">nobody</em></span>
+          <button class="btn" id="unblockall">Let them back</button></div>
+      </section>
+
+      <section class="spane" data-s="sharing">
+        <div class="seclbl">The link you give people</div>
+        <div class="hint">Send anyone this address. They open it, sign in with
+          Google, and they're in — no key, no per-person link to hand out or
+          take back. Who may stay, and what they can do, is under People in the
+          Access tab.</div>
+        <div id="netaddrs"></div>
+        <div class="hint" id="nethint"></div>
+        <div class="srow"><span class="slabel">Can the outside world reach it?<em>Asks something outside your network to try the door</em></span>
+          <button class="btn" id="portcheck">Check</button></div>
+        <div class="reach" id="reachbox"></div>
+        <div class="seclbl">Your public master link</div>
+        <div class="hint">Paste the complete HTTPS address you want people and Google to use, such as
+          <code>https://musicrequestserver.dynu.com:29543</code>. It updates the hostname, public
+          port and optional Music path below in one go.</div>
+        <div class="srow"><span class="slabel">Public link<em>Must be HTTPS; an optional /music path is allowed</em></span>
+          <span class="acctname"><input class="keyin" id="addrmaster" placeholder="https://your-name.example:29543" autocomplete="url" spellcheck="false">
+            <button class="btn primary" id="addrmastersave">Save link</button></span></div>
+        <div class="hint" id="addrmasterhint"></div>
+        <div class="seclbl">HTTPS</div>
+        <div class="srow"><span class="slabel">Certificate<em id="certinfo">Checking…</em></span>
+          <button class="btn" id="certrenew">Check now</button></div>
+        <div class="seclbl">The address</div>
+        <div class="hint">Put Music at a path so another app can share the address, and say which
+          port the outside world uses (your router forwards it here). Google sign-in has to be told
+          the new address in its console before anybody can sign in on it.</div>
+        <div class="srow"><label class="slabel" for="addrhttps">HTTPS<em>Use the direct certificate route for Dynu. A Dynu Web Redirect may forward a separate HTTP alias here, but it must never replace this hostname's HTTPS service.</em></label>
+          <select class="keyin" id="addrhttps"><option value="direct">Direct certificate (Dynu / router)</option><option value="proxy">Local HTTPS gateway (not Dynu Web Redirect)</option></select></div>
+        <div class="srow"><span class="slabel">Path<em>Where Music lives, like /music</em></span>
+          <input class="keyin" id="addrprefix" placeholder="/music" autocomplete="off" spellcheck="false"></div>
+        <div class="srow"><span class="slabel">Public port<em>What the outside uses, like 443. 0 means this computer's own</em></span>
+          <input class="keyin" id="addrport" placeholder="0" inputmode="numeric" autocomplete="off"></div>
+        <div class="srow"><span class="slabel">Movies address<em>Adds a Music / Movies choice at the bare address</em></span>
+          <input class="keyin" id="addrmovies" placeholder="https://host:port/" autocomplete="off" spellcheck="false"></div>
+        <div class="srow"><span class="slabel"><em id="addrhint"></em></span>
+          <span class="acctname"><button class="btn" id="addrcheck">Check with Google</button>
+            <button class="btn primary" id="addrsave">Save</button></span></div>
+        <div class="seclbl">A name that follows you</div>
+        <div class="hint">Your home address is public but not permanent — it moves on a
+          reconnect, and every link you've handed out dies with it. A hostname survives that.</div>
+        <div class="mk">
+          <select class="keyin" id="ddnsprov">
+            <option value="dynu">Dynu</option>
+            <option value="duckdns">Duck DNS</option>
+            <option value="noip">No-IP</option>
+            <option value="afraid">FreeDNS</option>
+          </select>
+          <input class="keyin" id="ddnshost" placeholder="yourname.freeddns.org" autocomplete="off">
+          <div class="mk-opts">
+            <input class="keyin" id="ddnsuser" placeholder="Username" autocomplete="off">
+            <input class="keyin" id="ddnspass" type="password" placeholder="Password">
+          </div>
+          <button class="btn mk-go" id="ddnssave">Point it here</button>
+        </div>
+        <div class="reach" id="ddnsbox"></div>
+        <div class="seclbl">Security</div>
+        <div class="srow"><span class="slabel">Only my devices<em>Rejects other machines on the network</em></span>
+          <div class="toggle" id="lockips"></div></div>
+        <div class="srow"><span class="slabel">Allow the key in a link<em>Turn off once nothing you use puts it in a URL</em></span>
+          <div class="toggle" id="keyinurl"></div></div>
+        <div class="srow"><span class="slabel">Allow old GET requests<em>Shortcuts and remotes from before POST. Off once they're rebuilt</em></span>
+          <div class="toggle" id="legacyget"></div></div>
+        <div class="srow"><span class="slabel">Move to an unusual port<em>Takes you out of the drive-by scanning</em></span>
+          <button class="btn" id="portshuffle">Shuffle</button></div>
+        <div class="seclbl">In an emergency</div>
+        <div class="panic">
+          <button class="btn danger" id="lockdown">Reset access &amp; shuffle port</button>
+          <div class="hint">Ends every session, wipes any old links still lying around, and
+            moves the server to a new random port. Signed-in people come straight back once
+            you tell them the new address; anything pasted somewhere old stops working. Your
+            music, playlists, accounts and settings are untouched.</div>
+        </div>
+      </section>
+
+      <section class="spane" data-s="connections">
+        <div class="seclbl">Google sign-in</div>
+        <div class="hint">Paste the OAuth details from Google Cloud here. The secret stays on this
+          computer and is never shown again. Save these three values together, then copy the redirect
+          URI into Google Cloud Console before trying a sign-in.</div>
+        <div class="srow"><span class="slabel">Signing in with Google<em id="ghint">Let people in by who they are, not by which link they hold</em></span>
+          <span class="sval" id="gstate">off</span></div>
+        <div class="srow"><span class="slabel">Client ID<em>From the Google Cloud Console</em></span>
+          <input class="keyin" id="gclient" placeholder="...apps.googleusercontent.com" autocomplete="off" spellcheck="false"></div>
+        <div class="srow"><span class="slabel">Client secret<em>Kept here, never shown again</em></span>
+          <input class="keyin" id="gsecret" type="password" placeholder="GOCSPX-..." autocomplete="new-password" spellcheck="false"></div>
+        <div class="srow"><span class="slabel">Your own email<em>The account that gets to be the owner</em></span>
+          <input class="keyin" id="gowner" type="email" placeholder="you@gmail.com" autocomplete="email"></div>
+        <div class="srow"><span class="slabel"><em id="gsetuphint">Enter the three details, then save them together.</em></span>
+          <button class="btn primary" id="gsave">Save Google sign-in</button></div>
+        <div class="srow"><span class="slabel">Redirect URI<em>Paste this into the Console, exactly</em></span>
+          <button class="btn" id="gcopyuri">Copy</button></div>
+        <div class="hint" id="guri"></div>
+        <div class="seclbl">YouTube</div>
+        <div class="srow"><span class="slabel"><span class="status-dot" id="ckdot"></span> YouTube cookies</span>
+          <button class="btn" id="findck">Test cookies</button></div>
+        <div class="hint" id="ckhint"></div>
+        <div class="srow"><span class="slabel">Sign in to YouTube<em>Opens a Google login here — no browser to close, no files to export</em></span>
+          <button class="btn" id="cksignin">Sign in</button></div>
+        <div class="srow"><span class="slabel">Get cookies from your browser<em>Install the extension, click Export, I pick it up automatically</em></span>
+          <button class="btn" id="ckext">Set up</button></div>
+        <div class="srow"><span class="slabel">Re-check cookies hourly</span>
+          <div class="toggle" id="ckauto"></div></div>
+        <div class="seclbl">Understanding requests</div>
+        <div class="srow"><span class="slabel"><span class="status-dot" id="groqdot"></span> Groq key<em>Optional — improves messy dictation</em></span>
+          <input class="keyin" id="groqkey" type="password" placeholder="gsk_…"></div>
+        <div class="srow"><span class="slabel">Model<em>Which Groq model reads your requests</em></span>
+          <select class="keyin" id="groqmodel" style="width:168px"></select></div>
+        <div class="hint" id="groqhint"></div>
+        <div class="seclbl">Scrobbling</div>
+        <div class="srow"><span class="slabel"><span class="status-dot" id="lfmdot"></span> Last.fm</span>
+          <span style="display:flex;gap:6px">
+            <input class="keyin" id="lfmkey" placeholder="API key" style="width:104px">
+            <input class="keyin" id="lfmsec" placeholder="secret" style="width:88px">
+          </span></div>
+        <div class="srow"><span class="slabel">Connect<em>Opens Last.fm to approve, then press Finish</em></span>
+          <span style="display:flex;gap:6px">
+            <button class="btn" id="lfmauth">Approve</button>
+            <button class="btn" id="lfmdone">Finish</button>
+          </span></div>
+        <div class="seclbl">Other machines</div>
+        <div id="peerlist"></div>
+        <div class="srow"><span class="slabel">Add a peer<em>host:port of another copy of this app</em></span>
+          <span style="display:flex;gap:6px">
+            <input class="keyin" id="peerhost" placeholder="192.168.1.20:7420" style="width:150px">
+            <button class="btn" id="peeradd">Add</button>
+          </span></div>
+        <div class="srow"><span class="slabel">Send requests to peers too</span>
+          <div class="toggle" id="castall"></div></div>
+      </section>
+
       <section class="spane" data-s="system">
         <div class="srow"><span class="slabel">Version</span><span class="sval" id="release">—</span></div>
-        <div class="seclbl owneronly">This month</div>
-        <div class="statgrid owneronly" id="statsmonth"></div>
-        <div class="seclbl owneronly">All time<em class="since" id="statssince"></em></div>
-        <div class="statgrid owneronly" id="statstotal"></div>
-        <div class="months owneronly" id="statsmonths"></div>
-        <div class="seclbl owneronly">Per link</div>
-        <div class="owneronly" id="statslinks"></div>
-        <div class="seclbl owneronly">Changes to this machine</div>
-        <div class="srow owneronly"><span class="slabel">What's been changed here<em>What was done and by whom — never what was said or any secret</em></span>
-          <button class="btn" id="auditrefresh">Show</button></div>
-        <div class="owneronly" id="auditlist"></div>
         <div class="srow"><span class="slabel">Setup guide<em>What the tools are for, what the key is, and which extras are worth having</em></span>
           <button class="btn" id="reguide">Open</button></div>
         <div class="srow"><span class="slabel">Start with Windows<em>When you sign in</em></span><div class="toggle" id="boot"></div></div>
@@ -1814,41 +1854,35 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
           <span class="slabel" style="flex:1"><span id="bootcheck"
             class="hint">Checking what happens at boot…</span></span>
           <button class="btn" id="bootrecheck">Re-check</button></div>
-        <div class="srow"><span class="slabel">Only my devices<em>Rejects other machines on the network</em></span>
-          <div class="toggle" id="lockips"></div></div>
-
-
-
-        <div class="seclbl">Security</div>
-        <div class="srow"><span class="slabel">Allow the key in a link<em>Turn off once nothing you use puts it in a URL</em></span>
-          <div class="toggle" id="keyinurl"></div></div>
-        <div class="srow"><span class="slabel">Allow old GET requests<em>Shortcuts and remotes from before POST. Off once they're rebuilt</em></span>
-          <div class="toggle" id="legacyget"></div></div>
-        <div class="srow"><span class="slabel">Move to an unusual port<em>Takes you out of the drive-by scanning</em></span>
-          <button class="btn" id="portshuffle">Shuffle</button></div>
-        <div class="srow"><span class="slabel">Shut out<em id="blockedwho">nobody</em></span>
-          <button class="btn" id="unblockall">Let them back</button></div>
-
-        <div class="seclbl">Downloaded music</div>
-        <div class="srow"><span class="slabel">Cache limit<em>Least-played goes first; favourites and likes stay</em></span>
-          <span style="display:flex;gap:6px;align-items:center">
-            <input class="keyin" id="cachemb" type="number" min="200" step="100"
-                   style="width:86px"><span class="sval">MB</span>
-          </span></div>
-        <div class="srow"><span class="slabel">On disk now<em id="cacheuse">checking…</em></span>
-          <button class="btn" id="cachetrim">Trim now</button></div>
         <div class="srow"><span class="slabel">Restart the player<em>Reloads mpv without quitting</em></span>
           <button class="btn" id="restart">Restart</button></div>
         <div class="srow"><span class="slabel">Where your data lives</span>
           <button class="btn" id="openfolder">Open folder</button></div>
         <div class="srow"><span class="slabel">Show over other apps<em>Ctrl+Alt+M — clicks pass straight through</em></span>
           <span class="sval">Ctrl+Alt+M</span></div>
+        <div class="srow"><span class="slabel">Meter source<em>Reads the speakers directly when it can</em></span>
+          <span class="sval" id="meterinfo">—</span></div>
         <div class="srow"><span class="slabel">What the queue knows<em>Refreshes when you open this tab</em></span>
           <button class="btn" id="healthbtn">Check</button></div>
         <div class="health" id="health"></div>
         <div class="hint" id="diaghint"></div>
       </section>
 
+      <section class="spane" data-s="stats">
+        <div class="seclbl owneronly">This month</div>
+        <div class="statgrid owneronly" id="statsmonth"></div>
+        <div class="seclbl owneronly">All time<em class="since" id="statssince"></em></div>
+        <div class="statgrid owneronly" id="statstotal"></div>
+        <div class="months owneronly" id="statsmonths"></div>
+        <div class="seclbl owneronly">Per link</div>
+        <div class="owneronly" id="statslinks"></div>
+        <div class="seclbl owneronly">Changes to this machine</div>
+        <div class="srow owneronly"><span class="slabel">What's been changed here<em>What was done and by whom — never what was said or any secret</em></span>
+          <button class="btn" id="auditrefresh">Show</button></div>
+        <div class="owneronly" id="auditlist"></div>
+      </section>
+
+    </div>
     </div>
   </div>
 </div>
@@ -3468,11 +3502,21 @@ $("panel-lists").addEventListener("click", async e => {
 });
 
 /* ── settings ──────────────────────────────────────────────────────── */
+const settingsNarrow = () => window.matchMedia("(max-width:640px)").matches;
 $("openSettings").onclick = () => {
   $("sheet").classList.add("open");
-  // A guest lands on Sound; the tabs past Queue aren't theirs and are hidden.
-  if (ME && !ME.owner) showSheetTab("sound");
+  // Narrow, it opens on the list of sections; wide, on the first one.
+  $("sheet").classList.remove("picked");
+  $("settitle").textContent = "Settings";
+  if (!settingsNarrow()) {
+    const on = document.querySelector(".stab.on");
+    (on && on.offsetParent ? on : document.querySelector('.stab[data-s="sound"]')).click();
+  }
   loadSettings();
+};
+$("setback").onclick = () => {
+  $("sheet").classList.remove("picked");
+  $("settitle").textContent = "Settings";
 };
 
 function showSheetTab(name) {
@@ -3486,19 +3530,23 @@ document.querySelectorAll(".stab").forEach(tab => tab.onclick = () => {
   document.querySelectorAll(".stab").forEach(t => t.classList.toggle("on", t === tab));
   document.querySelectorAll(".spane").forEach(p =>
     p.classList.toggle("open", p.dataset.s === tab.dataset.s));
+  $("sheet").classList.add("picked");
+  $("settitle").textContent = tab.querySelector("span").firstChild.textContent;
   $("sheet").querySelector(".sheet-body").scrollTop = 0;
-  // Only ask when the tab is actually on screen: it walks three caches and
-  // stats the download folder.
-  if (tab.dataset.s === "system") {
-    loadHealth(); loadCache(); loadBlocked(); loadStats();
-  }
-  if (tab.dataset.s === "access") {
-    loadPeople();
+  // Only ask when the section is actually on screen: some of these walk
+  // caches and stat the download folder.
+  const s = tab.dataset.s;
+  if (s === "system") loadHealth();
+  if (s === "library") loadCache();
+  if (s === "stats") loadStats();
+  if (s === "connections") loadPeople();
+  if (s === "access") {
+    loadPeople(); loadBlocked();
+    if (ME.owner) watchSharing();
   }
   if (tab.dataset.s === "account") { acctLoad(); siriLoad(); }
   if (tab.dataset.s === "sharing") {
-    loadNetwork(); loadDdns(); addrHint();
-    if (ME.owner) watchSharing();
+    loadNetwork(); loadDdns(); addrHint(); loadCert();
   }
 });
 
@@ -3511,7 +3559,7 @@ function watchSharing() {
   clearInterval(sharingTimer);
   const tick = () => {
     const open = $("sheet").classList.contains("open") &&
-                 document.querySelector('.spane[data-s="sharing"]').classList.contains("open");
+                 document.querySelector('.spane[data-s="access"]').classList.contains("open");
     if (!open) { clearInterval(sharingTimer); sharingTimer = null; return; }
     loadSessions();
   };
@@ -3519,6 +3567,26 @@ function watchSharing() {
   sharingTimer = setInterval(tick, 8000);
 }
 $("healthbtn").onclick = loadHealth;
+
+/* The certificate, and the keeper that renews it. */
+async function loadCert() {
+  const r = await api("/api/certificate");
+  if (!r) return;
+  const live = r.live || {};
+  const names = (live.names || []).join(", ");
+  let line = !names ? "None yet: links are plain http"
+    : names + " · " + Math.floor(live.days_left) + " days left";
+  if (r.busy) line += " · asking Let's Encrypt now";
+  else if (r.need === "issue") line += " · doesn't cover " + r.hostname;
+  else if (r.need === "renew") line += " · renewing soon";
+  if (r.last_result && r.last_result.startsWith("failed")) line += " · last try: " + r.last_result.slice(8, 120);
+  $("certinfo").textContent = line;
+}
+$("certrenew").onclick = async () => {
+  const r = await api("/api/certificate/renew");
+  toast(r && r.need ? (r.busy ? "Asking for a certificate" : "Not yet: it was told to wait") : "Nothing needed: it's in date");
+  loadCert();
+};
 
 /* which addresses reach this player, and whether Tailscale is up */
 async function loadNetwork() {
