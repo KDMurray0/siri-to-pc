@@ -3828,6 +3828,28 @@ def api_me_siri_revoke(request: Request, id: str = "", _: bool = Auth):
     return {"status": "ok"}
 
 
+@app.get("/api/certificate")
+def api_certificate(_: bool = Owner):
+    """The certificate being served, and what the keeper is doing about it."""
+    from ..core import certkeeper
+    return {"status": "ok", **certkeeper.status()}
+
+
+@app.get("/api/certificate/renew")
+def api_certificate_renew(_: bool = Owner):
+    """Check now rather than in a few hours. Takes minutes, so it runs aside.
+
+    It still won't ask Let's Encrypt for something that isn't needed, or before
+    a "retry after" it was given -- pressing it twice costs nothing.
+    """
+    from ..core import certkeeper
+    if certkeeper.need() and not certkeeper.status()["busy"]:
+        threading.Thread(target=certkeeper.attempt, kwargs={"force": True},
+                         daemon=True, name="cert-now").start()
+        time.sleep(0.2)
+    return {"status": "ok", **certkeeper.status()}
+
+
 @app.get("/api/accounts/check")
 def api_accounts_check(url_prefix: str | None = None, public_port: int | None = None,
                        https_mode: str | None = None,

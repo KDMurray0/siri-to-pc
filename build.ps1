@@ -88,10 +88,14 @@ Copy-Item "$stage\MusicClient.zip" "$dst\downloads\MusicClient.zip" -Force
 # certificate helper is an operator-facing command, so it must be visibly
 # beside the executable rather than technically present but undiscoverable in
 # the runtime internals.
-Copy-Item (Join-Path $root "certificate.ps1") "$dst\certificate.ps1" -Force
-if (-not (Test-Path -LiteralPath "$dst\certificate.ps1")) {
-    Write-Host "Couldn't install the Dynu certificate helper." -ForegroundColor Red
-    exit 1
+# The nightly renewal task runs the copy here, and so does the app's own
+# certificate keeper, so both scripts have to be here after every install.
+foreach ($script in "certificate.ps1", "Request-MusicCertificate.ps1") {
+    Copy-Item (Join-Path $root $script) "$dst\$script" -Force
+    if (-not (Test-Path -LiteralPath "$dst\$script")) {
+        Write-Host "Couldn't install $script." -ForegroundColor Red
+        exit 1
+    }
 }
 
 if ($NoRestart) {

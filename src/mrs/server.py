@@ -451,8 +451,9 @@ def run() -> None:
 
     mark("loaded, starting up")
     startup()
-    from .core import ddns
+    from .core import ddns, certkeeper
     ddns.start()
+    certkeeper.start()
     port = pick_port(config.get("port", 7420))
     runtime["port"] = port
     loop = asyncio.new_event_loop()
@@ -492,12 +493,39 @@ def run() -> None:
         else:
             runtime.pop("local_port", None)
             runtime.pop("proxy_tls", None)
-            loop.run_until_complete(
-                server_for(host=config.get("host", "0.0.0.0"), port=port,
-                           proxy_headers=False).serve())
+            loop.run_until_complete(_serve_plain(server_for, port))
     finally:
         runtime.pop("proxy_tls", None)
         player.stop()
+
+
+async def _serve_plain(server_for, port: int) -> None:
+    """Plain http, until a certificate turns up -- then https, no restart.
+
+    The certificate keeper gets one while this is running; waiting for somebody
+    to restart the app before links can say https was the gap it left.
+    """
+    plain = server_for(host=config.get("host", "0.0.0.0"), port=port,
+                       proxy_headers=False)
+    task = asyncio.ensure_future(plain.serve())
+    tls = None
+    while not task.done():
+        await asyncio.sleep(30)
+        tls = tls_files() if not proxy_tls() else None
+        if tls:
+            log.info("a certificate has arrived — switching to https")
+            plain.should_exit = True
+            await task
+            break
+    if not tls:
+        await task
+        return
+    for wait in (0.5, 1, 2, 4, 8):
+        if _port_free(port):
+            break
+        await asyncio.sleep(wait)
+    runtime["tls"] = True
+    await _serve_secure(server_for, port, tls)
 
 
 def _cert_stamp(cert: str, key: str) -> tuple:

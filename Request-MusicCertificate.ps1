@@ -1,4 +1,4 @@
-# Issue a real certificate for this server's Dynu hostname, and let the live
+﻿# Issue a real certificate for this server's Dynu hostname, and let the live
 # server take it up without a restart.
 #
 # This is the one-off companion to certificate.ps1 (for a domain change or a
@@ -78,9 +78,13 @@ try {
     # Write beside the live pair and move in, so the running server can never
     # read a half-written file. It watches the file stamp and rebuilds its own
     # socket, so there is nothing to restart.
+    # Copied, never moved: Posh-ACME renews from the key it keeps beside the
+    # order, and moving it out left the next renewal nothing to renew with.
     New-Item -ItemType Directory -Force -Path $certs | Out-Null
-    Move-Item -LiteralPath $certificate.FullChainFile -Destination (Join-Path $certs 'fullchain.pem') -Force
-    Move-Item -LiteralPath $certificate.KeyFile -Destination (Join-Path $certs 'privkey.pem') -Force
+    Copy-Item -LiteralPath $certificate.FullChainFile -Destination (Join-Path $certs 'fullchain.pem.new') -Force
+    Copy-Item -LiteralPath $certificate.KeyFile -Destination (Join-Path $certs 'privkey.pem.new') -Force
+    Move-Item -LiteralPath (Join-Path $certs 'fullchain.pem.new') -Destination (Join-Path $certs 'fullchain.pem') -Force
+    Move-Item -LiteralPath (Join-Path $certs 'privkey.pem.new') -Destination (Join-Path $certs 'privkey.pem') -Force
     Note "Certificate installed: $certs"
 
     # Confirm the live socket actually switched to the new name. The server

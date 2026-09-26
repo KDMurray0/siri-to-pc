@@ -21,7 +21,7 @@ theme announce sleep download pin lockips groqkey groqmodels groqmodel boot
 boot/status boot/early cookies cookies/find cookies/extension cookies/signedin
 cookies/import cookies/grab openfolder library/scan library/paths lastfm alarms
 cast diag audit policy stats accounts accounts/setup accounts/scope accounts/forget accounts/check
-public-address
+public-address certificate certificate/renew
 stream/{video_id}
 autoeq/status autoeq/assign'''.split())
 SCOPED = set('''status play play/video/{video_id} control/{action} session/ended
@@ -38,7 +38,7 @@ blocks liked playlists settings audio/devices setup/state whoami passes profiles
 boot/status cookies diag output/stats audit policy
 output/stream/{video_id} announce/{aid}.mp3 stream/{video_id} events
 smartplaylists
-autoeq/status stats accounts accounts/check me me/export me/siri'''.split())
+autoeq/status stats accounts accounts/check certificate me me/export me/siri'''.split())
 READ_PARAMS = {
     "sessions": {"close"}, "cache": {"prune"}, "blocked": {"forgive", "clear"},
     "ddns": {"hostname", "user", "secret", "provider", "now"},

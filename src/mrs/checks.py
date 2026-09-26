@@ -4183,6 +4183,133 @@ def _run(verbose: bool = False) -> Result:
                         _srv37.runtime[k] = v
             say("https links", c)
 
+            # -- 38. the certificate keeper: renew what's due, and nothing else --
+            c = _Checker("certificate keeper")
+            import datetime as _dt38
+            from cryptography import x509 as _x509
+            from cryptography.hazmat.primitives import hashes as _hashes, serialization as _ser
+            from cryptography.hazmat.primitives.asymmetric import ec as _ec
+            from cryptography.x509.oid import NameOID as _NameOID
+            from .core import certkeeper as _ck
+            from .paths import data_dir as _dd38
+
+            def _make_cert(names, days):
+                key = _ec.generate_private_key(_ec.SECP256R1())
+                now = _dt38.datetime.now(_dt38.timezone.utc)
+                subject = _x509.Name([_x509.NameAttribute(_NameOID.COMMON_NAME, names[0])])
+                cert = (_x509.CertificateBuilder().subject_name(subject).issuer_name(subject)
+                        .public_key(key.public_key()).serial_number(_x509.random_serial_number())
+                        .not_valid_before(now - _dt38.timedelta(days=1))
+                        .not_valid_after(now + _dt38.timedelta(days=days))
+                        .add_extension(_x509.SubjectAlternativeName(
+                            [_x509.DNSName(n) for n in names]), critical=False)
+                        .sign(key, _hashes.SHA256()))
+                folder = _dd38() / "certs"
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "fullchain.pem").write_bytes(cert.public_bytes(_ser.Encoding.PEM))
+                (folder / "privkey.pem").write_bytes(key.private_bytes(
+                    _ser.Encoding.PEM, _ser.PrivateFormat.PKCS8, _ser.NoEncryption()))
+
+            _keep38 = {k: config.get(k) for k in ("ddns_hostname", "https_mode", "ddns_provider",
+                                                  "tls_cert", "tls_key")}
+            _calls38: list = []
+
+            class _Proc:
+                def __init__(self, code, out):
+                    self.returncode, self.stdout, self.stderr = code, out, ""
+
+            def _run_as(code, out):
+                def run(args, **kw):
+                    _calls38.append(list(args))
+                    return _Proc(code, out)
+                return run
+
+            try:
+                config.set("ddns_hostname", "music.example.test", save=False)
+                config.set("https_mode", "direct", save=False)
+                config.set("ddns_provider", "dynu", save=False)
+                config.set("tls_cert", "", save=False)
+                config.set("tls_key", "", save=False)
+                _ck._state_path().unlink(missing_ok=True)
+                _make_cert(["music.example.test"], 60)
+                c("a certificate for the name with two months left needs nothing",
+                  _ck.need() == "", _ck.need())
+                c("...and what is being served is read from it",
+                  _ck.live().get("names") == ["music.example.test"]
+                  and 58 < _ck.live().get("days_left", 0) <= 60)
+                config.set("ddns_hostname", "other.example.test", save=False)
+                c("a hostname the certificate doesn't cover needs a new one", _ck.need() == "issue")
+                config.set("ddns_hostname", "music.example.test", save=False)
+                _make_cert(["music.example.test"], 12)
+                c("inside the last month it needs renewing", _ck.need() == "renew")
+                config.set("https_mode", "proxy", save=False)
+                c("behind a gateway that owns https, nothing here is needed", _ck.need() == "")
+                config.set("https_mode", "direct", save=False)
+
+                with _patch.object(_ck, "can_run", lambda: True), \
+                        _patch.object(_ck, "_script", lambda name: "C:/x/" + name), \
+                        _patch.object(_ck.subprocess, "run", _run_as(1,
+                            'too many certificates (50) already issued for "example.test", '
+                            "retry after 2099-01-01 00:00:00 UTC")):
+                    _calls38.clear()
+                    got = _ck.attempt()
+                    c("renewal asks for this name only, by name",
+                      len(_calls38) == 1 and "-Renew" in _calls38[0]
+                      and _calls38[0][_calls38[0].index("-Domain") + 1] == "music.example.test",
+                      str(_calls38))
+                    c("...never for every order in the store",
+                      not any("AllOrders" in a for a in _calls38[0]))
+                    c("a refusal is kept, with when Let's Encrypt said to try again",
+                      got["last_result"].startswith("failed") and _ck._state().get("retry_after", 0) > 4e9)
+                    _calls38.clear()
+                    _ck.attempt(force=True)
+                    c("...and not even Renew now asks again before then", _calls38 == [])
+
+                _ck._save(retry_after=0, next_try=0)
+                with _patch.object(_ck, "can_run", lambda: True), \
+                        _patch.object(_ck, "_script", lambda name: "C:/x/" + name), \
+                        _patch.object(_ck.subprocess, "run", _run_as(1, "network down")):
+                    _calls38.clear()
+                    _ck.attempt()
+                    _ck.attempt()
+                    c("after a failure it waits hours, not seconds, before asking again",
+                      len(_calls38) == 1 and _ck._state()["next_try"] - _t.time() > 11 * 3600,
+                      str(len(_calls38)))
+                _make_cert(["music.example.test"], 60)
+                _ck._save(retry_after=0, next_try=0)
+                with _patch.object(_ck, "can_run", lambda: True), \
+                        _patch.object(_ck.subprocess, "run", _run_as(0, "")):
+                    _calls38.clear()
+                    _ck.attempt(force=True)
+                    c("with nothing due, nothing is asked for, even when pressed", _calls38 == [])
+                config.set("ddns_hostname", "other.example.test", save=False)
+                _ck._save(retry_after=0, next_try=0)
+                with _patch.object(_ck, "can_run", lambda: True), \
+                        _patch.object(_ck, "_script", lambda name: "C:/x/" + name), \
+                        _patch.object(_ck.subprocess, "run", _run_as(0, "")):
+                    _calls38.clear()
+                    _ck.attempt()
+                    c("a new name gets a first certificate of its own",
+                      len(_calls38) == 1 and "C:/x/Request-MusicCertificate.ps1" in _calls38[0]
+                      and "other.example.test" in _calls38[0], str(_calls38))
+                config.set("ddns_hostname", "music.example.test", save=False)
+                with _patch.object(_ck.sys, "argv", ["x", "--headless"]):
+                    c("the copy from before sign-in can't open the credential, so doesn't try",
+                      _ck.can_run() is False)
+                c("what the keeper is doing is the owner's to see",
+                  client.get("/api/certificate", headers=owner_h).status_code == 200
+                  and client.get("/api/certificate", headers={"X-Music-Key": phone}).status_code == 403)
+                _page38 = client.get("/api/certificate", headers=owner_h).json()
+                c("...with the names, the days left and what it needs",
+                  _page38["live"]["names"] == ["music.example.test"] and _page38["need"] == "")
+            finally:
+                for k, v in _keep38.items():
+                    config.set(k, v, save=False)
+                for f in ("fullchain.pem", "privkey.pem"):
+                    (_dd38() / "certs" / f).unlink(missing_ok=True)
+                _ck._state_path().unlink(missing_ok=True)
+            say("certificate keeper", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json

@@ -20,6 +20,8 @@ datas = [('src/mrs/web/templates', 'web/templates'),
          # bootstrapper must be beside the built executable, not stranded in
          # a source checkout the release user may no longer have.
          ('certificate.ps1', '.'),
+         # The keeper's first certificate for a new name.
+         ('Request-MusicCertificate.ps1', '.'),
          ('config.example.json', '.')]
 binaries = []
 hiddenimports = [

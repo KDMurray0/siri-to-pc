@@ -2,7 +2,15 @@
 #
 #   .\certificate.ps1 -ClientId xxxx
 #   .\certificate.ps1 -Domain music.example.dynu.net -ClientId xxxx -Staging
-#   .\certificate.ps1 -Renew        # what the scheduled task runs
+#   .\certificate.ps1 -Renew        # what the scheduled task and the app run
+#
+# -Renew only ever touches THIS server's name. The Posh-ACME store belongs to
+# the Windows user, not to this app, and the movie server keeps its orders in
+# the same one: renewing -AllOrders published whichever certificate renewed
+# last into this server's folder, so one night it would have served the movie
+# server's name. A shared Dynu domain has a 50-a-week limit that
+# thousands of other people spend; renewing the same name is exempt from it,
+# a new name is not, so this never asks for anything but the same name again.
 #
 # Let's Encrypt proves the name is yours by asking for a DNS record, so
 # nothing has to be reachable from the internet while this runs and no port
@@ -82,12 +90,51 @@ function Publish-Cert($order) {
 Install-PoshAcme
 Import-Module Posh-ACME -ErrorAction Stop
 
+function Note($msg) {
+    # The app reads this to know what happened and when to try again.
+    $log = Join-Path $env:LOCALAPPDATA "MusicRequestServer\tls-provisioning.log"
+    Add-Content -LiteralPath $log -Value ("{0}  {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg) -Encoding utf8
+    Say $msg
+}
+
+function Live-Names {
+    $live = Join-Path $certs "fullchain.pem"
+    if (-not (Test-Path $live)) { return @() }
+    try {
+        $c = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($live)
+        $san = $c.Extensions | Where-Object { $_.Oid.Value -eq "2.5.29.17" }
+        if ($san) { return @(($san.Format($false) -split ",\s*") | ForEach-Object { ($_ -replace "^DNS Name=", "").Trim().ToLower() }) }
+        return @($c.GetNameInfo("DnsName", $false).ToLower())
+    } catch { return @() }
+}
+
 if ($Renew) {
-    # The scheduled task's path: renew anything due, then republish.
-    Say "Renewing anything that's due"
-    $done = Submit-Renewal -AllOrders
-    if ($done) { foreach ($order in $done) { Publish-Cert $order } }
-    else { Say "Nothing was due." }
+    if (-not $Domain) { $Domain = Configured-DynuName }
+    if (-not $Domain) { Note "Renewal skipped: no Dynu hostname saved."; exit 0 }
+    $order = Get-PAOrder -MainDomain $Domain -ErrorAction SilentlyContinue
+    if (-not $order) { Note "Renewal skipped: Posh-ACME has no order for $Domain."; exit 1 }
+    try {
+        $done = Submit-Renewal -MainDomain $Domain -ErrorAction Stop
+    } catch {
+        $brief = ($_.Exception.Message -replace '[\r\n]+', ' ').Trim()
+        Note ("Renewal of $Domain failed: " + $brief.Substring(0, [Math]::Min(240, $brief.Length)))
+        exit 1
+    }
+    if ($done) {
+        Publish-Cert $done
+        Note "Renewed $Domain."
+        exit 0
+    }
+    # Not due. Still make sure the live pair is this name's: anything that
+    # published another order over it is undone here, the same night.
+    $names = Live-Names
+    $cert = Get-PACertificate -MainDomain $Domain -ErrorAction SilentlyContinue
+    if ($names -notcontains $Domain.ToLower() -and $cert -and (Test-Path $cert.FullChainFile) -and (Test-Path $cert.KeyFile)) {
+        Publish-Cert $cert
+        Note "Live certificate was for '$($names -join ', ')'; put $Domain's back."
+    } else {
+        Say "Nothing was due for $Domain."
+    }
     exit 0
 }
 
