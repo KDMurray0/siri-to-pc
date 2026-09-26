@@ -4121,6 +4121,68 @@ def _run(verbose: bool = False) -> Result:
                                   for n in _os36.listdir(_os36.path.join(_base36, "MusicRequestServer"))))
             say("boot and containers", c)
 
+            # -- 37. under https every link is to a name a certificate can cover --
+            c = _Checker("https links")
+            import re as _re37
+            from .core import net as _net37
+            from . import server as _srv37
+            from .web import api as _api37
+            _keep37 = {k: config.get(k) for k in ("ddns_hostname", "public_port", "url_prefix", "lan_hostname")}
+            _rt37 = {k: _srv37.runtime.get(k) for k in ("tls", "local_port", "port")}
+            try:
+                config.set("ddns_hostname", "music.example.test", save=False)
+                config.set("public_port", 29543, save=False)
+                config.set("url_prefix", "", save=False)
+                config.set("lan_hostname", "", save=False)
+                _srv37.runtime.update(tls=True, local_port=29544, port=29543)
+                with _patch("mrs.core.net.lan_ip", lambda: "192.168.1.9"),                         _patch("mrs.core.net.wan_ip", lambda force=False: "203.0.113.7"):
+                    # The offline harness swaps addresses() for a stub; this is the
+                    # real one, defined beside it so it sees the same helpers.
+                    _src37 = _Path(_net37.__file__).read_text(encoding="utf-8")
+                    _fn37 = _src37[_src37.index("def addresses("):]
+                    _end37 = _fn37.find(chr(10) + "def ", 1)
+                    _fn37 = _fn37[:_end37] if _end37 > 0 else _fn37
+                    exec(_fn37.replace("def addresses(", "def _addresses_real("), _net37.__dict__)
+                    _real_addr = _net37.__dict__["_addresses_real"]
+                    rows = _real_addr()["addresses"]
+                    urls = [r["url"] for r in rows if r.get("url")]
+                    c("no https link points at a bare address",
+                      not any(_re37.match(r"https://(\d{1,3}\.){3}\d{1,3}", u) for u in urls), str(urls))
+                    c("...every https one is to the name",
+                      all(u.startswith("https://music.example.test") for u in urls if u.startswith("https")), str(urls))
+                    local = next(r for r in rows if r["kind"] == "local")["url"]
+                    c("this machine's own link is plain http on the loopback port, which is what answers there",
+                      local == "http://127.0.0.1:29544/", local)
+                    lan = next((r for r in rows if r["kind"] == "lan"), {})
+                    c("the wifi link is the public name when there's no home name",
+                      lan.get("url", "").startswith("https://music.example.test"), str(lan))
+                    config.set("lan_hostname", "home.example.test", save=False)
+                    lan = next((r for r in _real_addr()["addresses"] if r["kind"] == "lan"), {})
+                    c("...and the home name when there is one", lan.get("url", "").startswith("https://home.example.test"), str(lan))
+                    config.set("lan_hostname", "", save=False)
+                    got = _api37._client_addresses()
+                    c("the desktop app is never handed https to a bare address",
+                      got == ["https://music.example.test:29543"], str(got))
+                    _srv37.runtime.update(tls=False)
+                    got = _api37._client_addresses()
+                    c("...while over http the wifi address is still a fallback",
+                      got == ["http://music.example.test:29543", "http://192.168.1.9:29543"], str(got))
+                    _srv37.runtime.update(tls=True)
+                    page = client.get("/setup", headers=owner_h)
+                    c("the Shortcut recipe's address is the https one",
+                      "https://music.example.test:29543/" in page.text and "http://192.168" not in page.text,
+                      str(page.status_code))
+            finally:
+                _net37.__dict__.pop("_addresses_real", None)
+                for k, v in _keep37.items():
+                    config.set(k, v, save=False)
+                for k, v in _rt37.items():
+                    if v is None:
+                        _srv37.runtime.pop(k, None)
+                    else:
+                        _srv37.runtime[k] = v
+            say("https links", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json

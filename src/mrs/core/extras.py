@@ -250,7 +250,8 @@ class Caster:
     def _send(peer: dict, path: str, params: dict, timeout: float) -> bool:
         """POST with the key in a header; a peer on an older build only
         knows GET with ?key=, so a 404/405 falls back to that."""
-        base = f"http://{peer['host']}{path}"
+        host = str(peer["host"])
+        base = host + path if "://" in host else f"http://{host}{path}"
         headers = dict(UA, **{"Content-Type": "application/json"})
         if peer.get("key"):
             headers["X-Music-Key"] = peer["key"]

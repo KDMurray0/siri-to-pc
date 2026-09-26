@@ -68,9 +68,18 @@ def alive(base: str) -> bool:
 
 
 def find() -> str:
+    """The first address that answers.
+
+    A server that has since turned https on (or off) is still the same server,
+    so an address that doesn't answer is tried again in the other scheme --
+    a copy downloaded before the switch keeps working after it.
+    """
     for base in addresses():
-        if alive(base):
-            return base + "/"
+        other = ("https://" + base[7:] if base.startswith("http://")
+                 else "http://" + base[8:] if base.startswith("https://") else "")
+        for attempt in (base, other):
+            if attempt and alive(attempt):
+                return attempt + "/"
     return ""
 
 

@@ -820,17 +820,15 @@ def _tray() -> None:
         _api("/api/cookies/find")
 
     def browser(_i, _it):
+        # The address a phone would use, in the scheme the server speaks --
+        # it used to be http://this-pc:port whatever the server was doing.
         import webbrowser
-        import socket
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 53))
-            host = s.getsockname()[0]
-            s.close()
-        except Exception:
-            host = "127.0.0.1"
-        port = int(srv.runtime.get("port") or config.get("port", 7420))
-        webbrowser.open(f"http://{host}:{port}/?key={config.get('api_key','')}")
+        from mrs.core import net
+        rows = net.addresses()["addresses"]
+        row = next((r for r in rows if r["kind"] == "lan" and r.get("url")), None) \
+            or next((r for r in rows if r.get("url")), None)
+        if row:
+            webbrowser.open(row["url"])
 
     def desktop(_i, _it):
         # The flyout is a fixed 400px window on purpose, so the wide layout

@@ -76,6 +76,9 @@ DEFAULTS: dict[str, Any] = {
     "public_port": 0,
     # Where the other application lives, for the switch on the front page.
     "movies_url": "",
+    # Over https, a name for this machine on the wifi -- only when the router
+    # won't loop the public name back indoors. Blank uses the public name.
+    "lan_hostname": "",
     "server_name": "Music Request",
     "crossfade": 0,
     "repeat": "off",          # off | all | one

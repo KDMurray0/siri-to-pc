@@ -235,6 +235,28 @@ def public_port() -> int:
     return got if 0 < got < 65536 else live_port()
 
 
+def local_port() -> int:
+    """The port this machine's own callers use.
+
+    With a certificate the network side speaks TLS and this machine keeps a
+    plain http socket on loopback of its own; without one they're the same.
+    """
+    try:
+        from ..server import runtime
+        return int(runtime.get("local_port") or live_port())
+    except Exception:
+        return live_port()
+
+
+def lan_name() -> str:
+    """A name for this machine on the home network, if one has been given.
+
+    Only needed over https when the router won't loop the public name back
+    inside the house: a certificate names a host, never 192.168.x.x.
+    """
+    return str(config.get("lan_hostname") or "").strip().lower()
+
+
 def public_base(host: str, *, outside: bool = True, prefix_override=None,
                 port_override=None, scheme_override: str | None = None) -> str:
     """https://host[:port][/prefix], the way somebody else would type it.
@@ -296,11 +318,28 @@ def addresses(pass_token: str = "") -> dict:
     elif wan:
         rows.append({"kind": "wan", "label": "Anywhere (needs the port forwarded)",
                      "url": player_url(wan, pass_token), "host": wan})
-    rows.append({"kind": "lan", "label": "Same wifi",
-                 "url": player_url(lan_ip(), pass_token, outside=False),
-                 "host": lan_ip()})
+    if scheme() == "https":
+        # A certificate is issued to a name. https://192.168.x.x is a link every
+        # browser answers with a warning and Safari refuses outright, so on the
+        # wifi it is a name too: one of its own if given, else the public one,
+        # which works indoors whenever the router loops it back (most do).
+        home = lan_name()
+        if home:
+            rows.append({"kind": "lan", "label": "Same wifi",
+                         "url": player_url(home, pass_token, outside=False),
+                         "host": home, "named": True})
+        elif host:
+            rows.append({"kind": "lan", "label": "Same wifi (through the router)",
+                         "url": player_url(host, pass_token), "host": host,
+                         "named": True})
+    else:
+        rows.append({"kind": "lan", "label": "Same wifi",
+                     "url": player_url(lan_ip(), pass_token, outside=False),
+                     "host": lan_ip()})
+    # This machine's own callers are plain http on loopback: a certificate
+    # can't name 127.0.0.1, and the window would show its own server a warning.
     rows.append({"kind": "local", "label": "This machine",
-                 "url": player_url("127.0.0.1", pass_token, outside=False),
+                 "url": f"http://127.0.0.1:{local_port()}/",
                  "host": "127.0.0.1"})
     wanted = int(config.get("port", 5000))
     return {"addresses": rows, "port": port, "public_port": public_port(),

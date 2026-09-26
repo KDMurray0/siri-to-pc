@@ -440,7 +440,6 @@ async def setup_page(request: Request, key: str = Query(default=""),
     Owner-only, because it prints the master key straight into the html. On
     the home network it opens as it always has.
     """
-    import socket
     from .security import is_home
 
     ip = _client_ip(request)
@@ -455,16 +454,16 @@ async def setup_page(request: Request, key: str = Query(default=""),
                 status_code=403,
                 detail="That page has the master key on it — it needs the key, "
                        "not a shared link")
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 53))
-        host = s.getsockname()[0]
-        s.close()
-    except Exception:
-        host = "127.0.0.1"
     from ..core import net
+    host = net.lan_ip()
+    # Where the Shortcut posts: what the outside world uses, so the scheme is
+    # the real one. "http://this-pc:port" was only ever right unencrypted.
+    public = (config.get("ddns_hostname") or "").strip()
+    endpoint = net.player_url(public) if public else net.player_url(host, outside=False)
+    if not endpoint.endswith("/"):
+        endpoint += "/"
     return templates.TemplateResponse(request, "setup.html", {
-        "host": host, "port": net.live_port(),
+        "host": host, "port": net.live_port(), "endpoint": endpoint,
         "api_key": config.get("api_key", ""),
         "key_in_url": bool(config.get("allow_key_in_url", False))})
 
@@ -1791,6 +1790,7 @@ _SETTABLE = {
     "google_client_id": str, "google_client_secret": str, "owner_email": str,
     "new_account_scope": str, "server_name": str,
     "url_prefix": str, "public_port": int, "movies_url": str, "https_mode": str,
+    "lan_hostname": str,
     "tailscale": str, "tailscale_exe": str, "cache_size_mb": int,
     "allow_key_in_url": bool, "port": int,
     "block_full_guests": bool, "lan_open": bool, "party_mode": bool,
@@ -3339,7 +3339,11 @@ def _client_addresses() -> list[str]:
     if host:
         found.append(net.public_base(host))
     try:
-        found.append(net.public_base(net.lan_ip(), outside=False))
+        if net.scheme() != "https":
+            found.append(net.public_base(net.lan_ip(), outside=False))
+        elif net.lan_name():
+            # A certificate names a host, not an address on the wifi.
+            found.append(net.public_base(net.lan_name(), outside=False))
     except Exception:                       # no network: the other one will do
         pass
     return list(dict.fromkeys(found))
