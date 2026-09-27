@@ -462,9 +462,9 @@ a.btn{text-decoration:none;display:inline-block}
 
 /* lyrics */
 .lyrics{padding:4px 2px;text-align:center}
-.lyrics .lrow{font-size:14px;line-height:1.5;color:var(--sub);padding:5px 4px;
+.lyrics .lrow{font-size:14.5px;line-height:1.5;color:var(--sub);padding:5px 4px;font-weight:600;
   opacity:.55;overflow-wrap:anywhere;transition:color .2s,opacity .2s}
-.lyrics .lrow.active{color:var(--fg);font-weight:700;opacity:1}
+.lyrics .lrow.active{color:var(--fg);font-weight:800;opacity:1}
 /* A line you can jump to should look like one. manipulation kills the tap
    delay a phone otherwise spends waiting to see if you meant to zoom, and
    the active state is the only feedback a finger gets — there is no hover
@@ -489,7 +489,8 @@ a.btn{text-decoration:none;display:inline-block}
    flicker of steps. */
 .lyrics .lrow.inst{font-size:.72em;opacity:.22;letter-spacing:.3em}
 .lyrics .lrow.inst.active{opacity:.4;font-weight:inherit}
-.lyrics .lrow .w{font-style:normal;transition:color .22s ease,opacity .22s ease}
+.lyrics .lrow .w{font-style:normal;display:inline-block;transform-origin:50% 70%;
+  transition:color .22s ease,opacity .22s ease,transform .5s ease,text-shadow .6s ease}
 .lyrics .lrow.active .w{color:var(--sub);opacity:.5}
 .lyrics .lrow.active .w.lit{color:var(--fg);opacity:1}
 /* Each word comes up as it's sung.
@@ -510,6 +511,29 @@ a.btn{text-decoration:none;display:inline-block}
   100% { color:var(--fg);  opacity:1 }
 }
 .lyrics .lrow.active .w.now{transition:none}
+/* The word being sung lifts, grows and glows, and keeps building for as long
+   as it's held: --hold is how long this word is sung, 0 to 1, so a quick "the"
+   barely stirs and a held note swells. Then it lets go and settles. */
+@property --hold { syntax:'<number>'; inherits:false; initial-value:0; }
+@keyframes wordsing {
+  0%   { color:var(--sub); opacity:.5; transform:translateY(0) scale(1); text-shadow:none }
+  16%  { color:var(--fg); opacity:1;
+         transform:translateY(calc(-1px - var(--hold) * 1px)) scale(calc(1 + var(--hold) * .025));
+         text-shadow:0 0 calc(3px + var(--hold) * 6px) color-mix(in srgb,var(--fg) 30%,transparent) }
+  100% { color:var(--fg); opacity:1;
+         transform:translateY(calc(-1.5px - var(--hold) * 2.5px)) scale(calc(1.02 + var(--hold) * .07));
+         text-shadow:0 0 calc(5px + var(--hold) * 16px) color-mix(in srgb,var(--fg) calc(30% + var(--hold) * 45%),transparent),
+                     0 0 calc(2px + var(--hold) * 4px) color-mix(in srgb,var(--accent) calc(var(--hold) * 60%),transparent) }
+}
+@keyframes wordrelease {
+  from { color:var(--fg); opacity:1;
+         transform:translateY(calc(-1.5px - var(--hold) * 2.5px)) scale(calc(1.02 + var(--hold) * .07));
+         text-shadow:0 0 calc(5px + var(--hold) * 16px) color-mix(in srgb,var(--fg) calc(30% + var(--hold) * 45%),transparent) }
+  to   { color:var(--fg); opacity:1; transform:none; text-shadow:none }
+}
+@media (prefers-reduced-motion:reduce){
+  .lyrics .lrow .w{transition:color .22s ease,opacity .22s ease}
+}
 /* Stopped means stopped. The animations hold where they are rather than
    running on while the music doesn't. */
 body.paused .lyrics .lrow .w{animation-play-state:paused}
@@ -1325,8 +1349,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
      size relationship as the sidebar version, same weight, same way of
      saying which line is which. The room is the only thing that changes. */
   body:not(.mini) #panel-lyrics .lrow{font-size:clamp(15px,1.1vw,20px);
-    line-height:1.55;padding:6px 0;font-weight:500;letter-spacing:0}
-  body:not(.mini) #panel-lyrics .lrow.active{font-weight:700}
+    line-height:1.55;padding:6px 0;font-weight:600;letter-spacing:0}
+  body:not(.mini) #panel-lyrics .lrow.active{font-weight:800}
   /* The panel already carries the vertical room, so the message shouldn't
      add another half-screen on top of it — and at 12px it read as a fault
      rather than an answer in a column that size. */
@@ -3201,6 +3225,7 @@ const lyricsPinned = () =>
    looked wrong. Syllables are a much better proxy for duration than either
    word count or letter count: vowel groups, with a silent final e dropped,
    and never less than one. */
+const STILL = window.matchMedia("(prefers-reduced-motion: reduce)");
 function syllables(word) {
   const w = (word || "").toLowerCase().replace(/[^a-z]/g, "");
   if (!w) return 0.4;                       // punctuation on its own
@@ -3311,11 +3336,24 @@ function litWords(box, s, idx, pos) {
       // animation-play-state:running, and inline beats the stylesheet — so
       // the shorthand quietly made body.paused unable to stop anything.
       w.className = "w now";
-      w.style.animationName = "wordfill";
-      w.style.animationDuration = (to - from).toFixed(3) + "s";
-      w.style.animationTimingFunction = "linear";
-      w.style.animationDelay = (from - pos).toFixed(3) + "s";
-      w.style.animationFillMode = "both";
+      const dur = Math.max(0.08, to - from);
+      if (STILL.matches) {
+        w.style.animationName = "wordfill";
+        w.style.animationDuration = dur.toFixed(3) + "s";
+        w.style.animationTimingFunction = "linear";
+        w.style.animationDelay = (from - pos).toFixed(3) + "s";
+        w.style.animationFillMode = "both";
+      } else {
+        // Sung, then let go: the swell runs for the word's own length and
+        // the release picks up where it ends. How long it's held is how big
+        // it gets.
+        w.style.setProperty("--hold", Math.max(0.12, Math.min(1, (dur - 0.12) / 0.9)).toFixed(3));
+        w.style.animationName = "wordsing, wordrelease";
+        w.style.animationDuration = dur.toFixed(3) + "s, .7s";
+        w.style.animationTimingFunction = "cubic-bezier(.2,.7,.3,1), ease-out";
+        w.style.animationDelay = (from - pos).toFixed(3) + "s, " + (to - pos).toFixed(3) + "s";
+        w.style.animationFillMode = "both, forwards";
+      }
     }
   });
 }
