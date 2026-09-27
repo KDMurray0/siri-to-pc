@@ -3722,11 +3722,13 @@ def _account_of(request: Request) -> dict:
 
 
 def _consent_view(person: dict) -> dict:
+    learning = (bool(config.get("learn_taste", True)) if person.get("scope") == "owner"
+                else bool(person.get("tracking")))
     return {
         "privacy_notice": {"version": person.get("terms_version") or None,
                            "accepted_at": person.get("terms_at") or None,
                            "current": person.get("terms_version") == accounts.TERMS_VERSION},
-        "tracking": bool(person.get("tracking")),
+        "tracking": learning,
         "tracking_changed_at": person.get("tracking_at") or None,
     }
 
@@ -3764,10 +3766,14 @@ def api_me_consent(request: Request, tracking: int | None = None,
     if not got:
         raise HTTPException(404, "no such account")
     pid = accounts.profile_id(person["sub"])
-    # Rebuilt on their next request, judged by the new answer; and the
-    # counters stop (or start) keeping a row about them straight away.
-    profiles.forget(pid)
     stats_mod.set_tracked(pid, bool(got.get("tracking")))
+    if got.get("scope") == "owner":
+        # The owner listens on the house's store, so their switch is the
+        # house's. Off stops it learning; it doesn't wipe the owner's own
+        # history -- "Forget what it has learned" is there for that.
+        if tracking is not None:
+            config.set("learn_taste", bool(tracking))
+        return {"status": "ok", "consent": _consent_view(got), "forgot": False}
     withdrew = bool(person.get("tracking")) and not got.get("tracking")
     if withdrew:
         # Taking consent back means what it was given for goes too: keeping
@@ -3775,6 +3781,14 @@ def api_me_consent(request: Request, tracking: int | None = None,
         from . import privacy
         privacy.forget_taste(person["sub"])
         stats_mod.erase(pid)
+    # Rebuilt now, judged by the new answer, and handed to anything already
+    # playing -- it takes effect on this song's end, not on the next visit.
+    profiles.forget(pid)
+    fresh = profiles.for_row(accounts.as_row(got))
+    from ..core.session import sessions
+    room = sessions._rooms.get(pid)
+    if room is not None:
+        room.adopt(fresh)
     return {"status": "ok", "consent": _consent_view(got), "forgot": withdrew}
 
 

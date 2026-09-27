@@ -3790,6 +3790,10 @@ function acctPaint() {
     (a.owner ? "Runs this server" : "Can use " + esc(PERSON_SCOPE[a.access] || a.access)) + "</span></div>";
   if (document.activeElement !== $("acctname")) $("acctname").value = a.name || "";
   $("acctrack").classList.toggle("on", !!a.consent.tracking);
+  // The owner's switch is the house's, and off doesn't wipe their history.
+  $("acctrack").closest(".srow").querySelector("em").textContent = a.owner
+    ? "Remember what's played, skipped and liked here, to tune the radio. Off stops it learning; Forget clears what it has."
+    : "Remember what I play, skip and like, to tune my radio and suggestions. Off unless you switch it on, and switching it off forgets what it learned.";
   const n = a.consent.privacy_notice;
   $("acctnotice").textContent = !n.version ? "You'll be asked to agree next time you sign in"
     : n.current ? "You agreed to version " + n.version + ", the current one"
@@ -3824,7 +3828,8 @@ $("acctrack").onclick = async () => {
     toast((r.body && r.body.detail) || "That didn't go through"); return;
   }
   if (ACCT) ACCT.consent = r.body.consent;
-  toast(on ? "It will learn what you like" : "Switched off, and what it learned is gone");
+  toast(on ? "It will learn what you like"
+     : r.body.forgot ? "Switched off, and what it learned is gone" : "Switched off: it won't learn from here on");
 };
 $("acctforget").onclick = async e => {
   if (!armDanger(e.currentTarget, "forget what it has learned")) return;

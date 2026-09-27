@@ -120,6 +120,8 @@ DEFAULTS: dict[str, Any] = {
     # Other devices on the wifi get the owner's player without signing in too.
     # Off: once Google sign-in is set up they sign in, like everyone else.
     "lan_open_devices": False,
+    # The owner's "learn what I like": whether the house's taste store learns.
+    "learn_taste": True,
     # While this is on, a full-access guest asking for something on the PC
     # speakers is refused. Anyone playing on their own phone is unaffected —
     # the point is to protect the room you're in, and headphones aren't in it.

@@ -4391,6 +4391,67 @@ def _run(verbose: bool = False) -> Result:
             c("it runs every few seconds, not on shutdown", _fl39.EVERY <= 15)
             say("usage on disk", c)
 
+            # -- 40. "learn what I like" takes effect now, and stays how it was left --
+            c = _Checker("learn what I like")
+            from .core.session import sessions as _ses40
+            from .core.profile import profiles as _prof40
+            from .core import flusher as _fl40
+            from .core.taste import TasteEngine as _TE40, ExplicitTaste as _XT40, taste as _house40
+            from .models import Track as _T40
+            from .web import accounts as _acc40, privacy as _priv40
+            SUB40 = "40400404"
+            _acc40.admit(SUB40, "learn@example.test", "Learner", terms=True)
+            _acc40.set_scope(SUB40, "phone")
+            ck40 = {_COOKIE: sec.session_cookie(now_key(), SUB40)}
+            pid40 = _acc40.profile_id(SUB40)
+            try:
+                client.get("/api/status", cookies=ck40, headers={"X-Play-Here": "1"})
+                room = _ses40._rooms.get(pid40)
+                c("a signed-in phone has its own session", room is not None)
+                c("...learning nothing to begin with", isinstance(room.queue.taste, _XT40))
+                client.post("/api/me/consent", json={"tracking": 1}, cookies=ck40)
+                c("switching it on doesn't close the session (the song carries on)",
+                  _ses40._rooms.get(pid40) is room)
+                c("...and the running queue learns from now", isinstance(room.queue.taste, _TE40)
+                  and room.queue.context.taste is room.queue.taste)
+                song = _T40(video_id="LEARN00001", title="A Song", artist="Someone", origin="request")
+                room.queue.taste.record(song, 200, 200)
+                room.queue.taste.save()
+                learned = _priv40._home(SUB40) / "taste" / "play_stats.json"
+                c("...and it's written down", learned.exists())
+                room.queue.taste.record(song, 200, 200)        # dirty again, not saved
+                client.post("/api/me/consent", json={"tracking": 0}, cookies=ck40)
+                _fl40.tick()
+                c("switching it off forgets it, and nothing writes it back afterwards",
+                  not learned.exists())
+                c("...still without closing the session", _ses40._rooms.get(pid40) is room
+                  and isinstance(room.queue.taste, _XT40))
+
+                # The owner's switch is the house's.
+                _cfg.set("owner_email", "boss40@example.test", save=False)
+                SUBO = "40400405"
+                _acc40.admit(SUBO, "boss40@example.test", "Boss", terms=True)
+                cko = {_COOKIE: sec.session_cookie(now_key(), SUBO)}
+                client.post("/api/me/consent", json={"tracking": 0}, cookies=cko)
+                c("the owner switching it off stops the house learning",
+                  _cfg.get("learn_taste") is False
+                  and _house40.record(_T40(video_id="HOUSE00001", title="B", artist="C",
+                                           origin="request"), 200, 200) is False)
+                c("...and says so",
+                  client.get("/api/me", cookies=cko).json()["consent"]["tracking"] is False)
+                client.post("/api/me/consent", json={"tracking": 1}, cookies=cko)
+                c("...and on again, it learns again", _cfg.get("learn_taste") is True
+                  and client.get("/api/me", cookies=cko).json()["consent"]["tracking"] is True)
+            finally:
+                _cfg.set("learn_taste", True, save=False)
+                _ses40.close(pid40, "check")
+                for sub in (SUB40, "40400405"):
+                    try:
+                        _priv40.erase(sub)
+                    except Exception:
+                        pass
+            say("learn what I like", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json
@@ -4811,8 +4872,13 @@ def _run(verbose: bool = False) -> Result:
                 expiring_profile = profs.for_row(row)
                 third_room = rooms.for_pass(row["id"], "check", "phone", expiring_profile)
                 rooms.close(row["id"])
-            c("both permanence transitions replace the cached live session",
-              first_room is not second_room and second_room is not third_room
+            # Followed in place: the room stays (the song carries on) and its
+            # queue uses the new store from then on.
+            c("both permanence transitions carry the live session over to the new profile",
+              first_room is second_room is third_room
+              and third_room.profile is expiring_profile
+              and third_room.queue.taste is expiring_profile.taste
+              and third_room.queue.context.taste is expiring_profile.taste
               and not temp_profile.permanent and permanent_profile.permanent
               and not expiring_profile.permanent)
 

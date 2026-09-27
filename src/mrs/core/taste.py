@@ -207,6 +207,10 @@ class TasteEngine:
         """Log a finished/abandoned track. Returns True if it counted as played."""
         if not track or not duration:
             return False
+        # The house's store is the owner's, and the owner's "learn what I like"
+        # is this switch. Other people's stores are built learning or not.
+        if self._root is None and not config.get("learn_taste", True):
+            return False
         ratio = position / duration if duration else 0
         completed = ratio >= float(config.get("completion_ratio", 0.30))
         vid = track.video_id

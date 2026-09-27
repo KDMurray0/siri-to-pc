@@ -93,6 +93,7 @@ class Session:
                                       config.get("cast_queue_minutes", 10)))
         self.created = time.time()
         self.last_seen = time.time()
+
         # Seconds, as last reported by the client, and which track it was
         # talking about. Stamped because an unstamped number is worse than
         # none: the next track inherited the last one's position and the
@@ -104,6 +105,20 @@ class Session:
         self._dropped = False      # their connection went away and we paused
         self._started = False
         self._stop = threading.Event()
+
+    def adopt(self, profile) -> None:
+        """Carry on with another taste store, without stopping the music.
+
+        A change of mind about learning rebuilds the profile. Closing the room
+        for it cut the song off and emptied the queue mid-listen. The old store
+        is dropped without a save on purpose: when consent was withdrawn, its
+        history has just been deleted and must not be written back.
+        """
+        mine = profile.taste if profile is not None else NeutralTaste()
+        self.profile = profile
+        self.queue.taste = mine
+        self.queue.context.taste = mine
+        self.queue.prefs = profile if profile is not None else config
 
     def start(self) -> None:
         if not self._started:
@@ -322,12 +337,9 @@ class Sessions:
         with self._lock:
             room = self._rooms.get(pass_id)
             if room is not None and profile is not None and room.profile is not profile:
-                # The profile's persistence policy changed while this room
-                # was alive. A queue built with the old TasteEngine cannot be
-                # safely converted in place, so close it and let the next
-                # request receive a clean session.
-                stale = self._rooms.pop(pass_id)
-                room = None
+                # The profile was rebuilt -- learning switched on or off. Swap
+                # the store under the running queue rather than closing it.
+                room.adopt(profile)
             if room is None:
                 room = Session(pass_id, name, scope, profile)
                 self._rooms[pass_id] = room
