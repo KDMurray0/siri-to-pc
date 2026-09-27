@@ -161,6 +161,17 @@ li b{color:var(--fg)}
     <div class="note"><b>This only records the address.</b> It cannot register a domain,
       open your router, or make an HTTPS certificate. Do those first; you can change this
       later in <b>Settings → Sharing</b>.</div>
+
+    <div class="card">
+      <h3><span class="dot" id="owndot"></span> Your Google account
+        <span class="tagline" id="owntag">not set</span></h3>
+      <p>Log in with Google from your phone and it should be <em>you</em> — the same
+        likes, playlists and history as this computer, not a new empty account.
+        Put the address you sign in with here. Already signed in with it? That
+        account joins this one now, and brings what it had.</p>
+      <input class="textin" id="ownmail" placeholder="you@gmail.com" autocomplete="email" spellcheck="false">
+      <div class="foot"><button class="btn go" id="ownsave">That's me</button></div>
+    </div>
   </section>
 
   <!-- 5 ─────────────────────────────────────────────────────────── -->
@@ -372,6 +383,36 @@ $("mastersave").onclick = async () => {
   refresh();
 };
 
+/* ── step 3: the owner's Google account is this computer ─────────── */
+async function paintOwner() {
+  const r = await api("/api/accounts/owner/state");
+  if (!r || r.status !== "ok") return;
+  if (!$("ownmail").matches(":focus")) $("ownmail").value = r.owner_email || "";
+  $("owndot").className = "dot " + (r.signed_in ? "ok" : r.owner_email ? "warn" : "");
+  $("owntag").textContent = !r.owner_email ? "not set"
+    : r.signed_in ? "linked · one profile"
+    : !r.google ? "saved · Google sign-in isn't set up yet"
+    : "saved · log in with it once to link";
+}
+$("ownsave").onclick = async () => {
+  const mail = $("ownmail").value.trim();
+  if (!mail) { $("owntag").textContent = "type the address first"; return; }
+  $("ownsave").disabled = true;
+  const r = await api("/api/accounts/owner?owner_email=" + encodeURIComponent(mail));
+  $("ownsave").disabled = false;
+  if (!r || r.status !== "ok") {
+    $("owntag").textContent = (r && r.detail) || "that didn't save";
+    return;
+  }
+  await paintOwner();
+  const got = (r.linked || []).filter(x => x.folded);
+  if (got.length) {
+    const liked = got.reduce((n, x) => n + (x.liked || 0), 0);
+    const lists = got.reduce((n, x) => n + (x.playlists || 0), 0);
+    $("owntag").textContent = "linked · brought across " + liked + " liked, " + lists + " playlists";
+  }
+};
+
 /* ── step 4: extras ────────────────────────────────────────────── */
 function paintExtras(s) {
   $("groqdot").className = "dot " + (s.groq ? "ok" : "");
@@ -398,7 +439,7 @@ async function refresh() {
     return;
   }
   $("rel").textContent = s.release ? "v" + s.release : "";
-  paintTools(s); paintCookies(s); paintMaster(s); paintExtras(s);
+  paintTools(s); paintCookies(s); paintMaster(s); paintExtras(s); paintOwner();
 }
 refresh();
 show(0);

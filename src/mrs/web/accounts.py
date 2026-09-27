@@ -141,6 +141,49 @@ def owner_email() -> str:
     return str(config.get("owner_email") or "").strip().lower()
 
 
+def _canon(email: str) -> str:
+    """One address however it's written. Gmail ignores dots and anything after
+    a plus, so j.smith@ and jsmith+music@ are the same inbox."""
+    local, _, domain = (email or "").strip().lower().partition("@")
+    if domain in ("gmail.com", "googlemail.com"):
+        local = local.split("+", 1)[0].replace(".", "")
+        domain = "gmail.com"
+    return f"{local}@{domain}" if domain else local
+
+
+def is_owner(sub: str, email: str) -> bool:
+    """The owner: the Google account already known to be them, or the address
+    written down for them."""
+    pinned = str(config.get("owner_sub") or "")
+    if pinned and sub == pinned:
+        return True
+    want = owner_email()
+    return bool(want and email and _canon(email) == _canon(want))
+
+
+def _pin_owner(sub: str) -> None:
+    # Theirs from now on, even if the address on the account changes.
+    if not config.get("owner_sub"):
+        config.set("owner_sub", sub)
+
+
+def promote_owner_matches() -> list[dict]:
+    """Everyone already signed in who is the owner by address, made so."""
+    got = []
+    with _lock, exclusive_file_lock(_path()):
+        people = _read()
+        for sub, row in people.items():
+            if row.get("scope") != "owner" and is_owner(sub, row.get("email", "")):
+                row["scope"] = "owner"
+                got.append(dict(row))
+        if got and not _write(people):
+            raise AccountPersistenceError("couldn't save the account")
+    for row in got:
+        _pin_owner(row["sub"])
+        log.info("%s is the owner (address matched)", tag(row["sub"]))
+    return got
+
+
 def default_scope() -> str:
     got = str(config.get("new_account_scope") or "blocked")
     return got if got in NEW_ACCOUNT_SCOPES else "blocked"
@@ -173,7 +216,7 @@ def admit(sub: str, email: str, name: str, *, picture: str = "",
                    "terms_at": now if terms else 0,
                    "terms_version": TERMS_VERSION if terms else "",
                    "tracking": bool(tracking), "tracking_at": now if tracking else 0}
-            if email and email == owner_email():
+            if is_owner(sub, email):
                 row["scope"] = "owner"
             people[sub] = row
             log.info("new account: %s (%s)", tag(sub), row["scope"])
@@ -187,11 +230,13 @@ def admit(sub: str, email: str, name: str, *, picture: str = "",
                 row["picture"] = picture[:400]
             row["last_seen"] = now
             # The owner's address can be set after they first signed in.
-            if email and email == owner_email() and row["scope"] != "owner":
+            if row["scope"] != "owner" and is_owner(sub, email):
                 row["scope"] = "owner"
         if not _write(people):
             raise AccountPersistenceError("couldn't save the account")
-        return dict(row)
+    if row["scope"] == "owner" and is_owner(sub, email):
+        _pin_owner(sub)
+    return dict(row)
 
 
 def seen(sub: str) -> None:

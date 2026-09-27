@@ -4900,6 +4900,64 @@ def _run(verbose: bool = False) -> Result:
             c("the page itself opens as usual", got48.status_code == 200, str(got48.status_code))
             say("settings window", c)
 
+            # -- 49. the owner's Google account is this computer, one profile --
+            c = _Checker("owner's Google account")
+            from .web import accounts as _acc49
+            from .core import profile as _prof49
+            from .core.taste import taste as _house49
+            from .core.playlists import playlists as _lists49
+            from .models import Track as _T49
+            c("an address is one inbox however Gmail lets it be written",
+              _acc49._canon("J.Smith+music@GoogleMail.com") == _acc49._canon("jsmith@gmail.com")
+              and _acc49._canon("a.b@example.com") != _acc49._canon("ab@example.com"))
+            mail49, pin49 = config.get("owner_email", ""), config.get("owner_sub", "")
+            sub49 = "4949494949"
+            try:
+                config.update({"owner_email": "", "owner_sub": ""})
+                early = _acc49.admit(sub49, "k.d.m49@gmail.com", "Early Me", terms=True, tracking=True)
+                c("signed in before the owner's address was written down: not the owner",
+                  early["scope"] != "owner", early["scope"])
+                mine = _prof49.Profile(_acc49.profile_id(sub49), "Early Me", permanent=True, tracking=True)
+                song49 = _T49(video_id="OWNER00049", title="Mother", artist="Danzig")
+                mine.taste.toggle_like(song49)
+                mine.lists.add("Owner 49 list", song49)
+                had49 = _house49.is_liked("OWNER00049")
+                r49 = client.post("/api/accounts/owner", json={"owner_email": "kdm49+x@gmail.com"},
+                                  headers=owner_h)
+                got49 = r49.json()
+                linked = [x for x in got49.get("linked", []) if x.get("sub") == sub49]
+                c("naming the address makes them the owner there and then",
+                  r49.status_code == 200 and (_acc49.get(sub49) or {}).get("scope") == "owner",
+                  r49.text[:160])
+                c("...and what they'd kept separately moves into the house",
+                  linked and linked[0].get("folded") and not had49 and _house49.is_liked("OWNER00049")
+                  and "Owner 49 list" in _lists49.names(), str(linked)[:200])
+                home49 = _prof49.data_dir() / "profiles" / _prof49._safe(_acc49.profile_id(sub49))
+                c("...with the old folder put aside, not left to drift",
+                  not home49.exists() and any(p.name.startswith(home49.name + ".folded-")
+                                              for p in home49.parent.iterdir()))
+                c("their Google account is pinned as the owner's",
+                  config.get("owner_sub") == sub49)
+                again = _acc49.admit(sub49, "a-new-address@example.com", "Me")
+                c("...so a changed address doesn't lose them the house", again["scope"] == "owner")
+                st49 = client.get("/api/accounts/owner/state", headers=owner_h).json()
+                c("the setup guide can see it's linked", st49.get("signed_in") is True
+                  and st49.get("owner_email") == "kdm49+x@gmail.com", str(st49))
+                c("nobody else can name the owner",
+                  client.post("/api/accounts/owner", json={"owner_email": "x@y.com"}).status_code in (401, 403))
+                _bans.forgive("testclient")
+                c("a typo is refused, not saved",
+                  client.post("/api/accounts/owner", json={"owner_email": "not an email"},
+                              headers=owner_h).status_code == 400)
+            finally:
+                if _house49.is_liked("OWNER00049"):
+                    _house49.toggle_like(_T49(video_id="OWNER00049", title="Mother", artist="Danzig"))
+                if "Owner 49 list" in _lists49.names():
+                    _lists49.delete("Owner 49 list")
+                _acc49.forget(sub49)
+                config.update({"owner_email": mail49, "owner_sub": pin49})
+            say("owner's Google account", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json

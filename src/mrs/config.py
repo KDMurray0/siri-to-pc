@@ -64,6 +64,9 @@ DEFAULTS: dict[str, Any] = {
     "google_client_id": "",
     "google_client_secret": "",     # never leaves this machine; hidden from the UI
     "owner_email": "",
+    # The owner's Google account id, pinned the first time they sign in with
+    # it, so a changed address can't lose them the house.
+    "owner_sub": "",
     # An uninvited Google sign-in is held until an owner explicitly admits
     # it.  Invited sign-ins inherit the scope of the pass that admitted them.
     "new_account_scope": "phone",

@@ -155,6 +155,34 @@ class TasteEngine:
                 return
         self.save()
 
+    def absorb(self, other: "TasteEngine") -> dict:
+        """Take in another profile's listening -- the owner's Google account's,
+        from before it was known to be the owner. Counts add; likes and blocks
+        join; nothing of this one's is lost."""
+        with self._lock, other._lock:
+            for key, (plays, skips) in other._song.items():
+                row = self._song[key]
+                row[0] += plays
+                row[1] += skips
+            for key, (plays, skips) in other._artist.items():
+                row = self._artist[key]
+                row[0] += plays
+                row[1] += skips
+            have = {r.get("video_id") for r in self._liked}
+            likes = [dict(r) for r in other._liked
+                     if r.get("video_id") and r.get("video_id") not in have]
+            self._liked.extend(likes)
+            for key, row in other._blocked_songs.items():
+                self._blocked_songs.setdefault(key, row)
+            self._blocked_artists |= other._blocked_artists
+            for key, at in other._played_at.items():
+                self._played_at[key] = max(at, self._played_at.get(key, 0.0))
+            songs = len(other._song)
+        self.save()
+        self._save_liked()
+        self._save_blocks()
+        return {"songs": songs, "liked": len(likes)}
+
     def _save_liked(self) -> None:
         try:
             with self._lock:

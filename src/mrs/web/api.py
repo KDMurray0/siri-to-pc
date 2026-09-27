@@ -3721,6 +3721,11 @@ def _start_session(request: Request, person: dict, next_path: str):
     resp = RedirectResponse(dest, status_code=302)
     _set_session(resp, request, person["sub"])
     log.info("%s signed in (%s)", accounts.tag(person["sub"]), person.get("scope"))
+    if person.get("scope") == "owner" and accounts.is_owner(person["sub"], person.get("email", "")):
+        # The owner is the house. Anything they built up under a separate
+        # profile before that was known comes with them.
+        from ..core import ownersync
+        ownersync.fold(accounts.profile_id(person["sub"]))
     return resp
 
 
@@ -4164,12 +4169,48 @@ def api_accounts_setup(request: Request, client_id: str = "", client_secret: str
         raise HTTPException(400, "Enter the Google OAuth client secret")
     # Config.update makes one atomic on-disk replacement, instead of leaving a
     # half-configured public sign-in system behind after a field blur.
-    config.update({"google_client_id": client_id,
-                   "google_client_secret": secret,
-                   "owner_email": owner_email})
+    changes = {"google_client_id": client_id, "google_client_secret": secret,
+               "owner_email": owner_email}
+    if owner_email != accounts.owner_email():
+        changes["owner_sub"] = ""         # the pinned account was the old address's
+    config.update(changes)
+    from ..core import ownersync
     return {"status": "ok", "configured": google.configured(),
             "owner_email": accounts.owner_email(),
+            "linked": ownersync.link_owner(),
             "redirect_uri": google.redirect_uri()}
+
+
+@app.get("/api/accounts/owner")
+def api_accounts_owner(owner_email: str = "", _: bool = Owner):
+    """Whose Google account is this computer's -- set from the setup guide.
+
+    Anybody who already signed in with it becomes the owner there and then,
+    and whatever they had kept separately moves into the house.
+    """
+    owner_email = str(owner_email or "").strip().lower()
+    local, at, domain = owner_email.partition("@")
+    if (not local or not at or "." not in domain or len(owner_email) > 254
+            or any(ch.isspace() for ch in owner_email)):
+        raise HTTPException(400, "That doesn't look like an email address")
+    if owner_email != accounts.owner_email():
+        # A different person: the pinned account was the old address's.
+        config.update({"owner_email": owner_email, "owner_sub": ""})
+    from ..core import ownersync
+    return {"status": "ok", **_owner_link(), "linked": ownersync.link_owner()}
+
+
+@app.get("/api/accounts/owner/state")
+def api_accounts_owner_state(_: bool = Owner):
+    return {"status": "ok", **_owner_link()}
+
+
+def _owner_link() -> dict:
+    mine = [p for p in accounts.everyone() if p.get("scope") == "owner"
+            and accounts.is_owner(p["sub"], p.get("email", ""))]
+    return {"owner_email": accounts.owner_email(), "google": google.configured(),
+            "signed_in": bool(mine),
+            "last_seen": max((int(p.get("last_seen") or 0) for p in mine), default=0)}
 
 
 @app.get("/api/accounts/scope")
