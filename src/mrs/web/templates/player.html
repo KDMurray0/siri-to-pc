@@ -249,6 +249,18 @@ body.guest:not(.keeps) #addimport{display:none}
 .results.show{display:block}
 .rres{display:flex;gap:9px;align-items:center;padding:8px 10px;cursor:pointer}
 .rres:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+/* Picked: a tap picks, a second tap on the only pick plays it. */
+.rres.sel{background:color-mix(in srgb,var(--accent) 22%,transparent);box-shadow:inset 3px 0 0 var(--accent)}
+.rres.sel .rn::after{content:" \2713";color:var(--accent);font-weight:800}
+.pickchips{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+.pickchips[hidden]{display:none}
+.pchip{display:inline-flex;align-items:center;gap:4px;max-width:46%;font-size:11px;font-weight:600;
+  padding:3px 4px 3px 9px;border-radius:999px;background:color-mix(in srgb,var(--accent) 18%,transparent);
+  color:var(--fg)}
+.pchip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pchip button{border:0;background:none;color:var(--sub);cursor:pointer;font-size:13px;line-height:1;padding:0 4px}
+.qbtn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.qbtn[hidden]{display:none}
 .rres .qi{width:30px;height:30px;border-radius:6px;object-fit:cover;background:var(--bg);flex:0 0 auto}
 /* A row with no cover gets a faint note rather than an empty hole or the
    browser's broken-image icon. It has to be a div — pseudo elements don't
@@ -1444,7 +1456,10 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
            happens to end, which on the desktop layout is off the window. -->
       <div class="results" id="results"></div>
       </div>
+      <div class="pickchips" id="pickchips" hidden></div>
       <div class="qactions" id="qactions">
+        <button class="qbtn primary" id="pickplay" hidden>Play</button>
+        <button class="qbtn" id="picktogether" hidden>Play together</button>
         <button class="qbtn" id="addnext">Play next</button>
         <button class="qbtn" id="addqueue">Add to queue</button>
         <button class="qbtn" id="radio">Radio</button>
@@ -2506,7 +2521,7 @@ function toastUndo(msg, onUndo) {
 let searchT, searchSeq = 0;
 $("q").addEventListener("input", () => {
   const v = $("q").value.trim();
-  $("qactions").classList.toggle("show", v.length > 0);
+  $("qactions").classList.toggle("show", v.length > 0 || picks.length > 0);
   document.body.classList.toggle("pastedlink", isLink(v));
   clearTimeout(searchT);
   if (v.length < 2) { hideResults(); return; }
@@ -2514,14 +2529,63 @@ $("q").addEventListener("input", () => {
 });
 $("q").addEventListener("keydown", e => {
   if (e.key === "Enter") {
+    // What's picked wins over what's typed: that's what they chose.
+    if (picks.length) { playPicks(picks.length > 1 ? "together" : "play"); return; }
     const v = $("q").value.trim(); if (!v) return;
     closeSearch();
     apiSay("/api/play?q=" + encodeURIComponent(v), true)
       .then(r => { if (r) toast(r.message); });
   } else if (e.key === "Escape") { closeSearch(); }
 });
+/* Picking. A tap on a song, band or album picks it; a second tap on the only
+   pick plays it; the buttons act on the picks -- or, with none, on the top
+   result, never on a fresh search that might land somewhere else. Picks
+   survive a new search, so two bands found separately can play together. */
+let picks = [];
+const PICKABLE = new Set(["song", "artist", "album"]);
+const pickKey = row => row.dataset.act + ":" +
+  (row.dataset.v || ((row.dataset.n || "") + "|" + (row.dataset.ar || "")));
+const pickOf = row => ({ key: pickKey(row), kind: row.dataset.act, video_id: row.dataset.v || "",
+  title: row.dataset.t || "", name: row.dataset.n || row.dataset.t || "",
+  artist: row.dataset.ar || "", art: row.dataset.img || "" });
+function paintPicks() {
+  document.querySelectorAll("#results .rres").forEach(r =>
+    r.classList.toggle("sel", PICKABLE.has(r.dataset.act) && picks.some(p => p.key === pickKey(r))));
+  $("pickchips").innerHTML = picks.map((p, i) =>
+    `<span class="pchip"><span>${esc(p.kind === "song" ? p.title : p.name)}</span>` +
+    `<button type="button" data-i="${i}" aria-label="Unpick">×</button></span>`).join("");
+  $("pickchips").hidden = !picks.length;
+  $("pickplay").hidden = !picks.length;
+  $("picktogether").hidden = picks.length < 2;
+  $("pickplay").textContent = picks.length > 1 ? "Play these" : "Play";
+  if (picks.length) $("qactions").classList.add("show");
+}
+function topPick() {
+  if (!$("results").classList.contains("show")) return null;
+  const row = [...document.querySelectorAll("#results .rres")].find(r => PICKABLE.has(r.dataset.act));
+  return row ? pickOf(row) : null;
+}
+async function playPicks(mode, list) {
+  const items = (list || picks).map(({ key, ...rest }) => rest);
+  if (!items.length) return;
+  closeSearch();
+  const r = await apiSay("/api/play/pick?items=" + encodeURIComponent(JSON.stringify(items)) +
+                         "&mode=" + mode, true);
+  toast((r && r.message) || "Playing");
+}
+$("pickchips").addEventListener("mousedown", e => {
+  const b = e.target.closest("button[data-i]");
+  if (!b) return;
+  e.preventDefault();
+  picks.splice(Number(b.dataset.i), 1);
+  paintPicks();
+});
+$("pickplay").onclick = () => playPicks(picks.length > 1 ? "together" : "play");
+$("picktogether").onclick = () => playPicks("together");
+
 function closeSearch() {
   clearTimeout(searchT);
+  picks = []; paintPicks();
   searchSeq++;                       // any reply still coming is now stale
   $("spin").style.display = "none";
   $("foryou").classList.remove("hide");
@@ -2641,6 +2705,7 @@ async function showResults(v) {
   if (!html) { hideResults(); return; }
   $("results").innerHTML = html;
   $("results").classList.add("show");
+  paintPicks();
 }
 const hideResults = () => $("results").classList.remove("show");
 
@@ -2649,6 +2714,13 @@ $("results").addEventListener("mousedown", async e => {
   if (!row) return;
   e.preventDefault();
   const act = row.dataset.act;
+  if (PICKABLE.has(act)) {
+    const key = pickKey(row), at = picks.findIndex(p => p.key === key);
+    if (at >= 0 && picks.length === 1) { playPicks("play"); return; }
+    if (at >= 0) picks.splice(at, 1); else picks.push(pickOf(row));
+    paintPicks();
+    return;
+  }
   const q = $("q").value.trim();
   closeSearch();
   let r;
@@ -2704,6 +2776,10 @@ $("addimport").onclick = async () => {
 };
 
 const withQuery = (mode) => {
+  // The picks, or the top of the list they're looking at -- not a new search.
+  if (picks.length) { playPicks(mode); return; }
+  const top = topPick();
+  if (top) { playPicks(mode, [top]); return; }
   const v = $("q").value.trim(); if (!v) return;
   $("q").value = ""; $("qactions").classList.remove("show");
   document.body.classList.remove("pastedlink"); hideResults();

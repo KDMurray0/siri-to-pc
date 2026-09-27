@@ -24,7 +24,7 @@ cast diag audit policy stats accounts accounts/setup accounts/scope accounts/for
 public-address certificate certificate/renew
 stream/{video_id}
 autoeq/status autoeq/assign'''.split())
-SCOPED = set('''status play play/video/{video_id} control/{action} session/ended
+SCOPED = set('''status play play/video/{video_id} play/pick control/{action} session/ended
 session/progress session/here seek queue/{op} cancel radio search play/artist
 play/album lyrics lyrics/search about history block blocks history/forget liked
 playlists station foryou spectrum spotify/add playlist/{op} settings setting

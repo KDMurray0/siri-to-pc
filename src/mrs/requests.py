@@ -13,7 +13,7 @@ from .core.playlists import playlists
 from .core.taste import taste
 from .events import Ev, bus
 from .logging_setup import get, spawn
-from .models import Track, _fold
+from .models import Plan, Track, _fold
 from .player import player
 from .resolve import (applemusic, grammar, lyrics, numbers, parser, resolver,
                       spotify, youtube)
@@ -987,6 +987,101 @@ def play_station(url: str, name: str = "", art: str = "", queue=None) -> dict:
     say_to(getattr(queue, "session_id", ""), msg)
     log.info("%s", msg)
     return {"status": "played", "message": msg, "via": "radio"}
+
+
+def _picked(item: dict, taste) -> tuple[list[Track], "resolver.Resolution | None"]:
+    """What one picked search result stands for: the song, or the band's
+    likeliest songs, or the album."""
+    kind = str(item.get("kind") or "song")
+    if kind == "song" and item.get("video_id"):
+        return [Track(video_id=str(item["video_id"]), title=str(item.get("title") or ""),
+                      artist=str(item.get("artist") or ""), art=str(item.get("art") or ""),
+                      origin="request")], None
+    name = str(item.get("name") or item.get("title") or "").strip()
+    if not name:
+        return [], None
+    plan = Plan(kind=kind if kind in ("artist", "album", "genre") else "auto", query=name,
+                artist=str(item.get("artist") or (name if kind == "artist" else "")),
+                via="pick", spoken=name)
+    res = resolver.resolve(plan, taste)
+    return (res.tracks if res else []), (res if res else None)
+
+
+def play_picks(items: list[dict], mode: str = "play", *, queue=None,
+               announce: bool = True) -> dict:
+    """What was picked in the search results, acted on as asked.
+
+    One pick is played as itself. Several, or "together", are dealt out in turn
+    -- a band, an album and two songs open with one of each -- and every pick is
+    an anchor the radio keeps returning to. Next and Queue use exactly the
+    picks, never a fresh search that might land somewhere else.
+    """
+    queue = queue if queue is not None else player.queue
+    room = getattr(queue, "session_id", "") if queue is not player.queue else ""
+    if room:
+        queue.note_request()
+    items = [i for i in (items or []) if isinstance(i, dict)][:8]
+    if not items:
+        return {"status": "error", "message": "Nothing picked"}
+    taste = getattr(queue, "taste", None)
+    lanes, parts, names = [], [], []
+    for item in items:
+        tracks, res = _picked(item, taste)
+        if tracks:
+            lanes.append(tracks)
+            parts.append((item, res))
+            names.append(item.get("name") or item.get("title") or tracks[0].title)
+    if not lanes:
+        return {"status": "not_found", "message": "Couldn't find those"}
+
+    def say(msg: str) -> None:
+        if announce and msg:
+            player.announce(msg, room)
+
+    first = lanes[0][0]
+    if mode == "next":
+        # A band next means their likeliest song, an album means the album --
+        # in the order they were picked, so everything goes in backwards.
+        chosen = []
+        for (item, _), tracks in zip(parts, lanes):
+            chosen += tracks[:1] if item.get("kind") == "artist" else tracks
+        for t in reversed(chosen):
+            queue.play_next(t)
+        msg = (f"Playing {first.title} next" + (f", by {first.artist}" if first.artist else "")
+               if len(chosen) == 1 else f"Playing {len(chosen)} songs next")
+        say(msg)
+        return {"status": "played", "message": msg, "tracks": len(chosen)}
+    if mode == "queue":
+        chosen = []
+        for (item, _), tracks in zip(parts, lanes):
+            chosen += tracks[:5] if item.get("kind") == "artist" else tracks
+        queue.enqueue(chosen)
+        msg = (f"Added {first.title} to the queue" if len(chosen) == 1
+               else f"Added {len(chosen)} songs to the queue")
+        return {"status": "played", "message": msg, "tracks": len(chosen)}
+
+    queue.cancel(user=False)
+    if len(lanes) == 1:
+        item, res = parts[0]
+        kind = item.get("kind") or "song"
+        queue.play_now(lanes[0], res.alternates if res else None,
+                       anchors=res.anchors if res else None,
+                       hold_radio=bool(res and res.hold_radio), kind=kind)
+        msg = (f"Playing {first.title}" + (f" by {first.artist}" if first.artist else "")
+               if kind == "song" else (res.spoken if res else f"Playing {names[0]}"))
+    else:
+        from itertools import zip_longest
+        dealt, seen = [], set()
+        for row in zip_longest(*[lane[:12] for lane in lanes]):
+            for t in row:
+                if t is not None and t.video_id not in seen:
+                    seen.add(t.video_id)
+                    dealt.append(t)
+        queue.play_now(dealt, anchors=[lane[0] for lane in lanes], kind="mix")
+        said = ", ".join(names[:-1]) + " and " + names[-1]
+        msg = f"Playing {said} together"
+    say(msg)
+    return {"status": "played", "message": msg, "tracks": len(lanes)}
 
 
 def play_video(video_id: str, *, title: str = "", artist: str = "", art: str = "",

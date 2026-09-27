@@ -831,6 +831,25 @@ def api_play_video(request: Request, video_id: str, title: str = "", artist: str
                       queue=room.queue if room else None)
 
 
+@app.get("/api/play/pick")
+def api_play_pick(request: Request, items: str = "", mode: str = "play", _: bool = Auth):
+    """Play what was picked in the search results: now, next, queued, or together."""
+    try:
+        picked = json.loads(items or "[]")
+    except ValueError:
+        raise HTTPException(400, "items must be a JSON list")
+    if not isinstance(picked, list):
+        raise HTTPException(400, "items must be a JSON list")
+    if mode not in ("play", "next", "queue", "together"):
+        raise HTTPException(400, "mode is play, next, queue or together")
+    room = _session_for(request)
+    _guard_rate(room, request)
+    if not room:
+        _guard_shared(request)
+    from ..requests import play_picks
+    return play_picks(picked, mode, queue=room.queue if room else None)
+
+
 @app.get("/api/control/{action}")
 def api_control(request: Request, action: str, value: int | None = None,
                 _: bool = Auth):

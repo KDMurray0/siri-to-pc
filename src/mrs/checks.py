@@ -4580,6 +4580,67 @@ def _run(verbose: bool = False) -> Result:
               and q42._work and q42._work[0].mode == "next", str(said))
             say("what gets played", c)
 
+            # -- 43. picked search results: exactly those, now, next, queued or together --
+            c = _Checker("picked results")
+            from . import requests as _rq43
+            from .core.queue import QueueManager as _QM43
+            from .core.sink import ListSink as _LS43
+            from .core.taste import NeutralTaste as _NT43
+            from .models import Track as _T43
+            from .resolve import resolver as _rv43
+
+            class _Ctx43:
+                def build(self, *a, **k): return []
+                def quick(self, *a, **k): return []
+
+            searched: list = []
+
+            def _res43(plan, taste=None):
+                searched.append((plan.kind, plan.query))
+                return _rv43.Resolution([_T43(video_id=f"{plan.query[:4]}{i}", title=f"{plan.query} {i}",
+                                              artist=plan.query) for i in range(8)], f"Playing {plan.query}")
+
+            def fresh():
+                q = _QM43(_LS43(), _Ctx43(), taste=_NT43(), session_id="pick-check")
+                q.sink.load("C:/x/on.m4a"); q.sink._pos = 0
+                return q
+
+            song = lambda n: {"kind": "song", "video_id": f"s{n}", "title": f"Song {n}", "artist": "A"}
+            with _patch.object(_rq43.resolver, "resolve", _res43), \
+                    _patch.object(_rq43, "handle_request", lambda *a, **k: searched.append("typed")):
+                q = fresh()
+                _rq43.play_picks([song(1), song(2)], "next", queue=q, announce=False)
+                c("two songs picked for next play next, in the order picked",
+                  [w.track.video_id for w in q._work] == ["s1", "s2"]
+                  and all(w.mode == "next" for w in q._work))
+                c("...without searching for anything", searched == [])
+                q = fresh()
+                got = _rq43.play_picks([{"kind": "artist", "name": "Danzig"}], "next", queue=q, announce=False)
+                c("a band picked for next is their likeliest song, once",
+                  [w.track.video_id for w in q._work] == ["Danz0"] and "next" in got["message"])
+                q = fresh()
+                got = _rq43.play_picks([{"kind": "artist", "name": "Korn"}], "queue", queue=q, announce=False)
+                c("a band added to the queue is a handful of their songs, not their catalogue",
+                  len(q._work) == 5 and got["message"] == "Added 5 songs to the queue")
+                q = fresh()
+                got = _rq43.play_picks([{"kind": "artist", "name": "Danzig"},
+                                        {"kind": "artist", "name": "Black Label Society"}, song(9)],
+                                       "together", queue=q, announce=False)
+                order = [w.track.artist for w in q._work][:3]
+                c("picks played together open with one of each",
+                  order == ["Danzig", "Black Label Society", "A"], str(order))
+                c("...each one an anchor the radio comes back to", len(q._anchors) == 3)
+                c("...and it says so", got["message"] == "Playing Danzig, Black Label Society and Song 9 together")
+                c("an empty pick is refused plainly",
+                  _rq43.play_picks([], "play", queue=fresh())["status"] == "error")
+            c("the route is anyone's who can play music, not only the owner's",
+              client.post("/api/play/pick", json={"items": "[]", "mode": "play"},
+                          headers={"X-Music-Key": phone, **here}).status_code == 200)
+            c("...and a bad list is a 400, not a crash",
+              client.post("/api/play/pick", json={"items": "not json"},
+                          headers=owner_h).status_code == 400)
+            say("picked results", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json
