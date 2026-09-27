@@ -19,3 +19,10 @@ python-multipart>=0.0.9
 # operations. There is a slow fallback, so this is performance, not
 # correctness -- but the build bundles it and it should be the default.
 numpy>=1.26
+# The Windows media overlay and the keyboard's media keys, run by the app so
+# they can let go while a phone is the speaker. Without these mpv keeps its own.
+winrt-runtime>=3.0; sys_platform == 'win32'
+winrt-Windows.Foundation>=3.0; sys_platform == 'win32'
+winrt-Windows.Media>=3.0; sys_platform == 'win32'
+winrt-Windows.Media.Playback>=3.0; sys_platform == 'win32'
+winrt-Windows.Storage.Streams>=3.0; sys_platform == 'win32'

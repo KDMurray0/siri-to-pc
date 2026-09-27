@@ -47,7 +47,9 @@ for _pkg in ('fastapi', 'starlette', 'uvicorn', 'jinja2'):
 
 # pythonnet (clr) powers pywebview's WebView2 backend; edge_tts/certifi give the
 # neural announce voice. Pull their data + native DLLs in explicitly.
-for _pkg in ('pythonnet', 'clr_loader', 'edge_tts', 'certifi', 'pyaudiowpatch'):
+# winrt is the Windows media overlay and keys (mrs.core.smtc), imported lazily
+# on its own thread, so nothing points PyInstaller at it.
+for _pkg in ('pythonnet', 'clr_loader', 'edge_tts', 'certifi', 'pyaudiowpatch', 'winrt'):
     try:
         _d, _b, _h = collect_all(_pkg)
         datas += _d
@@ -55,6 +57,8 @@ for _pkg in ('pythonnet', 'clr_loader', 'edge_tts', 'certifi', 'pyaudiowpatch'):
         hiddenimports += _h
     except Exception:
         pass
+hiddenimports += ['winrt.runtime', 'winrt.windows.foundation', 'winrt.windows.media',
+                  'winrt.windows.media.playback', 'winrt.windows.storage.streams']
 
 
 # Nothing here uses the scientific/ML stack; exclude it so the build stays lean

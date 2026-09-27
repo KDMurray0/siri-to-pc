@@ -211,6 +211,10 @@ def kill_orphan_mpv() -> int:
 class MpvClient:
     """One mpv process plus its IPC connection."""
 
+    # The primary's own Windows media session. Off once the app runs its own
+    # (core/smtc): mpv's can't be taken down later, so it's never put up.
+    windows_session = True
+
     def __init__(self, pipe_name: str = PIPE_MAIN, *, primary: bool = True) -> None:
         self.pipe_name = pipe_name
         self.primary = primary
@@ -242,8 +246,10 @@ class MpvClient:
         args = [self.mpv_path, "--no-video", "--idle=yes", "--no-terminal",
                 "--volume-max=150", f"--volume={int(volume)}",
                 f"--input-ipc-server={self.pipe_name}"]
-        if self.primary:
+        if self.primary and MpvClient.windows_session:
             args += ["--media-controls=yes", "--input-media-keys=yes"]
+        elif self.primary:
+            args += ["--media-controls=no"]
         else:
             args += ["--no-config", "--media-controls=no"]
         args += (extra_args or [])

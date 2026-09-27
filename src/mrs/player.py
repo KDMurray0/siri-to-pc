@@ -101,6 +101,9 @@ class PlayerService:
         kill_stray_mpv()
         kill_orphan_mpv()
         vol = int(config.get("volume", 70))
+        # Before mpv, which only leaves the media keys alone if told at birth.
+        from .core import smtc
+        MpvClient.windows_session = not smtc.start(self._media_key, self._media_seek)
         # gapless=yes so albums run together properly
         self.mpv.spawn(vol, extra_args=["--gapless-audio=yes"])
         try:
@@ -151,6 +154,8 @@ class PlayerService:
 
     def stop(self) -> None:
         self._stop.set()
+        from .core import smtc
+        smtc.stop()
         stats.flush()
         listener.stop()
         self.queue.stop()
@@ -214,6 +219,7 @@ class PlayerService:
                     self._recover()
                     continue
                 self._watch_track()
+                self._tell_windows()
                 if self._mute_since:
                     # mpv answered nothing that time. Everything below asks
                     # it more questions, and each one waits out the full IPC
@@ -505,6 +511,37 @@ class PlayerService:
                 stats.note(stats.HOUSE, seconds=pos - was)
             self._watch["pos"] = max(was, pos)
             self._watch["dur"] = dur or self._watch.get("dur", 0)
+        self._watch["paused"] = bool(props.get("pause"))
+        self._watch["at"] = pos
+
+    def _tell_windows(self) -> None:
+        """The media overlay and keys: on what's playing, and gone while it's the phone."""
+        from .core import smtc
+        if not smtc.running():
+            return
+        w = self._watch
+        track = self.queue.track_for(w.get("path") or "") if w.get("path") else None
+        if not track or self.casting():
+            smtc.follow(show=False)
+            return
+        on_air = _song_on_air(track)
+        smtc.follow(show=True, name=on_air or track.title,
+                    artist=track.title if on_air else track.artist,
+                    album=track.album or "", art=track.art or "",
+                    playing=not w.get("paused"), pos=w.get("at", 0),
+                    dur=0 if radio.is_station(track) else (w.get("dur") or track.duration or 0))
+
+    def _media_key(self, action: str) -> None:
+        # Hidden while casting, but a press already in flight can still land.
+        if self.casting():
+            log.info("media key %s ignored -- the sound is on a phone", action)
+            return
+        self.control(action)
+        bus.publish(Ev.STATUS, self.status())
+
+    def _media_seek(self, to: float) -> None:
+        if not self.casting():
+            self.seek(to)
 
     def _revive_alt(self) -> bool:
         """The crossfade engine is a second mpv; bring it back if it died."""
@@ -711,14 +748,10 @@ class PlayerService:
                                      wait=False)
             except Exception as exc:
                 log.debug("audio chain nudge: %s", exc)
-        # The Windows media overlay and the media keys belong to whatever is
-        # actually making the sound. While that's the phone, mpv answering
-        # them means two things fighting over one play/pause.
-        try:
-            self.mpv.set("media-controls", "no" if release else "yes")
-            self.mpv.set("input-media-keys", "no" if release else "yes")
-        except Exception as exc:
-            log.debug("media-controls switch failed: %s", exc)
+        # The media overlay and keys go with the sound: _tell_windows hides
+        # ours while it's the phone. (mpv's own can't be switched off here --
+        # set at runtime it stays up and keeps obeying the keys.)
+        self._tell_windows()
 
     def current_ao(self, alt: bool = False) -> str:
         """mpv reports `ao` as a list of driver entries, empty when default."""

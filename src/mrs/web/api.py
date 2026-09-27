@@ -34,6 +34,7 @@ from ..core import stats
 from ..core import cast as cast_mod
 from ..core import cookies as cookie_mod
 from ..core import radio as radio_mod
+from ..core import smtc as _smtc
 from ..core.downloader import downloader
 from ..core.extras import caster, scrobbler
 from ..core.library import library
@@ -2570,6 +2571,7 @@ def api_output_stats(_: bool = Auth):
     return {"status": "ok", "casting": player.casting(),
             "ao": player.current_ao(), "alt_ao": player.current_ao(alt=True),
             "media_controls": player.mpv.get("media-controls", None),
+            "media_overlay": "ours" if _smtc.running() else "mpv's",
             **cast_mod.stats()}
 
 

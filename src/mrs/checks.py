@@ -4777,6 +4777,73 @@ def _run(verbose: bool = False) -> Result:
               _sh45.forget_by("g-45454545") == 1 and _sh45.forget_by("g-45454545") == 0)
             say("sharing a song", c)
 
+            # -- 46. media keys: the PC's keyboard stays out of the phone's music --
+            c = _Checker("media keys")
+            from .core import smtc as _smtc46
+            from .core import mpv as _mpv46
+            from .player import CAST_DEVICE as _CAST46, player
+            from .models import Track as _T46
+
+            class _Born(Exception):
+                pass
+
+            def _args46(windows):
+                seen = []
+
+                def fake(args, **kw):
+                    seen.append(list(args))
+                    raise _Born()
+                was = _mpv46.MpvClient.windows_session
+                _mpv46.MpvClient.windows_session = windows
+                try:
+                    with _patch.object(_mpv46.subprocess, "Popen", fake):
+                        try:
+                            _mpv46.MpvClient("mrs-check-46", primary=True).spawn(50)
+                        except _Born:
+                            pass
+                finally:
+                    _mpv46.MpvClient.windows_session = was
+                return seen[0] if seen else []
+            c("with our overlay up, mpv never puts up its own",
+              "--media-controls=no" in _args46(False) and "--media-controls=yes" not in _args46(False))
+            c("...and without it, mpv's is still there for the keys",
+              "--media-controls=yes" in _args46(True))
+            c("the buttons mean what they say",
+              _smtc46._ACTIONS == {0: "resume", 1: "pause", 2: "pause", 6: "next", 7: "previous"})
+            told = []
+            song46 = _T46(title="Mother", artist="Danzig", album="Danzig", art="https://img/m.jpg",
+                          video_id="MEDIA00046", duration=205)
+            dev_was = config.get("audio_device", "auto")
+            watch_was = dict(player._watch)
+            try:
+                player._watch = {"path": "C:/x/MEDIA00046.m4a", "paused": False, "at": 30.0, "dur": 205}
+                with _patch.object(_smtc46, "running", lambda: True), \
+                        _patch.object(_smtc46, "follow", lambda **kw: told.append(kw)), \
+                        _patch.object(player.queue, "track_for", lambda p: song46):
+                    config.set("audio_device", "auto")
+                    player._tell_windows()
+                    c("on the speakers it names the song, playing, where it's got to",
+                      told and told[-1].get("show") is True and told[-1].get("name") == "Mother"
+                      and told[-1].get("artist") == "Danzig" and told[-1].get("playing") is True
+                      and told[-1].get("pos") == 30.0, str(told[-1:]))
+                    config.set("audio_device", _CAST46)
+                    player._tell_windows()
+                    c("on the phone it's gone from Windows altogether", told[-1] == {"show": False})
+                    acted = []
+                    with _patch.object(player, "control", lambda a, v=None: acted.append(a) or {}):
+                        player._media_key("pause")
+                        c("...and a key press that was already on its way does nothing", acted == [])
+                        config.set("audio_device", "auto")
+                        with _patch.object(player, "status", lambda: {}):
+                            player._media_key("pause")
+                        c("back on the speakers the keys work again", acted == ["pause"])
+            finally:
+                config.set("audio_device", dev_was)
+                player._watch = watch_was
+            c("with no overlay running, nothing is sent", _smtc46.follow(show=True) is None
+              and not _smtc46.running())
+            say("media keys", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json
