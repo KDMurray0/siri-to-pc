@@ -644,9 +644,10 @@ class PlayerService:
         # mode buried in a device list is how somebody ends up wondering why
         # the volume slider stopped doing anything. It's a toggle in the UI.
         return {"devices": out, "current": current, "casting": self.casting(),
-                "cast_client": config.get("cast_client", "")}
+                "cast_client": config.get("cast_client", ""),
+                "label": config.get("audio_device_label", "")}
 
-    def set_audio_device(self, name: str, client: str = "") -> dict:
+    def set_audio_device(self, name: str, client: str = "", label: str = "") -> dict:
         name = (name or "auto").strip()
         config.set("audio_device", name)
         # Which browser is the speaker. Without this every open copy of the
@@ -669,7 +670,7 @@ class PlayerService:
                 self._release_sound_card(True)
             except Exception as exc:
                 return {"ok": False, "message": str(exc)}
-            config.set("audio_device_label", "This phone or browser")
+            config.set("audio_device_label", label or "another device")
             self._announce_output(name, True, client=config.get("cast_client", ""))
             log.info("audio output -> cast (PC released)")
             return {"ok": True, "device": name, "cast": True,

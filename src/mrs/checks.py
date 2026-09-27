@@ -4844,6 +4844,41 @@ def _run(verbose: bool = False) -> Result:
               and not _smtc46.running())
             say("media keys", c)
 
+            # -- 47. the phone as the speaker: named, handed over, kept awake --
+            c = _Checker("the phone as the speaker")
+            from .web import api as _api47
+            from .player import CAST_DEVICE as _CAST47, player as _pl47
+            c("the device that took the sound gets a name the PC can show",
+              _api47._device_kind("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)") == "your iPhone"
+              and _api47._device_kind("Mozilla/5.0 (Linux; Android 15; Pixel 9) Mobile Safari") == "your phone"
+              and _api47._device_kind("Mozilla/5.0 (Windows NT 10.0) Chrome/140") == "another browser")
+            dev47, lab47, cli47 = (config.get("audio_device", "auto"), config.get("audio_device_label", ""),
+                                   config.get("cast_client", ""))
+            try:
+                with _patch.object(_pl47, "_release_sound_card", lambda release: None), \
+                        _patch.object(_pl47, "_announce_output", lambda *a, **k: None):
+                    _pl47.set_audio_device(_CAST47, client="c47", label="your iPhone")
+                    with _patch.object(_pl47.mpv, "command", lambda *a, **k: []):
+                        got47 = _pl47.audio_devices()
+                c("...and a PC page opening later is told it too",
+                  got47.get("casting") and got47.get("label") == "your iPhone", str(got47)[:160])
+            finally:
+                config.set("audio_device", dev47)
+                config.set("audio_device_label", lab47)
+                config.set("cast_client", cli47)
+            page47 = (Path(__file__).parent / "web" / "templates" / "player.html").read_text("utf-8")
+            c("the PC stops claiming the speakers while a phone plays",
+              "function segAway(" in page47 and "if (away) segAway(where)" in page47)
+            c("the owner's phone hands over the moment a song ends, not after the PC says so",
+              'if (castHandover() && ME.owner) cast.handed' in page47
+              and 'if (cast.handed && vid === cast.handed.from) return;' in page47)
+            c("a stream that died in a pocket is noticed and reopened",
+              "Date.now() - lastEvAt < 40000" in page47 and "lastEvAt = Date.now();" in page47)
+            api47 = Path(_api47.__file__).read_text("utf-8")
+            c("...because the quiet stream says something a page can hear",
+              'yield _sse({"type": "ping"})' in api47 and '": keepalive"' not in api47)
+            say("the phone as the speaker", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json

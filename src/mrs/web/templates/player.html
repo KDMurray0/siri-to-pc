@@ -4840,6 +4840,23 @@ $("devlist").addEventListener("click", async e => {
 
 /* The toggle is a real user gesture, which is the only moment iOS will let
    audio start — so playback is kicked off from inside the handler itself. */
+/* Neither half: the sound is on another device. The PC went on saying
+   "PC Speaker" while a phone played, which is how the wrong one gets paused. */
+let awayOn = "";
+function segAway(label) {
+  const note = $("ph-note");
+  if (label && !awayOn) note.dataset.was = note.textContent;
+  if (!label && awayOn && note.dataset.was) note.textContent = note.dataset.was;
+  awayOn = label || "";
+  document.body.classList.toggle("elsewhere", !!awayOn);
+  if (!awayOn) return;
+  ["segphone", "segpc"].forEach(id => {
+    $(id).classList.remove("on");
+    $(id).setAttribute("aria-selected", "false");
+  });
+  note.textContent = "Playing on " + awayOn + " — pick one to take it back";
+  $("volicon").title = "Playing on " + awayOn;
+}
 function segShow(here) {
   $("segphone").classList.toggle("on", here);
   $("segphone").setAttribute("aria-selected", here ? "true" : "false");
@@ -4857,8 +4874,9 @@ function segShow(here) {
 let switching = false;
 async function choosePlace(here) {
   if (ME.scope === "phone" && !here) return;     // that half isn't theirs
-  if (here === cast.on || switching) return;
+  if ((here === cast.on && !awayOn) || switching) return;
   switching = true;
+  segAway("");
   const want = here;
   // Where we'd got to, read before anything stops — this is what gets
   // carried across, and a moment later it's gone.
@@ -5533,6 +5551,11 @@ function castSync(d) {
   }
   const t = d.track || {};
   const vid = t.video_id || "";
+  // Handed over ahead of mpv: it's still finishing the song we left. Wait for
+  // it rather than going back for the last second of it.
+  if (cast.handed && Date.now() - cast.handed.at > 8000) cast.handed = null;
+  if (cast.handed && vid === cast.handed.from) return;
+  if (cast.handed && vid !== cast.handed.from) cast.handed = null;
   if (!vid) { castHush(); try { castLive().pause(); } catch (e) {} return; }
 
   // Nothing was playing here a moment ago — this is a page that just loaded,
@@ -5593,15 +5616,24 @@ function applyOutput(d) {
   // Casting names one browser. Every other open copy has to stop, or picking
   // the phone while the page is also open on the PC plays out of both.
   const mine = !!d.casting && d.client === CLIENT_ID;
-  if (mine === cast.on) return;
-  if (mine) {
-    castOn();
-    castSync(lastStatus);
-    toast("Now playing on this device");
-  } else {
-    castOff();
-    if (d.casting) toast("Moved to another device");
-    else toast("Moved to " + (d.label || "the computer"));
+  const away = !!ME.owner && !!d.casting && !mine;
+  const where = d.label || (d.casting ? "another device" : "the computer");
+  if (mine !== cast.on) {
+    if (mine) {
+      castOn();
+      castSync(lastStatus);
+      toast("Now playing on this device");
+    } else {
+      castOff();
+      toast("Moved to " + where);
+    }
+  } else if (away && awayOn !== where) {
+    toast("Playing on " + where + " now");
+  }
+  // And every other screen of the owner's says where the sound went.
+  if (ME.owner) {
+    if (away) segAway(where);
+    else if (awayOn) { segAway(""); segShow(cast.on); }
   }
 }
 
@@ -5720,11 +5752,22 @@ function castHandover() {
 }
 
 castEls.forEach(el => el.addEventListener("ended", async () => {
-  if (!cast.on || el !== castLive() || ME.owner) return;
+  if (!cast.on || el !== castLive()) return;
   // Audio first, paperwork second. If the guess turns out wrong — the queue
   // was reordered, something was played next — castSync below corrects it,
   // and correcting a track that is playing is cheap. Silence is not.
-  castHandover();
+  //
+  // The owner too. mpv moves itself on, but the phone finishing first and
+  // waiting for it to say so was a silent gap -- and a locked phone that
+  // isn't playing is one iOS puts to sleep before the word arrives.
+  if (ME.owner && (lastStatus || {}).repeat === "one") {
+    try { el.currentTime = 0; } catch (e) {}
+    castPlay(el);
+    return;
+  }
+  const from = cast.vid;
+  if (castHandover() && ME.owner) cast.handed = { from, at: Date.now() };
+  if (ME.owner) return;
   const r = await api("/api/session/ended");
   if (r) { lastStatus = r; castSync(r); }
 }));
@@ -5833,6 +5876,7 @@ castEls.forEach(el => el.addEventListener("playing", () => {
     if (mine && !cast.on) castOn();
     else if (!mine && cast.on) castOff();
     else segShow(cast.on);
+    if (!mine && r.casting) segAway(r.label || "another device");
   }
   if (!mine) return;
   // Selected on a previous visit: we're the output, but nothing can start
@@ -6618,7 +6662,21 @@ function applyActivity(a) {
   $("actbar").style.width = Math.round((a.progress || 0) * 100) + "%";
 }
 
-let es = null;
+let es = null, lastEvAt = Date.now();
+/* The server says something at least every fifteen seconds. Nothing for
+   longer is a stream that died while the phone slept -- no error, just
+   quiet -- and the next song would never have been named. */
+setInterval(() => {
+  if (!es || Date.now() - lastEvAt < 40000) return;
+  lastEvAt = Date.now();
+  connect();
+}, 5000);
+document.addEventListener("visibilitychange", async () => {
+  if (document.hidden || !cast.on) return;
+  if (Date.now() - lastEvAt > 20000) connect();
+  const d = await api("/api/status");
+  if (d) { lastStatus = d; applyStatus(d); }
+});
 function connect() {
   if (es) es.close();
   if (!URL_TOKEN && !SIGNED_IN) { refreshToken().then(connect); return; }
@@ -6628,6 +6686,7 @@ function connect() {
   es = new EventSource(BASE + "/api/events?" + urlAuth() +
                        "&here=" + (cast.on ? "1" : "0"));
   es.onmessage = ev => {
+    lastEvAt = Date.now();
     let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
     switch (msg.type) {
       case "status": applyStatus(msg.data); break;

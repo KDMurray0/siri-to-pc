@@ -719,7 +719,9 @@ async def events(request: Request, key: str = Query(default=""),
                     if _mine(evt, mine):
                         yield _sse(evt)
                 except asyncio.TimeoutError:
-                    yield ": keepalive" + NEWLINE + NEWLINE
+                    # A message, not a comment: a page can't see comments, and
+                    # a phone needs to notice a stream that died while it slept.
+                    yield _sse({"type": "ping"})
         finally:
             bus.unsubscribe(queue)
 
@@ -2186,7 +2188,21 @@ def api_audio_device(request: Request, name: str = "auto", client: str = "",
     """
     if _pass_scope(request) == "phone" and name != CAST_DEVICE:
         raise HTTPException(403, "That link plays on your own device only")
-    return {"status": "ok", **player.set_audio_device(name, client=client)}
+    return {"status": "ok", **player.set_audio_device(
+        name, client=client, label=_device_kind(request.headers.get("user-agent", "")))}
+
+
+def _device_kind(ua: str) -> str:
+    """What the other screens call the device that took the sound."""
+    if "iPhone" in ua:
+        return "your iPhone"
+    if "iPad" in ua:
+        return "your iPad"
+    if "Android" in ua:
+        return "your phone" if "Mobile" in ua else "your tablet"
+    if "Macintosh" in ua and "Mobile" in ua:
+        return "your iPad"
+    return "another browser"
 
 
 # ── the first-run guide ───────────────────────────────────────────────
