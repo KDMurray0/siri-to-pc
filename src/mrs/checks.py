@@ -4452,6 +4452,54 @@ def _run(verbose: bool = False) -> Result:
                         pass
             say("learn what I like", c)
 
+            # -- 41. party mode: fair, never silent, and only on the speakers ------
+            c = _Checker("party mode")
+            from .core.queue import QueueManager as _QM41
+            from .core.sink import ListSink as _LS41
+            from .core.taste import NeutralTaste as _NT41
+            from .models import Track as _T41
+
+            class _Ctx41:
+                def build(self, *a, **k): return []
+                def quick(self, *a, **k): return []
+
+            _was41 = _cfg.get("party_mode")
+            try:
+                _cfg.set("party_mode", True, save=False)
+                house = _QM41(_LS41(), _Ctx41(), taste=_NT41())      # the shared speakers
+                house.sink.load("C:/x/playing.m4a")
+                house.sink._pos = 0
+                twenty = [_T41(video_id=f"queen{i:02d}", title=f"Q{i}", artist="Queen") for i in range(20)]
+                house.play_now(twenty, kind="artist")
+                queued = [w.track.video_id for w in house._work]
+                c("a request adds one song to the back, not a whole artist",
+                  queued == ["queen00"], str(queued))
+                c("...and doesn't replace what's on", house.sink.count() == 1 and house._work[0].mode == "append")
+                house.play_next(_T41(video_id="jump01", title="J", artist="X"))
+                c("play next waits its turn like everyone else's",
+                  [w.mode for w in house._work] == ["append", "append"])
+                house._work.clear()
+                house._pool = [type("C", (), {"can_try": lambda self, now: True, "score": 1.0,
+                                             "track": _T41(video_id="radio01", title="R", artist="Y"),
+                                             "reason": "keeping it going"})()]
+                house.sink.load("C:/x/next.m4a")
+                c("while requests are waiting the radio stays out of it", house._take_work() is None)
+                house.sink._items = ["C:/x/playing.m4a"]
+                got = house._take_work()
+                c("...but when they've run out it keeps the room going, one song at a time",
+                  got is not None and got.track.video_id == "radio01", str(got))
+
+                phone41 = _QM41(_LS41(), _Ctx41(), taste=_NT41(), session_id="somebody")
+                phone41.sink.load("C:/x/theirs.m4a")
+                phone41.sink._pos = 0
+                phone41.play_now([_T41(video_id="mine01", title="M", artist="Z"),
+                                _T41(video_id="mine02", title="N", artist="Z")])
+                c("somebody's own phone isn't at the party: play now plays now",
+                  [w.mode for w in phone41._work][:1] == ["now"] and len(phone41._work) == 2)
+            finally:
+                _cfg.set("party_mode", _was41, save=False)
+            say("party mode", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json

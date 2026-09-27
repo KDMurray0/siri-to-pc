@@ -357,6 +357,10 @@ class QueueManager:
         return self._activity
 
     # -- public API ----------------------------------------------------
+    def _party(self) -> bool:
+        """Party rules are for the shared speakers, not somebody's own phone."""
+        return bool(config.get("party_mode")) and not self._solo
+
     def play_now(self, tracks: list[Track], alternates: list[str] | None = None,
                  *, shuffle: bool = False, hold_radio: bool = False,
                  kind: str = "song", theme: str = "",
@@ -365,11 +369,14 @@ class QueueManager:
         tracks = [t for t in tracks if t.video_id or t.url]
         if not tracks:
             return
-        if config.get("party_mode") and self.sink.count():
-            # In party mode nobody replaces what's on — not even by asking
+        if self._party() and self.sink.count():
+            # In party mode nobody replaces what's on -- not even by asking
             # for it outright. It goes on the end like everyone else's, and
-            # the owner is still free to drag it wherever they like.
-            self.enqueue(tracks)
+            # the owner is still free to drag it wherever they like. One song
+            # a request: "play some Queen" adding twenty put one guest's whole
+            # evening ahead of everybody else's.
+            tracks[0].reason = tracks[0].reason or "asked"
+            self.enqueue(tracks[:1])
             return
         if shuffle or self._pref_shuffle():
             random.shuffle(tracks)
@@ -403,7 +410,7 @@ class QueueManager:
         self._wake.set()
 
     def play_next(self, track: Track) -> None:
-        if config.get("party_mode"):
+        if self._party():
             self.enqueue([track])       # no queue-jumping while the party's on
             return
         with self._lock:
@@ -536,10 +543,10 @@ class QueueManager:
                 return self._work.popleft()
         if self._hold_radio:
             return None
-        if config.get("party_mode"):
-            # Nothing but what people actually asked for. The radio filling
-            # gaps is the right behaviour on an ordinary evening and exactly
-            # wrong when six people are queueing things.
+        if self._party() and (self.minutes_ahead() > 1.5 or self.ready_ahead() > 0):
+            # What people asked for comes first, all of it. The radio only
+            # steps in when that has run out -- a lull shouldn't be silence --
+            # and then one song at a time, so the next request is next.
             return None
         if self._pref_repeat() != "off":
             return None          # repeating a set list: don't keep growing it
