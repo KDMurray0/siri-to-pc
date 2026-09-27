@@ -1,3 +1,3 @@
 """Music Request Server."""
 
-__version__ = "3.14.0"
+__version__ = "4.0.0"

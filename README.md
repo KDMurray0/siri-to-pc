@@ -48,6 +48,34 @@ eight, back up at seven. The level you set is remembered as the level you
 meant for that time of day, so turning it up at midnight makes midnight
 louder rather than starting an argument. One toggle in settings turns it off.
 
+**Make me a playlist of five hundred.** Lists → *Make one for me*, or say it:
+"500 songs of nu metal and glam metal", "a playlist of Danzig and Black Label
+Society". Bands, genres or both, at the size asked for (up to a thousand). Each
+band's songs come from its own top hundred, most-played first, weighed against
+what you like, so you get the ones you'd want rather than a deep cut by a band
+you know.
+
+**Pick, then choose what happens.** Tap a song, band or album in the search
+results to pick it; tap again to play. With picks made, *Play*, *Next* and
+*Queue* do that to exactly those — never a fresh search — and *Play together* deals
+several bands or albums out in turn and keeps the radio steering by all of
+them. "Play Mother by Danzig next" works out loud too, and says so.
+
+**Share a song.** The share button makes a link that plays that one song for
+anyone who opens it — no account, no sign-in, nothing else reachable — and
+turns into a card with the cover when pasted into Discord, iMessage or
+WhatsApp. It expires after thirty days. With a free Spotify developer app in
+Settings → Connections, it can hand out the Spotify link as well.
+
+**Lyrics that sing.** Heavier words, and each one lifts, grows and glows while
+it's sung — more the longer it's held.
+
+**A glass mini player.** The shrunk bar can be a slab of glass over the cover:
+bent at the edges, tinted by the album. Settings → Look.
+
+**Party mode.** One song per request, the queue never runs dry, and it only
+plays on the speakers.
+
 ## Playing somewhere else
 
 The whole player runs in a browser, so anything with one is a speaker.
@@ -64,6 +92,13 @@ The whole player runs in a browser, so anything with one is a speaker.
   once. The list shows who's listening, to what, and how much they've asked
   for.
 
+While your phone is the speaker the computer says so — neither half of its
+capsule lit, "Playing on your iPhone" underneath — and its keyboard's media
+keys and the Windows media overlay let go, so pausing at the desk can't pause
+the music in your pocket. Pick either half on the computer to take it back.
+A locked phone moves to the next song the moment one ends rather than waiting
+to be told, and a connection that died while it slept is noticed and reopened.
+
 Links are signed passes rather than the key itself, they expire, and three
 wrong guesses from one address earns a 24-hour ban.
 
@@ -75,6 +110,10 @@ stays visible while you use the rest of it, the cover takes the height it's
 given, and the search box moves to the top. The tray flyout stays the narrow
 bar it's meant to be — **right-click the tray icon → Open desktop player** to
 get the wide one on this machine.
+
+In the desktop app, the gear opens Settings in a window of its own rather than
+squeezing them into the 400px flyout. What you change there shows in the flyout
+straight away.
 
 A link playing on a laptop also gets the volume slider, which used to be
 hidden from every link on the assumption that "playing on your own device"
@@ -500,10 +539,18 @@ For a genuine local gateway/tunnel, select **Local HTTPS gateway** in Settings
 → Access, save, restart, and confirm its HTTP origin is
 `http://127.0.0.1:<port>` before adding the redirect URI below.
 
-1. **Write down your own address first.** Settings → Access → *Your own
-   email*. The account matching it becomes the owner. Being the first person
-   to sign in doesn't do it — otherwise whoever found the address first would
-   own the server.
+1. **Write down your own address first.** In the setup guide (*Your Google
+   account*) or Settings → Connections → *Your own email*. The account matching
+   it becomes the owner. Being the first person to sign in doesn't do it —
+   otherwise whoever found the address first would own the server.
+
+   The owner signed in with Google *is this computer*: the same likes,
+   playlists and history, not a second empty profile. Gmail's dots and
+   `+anything` don't matter (`j.smith@` and `jsmith+music@` are the
+   same inbox), and once you've signed in the account is pinned, so a later
+   change of address doesn't lose you the house. Signed in before you wrote
+   the address down? Saving it makes that account the owner there and then,
+   and whatever it had kept separately moves into the house profile.
 
 2. **Make a Google client.** [Google Cloud Console](https://console.cloud.google.com/)
    → APIs & Services → Credentials → **Create credentials → OAuth client ID**
@@ -527,7 +574,8 @@ directly over TLS using the client secret, so nothing the browser carried is
 taken on trust.
 
 The session is a signed cookie holding an account id and nothing else. It
-lasts 30 days, is HttpOnly, and is marked Secure whenever the server is on
+lasts 180 days and is renewed as it's used, so somebody who keeps coming back
+stays signed in; it is HttpOnly, and marked Secure whenever the server is on
 https.
 
 ### What is held, and what people can do about it
@@ -665,10 +713,13 @@ Toggle the whole thing live from the music bar.
 
 ## Windows Media Integration
 
-mpv is launched with `--media-controls=yes`, so the player registers with the **Windows System Media Transport Controls**:
+The app registers its own session with the **Windows System Media Transport Controls** (through `winrt`):
 
-- The **volume/media flyout, lock screen, and "now playing"** show the current song and artist (embedded into each downloaded file's tags).
-- The keyboard/hardware **media keys work**: Play/Pause toggles playback, and Next/Previous move through the queue — even with no window focused.
+- The **volume/media flyout, lock screen and "now playing"** show the song, the artist and the cover — the song, not the file name.
+- The keyboard/hardware **media keys work**: Play/Pause, Next and Previous, even with no window focused. Scrubbing in the flyout seeks.
+- **While a phone is the speaker the session is taken down**, so the keys and the flyout can't reach the music in your pocket. It comes back when the sound does.
+
+mpv's own session can't be let go of once it's up — switched off at runtime it stays, and its buttons call pause directly — so mpv is started with `--media-controls=no` whenever the app's session is running. Without `winrt` installed mpv keeps its own, as before.
 
 ## A note on streaming vs. downloading
 
