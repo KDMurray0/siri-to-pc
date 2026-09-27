@@ -647,9 +647,13 @@ class Bridge:
         return True
 
     def open_settings(self, section=""):
-        threading.Thread(target=settings_window, args=(str(section or ""),),
-                         daemon=True, name="settings").start()
-        return True
+        # Made here, not on a thread: if it can't be, the page hears False and
+        # opens them in the flyout rather than the gear doing nothing.
+        try:
+            return settings_window(str(section or ""))
+        except Exception as exc:
+            log.warning("settings window: %s", exc)
+            return False
 
     def open_external(self, url):
         """Open a link in the user's actual browser.
@@ -686,7 +690,7 @@ class SettingsBridge:
 _settings_win: dict = {"win": None}
 
 
-def settings_window(section: str = "") -> None:
+def settings_window(section: str = "") -> bool:
     """Settings in a window of its own, sized for them.
 
     The flyout is 400 pixels wide; ten sections of settings were never going
@@ -700,7 +704,7 @@ def settings_window(section: str = "") -> None:
             win.show()
             win.on_top = True
             win.on_top = False
-            return
+            return True
         except Exception:
             _settings_win["win"] = None
     port = int(srv.runtime.get("port") or config.get("port", 7420))
@@ -713,6 +717,7 @@ def settings_window(section: str = "") -> None:
         background_color="#0e0f16")
     _settings_win["win"] = win
     win.events.closed += lambda: _settings_win.update(win=None)
+    return True
 
 # Straight to YouTube, not to a Google login form. You press "Sign in"
 # yourself, in your own time — the old flow drove the login itself and closed

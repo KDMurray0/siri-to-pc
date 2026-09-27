@@ -3869,9 +3869,15 @@ $("panel-lists").addEventListener("click", async e => {
 /* ── settings ──────────────────────────────────────────────────────── */
 const settingsNarrow = () => window.matchMedia("(max-width:640px)").matches;
 $("openSettings").onclick = () => {
-  // The desktop app opens them in a window of their own.
+  // The desktop app opens them in a window of their own -- or here, if it can't.
   const b = bridge();
-  if (b && b.open_settings && !SETTINGS_WIN) { b.open_settings(""); return; }
+  if (b && b.open_settings && !SETTINGS_WIN) {
+    Promise.resolve(b.open_settings("")).then(ok => { if (!ok) openSheetHere(); }, openSheetHere);
+    return;
+  }
+  openSheetHere();
+};
+function openSheetHere() {
   $("sheet").classList.add("open");
   // Narrow, it opens on the list of sections; wide, on the first one.
   $("sheet").classList.remove("picked");
@@ -3881,7 +3887,7 @@ $("openSettings").onclick = () => {
     (on && on.offsetParent ? on : document.querySelector('.stab[data-s="sound"]')).click();
   }
   loadSettings();
-};
+}
 $("setback").onclick = () => {
   $("sheet").classList.remove("picked");
   $("settitle").textContent = "Settings";

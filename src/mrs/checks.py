@@ -4885,7 +4885,11 @@ def _run(verbose: bool = False) -> Result:
             launch48 = (Path(__file__).parents[2] / "launcher.pyw")
             launch48 = launch48.read_text("utf-8") if launch48.exists() else ""
             c("the desktop app's gear opens a window, not the 400px sheet",
-              "if (b && b.open_settings && !SETTINGS_WIN) { b.open_settings(\"\"); return; }" in page48)
+              "if (b && b.open_settings && !SETTINGS_WIN) {" in page48)
+            c("...and if the window can't be made, the sheet opens here instead",
+              'Promise.resolve(b.open_settings("")).then(ok => { if (!ok) openSheetHere(); }, openSheetHere);'
+              in page48 and (not launch48 or ('log.warning("settings window: %s", exc)' in launch48
+                                              and "return settings_window(" in launch48)))
             c("...which is one window, brought forward if it's already open",
               not launch48 or ("def settings_window(" in launch48 and "win.restore()" in launch48
                                and "_settings_win.update(win=None)" in launch48))
@@ -5002,6 +5006,40 @@ def _run(verbose: bool = False) -> Result:
                 for k, v in keep50.items():
                     config.set(k, v)
             say("volume by the clock", c)
+
+            # -- 51. the event stream keeps every listener's page sure it's alive --
+            c = _Checker("stream pings")
+            import asyncio as _aio51
+            import time as _t51
+            from .web import api as _api51
+
+            def _run51(mine, stamp):
+                async def go():
+                    q = _aio51.Queue()
+                    until = _t51.monotonic() + 2.6
+
+                    async def gone():
+                        return _t51.monotonic() > until
+
+                    async def feed():
+                        # The owner's status, once every fifth of a second.
+                        while _t51.monotonic() < until + 1.5:
+                            await q.put({"type": "status", "data": {"session": stamp}})
+                            await _aio51.sleep(0.2)
+                    f = _aio51.ensure_future(feed())
+                    got = [chunk async for chunk in _api51._follow(q, mine, gone, ping_every=1.0)]
+                    await f
+                    return got
+                return _aio51.run(go())
+            guest51 = _run51("guest-51", "")
+            c("a guest with the owner's status going past still gets pinged",
+              sum('"ping"' in x for x in guest51) >= 2 and not any('"status"' in x for x in guest51),
+              str(guest51)[:160])
+            owner51 = _run51("", "")
+            c("...and the owner, who is sent those, isn't pinged on top of them",
+              any('"status"' in x for x in owner51) and not any('"ping"' in x for x in owner51),
+              str(owner51[:3])[:160])
+            say("stream pings", c)
 
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")

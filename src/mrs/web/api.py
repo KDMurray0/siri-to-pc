@@ -659,6 +659,33 @@ def _mine(evt: dict, session: str) -> bool:
     return stamped == session
 
 
+PING_EVERY = 15.0
+
+
+async def _follow(queue, mine: str, gone, touch=None, ping_every: float = PING_EVERY):
+    """What this listener is sent, and a ping whenever that's been nothing
+    for a while. Timed on what *they* got: a guest has the owner's status
+    going past every second, filtered out, so a ping on "the bus went quiet"
+    never came and their page reopened the stream every forty seconds."""
+    last = time.monotonic()
+    while True:
+        if await gone():
+            return
+        if touch:
+            touch()
+        wait = max(0.2, ping_every - (time.monotonic() - last))
+        try:
+            evt = await asyncio.wait_for(queue.get(), timeout=wait)
+            if _mine(evt, mine):
+                yield _sse(evt)
+                last = time.monotonic()
+        except asyncio.TimeoutError:
+            pass
+        if time.monotonic() - last >= ping_every:
+            yield _sse({"type": "ping"})
+            last = time.monotonic()
+
+
 @app.get("/api/events")
 async def events(request: Request, key: str = Query(default=""),
                  token: str = Query(default=""), here: str = Query(default="1")):
@@ -700,28 +727,17 @@ async def events(request: Request, key: str = Query(default=""),
                 yield _sse({"type": "status", "data": first})
             except Exception as exc:
                 log.debug("couldn't send the opening status: %s", exc)
-            while True:
-                if await request.is_disconnected():
-                    break
-                # An open stream is the connection. Nothing else a browser
-                # does is reliable — it never says goodbye, and a phone that
-                # walks out of range simply stops. This is what lets a
-                # dropped guest be paused rather than played to an empty room.
-                #
-                # Looked up each time rather than held: the session may not
-                # exist yet when the page first connects.
-                if mine:
-                    live = sessions.find(mine)
-                    if live:
-                        live.touch()
-                try:
-                    evt = await asyncio.wait_for(queue.get(), timeout=15)
-                    if _mine(evt, mine):
-                        yield _sse(evt)
-                except asyncio.TimeoutError:
-                    # A message, not a comment: a page can't see comments, and
-                    # a phone needs to notice a stream that died while it slept.
-                    yield _sse({"type": "ping"})
+            # An open stream is the connection. Nothing else a browser does
+            # is reliable — it never says goodbye, and a phone that walks out
+            # of range simply stops. This is what lets a dropped guest be
+            # paused rather than played to an empty room. Looked up each time
+            # rather than held: the session may not exist yet.
+            def touch():
+                live = sessions.find(mine) if mine else None
+                if live:
+                    live.touch()
+            async for chunk in _follow(queue, mine, request.is_disconnected, touch):
+                yield chunk
         finally:
             bus.unsubscribe(queue)
 
