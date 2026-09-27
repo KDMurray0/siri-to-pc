@@ -57,6 +57,11 @@ html,body{height:100%;overflow:hidden;background:var(--bg);
    are dead buttons, so they stay hidden until the bridge proves it exists. */
 #pin,#shrink{display:none}
 body.desktop #pin,body.desktop #shrink{display:block}
+/* Settings in the desktop app's own window: the sheet is the whole page. */
+body.settingswin .sheet,body.settingswin:not(.mini) .sheet{position:fixed;inset:0;z-index:200;transform:none;
+  translate:none;width:auto;height:auto;border:0;border-radius:0;box-shadow:none;visibility:visible;transition:none}
+body.settingswin #closeSettings{display:none}
+body.settingswin #pin,body.settingswin #shrink{display:none}
 /* Sits opposite the window buttons and matches them, so it reads as chrome
    rather than as part of the song. Never in mini — there's no room. */
 .timeleft{position:absolute;top:9px;left:12px;z-index:5;height:28px;
@@ -2031,6 +2036,8 @@ const BASE = "{{ base }}";
  * describing the shared player on a page that was about to become a phone.
  * The server already knows; it says so in the html. */
 const GUEST = "{{ is_guest }}" === "1";
+const SETTINGS_WIN = new URLSearchParams(location.search).get("view") === "settings";
+if (SETTINGS_WIN) document.body.classList.add("settingswin");
 const SIGNED_IN = "{{ signed_in_as }}";
 const SIGN_IN_OFFERED = "{{ sign_in_offered }}" === "1";
 const SIGNED_IN_NAME = "{{ signed_in_name }}";
@@ -3860,6 +3867,9 @@ $("panel-lists").addEventListener("click", async e => {
 /* ── settings ──────────────────────────────────────────────────────── */
 const settingsNarrow = () => window.matchMedia("(max-width:640px)").matches;
 $("openSettings").onclick = () => {
+  // The desktop app opens them in a window of their own.
+  const b = bridge();
+  if (b && b.open_settings && !SETTINGS_WIN) { b.open_settings(""); return; }
   $("sheet").classList.add("open");
   // Narrow, it opens on the list of sections; wide, on the first one.
   $("sheet").classList.remove("picked");
@@ -6741,6 +6751,7 @@ setInterval(() => {
 /* ── keyboard ──────────────────────────────────────────────────────── */
 document.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT") return;
+  if (SETTINGS_WIN) return;         // space on a toggle is not play/pause
   const k = e.key.toLowerCase();
   if (k === " ") { e.preventDefault(); $("play").onclick(); }
   else if (k === "arrowright") seekTo(state.position + 10);
@@ -6766,6 +6777,29 @@ if (cast.on) castEls.forEach(el => { try { el.volume = 0.7; } catch (e) {} });
    URL even on the very first connection. Reconnects reuse it, and it's
    refreshed hourly — well inside its twelve-hour life. */
 loadWhoami().then(refreshToken).then(connect).catch(connect);
+
+/* The settings window and the flyout are two pages. What one changes the
+   other shows at once: the theme and glass live in this browser's storage,
+   the rest comes back from the server. */
+const setsync = ("BroadcastChannel" in window) ? new BroadcastChannel("mrs-settings") : null;
+if (SETTINGS_WIN) {
+  loadWhoami().then(() => {
+    $("openSettings").onclick();
+    const s = new URLSearchParams(location.search).get("s");
+    const tab = s && document.querySelector('.stab[data-s="' + CSS.escape(s) + '"]');
+    if (tab) tab.click();
+  });
+  let tell = null;
+  const told = () => { clearTimeout(tell); tell = setTimeout(() => setsync && setsync.postMessage("changed"), 500); };
+  $("sheet").addEventListener("click", told);
+  $("sheet").addEventListener("change", told);
+} else if (setsync) {
+  setsync.onmessage = () => {
+    setTheme(localStorage.getItem("theme") || curTheme, false);
+    paintGlass();
+    loadSettings();
+  };
+}
 setInterval(refreshToken, 60 * 60 * 1000);
 api("/api/settings").then(s => { if (s && s.theme) setTheme(s.theme, false); });
 api("/api/status").then(d => { if (d) { applyStatus(d); renderQueue(d.queue); } });

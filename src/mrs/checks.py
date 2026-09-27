@@ -4879,6 +4879,27 @@ def _run(verbose: bool = False) -> Result:
               'yield _sse({"type": "ping"})' in api47 and '": keepalive"' not in api47)
             say("the phone as the speaker", c)
 
+            # -- 48. settings in a window of their own, in the desktop app --
+            c = _Checker("settings window")
+            page48 = (Path(__file__).parent / "web" / "templates" / "player.html").read_text("utf-8")
+            launch48 = (Path(__file__).parents[2] / "launcher.pyw")
+            launch48 = launch48.read_text("utf-8") if launch48.exists() else ""
+            c("the desktop app's gear opens a window, not the 400px sheet",
+              "if (b && b.open_settings && !SETTINGS_WIN) { b.open_settings(\"\"); return; }" in page48)
+            c("...which is one window, brought forward if it's already open",
+              not launch48 or ("def settings_window(" in launch48 and "win.restore()" in launch48
+                               and "_settings_win.update(win=None)" in launch48))
+            c("...and can't pin, drag or hide the flyout",
+              not launch48 or ("class SettingsBridge:" in launch48 and "js_api=SettingsBridge()" in launch48))
+            c("in that window the sheet is the page, and space doesn't play",
+              "body.settingswin:not(.mini) .sheet{position:fixed;inset:0" in page48
+              and "if (SETTINGS_WIN) return;" in page48)
+            c("what it changes, the flyout shows at once",
+              'new BroadcastChannel("mrs-settings")' in page48 and "setsync.onmessage" in page48)
+            got48 = client.get("/player?view=settings", headers=owner_h)
+            c("the page itself opens as usual", got48.status_code == 200, str(got48.status_code))
+            say("settings window", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json

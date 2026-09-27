@@ -646,6 +646,11 @@ class Bridge:
         threading.Thread(target=sign_in_window, daemon=True, name="signin").start()
         return True
 
+    def open_settings(self, section=""):
+        threading.Thread(target=settings_window, args=(str(section or ""),),
+                         daemon=True, name="settings").start()
+        return True
+
     def open_external(self, url):
         """Open a link in the user's actual browser.
 
@@ -665,6 +670,49 @@ class Bridge:
 
 
 flyout: Flyout | None = None
+
+
+class SettingsBridge:
+    """What the settings window may ask of the app: links and the YouTube
+    sign-in. Not the flyout's pin, drag and hide -- it isn't the flyout."""
+
+    def sign_in(self):
+        return Bridge().sign_in()
+
+    def open_external(self, url):
+        return Bridge().open_external(url)
+
+
+_settings_win: dict = {"win": None}
+
+
+def settings_window(section: str = "") -> None:
+    """Settings in a window of its own, sized for them.
+
+    The flyout is 400 pixels wide; ten sections of settings were never going
+    to sit well in it. One window: asked again, the open one comes forward.
+    """
+    import urllib.parse
+    win = _settings_win["win"]
+    if win is not None:
+        try:
+            win.restore()
+            win.show()
+            win.on_top = True
+            win.on_top = False
+            return
+        except Exception:
+            _settings_win["win"] = None
+    port = int(srv.runtime.get("port") or config.get("port", 7420))
+    path = f"/player?key={config.get('api_key', '')}&view=settings"
+    if section:
+        path += "&s=" + urllib.parse.quote(section)
+    win = webview.create_window(
+        "Settings - Music Request Server", url=srv.local_url(port, path),
+        js_api=SettingsBridge(), width=980, height=720, min_size=(420, 520),
+        background_color="#0e0f16")
+    _settings_win["win"] = win
+    win.events.closed += lambda: _settings_win.update(win=None)
 
 # Straight to YouTube, not to a Google login form. You press "Sign in"
 # yourself, in your own time — the old flow drove the login itself and closed
