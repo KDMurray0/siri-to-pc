@@ -33,7 +33,7 @@ log = get("certs")
 
 CHECK_EVERY = 6 * 3600
 RENEW_BELOW_DAYS = 30
-BACKOFF = 12 * 3600
+BACKOFF = 3 * 3600            # a failure that didn't say when to come back
 _lock = threading.Lock()
 _running = threading.Event()
 _started = False
@@ -169,7 +169,7 @@ def attempt(force: bool = False) -> dict:
     st = _state()
     if not force and time.time() < float(st.get("next_try", 0)):
         return status()
-    if float(st.get("retry_after", 0)) > time.time():
+    if float(st.get("retry_after", 0)) + 60 > time.time():
         # Let's Encrypt said when; asking before that only spends goodwill.
         return status()
     if not can_run() or _running.is_set():
@@ -197,13 +197,24 @@ def attempt(force: bool = False) -> dict:
         told = _log_tail(started) or said.strip()[-300:]
         retry = _retry_after(told)
         ok = ok and not need()
+        # Told when: come back then, to the minute. Not told: a few hours.
+        later = (retry + 60) if retry > time.time() else time.time() + BACKOFF
         _save(last_try=int(started), last_result=("ok: " if ok else "failed: ") + told[:300],
-              next_try=int(time.time() + (CHECK_EVERY if ok else BACKOFF)),
+              next_try=int(time.time() + CHECK_EVERY if ok else later),
               retry_after=int(retry))
         (log.info if ok else log.warning)("certificate %s: %s", what, told[:200])
         return status()
     finally:
         _running.clear()
+
+
+def _wait() -> float:
+    """Seconds until the next look: the time it was told, if sooner."""
+    if not need():
+        return CHECK_EVERY
+    st = _state()
+    due = max(float(st.get("next_try", 0)), float(st.get("retry_after", 0)) + 60)
+    return max(60.0, min(CHECK_EVERY, due - time.time()))
 
 
 def _loop() -> None:
@@ -214,7 +225,7 @@ def _loop() -> None:
                 attempt()
         except Exception as exc:
             log.debug("certificate keeper: %s", exc)
-        time.sleep(CHECK_EVERY)
+        time.sleep(_wait())
 
 
 def start() -> None:

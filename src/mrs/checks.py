@@ -4318,6 +4318,11 @@ def _run(verbose: bool = False) -> Result:
                     _calls38.clear()
                     _ck.attempt(force=True)
                     c("...and not even Renew now asks again before then", _calls38 == [])
+                    c("...and it comes back at that time, to the minute",
+                      _ck._state()["next_try"] == _ck._state()["retry_after"] + 60)
+                    _ck._save(retry_after=int(_t.time()) + 900, next_try=int(_t.time()) + 900)
+                    c("the loop sleeps until then when it's sooner than its usual round",
+                      840 < _ck._wait() <= 960, str(_ck._wait()))
 
                 _ck._save(retry_after=0, next_try=0)
                 with _patch.object(_ck, "can_run", lambda: True), \
@@ -4327,7 +4332,7 @@ def _run(verbose: bool = False) -> Result:
                     _ck.attempt()
                     _ck.attempt()
                     c("after a failure it waits hours, not seconds, before asking again",
-                      len(_calls38) == 1 and _ck._state()["next_try"] - _t.time() > 11 * 3600,
+                      len(_calls38) == 1 and _ck._state()["next_try"] - _t.time() > _ck.BACKOFF - 60,
                       str(len(_calls38)))
                 _make_cert(["music.example.test"], 60)
                 _ck._save(retry_after=0, next_try=0)
