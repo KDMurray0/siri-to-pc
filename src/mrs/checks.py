@@ -4369,6 +4369,28 @@ def _run(verbose: bool = False) -> Result:
                 _ck._state_path().unlink(missing_ok=True)
             say("certificate keeper", c)
 
+            # -- 39. what's counted reaches disk in seconds, even in a quiet house --
+            c = _Checker("usage on disk")
+            import json as _json39
+            from .core import flusher as _fl39, stats as _st39
+            from .paths import data_dir as _dd39
+            _st39.flush()
+            before = _st39._read()["house"]["totals"].get("plays", 0)
+            _st39.note(_st39.HOUSE, plays=1)
+            on_disk = lambda: _json39.loads((_dd39() / "stats.json").read_text("utf-8"))["house"]["totals"].get("plays", 0)
+            c("a play isn't written the instant it's counted (a skip shouldn't rewrite a file)",
+              on_disk() == before)
+            _fl39.tick()
+            c("...but the flusher writes it without waiting for the next event",
+              on_disk() == before + 1, f"{before} -> {on_disk()}")
+            from .core.taste import taste as _house39
+            _house39._dirty = True
+            _house39._last_save = _t.monotonic()
+            _fl39.tick()
+            c("...and a taste save that was put off is written too", _house39._dirty is False)
+            c("it runs every few seconds, not on shutdown", _fl39.EVERY <= 15)
+            say("usage on disk", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json

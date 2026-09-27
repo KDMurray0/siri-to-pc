@@ -451,9 +451,10 @@ def run() -> None:
 
     mark("loaded, starting up")
     startup()
-    from .core import ddns, certkeeper
+    from .core import ddns, certkeeper, flusher
     ddns.start()
     certkeeper.start()
+    flusher.start()
     port = pick_port(config.get("port", 7420))
     runtime["port"] = port
     loop = asyncio.new_event_loop()
