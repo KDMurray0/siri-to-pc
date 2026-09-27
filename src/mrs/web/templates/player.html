@@ -749,6 +749,43 @@ body.mini .frame::after{display:block;
     color-mix(in srgb,var(--bg) 70%,transparent) 46%,var(--bg) 88%)}
 /* paused is quieter, like the level meter it replaced */
 body.mini.paused .ambient{opacity:.34}
+
+/* ── liquid glass ─────────────────────────────────────────────────────
+   The bar as a slab of glass over its own cover. Behind it the cover fills
+   the window, sharp enough to be bent, drifting slowly so the bending is
+   seen to happen. The glass refracts it: pulled outward along the rim --
+   strongest at the edge, near-clear in the middle -- with a slow liquid
+   wobble on top, and red, green and blue bent by different amounts so the
+   edge splits the way glass does. The cover's colour is a tint in the glass,
+   strong beside the thumbnail and gone to clear by the far end. */
+.glass,.glassdefs{display:none}
+.glassdefs{position:absolute;width:0;height:0}
+body.mini.glassy .glassdefs{display:block}
+body.mini.glassy .ambient{inset:-35% -10%;width:auto;height:auto;opacity:.95;
+  filter:blur(2px) saturate(1.4) brightness(.85);animation:glassdrift 28s ease-in-out infinite alternate}
+body.mini.glassy .ambient img{border-radius:0;object-fit:cover}
+@keyframes glassdrift{0%{transform:scale(1.2) translate(-5%,-7%)}100%{transform:scale(1.35) translate(6%,7%)}}
+body.mini.glassy.paused .ambient{animation-play-state:paused;opacity:.7}
+body.mini.glassy .frame::after{display:none}
+body.mini.glassy .glass{display:block;position:absolute;inset:3px;z-index:1;border-radius:18px;
+  pointer-events:none;overflow:hidden;
+  -webkit-backdrop-filter:url(#liquid) saturate(1.45) brightness(.78);
+  backdrop-filter:url(#liquid) saturate(1.45) brightness(.78);
+  box-shadow:inset 1.5px 1.5px 0 rgba(255,255,255,.5),inset -1px -1px 0 rgba(255,255,255,.12),
+    inset 0 0 22px rgba(255,255,255,.07),0 10px 28px rgba(0,0,0,.4)}
+body.mini.glassy .glass i{position:absolute;inset:0}
+body.mini.glassy .glass .tint{mix-blend-mode:color;
+  background:linear-gradient(to right,var(--accent) 0%,color-mix(in srgb,var(--accent) 55%,transparent) 30%,
+    transparent 72%)}
+body.mini.glassy .glass .veil{
+  background:linear-gradient(to right,color-mix(in srgb,var(--accent) 20%,transparent) 0%,transparent 55%),
+    rgba(0,0,0,.14)}
+body.mini.glassy .glass .spec{
+  background:radial-gradient(130% 110% at 0% 0%,rgba(255,255,255,.3),transparent 38%),
+    linear-gradient(to bottom,rgba(255,255,255,.14),transparent 40%)}
+body.mini.glassy .title,body.mini.glassy .artist{text-shadow:0 1px 8px rgba(0,0,0,.55)}
+body.mini.glassy .art{box-shadow:0 8px 22px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.18)}
+@media (prefers-reduced-motion:reduce){ body.mini.glassy .ambient{animation:none} }
 body.mini .stage{display:grid;grid-template-columns:auto 1fr;
   grid-template-areas:"art meta" "art ctl";align-items:center;align-content:center;
   column-gap:12px;row-gap:0;padding:11px 14px 11px 12px}
@@ -1428,6 +1465,25 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
     <svg viewBox="0 0 24 24"><path d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z"/></svg>
   </button>
   <div class="ambient" id="ambient"></div>
+  <div class="glass" id="glass" aria-hidden="true"><i class="tint"></i><i class="veil"></i><i class="spec"></i></div>
+  <svg class="glassdefs" aria-hidden="true" focusable="false">
+    <filter id="liquid" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.011 0.018" numOctaves="2" seed="7" result="noise">
+        <animate attributeName="baseFrequency" dur="20s" repeatCount="indefinite"
+                 values="0.011 0.018;0.018 0.010;0.011 0.018"/>
+      </feTurbulence>
+      <feImage id="glassrim" href="" x="0" y="0" width="100%" height="100%" preserveAspectRatio="none" result="rim"/>
+      <feComposite in="noise" in2="rim" operator="arithmetic" k1="0" k2="0.34" k3="1" k4="-0.17" result="map"/>
+      <feDisplacementMap in="SourceGraphic" in2="map" scale="50" xChannelSelector="R" yChannelSelector="G" result="dr"/>
+      <feDisplacementMap in="SourceGraphic" in2="map" scale="44" xChannelSelector="R" yChannelSelector="G" result="dg"/>
+      <feDisplacementMap in="SourceGraphic" in2="map" scale="38" xChannelSelector="R" yChannelSelector="G" result="db"/>
+      <feColorMatrix in="dr" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="r"/>
+      <feColorMatrix in="dg" type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" result="g"/>
+      <feColorMatrix in="db" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" result="b"/>
+      <feComposite in="r" in2="g" operator="arithmetic" k2="1" k3="1" result="rg"/>
+      <feComposite in="rg" in2="b" operator="arithmetic" k2="1" k3="1"/>
+    </filter>
+  </svg>
   <div class="minivol" id="minivol"><i id="minivfill"></i></div>
 
   <div class="stage">
@@ -1701,6 +1757,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         <div class="srow guestok"><span class="slabel">Theme</span><div class="swatches" id="swatches"></div></div>
         <div class="srow"><span class="slabel">Visualiser<em>The bars across the artwork</em></span>
           <div class="toggle" id="viz"></div></div>
+        <div class="srow guestok"><span class="slabel">Liquid glass mini player<em>The mini player as a slab of glass over its cover: bent at the edges, tinted by the album</em></span>
+          <div class="toggle" id="glasson"></div></div>
       </section>
 
       <section class="spane" data-s="queue">
@@ -2168,6 +2226,63 @@ const WIDE = window.matchMedia("(min-width:900px) and (min-height:520px)");
 function isWide() {
   return WIDE.matches && !document.body.classList.contains("mini");
 }
+
+/* ── liquid glass (the mini player) ────────────────────────────────── */
+function glassOn() { try { return localStorage.getItem("glass") !== "0"; } catch (e) { return true; } }
+/* The rim, as a displacement map: how far and which way each pixel of the
+   glass reads from, pulled out along the edge's normal and squared in the
+   distance from the middle -- near-clear in the centre, bending hard at the
+   rim. The same arithmetic as a lens: a rounded rectangle's distance field. */
+function glassRim() {
+  const el = $("glass"), w = el.clientWidth, h = el.clientHeight;
+  if (!w || !h || el._size === w + "x" + h) return;
+  el._size = w + "x" + h;
+  const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+  const g = cv.getContext("2d"), img = g.createImageData(w, h), d = img.data;
+  const r = Math.min(18, h / 2), band = Math.min(26, h / 2.1);
+  const sdf = (x, y) => {
+    const qx = Math.abs(x - w / 2) - (w / 2 - r), qy = Math.abs(y - h / 2) - (h / 2 - r);
+    return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - r;
+  };
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const px = x + 0.5, py = y + 0.5, s = sdf(px, py);
+      let nx = sdf(px + 1, py) - sdf(px - 1, py), ny = sdf(px, py + 1) - sdf(px, py - 1);
+      const n = Math.hypot(nx, ny) || 1; nx /= n; ny /= n;
+      const t = Math.max(0, Math.min(1, (s + band) / band)), off = t * t;
+      const i = (y * w + x) * 4;
+      d[i] = 128 + nx * off * 127; d[i + 1] = 128 + ny * off * 127; d[i + 2] = 128; d[i + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  $("glassrim").setAttribute("href", cv.toDataURL());
+}
+function paintGlass() {
+  const on = glassOn() && document.body.classList.contains("mini");
+  document.body.classList.toggle("glassy", on);
+  $("glasson").classList.toggle("on", glassOn());
+  if (on) glassRimSoon();
+}
+// Built as soon as the glass has a size -- the class that gives it one lands
+// a frame or two after mini does, and an empty map means no bending at all.
+function glassRimSoon(tries = 12) {
+  const el = $("glass");
+  if (el.clientWidth && el.clientHeight) { glassRim(); return; }
+  if (tries > 0) setTimeout(() => glassRimSoon(tries - 1), 120);
+}
+$("glasson").onclick = () => {
+  try { localStorage.setItem("glass", glassOn() ? "0" : "1"); } catch (e) {}
+  paintGlass();
+};
+// Mini comes and goes from several places; follow the class, not each of them.
+new MutationObserver(() => {
+  const want = glassOn() && document.body.classList.contains("mini");
+  if (want !== document.body.classList.contains("glassy")) paintGlass();
+}).observe(document.body, { attributes: true, attributeFilter: ["class"] });
+window.addEventListener("resize", () => {
+  if (document.body.classList.contains("glassy")) { $("glass")._size = ""; glassRim(); }
+});
+paintGlass();
 
 /* ── window bridge (pywebview) ─────────────────────────────────────── */
 const bridge = () => (window.pywebview && window.pywebview.api) || null;
