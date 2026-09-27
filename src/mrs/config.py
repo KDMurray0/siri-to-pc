@@ -117,6 +117,9 @@ DEFAULTS: dict[str, Any] = {
     # The player page opens without a key on the home network, as it always
     # has. Off means even your own wifi needs a link with one.
     "lan_open": True,
+    # Other devices on the wifi get the owner's player without signing in too.
+    # Off: once Google sign-in is set up they sign in, like everyone else.
+    "lan_open_devices": False,
     # While this is on, a full-access guest asking for something on the PC
     # speakers is refused. Anyone playing on their own phone is unaffected —
     # the point is to protect the room you're in, and headphones aren't in it.

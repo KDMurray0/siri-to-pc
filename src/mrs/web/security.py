@@ -142,7 +142,10 @@ def _sign(key: str, body: str) -> str:
     return _b64(hmac.new(key.encode(), body.encode(), hashlib.sha256).digest()[:18])
 
 
-def session_cookie(key: str, sub: str, days: int = 30) -> str:
+REMEMBER_DAYS = 180
+
+
+def session_cookie(key: str, sub: str, days: int = REMEMBER_DAYS) -> str:
     """A signed note saying which account this browser is. Nothing else.
 
     Signed with the server's own key, like a pass, so it can be checked
@@ -151,6 +154,14 @@ def session_cookie(key: str, sub: str, days: int = 30) -> str:
     """
     body = f"{sub}.{int(time.time() + days * 86400)}"
     return f"{body}.{_sign(key, body)}"
+
+
+def session_days_left(cookie: str) -> float:
+    """How long a session cookie has left. Only meaningful once it's been read."""
+    try:
+        return (float((cookie or "").split(".")[1]) - time.time()) / 86400
+    except (IndexError, ValueError):
+        return 0.0
 
 
 def read_session(key: str, cookie: str) -> str:

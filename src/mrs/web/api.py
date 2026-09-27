@@ -124,6 +124,9 @@ async def _door(request: Request, call_next):
     # send Origin: null for a form posted from one of these pages, which the
     # sign-up and claim forms are, and which then looks cross-site.
     resp.headers["Referrer-Policy"] = "same-origin"
+    renew = getattr(request.state, "renew_session", "")
+    if renew and resp.status_code < 400 and "set-cookie" not in resp.headers:
+        _set_session(resp, request, renew)
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "SAMEORIGIN"
     return resp
@@ -209,6 +212,10 @@ def _account_row(request: Request) -> dict | None:
     person = accounts.get(sub)
     if not person:
         return None
+    # Somebody who keeps using it stays signed in: a cookie with less than
+    # five months left is replaced on the way out with a fresh six.
+    if sec.session_days_left(cookie) < sec.REMEMBER_DAYS - 30:
+        request.state.renew_session = person["sub"]
     return _person_row(request, person)
 
 
@@ -269,6 +276,24 @@ def _link_row(expected: str, candidate: str, request: Request | None = None) -> 
             or config.get("allow_shared_links", False)):
         raise HTTPException(status_code=403, detail=LINKS_OFF)
     return row
+
+
+def _opens_as_owner(ip: str) -> bool:
+    """Does a visit from here get the owner's player without signing in?
+
+    This computer, always (with lan_open on). Other devices on the wifi used to
+    as well, which made sense when the house was the only way in; with people
+    signing in, it meant any guest who typed 192.168.x.x got the owner's keys.
+    So once Google sign-in is set up they sign in like everyone else -- the
+    owner's own phone once, then it's remembered -- unless lan_open_devices
+    says the whole house is trusted.
+    """
+    from .security import is_home
+    if not (is_home(ip) and config.get("lan_open", True)):
+        return False
+    if ip.startswith("127.") or ip in ("::1", "localhost"):
+        return True
+    return not google.configured() or bool(config.get("lan_open_devices", False))
 
 
 def require_key(request: Request, key: str = Query(default=""),
@@ -395,7 +420,7 @@ async def index(request: Request, key: str = Query(default=""),
     offered = (token or key
                or request.headers.get("X-Music-Key")
                or request.headers.get("X-API-Key") or "")
-    home_owner = is_home(ip) and config.get("lan_open", True) and not offered
+    home_owner = _opens_as_owner(ip) and not offered
     row = _account_row(request)
 
     def landing(blocked=False):
@@ -446,7 +471,7 @@ async def setup_page(request: Request, key: str = Query(default=""),
     offered = (token or key
                or request.headers.get("X-Music-Key")
                or request.headers.get("X-API-Key") or "")
-    home = is_home(ip) and config.get("lan_open", True) and not offered
+    home = _opens_as_owner(ip) and not offered
     if not home:
         require_key(request, key, token)
         if not is_owner(request, key):
@@ -546,7 +571,7 @@ def _serve_page(request: Request, name: str, key: str, token: str):
                # account opening the page from the sofa would be handed the
                # owner's copy by the open-home rule.
                or request.cookies.get(SESSION_COOKIE, "") or "")
-    home = is_home(ip) and config.get("lan_open", True) and not offered
+    home = _opens_as_owner(ip) and not offered
 
     if not home:
         try:
@@ -1793,7 +1818,8 @@ _SETTABLE = {
     "lan_hostname": str,
     "tailscale": str, "tailscale_exe": str, "cache_size_mb": int,
     "allow_key_in_url": bool, "port": int,
-    "block_full_guests": bool, "lan_open": bool, "party_mode": bool,
+    "block_full_guests": bool, "lan_open": bool, "lan_open_devices": bool,
+    "party_mode": bool,
     "ddns_provider": str, "ddns_hostname": str, "ddns_user": str,
     "max_downloads": int, "guest_requests_hour": int,
     "cast_queue_minutes": int, "guest_quiet_pause": int, "guest_quiet_close": int,
@@ -3511,17 +3537,23 @@ def _start_session(request: Request, person: dict, next_path: str):
     # that says so rather than on a player it can't use.
     dest = base + ("/" if person.get("scope") == "blocked" else _safe_next(next_path))
     resp = RedirectResponse(dest, status_code=302)
+    _set_session(resp, request, person["sub"])
+    log.info("%s signed in (%s)", accounts.tag(person["sub"]), person.get("scope"))
+    return resp
+
+
+def _set_session(resp, request: Request, sub: str) -> None:
+    """The remembered sign-in: six months, renewed while it's being used."""
+    base = _pfx.base_of(request)
     resp.set_cookie(
         SESSION_COOKIE,
-        sec.session_cookie(config.get("api_key") or "", person["sub"]),
-        max_age=30 * 86400, httponly=True, samesite="lax",
+        sec.session_cookie(config.get("api_key") or "", sub),
+        max_age=sec.REMEMBER_DAYS * 86400, httponly=True, samesite="lax",
         # Only over TLS when there is TLS: marking it secure on a plain http
         # LAN means the browser never sends it and nobody can stay signed in.
         # Scoped to where this application lives: another one on the same
         # address is a different application and gets none of it.
         secure=_net_scheme() == "https", path=base or "/")
-    log.info("%s signed in (%s)", accounts.tag(person["sub"]), person.get("scope"))
-    return resp
 
 
 @app.get("/auth/google/callback")
@@ -3543,6 +3575,19 @@ def auth_google_callback(request: Request, code: str = "", state: str = "",
 
     known = accounts.get(who["sub"])
     chosen = None
+    if known is not None and known.get("terms_version") != accounts.TERMS_VERSION:
+        # An account from before the notice, or from before it changed. Nobody
+        # gets in without having agreed to the one in force, so they're asked,
+        # once, on the way in -- not given a button in Settings to find later.
+        try:
+            handle = google.hold(who, row)
+        except google.SignInBusy as exc:
+            return _signin_page(str(exc), 429, base=base)
+        resp = RedirectResponse(base + "/auth/claim", status_code=302)
+        resp.set_cookie(CLAIM_COOKIE, handle, max_age=600, httponly=True,
+                        samesite="lax", secure=_net_scheme() == "https",
+                        path=base or "/")
+        return resp
     if known is None:
         chosen = row.get("signup") if row.get("mode") == "signup" else None
         if not chosen:
@@ -3577,6 +3622,10 @@ def auth_claim_page(request: Request):
     if not held:
         return _signin_page("That took too long. Please sign in again.",
                             base=_pfx.base_of(request))
+    known = accounts.get(held.get("sub", ""))
+    if known:
+        return _landing(request, tab="claim", claim=dict(held, existing=True),
+                        name=known.get("name", ""), tracking=bool(known.get("tracking")))
     return _landing(request, tab="claim", claim=held, name=accounts.clean_name(held.get("name", "")))
 
 
@@ -3602,11 +3651,24 @@ async def auth_claim_finish(request: Request):
     who = google.take_claim(handle)
     if not who:
         return _signin_page("That took too long. Please sign in again.", base=base)
+    tracking = str(form.get("tracking", "")) == "1"
     try:
-        person = accounts.admit(who["sub"], who["email"], name,
-                                picture=who.get("picture", ""), terms=True,
-                                tracking=str(form.get("tracking", "")) == "1")
-    except accounts.AccountPersistenceError:
+        if accounts.get(who["sub"]):
+            # Somebody we know agreeing to the notice in force.
+            was = accounts.get(who["sub"])
+            accounts.set_consent(who["sub"], terms=True, tracking=tracking)
+            if name != was.get("name"):
+                accounts.rename(who["sub"], name)
+            if was.get("tracking") and not tracking:
+                from . import privacy
+                privacy.forget_taste(who["sub"])
+            person = accounts.admit(who["sub"], who["email"], name,
+                                    picture=who.get("picture", ""))
+        else:
+            person = accounts.admit(who["sub"], who["email"], name,
+                                    picture=who.get("picture", ""), terms=True,
+                                    tracking=tracking)
+    except (accounts.AccountPersistenceError, ValueError):
         return _signin_page("Couldn't save that. Please try again.", 503, base=base)
     resp = _start_session(request, person, who.get("next", "/player"))
     resp.delete_cookie(CLAIM_COOKIE, path=base or "/")

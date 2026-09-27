@@ -2531,8 +2531,22 @@ def _run(verbose: bool = False) -> Result:
                   "/api/me/export" in blk.text and "/api/me/delete" in blk.text)
                 _acc.set_scope("1234567890", "phone")
             with _patch("mrs.web.security.is_home", lambda ip: True):
-                c("the owner at home goes straight in",
-                  client.get("/", follow_redirects=False).headers.get("location") == "/player")
+                from .web import api as _api25
+                c("this computer goes straight in",
+                  _api25._opens_as_owner("127.0.0.1") is True)
+                other = client.get("/", follow_redirects=False)
+                c("another device on the wifi signs in like everyone else, once sign-in exists",
+                  other.status_code == 200 and "Log in with Google" in other.text,
+                  str(other.status_code))
+                c("...so a guest typing 192.168.x.x isn't handed the owner's page",
+                  'const GUEST = "0"' not in client.get("/player").text)
+                _cfg.set("lan_open_devices", True, save=False)
+                try:
+                    c("with the whole house trusted, the owner at home goes straight in",
+                      client.get("/", follow_redirects=False).headers.get("location") == "/player")
+                finally:
+                    _cfg.set("lan_open_devices", False, save=False)
+                _bans.forgive("testclient")
 
             # The page: a guest signed in is still a guest, with no key in it.
             with _patch("mrs.web.security.is_home", lambda ip: True):
@@ -2759,6 +2773,46 @@ def _run(verbose: bool = False) -> Result:
                 c("signing up as a name that's already an account changes nothing about it",
                   _acc.get("55501")["name"] == "Sam Rivers"
                   and _acc.get("55501")["tracking"] is False)
+                client.cookies.clear()
+
+                # Somebody from before the notice is asked to agree on the way in.
+                _acc.admit("55504", "old@example.test", "Old Timer")        # never agreed
+                st6, _ = _start()
+                r = _back(st6, _goog._PENDING[st6]["nonce"], "55504")
+                c("an account that never agreed is asked to, before it's let in",
+                  r.headers.get("location") == "/auth/claim"
+                  and "mrs_account=" not in r.headers.get("set-cookie", ""))
+                held6 = {"mrs_claim": r.headers.get("set-cookie", "").split("mrs_claim=")[1].split(";")[0]}
+                pg = client.get("/auth/claim", cookies=held6)
+                c("...with its own name, and words for somebody we know",
+                  'value="Old Timer"' in pg.text and "Carry on" in pg.text
+                  and "we haven&rsquo;t met" not in pg.text)
+                c("...and no way round it without the tick",
+                  client.post("/auth/claim", data={"name": "Old Timer"}, cookies=held6,
+                              follow_redirects=False).status_code == 400
+                  and not _acc.get("55504")["terms_at"])
+                ok6 = client.post("/auth/claim", data={"name": "Old Timer", "terms": "1"},
+                                  cookies=held6, follow_redirects=False)
+                c("...and agreeing lets them in, as the same account",
+                  ok6.status_code == 302 and _acc.get("55504")["terms_version"] == _acc.TERMS_VERSION
+                  and "mrs_account=" in ok6.headers.get("set-cookie", ""))
+                client.cookies.clear()
+                st7, _ = _start()
+                r = _back(st7, _goog._PENDING[st7]["nonce"], "55504")
+                c("...once: the next time goes straight through", r.headers.get("location") == "/player")
+
+                # Remember me: six months, renewed while it's used.
+                ck = r.headers.get("set-cookie", "")
+                c("the sign-in is remembered for months, not weeks",
+                  "max-age=" in ck.lower()
+                  and int(ck.lower().split("max-age=")[1].split(";")[0]) >= 170 * 86400)
+                oldish = {"mrs_account": sec.session_cookie(now_key(), "55504", days=40)}
+                got = client.get("/api/status", cookies=oldish)
+                c("a sign-in that's being used is renewed on the way out",
+                  got.status_code == 200 and "mrs_account=" in got.headers.get("set-cookie", ""))
+                fresh = {"mrs_account": sec.session_cookie(now_key(), "55504")}
+                c("...and a fresh one is left alone",
+                  "mrs_account=" not in client.get("/api/status", cookies=fresh).headers.get("set-cookie", ""))
                 client.cookies.clear()
 
             c("only the owner sees who has signed in",

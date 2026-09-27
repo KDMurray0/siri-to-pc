@@ -171,11 +171,14 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
   /* A phone is here to sign in: name, the way in, then the pitch under it. */
   .stage{display:flex;flex-direction:column;align-items:stretch;gap:0;padding-top:24px}
   .pitch{display:contents}
-  .brand{order:0;margin-bottom:20px}
+  /* The card already carries the mark and the name, so the top line would
+     only say it twice. Only the pitch's own heading moves below the card. */
+  .brand{display:none}
   .door{order:1}
-  h1{order:2;font-size:32px;margin-top:38px}
+  .pitch>h1{order:2;font-size:32px;margin-top:40px}
   .sub{order:3}
-  .demo,.facts{display:none}
+  .demo{order:4;max-width:none}
+  .facts{order:5;margin-bottom:12px}
 }
 @media (prefers-reduced-motion:reduce){
   .wash i,.mark b,.mark56 b,.caret{animation:none}
@@ -238,7 +241,11 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
 
   {% elif claim %}
     <h2 class="state">One last thing</h2>
+    {% if claim.existing %}
+    <p class="lede">Before you carry on: this is the privacy notice that applies here now. Agree to it and you&rsquo;re in.</p>
+    {% else %}
     <p class="lede">You&rsquo;re signed in with Google, but we haven&rsquo;t met. Choose a name and you&rsquo;re in.</p>
+    {% endif %}
     {% if claim.picture %}<div class="pic"><img src="{{ claim.picture }}" alt="" referrerpolicy="no-referrer"><span>Signed in with Google</span></div>{% endif %}
     {% if error %}<p class="err" role="alert">{{ error }}</p>{% endif %}
     <form method="post" action="{{ base }}/auth/claim" style="margin-top:14px">
@@ -248,7 +255,7 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
         <span>I&rsquo;ve read the <a href="{{ base }}/privacy" target="_blank" rel="noopener">privacy notice</a> and I&rsquo;m happy with it.</span></label>
       <label class="chk"><input type="checkbox" name="tracking" value="1"{% if tracking %} checked{% endif %}>
         <span><b>Learn what I like</b><span class="opt">optional</span><br>Remember what I play and skip, to tune my radio and suggestions. Off unless you tick this; change it any time in Settings.</span></label>
-      <button class="gbtn" type="submit" style="background:var(--accent);color:var(--accent-ink)">Create my account</button>
+      <button class="gbtn" type="submit" style="background:var(--accent);color:var(--accent-ink)">{% if claim.existing %}Carry on{% else %}Create my account{% endif %}</button>
     </form>
     <div class="foot"><a href="{{ base }}/auth/signout">Cancel</a></div>
 
@@ -310,12 +317,58 @@ addEventListener("pywebviewready", () => { const a = document.getElementById("ge
   const typed = document.getElementById("typed");
   const rows = document.querySelectorAll("#queue li");
   if (!typed || !rows.length) return;
+  // Real requests and what they would bring up. Shuffled, so a second look
+  // isn't the same as the first.
   const SCRIPT = [
     ["something chill", [["Weightless", "Marconi Union"], ["Holocene", "Bon Iver"], ["Sunset Lover", "Petit Biscuit"]]],
     ["play sultans of swing", [["Sultans of Swing", "Dire Straits"], ["Money for Nothing", "Dire Straits"], ["Walk of Life", "Dire Straits"]]],
     ["nirvana and foo fighters", [["Everlong", "Foo Fighters"], ["Come as You Are", "Nirvana"], ["The Pretender", "Foo Fighters"]]],
     ["the album rumours", [["Dreams", "Fleetwood Mac"], ["Go Your Own Way", "Fleetwood Mac"], ["The Chain", "Fleetwood Mac"]]],
+    ["80s synthpop", [["Take On Me", "a-ha"], ["Don't You Want Me", "The Human League"], ["Just Can't Get Enough", "Depeche Mode"]]],
+    ["songs like mr brightside", [["Mr. Brightside", "The Killers"], ["Take Me Out", "Franz Ferdinand"], ["Seven Nation Army", "The White Stripes"]]],
+    ["something to focus to", [["Nuvole Bianche", "Ludovico Einaudi"], ["Experience", "Ludovico Einaudi"], ["Intro", "The xx"]]],
+    ["dancing queen", [["Dancing Queen", "ABBA"], ["Mamma Mia", "ABBA"], ["Gimme! Gimme! Gimme!", "ABBA"]]],
+    ["workout metal", [["Duality", "Slipknot"], ["Down with the Sickness", "Disturbed"], ["Bodies", "Drowning Pool"]]],
+    ["the one that goes is this the real life", [["Bohemian Rhapsody", "Queen"], ["Don't Stop Me Now", "Queen"], ["Somebody to Love", "Queen"]]],
+    ["rainy day indie", [["Motion Sickness", "Phoebe Bridgers"], ["Skinny Love", "Bon Iver"], ["Fake Plastic Trees", "Radiohead"]]],
+    ["90s hip hop", [["Juicy", "The Notorious B.I.G."], ["California Love", "2Pac"], ["C.R.E.A.M.", "Wu-Tang Clan"]]],
+    ["taylor swift but only the sad ones", [["All Too Well", "Taylor Swift"], ["exile", "Taylor Swift"], ["my tears ricochet", "Taylor Swift"]]],
+    ["arctic monkeys am", [["Do I Wanna Know?", "Arctic Monkeys"], ["R U Mine?", "Arctic Monkeys"], ["Arabella", "Arctic Monkeys"]]],
+    ["road trip classics", [["Life Is a Highway", "Tom Cochrane"], ["Born to Run", "Bruce Springsteen"], ["Take It Easy", "Eagles"]]],
+    ["play hotel california next", [["Hotel California", "Eagles"], ["Dreams", "Fleetwood Mac"], ["Go Your Own Way", "Fleetwood Mac"]]],
+    ["lofi to study to", [["Aruarian Dance", "Nujabes"], ["Feather", "Nujabes"], ["Luv(sic.) Part 3", "Nujabes"]]],
+    ["open.spotify.com/playlist/37i9dQ…", [["Blinding Lights", "The Weeknd"], ["Levitating", "Dua Lipa"], ["Heat Waves", "Glass Animals"]]],
+    ["daft punk", [["Get Lucky", "Daft Punk"], ["One More Time", "Daft Punk"], ["Instant Crush", "Daft Punk"]]],
+    ["sad songs for a breakup", [["Someone Like You", "Adele"], ["Liability", "Lorde"], ["drivers license", "Olivia Rodrigo"]]],
+    ["danzig and black label society", [["Mother", "Danzig"], ["Stillborn", "Black Label Society"], ["Twist of Cain", "Danzig"]]],
+    ["70s funk", [["Superstition", "Stevie Wonder"], ["September", "Earth, Wind & Fire"], ["Play That Funky Music", "Wild Cherry"]]],
+    ["that song from stranger things", [["Running Up That Hill", "Kate Bush"], ["Master of Puppets", "Metallica"], ["Should I Stay or Should I Go", "The Clash"]]],
+    ["something upbeat for cooking", [["Valerie", "Mark Ronson, Amy Winehouse"], ["Uptown Funk", "Mark Ronson, Bruno Mars"], ["Happy", "Pharrell Williams"]]],
+    ["pink floyd dark side of the moon", [["Time", "Pink Floyd"], ["Money", "Pink Floyd"], ["Breathe (In the Air)", "Pink Floyd"]]],
+    ["jazz for a late night", [["So What", "Miles Davis"], ["Take Five", "The Dave Brubeck Quartet"], ["My Favorite Things", "John Coltrane"]]],
+    ["2000s emo", [["Welcome to the Black Parade", "My Chemical Romance"], ["Sugar, We're Goin Down", "Fall Out Boy"], ["The Middle", "Jimmy Eat World"]]],
+    ["kendrick lamar", [["HUMBLE.", "Kendrick Lamar"], ["Alright", "Kendrick Lamar"], ["Money Trees", "Kendrick Lamar"]]],
+    ["chill house", [["Innerbloom", "RÜFÜS DU SOL"], ["Cola", "CamelPhat, Elderbrook"], ["Losing It", "FISHER"]]],
+    ["dolly parton and johnny cash", [["Jolene", "Dolly Parton"], ["Ring of Fire", "Johnny Cash"], ["9 to 5", "Dolly Parton"]]],
+    ["classical for sleeping", [["Clair de Lune", "Claude Debussy"], ["Gymnopédie No. 1", "Erik Satie"], ["Spiegel im Spiegel", "Arvo Pärt"]]],
+    ["grunge", [["Black Hole Sun", "Soundgarden"], ["Would?", "Alice in Chains"], ["Alive", "Pearl Jam"]]],
+    ["a lazy sunday morning", [["Here Comes the Sun", "The Beatles"], ["Banana Pancakes", "Jack Johnson"], ["Put Your Records On", "Corinne Bailey Rae"]]],
+    ["something like billie eilish", [["bad guy", "Billie Eilish"], ["Royals", "Lorde"], ["Glimpse of Us", "Joji"]]],
+    ["play me some bowie", [["Heroes", "David Bowie"], ["Starman", "David Bowie"], ["Life on Mars?", "David Bowie"]]],
+    ["nu metal and glam metal", [["Freak on a Leash", "Korn"], ["Kickstart My Heart", "Mötley Crüe"], ["In the End", "Linkin Park"]]],
+    ["the weeknd after hours", [["Blinding Lights", "The Weeknd"], ["Save Your Tears", "The Weeknd"], ["In Your Eyes", "The Weeknd"]]],
+    ["irish pub songs", [["Whiskey in the Jar", "Thin Lizzy"], ["Dirty Old Town", "The Pogues"], ["The Irish Rover", "The Pogues, The Dubliners"]]],
+    ["k-pop", [["Dynamite", "BTS"], ["How You Like That", "BLACKPINK"], ["Super Shy", "NewJeans"]]],
+    ["songs about the sea", [["Sloop John B", "The Beach Boys"], ["(Sittin' On) The Dock of the Bay", "Otis Redding"], ["Beyond the Sea", "Bobby Darin"]]],
+    ["britpop", [["Wonderwall", "Oasis"], ["Song 2", "Blur"], ["Common People", "Pulp"]]],
+    ["ac/dc back in black", [["Back in Black", "AC/DC"], ["Highway to Hell", "AC/DC"], ["Thunderstruck", "AC/DC"]]],
+    ["reggae", [["Three Little Birds", "Bob Marley & The Wailers"], ["Red Red Wine", "UB40"], ["Is This Love", "Bob Marley & The Wailers"]]],
+    ["film scores", [["Cornfield Chase", "Hans Zimmer"], ["Now We Are Free", "Hans Zimmer, Lisa Gerrard"], ["Hedwig's Theme", "John Williams"]]],
+    ["the song that goes i gotta feeling", [["I Gotta Feeling", "Black Eyed Peas"], ["Boom Boom Pow", "Black Eyed Peas"], ["Where Is the Love?", "Black Eyed Peas"]]]
   ];
+  for (let i = SCRIPT.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1)); [SCRIPT[i], SCRIPT[j]] = [SCRIPT[j], SCRIPT[i]];
+  }
   // A cover in the colour of its own name: the same title always gets the same one.
   const cover = t => { let h = 7; for (const c of t) h = (h * 31 + c.charCodeAt(0)) % 360;
     return `linear-gradient(135deg,hsl(${h} 72% 58%),hsl(${(h + 48) % 360} 62% 34%))`; };
@@ -331,7 +384,7 @@ addEventListener("pywebviewready", () => { const a = document.getElementById("ge
   const wait = ms => new Promise(r => setTimeout(r, ms));
   (async () => {
     await wait(700);
-    for (let i = 0; ; i = (i + 1) % SCRIPT) {
+    for (let i = 0; ; i = (i + 1) % SCRIPT.length) {
       const [ask, list] = SCRIPT[i];
       typed.classList.remove("idle"); typed.textContent = "";
       for (const ch of ask) { typed.textContent += ch; await wait(48 + Math.random() * 60); }

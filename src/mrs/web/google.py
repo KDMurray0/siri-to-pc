@@ -244,7 +244,7 @@ def peek_claim(handle: str) -> dict | None:
         return None
     who = held["who"]
     return {"name": who.get("name", ""), "picture": who.get("picture", ""),
-            "next": held["next"]}
+            "next": held["next"], "sub": who.get("sub", "")}
 
 
 def take_claim(handle: str) -> dict | None:
