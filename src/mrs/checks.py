@@ -4898,6 +4898,17 @@ def _run(verbose: bool = False) -> Result:
               'new BroadcastChannel("mrs-settings")' in page48 and "setsync.onmessage" in page48)
             got48 = client.get("/player?view=settings", headers=owner_h)
             c("the page itself opens as usual", got48.status_code == 200, str(got48.status_code))
+            lan48 = config.get("lan_open_devices", False)
+            try:
+                saved48 = client.post("/api/setting", json={"key": "lan_open_devices", "value": "1"},
+                                      headers=owner_h)
+                c("trusting the whole Wi-Fi is a switch in Address & security",
+                  'id="lanopendev"' in page48 and saved48.status_code == 200
+                  and config.get("lan_open_devices") is True
+                  and client.get("/api/settings", headers=owner_h).json().get("lan_open_devices") is True,
+                  saved48.text[:120])
+            finally:
+                config.set("lan_open_devices", lan48)
             say("settings window", c)
 
             # -- 49. the owner's Google account is this computer, one profile --

@@ -1898,6 +1898,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         <div class="seclbl">Security</div>
         <div class="srow"><span class="slabel">Only my devices<em>Rejects other machines on the network</em></span>
           <div class="toggle" id="lockips"></div></div>
+        <div class="srow"><span class="slabel">Trust everything on my Wi-Fi<em>Other devices at home open as you, no sign-in. Off: they sign in, your own phone once</em></span>
+          <div class="toggle" id="lanopendev"></div></div>
         <div class="srow"><span class="slabel">Allow the key in a link<em>Turn off once nothing you use puts it in a URL</em></span>
           <div class="toggle" id="keyinurl"></div></div>
         <div class="srow"><span class="slabel">Allow old GET requests<em>Shortcuts and remotes from before POST. Off once they're rebuilt</em></span>
@@ -4594,6 +4596,7 @@ const settingRow = (id, key) => {
 settingRow("blockguests", "block_full_guests");
 settingRow("partymode", "party_mode");
 settingRow("keyinurl", "allow_key_in_url");
+settingRow("lanopendev", "lan_open_devices");
 settingRow("legacyget", "allow_legacy_get_mutations");
 async function loadDdns() {
   const r = await api("/api/ddns");
@@ -6305,6 +6308,7 @@ async function loadSettings() {
   if (document.activeElement !== $("addrhttps")) $("addrhttps").value = s.https_mode || "direct";
   if (document.activeElement !== $("addrmovies")) $("addrmovies").value = s.movies_url || "";
   $("keyinurl").classList.toggle("on", !!s.allow_key_in_url);
+  $("lanopendev").classList.toggle("on", !!s.lan_open_devices);
   $("legacyget").classList.toggle("on", !!s.allow_legacy_get_mutations);
   $("aeqon").classList.toggle("on", s.device_eq_enabled !== false);
   $("aeqauto").classList.toggle("on", s.device_eq_auto !== false);
