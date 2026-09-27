@@ -80,8 +80,15 @@ _UNGUARDED_BY_DESIGN = {
                    "callback set, which names a Google identity we verified",
     "/privacy":   "the notice has to be readable before anyone signs up",
     "/s/{sid}":   "a shared song: plays that song for anyone with the link, nothing else",
-    "/s/{sid}/audio": "that one shared song's audio, rate limited",
-    "/s/{sid}/spotify": "the shared song's Spotify link",
+    "/s/{sid}/embed.mp4": "the shared song as a video for a chat card, made once",
+    "/s/{sid}/join": "opening a shared song: a session of its own, rate limited per "
+                     "address and capped overall",
+    "/s/{sid}/v/{token}": "that visitor's own session, named by an unguessable token",
+    "/s/{sid}/v/{token}/beat": "same",
+    "/s/{sid}/v/{token}/ended": "same",
+    "/s/{sid}/v/{token}/next": "same",
+    "/s/{sid}/v/{token}/leave": "same",
+    "/s/{sid}/v/{token}/audio/{video_id}": "only the tracks in that visitor's session",
     "/download/client": "offered on the sign-in page, before anybody has an "
                         "account; holds no secret and is rate limited",
     "/auth/signout": "throws a cookie away; there is nothing to guard",
@@ -922,53 +929,6 @@ def _run(verbose: bool = False) -> Result:
               _ins._key("Money For Nothing (Remastered 1996)", "Dire Straits")
               == _ins._key("money for nothing", "dire straits"))
             say("about this song", c)
-
-            # -- 9l. the volume follows the clock --------------------------
-            c = _Checker("ambient")
-            from datetime import datetime as _dt
-
-            from .core.ambient import Ambient, band as _band, factor as _factor
-
-            at = lambda h: _dt(2026, 8, 31, h, 30)
-            for hour, want in ((9, "day"), (14, "day"), (19, "day"),
-                               (20, "evening"), (22, "evening"),
-                               (23, "night"), (2, "night"), (6, "night"),
-                               (7, "day")):
-                c(f"{hour:02d}:30 is {want}", _band(at(hour)) == want,
-                  _band(at(hour)))
-            c("the day is left alone", _factor("day") == 1.0)
-            c("the evening is eased off", 0.5 < _factor("evening") < 1.0)
-            c("the night is quieter still", _factor("night") < _factor("evening"))
-
-            was = (config.get("volume_base"), config.get("volume"),
-                   config.get("auto_volume"))
-            try:
-                config.set("auto_volume", True)
-                config.set("volume_base", 80)
-                amb = Ambient()
-                first = amb.due()
-                c("the first look sets the level without announcing it",
-                  first is not None and first[1] == "", str(first))
-                c("...and nothing more until the hour moves on",
-                  amb.due(force=True) is None)
-                # Turning it up at night means night is louder, not that the
-                # level you chose for the day has changed.
-                amb._band = ""
-                lvl = amb.wanted()
-                amb.note_manual(lvl)
-                c("re-setting the level it chose changes nothing",
-                  config.get("volume_base") == 80, str(config.get("volume_base")))
-                amb.note_manual(lvl + 20)
-                c("but turning it up rebases it",
-                  int(config.get("volume_base")) > 80,
-                  str(config.get("volume_base")))
-                config.set("auto_volume", False)
-                c("switched off, it asks for nothing", Ambient().due() is None)
-            finally:
-                config.set("volume_base", was[0])
-                config.set("volume", was[1])
-                config.set("auto_volume", was[2])
-            say("volume follows the clock", c)
 
             # -- 9m. a list the house shares -------------------------------
             # One copy, the owner's. The flag is the whole permission, so
@@ -4717,61 +4677,89 @@ def _run(verbose: bool = False) -> Result:
               and client.get("/api/playlists/job?job=nope", headers=owner_h).status_code == 404)
             say("making a playlist", c)
 
-            # -- 45. sharing a song: a link that plays that song, and nothing else --
+            # -- 45. sharing a song: a session of its own for everyone who opens it --
             c = _Checker("sharing a song")
             from .core import shares as _sh45
+            from .core.queue import QueueManager as _QM45
+            from .core.session import sessions as _ss45
+            from .models import Track as _T45
             from .web import api as _api45
-            import os as _os45, tempfile as _tf45
+            import os as _os45, tempfile as _tf45, time as _time45
+            _sh45._joins.clear()
             made = client.post("/api/share", json={"video_id": "SHARE00001", "title": "Mother",
                                                    "artist": "Danzig", "art": "https://img/x.jpg",
-                                                   "duration": 205}, headers=owner_h)
-            c("the owner can share what's playing", made.status_code == 200
-              and "/s/" in made.json().get("url", ""), made.text[:120])
+                                                   "duration": 258.484535}, headers=owner_h)
+            c("the owner can share what's playing -- even a song whose length isn't whole seconds",
+              made.status_code == 200 and "/s/" in made.json().get("url", ""), made.text[:160])
             sid = made.json()["id"]
+            c("...and the length is kept as whole seconds", _sh45.get(sid)["duration"] == 258)
             again = client.post("/api/share", json={"video_id": "SHARE00001", "title": "Mother"},
                                 headers=owner_h).json()
-            c("...and sharing it again is the same link", again["id"] == sid)
+            c("sharing it again is the same link", again["id"] == sid)
             c("nobody without a way in can make one",
               client.post("/api/share", json={"video_id": "x"}).status_code in (401, 403))
             _bans.forgive("testclient")
             page = client.get(f"/s/{sid}")
             c("the link opens for anyone, no sign-in", page.status_code == 200, str(page.status_code))
-            c("...with the tags a chat app turns into a card",
-              'property="og:title" content="Mother · Danzig"' in page.text
-              and 'property="og:image" content="https://img/x.jpg"' in page.text
-              and 'name="twitter:card"' in page.text)
+            c("...with a video a chat app plays in place, and the cover",
+              'property="og:video" content="' in page.text and "/s/" + sid + "/embed.mp4" in page.text
+              and 'property="og:video:type" content="video/mp4"' in page.text
+              and 'property="og:image" content="https://img/x.jpg"' in page.text)
+            c("...and nothing of Spotify's", "spotify" not in page.text.lower()
+              and not hasattr(_sh45, "spotify")
+              and client.get(f"/api/share/spotify?id={sid}", headers=owner_h).status_code == 404)
             c("a link that isn't one, or has run out, says so plainly",
               client.get("/s/nope").status_code == 404)
-            with _patch.object(_api45, "_share_fetch", lambda row, ip: None), \
-                    _patch.object(_api45.cast_mod, "serve", lambda vid, tune="", fmt="": ("", "missing")):
-                c("its audio says \"nearly\" while it's being fetched",
-                  client.get(f"/s/{sid}/audio").status_code == 503)
-            served = []
+            clip = _sh45.embed_file("SHARE00001")
+            clip.write_bytes(b"\x00" * 4096)
+            vid45 = client.get(f"/s/{sid}/embed.mp4", headers={"Range": "bytes=0-99"})
+            c("the chat card's video is served as a video", vid45.status_code == 206
+              and vid45.headers.get("content-type", "").startswith("video/mp4"),
+              f"{vid45.status_code} {vid45.headers.get('content-type')}")
+            clip.unlink()
+            asked = []
+            with _patch.object(_QM45, "play_now", lambda self, tracks, *a, **k: asked.append(
+                    (self.session_id, [t.video_id for t in tracks]))):
+                one = client.post(f"/s/{sid}/join")
+                two = client.post(f"/s/{sid}/join")
+            j1, j2 = one.json(), two.json()
+            c("opening the link gives that person a session, starting with the song",
+              one.status_code == 200 and j1.get("visit") and asked and asked[0][1] == ["SHARE00001"],
+              one.text[:160])
+            c("...and the next person gets one of their own",
+              j2.get("visit") and j2["visit"] != j1["visit"] and len({a[0] for a in asked}) == 2)
+            room1 = _sh45.visit(sid, j1["visit"])
+            c("...which isn't a pass: it can't open anything else",
+              room1 is not None and client.get("/api/status", headers={"X-Music-Key": j1["visit"]}).status_code in (401, 403))
+            _bans.forgive("testclient")
+            room1.sink.load("C:/x/SHARE00001.m4a")
             with _tf45.NamedTemporaryFile(suffix=".m4a", delete=False) as fh:
                 fh.write(b"\x00" * 64)
-            with _patch.object(_api45.cast_mod, "serve",
-                               lambda vid, tune="", fmt="": served.append(vid) or (fh.name, "ready")):
-                got = client.get(f"/s/{sid}/audio?fmt=aac", headers={"Range": "bytes=0-9"})
+            with _patch.object(room1.queue, "track_for",
+                               lambda p: _T45(video_id="SHARE00001", title="Mother") if p else None), \
+                    _patch.object(_api45.cast_mod, "serve", lambda vid, tune="", fmt="": (fh.name, "ready")):
+                mine45 = client.get(f"/s/{sid}/v/{j1['visit']}/audio/SHARE00001?fmt=aac",
+                                    headers={"Range": "bytes=0-9"})
+                theirs45 = client.get(f"/s/{sid}/v/{j1['visit']}/audio/SOMEOTHER01?fmt=aac")
             _os45.unlink(fh.name)
-            c("...and then serves that song, and only that song",
-              got.status_code == 206 and served == ["SHARE00001"], f"{got.status_code} {served}")
-            c("a share id is not a way into anything else",
-              client.get("/api/status", headers={"X-Music-Key": sid}).status_code in (401, 403)
-              and client.get(f"/api/status?token={sid}").status_code in (401, 403))
-            _bans.forgive("testclient")
-            asked = []
-            with _patch.object(_sh45, "spotify_ready", lambda: True), _patch.object(_sh45, "_songlink",
-                               lambda row: asked.append(row["video_id"]) or "https://open.spotify.com/track/abc"):
-                one = client.get(f"/api/share/spotify?id={sid}", headers=owner_h).json()
-                two = client.get(f"/s/{sid}/spotify").json()
-            c("its Spotify twin is found once and remembered",
-              one["spotify"] == two["spotify"] == "https://open.spotify.com/track/abc" and asked == ["SHARE00001"])
-            c("without a Spotify app it says so rather than failing",
-              client.get(f"/api/share/spotify?id={sid}", headers=owner_h).json().get("ready") is False)
-            with _patch.object(_sh45, "_songlink", lambda row: "https://evil.example/x"):
-                other = _sh45.create({"video_id": "SHARE00002", "title": "x"}, by="owner")
-                c("...and only a real Spotify address is ever handed out",
-                  _sh45.spotify(other["id"]) == "")
+            c("a session plays what's in it", mine45.status_code == 206, str(mine45.status_code))
+            c("...and nothing that isn't", theirs45.status_code == 404, str(theirs45.status_code))
+            beat = client.post(f"/s/{sid}/v/{j1['visit']}/beat", json={"pos": 12.5, "paused": False})
+            c("its page checks in", beat.status_code == 200 and room1.position == 12.5, beat.text[:120])
+            left = client.post(f"/s/{sid}/v/{j1['visit']}/leave").json()
+            c("leaving ends it there and then", left.get("closed") is True
+              and client.get(f"/s/{sid}/v/{j1['visit']}").status_code == 410)
+            room2 = _sh45.visit(sid, j2["visit"])
+            room2.last_seen = _time45.time() - (_sh45.VISIT_GONE + 5)
+            _ss45.reap()
+            c("a page that stops checking in loses its session",
+              client.get(f"/s/{sid}/v/{j2['visit']}").status_code == 410)
+            with _patch.object(_QM45, "play_now", lambda self, tracks, *a, **k: None):
+                codes = [client.post(f"/s/{sid}/join").status_code for _ in range(_sh45.JOINS_PER_IP)]
+            c("one address opening it over and over is slowed down", 429 in codes, str(codes))
+            for t45, v45 in list(_sh45._visits.items()):
+                _sh45.leave(v45["sid"], t45)
+            _sh45._joins.clear()
             _sh45.create({"video_id": "SHARE00003", "title": "y"}, by="g-45454545")
             c("deleting an account deletes the songs it shared",
               _sh45.forget_by("g-45454545") == 1 and _sh45.forget_by("g-45454545") == 0)
@@ -4973,39 +4961,20 @@ def _run(verbose: bool = False) -> Result:
                 config.update({"owner_email": mail49, "owner_sub": pin49})
             say("owner's Google account", c)
 
-            # -- 50. the volume follows the clock, without blasting the morning --
-            c = _Checker("volume by the clock")
-            from .core import ambient as _amb50
+            # -- 50. the volume stays where you put it --------------------
+            c = _Checker("volume")
+            import importlib.util as _ilu50
             from .player import player as _pl50
-            keep50 = {k: config.get(k) for k in ("volume", "volume_base", "auto_volume")}
+            c("no clock turns it up or down", _ilu50.find_spec("mrs.core.ambient") is None
+              and not hasattr(_pl50, "_follow_the_clock"))
+            vol50 = config.get("volume")
             try:
-                config.set("auto_volume", True)
-                with _patch.object(_amb50, "band", lambda now=None: _amb50.NIGHT):
-                    _amb50.ambient.note_manual(82)
-                c("turned up at night, the morning isn't amplified past 100",
-                  config.get("volume_base") == 100, str(config.get("volume_base")))
-                with _patch.object(_amb50, "band", lambda now=None: _amb50.EVENING):
-                    _amb50.ambient.note_manual(40)
-                c("...while an ordinary evening level still scales back up",
-                  config.get("volume_base") == 50, str(config.get("volume_base")))
-                with _patch.object(_amb50, "band", lambda now=None: _amb50.DAY):
-                    _amb50.ambient.note_manual(120)
-                c("...and a level chosen by day is kept as chosen",
-                  config.get("volume_base") == 120, str(config.get("volume_base")))
-                set50 = []
-                with _patch.object(_amb50.ambient, "due", lambda force=False: (60, "Back up for the day")), \
-                        _patch.object(_pl50.mpv, "set", lambda k, v: set50.append((k, v))):
-                    try:
-                        _pl50._follow_the_clock()
-                        crashed = ""
-                    except Exception as exc:
-                        crashed = repr(exc)
-                c("a band change sets the level and doesn't crash the monitor on the way out",
-                  not crashed and set50 == [("volume", 60)], crashed or str(set50))
+                with _patch.object(_pl50.mpv, "set", lambda k, v: None):
+                    _pl50.control("volume", 64)
+                c("what you set is what's kept", config.get("volume") == 64)
             finally:
-                for k, v in keep50.items():
-                    config.set(k, v)
-            say("volume by the clock", c)
+                config.set("volume", vol50)
+            say("volume", c)
 
             # -- 51. the event stream keeps every listener's page sure it's alive --
             c = _Checker("stream pings")

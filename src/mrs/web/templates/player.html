@@ -720,7 +720,6 @@ select,.keyin{background:var(--panel);border:1px solid var(--line);color:var(--f
 .sharepick .shareurl{font-size:11px;color:var(--sub);padding:0 13px 8px;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
 .sharepick .picker-row svg{width:16px;height:16px;fill:currentColor;flex:0 0 auto}
-.sharepick .picker-row.spot{color:#6ee79a}
 .sharepick .picker-row[hidden]{display:none}
 .picker-new{display:flex;gap:6px;padding:9px 11px;border-top:1px solid var(--line)}
 .picker-new input{flex:1;background:var(--bg);border:1px solid var(--line);
@@ -1608,8 +1607,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
     <div class="picker-head">Share this song<button class="pickx" id="shareclose">Close</button></div>
     <div class="sharewhat" id="sharewhat"></div>
     <div class="shareurl" id="shareurl"></div>
-    <div class="picker-row" id="sharecopy"><svg viewBox="0 0 24 24"><path d="M16 1H4a2 2 0 00-2 2v14h2V3h12zm3 4H8a2 2 0 00-2 2v14a2 2 0 002 2h11a2 2 0 002-2V7a2 2 0 00-2-2zm0 16H8V7h11z"/></svg>Copy link<span class="cnt">plays it for anyone</span></div>
-    <div class="picker-row spot" id="sharespot"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm4.6 14.4a.6.6 0 01-.9.2c-2.4-1.5-5.4-1.8-9-1a.6.6 0 11-.3-1.2c3.9-.9 7.2-.5 9.9 1.1a.6.6 0 01.3.9zm1.2-2.7a.8.8 0 01-1.1.3c-2.7-1.7-6.9-2.2-10.2-1.2a.8.8 0 11-.5-1.5c3.7-1.1 8.3-.6 11.4 1.3.4.3.5.8.4 1.1zm.1-2.8C14.7 9 9.4 8.8 6.3 9.7a.9.9 0 11-.5-1.8c3.5-1.1 9.4-.9 13.1 1.3a.9.9 0 01-1 1.7z"/></svg><span id="sharespotlabel">Copy Spotify link</span><span class="cnt">embeds anywhere</span></div>
+    <div class="picker-row" id="sharecopy"><svg viewBox="0 0 24 24"><path d="M16 1H4a2 2 0 00-2 2v14h2V3h12zm3 4H8a2 2 0 00-2 2v14a2 2 0 002 2h11a2 2 0 002-2V7a2 2 0 00-2-2zm0 16H8V7h11z"/></svg>Copy link<span class="cnt">plays in Discord, and for anyone</span></div>
     <div class="picker-row" id="sharenative" hidden><svg viewBox="0 0 24 24"><path d="M12 2l4 4h-3v8h-2V6H8zM5 10h3v2H6v8h12v-8h-2v-2h3a1 1 0 011 1v10a1 1 0 01-1 1H5a1 1 0 01-1-1V11a1 1 0 011-1z"/></svg>Share…</div>
   </div>
   <div class="picker devpick" id="devpicker">
@@ -1752,8 +1750,6 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         <div class="aeqlist owneronly" id="aeqres"></div>
         <div class="srow guestok"><span class="slabel">Even out volume<em>Keeps quiet and loud songs level</em></span>
           <div class="toggle" id="normalize"></div></div>
-        <div class="srow"><span class="slabel">Follow the clock<em id="autovolnote">Quieter late at night, back up in the morning</em></span>
-          <div class="toggle" id="autovol"></div></div>
         <div class="srow guestok"><span class="slabel">Crossfade<em>Overlap between tracks</em></span>
           <div class="chips" id="crossfade"></div></div>
         <div class="srow guestok"><span class="slabel">Announce songs<em>Says the track name out loud</em></span>
@@ -1961,11 +1957,6 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
             <button class="btn" id="lfmauth">Approve</button>
             <button class="btn" id="lfmdone">Finish</button>
           </span></div>
-        <div class="seclbl">Sharing</div>
-        <div class="srow"><span class="slabel">Spotify for share links<em id="spothint">A free app from developer.spotify.com, so a shared song can come with its Spotify link</em></span>
-          <span class="acctname"><input class="keyin" id="spotid" placeholder="Client ID" autocomplete="off" spellcheck="false" style="width:108px">
-            <input class="keyin" id="spotsec" type="password" placeholder="Secret" autocomplete="new-password" style="width:88px">
-            <button class="btn" id="spotsave">Save</button></span></div>
         <div class="seclbl">Other machines</div>
         <div id="peerlist"></div>
         <div class="srow"><span class="slabel">Add a peer<em>host:port of another copy of this app</em></span>
@@ -2315,10 +2306,10 @@ window.addEventListener("resize", () => {
 paintGlass();
 
 /* ── sharing a song ──────────────────────────────────────────────────
-   Our own link plays the song for anyone who opens it, and pasted into a
-   chat it turns into a card with the cover. The Spotify one embeds nearly
-   everywhere; it's looked up as the panel opens so copying it is instant --
-   a copy after a wait loses the tap that allowed it, on a phone. */
+   A link that plays the song for whoever opens it -- each of them gets a
+   session of their own -- and turns into a playable card in Discord. */
+const detailText = d => typeof d === "string" ? d
+  : Array.isArray(d) ? ((d[0] && d[0].msg) || "") : "";
 let shareFor = null;
 $("sharebtn").onclick = async e => {
   e.stopPropagation();
@@ -2329,43 +2320,21 @@ $("sharebtn").onclick = async e => {
   const title = t.title || t.name || "";
   const r = await apiTry("/api/share?video_id=" + encodeURIComponent(t.video_id) +
     "&title=" + encodeURIComponent(title) + "&artist=" + encodeURIComponent(t.artist || "") +
-    "&art=" + encodeURIComponent(t.art || "") + "&duration=" + (t.duration || 0));
-  if (!r.ok) { toast((r.body && r.body.detail) || "Couldn't share that"); return; }
+    "&art=" + encodeURIComponent(t.art || "") + "&duration=" + Math.round(t.duration || 0));
+  if (!r.ok) { toast(detailText(r.body && r.body.detail) || "Couldn't share that"); return; }
   shareFor = Object.assign({ title, artist: t.artist || "" }, r.body);
   $("sharewhat").textContent = title + (t.artist ? " · " + t.artist : "");
   $("shareurl").textContent = shareFor.url;
-  $("sharespotlabel").textContent = shareFor.spotify ? "Copy Spotify link" : "Finding it on Spotify…";
   $("sharenative").hidden = !navigator.share;
   const b = $("sharebtn").getBoundingClientRect();
   box.style.bottom = (window.innerHeight - b.top + 8) + "px";
   if (isWide()) box.style.left = Math.max(12, Math.min(window.innerWidth - 332, b.left - 24)) + "px";
   box.classList.add("show");
-  if (!shareFor.spotify) {
-    const mine = shareFor;
-    const s = await api("/api/share/spotify?id=" + encodeURIComponent(mine.id));
-    if (shareFor !== mine) return;
-    mine.spotify = (s && s.spotify) || "";
-    $("sharespotlabel").textContent = mine.spotify ? "Copy Spotify link"
-      : (s && s.ready === false) ? "Spotify links aren't set up" : "Not on Spotify";
-  }
 };
 $("shareclose").onclick = e => { e.stopPropagation(); $("sharepick").classList.remove("show"); };
-$("spotsave").onclick = async () => {
-  const id = $("spotid").value.trim(), sec = $("spotsec").value.trim();
-  const put = (k, v) => apiTry("/api/setting?key=" + k + "&value=" + encodeURIComponent(v));
-  const a = await put("spotify_client_id", id);
-  const b = sec ? await put("spotify_client_secret", sec) : { ok: true };
-  toast(a.ok && b.ok ? "Saved" : "Couldn't save that");
-  $("spotsec").value = "";
-  loadSettings();
-};
 $("sharecopy").onclick = async () => {
   if (!shareFor) return;
   toast(await copyText(shareFor.url) ? "Link copied" : "Couldn't copy that");
-};
-$("sharespot").onclick = async () => {
-  if (!shareFor || !shareFor.spotify) { toast("Still looking for it on Spotify"); return; }
-  toast(await copyText(shareFor.spotify) ? "Spotify link copied" : "Couldn't copy that");
 };
 $("sharenative").onclick = () => {
   if (!shareFor || !navigator.share) return;
@@ -4793,11 +4762,6 @@ async function checkBoot() {
 }
 $("bootrecheck").onclick = checkBoot;
 
-$("autovol").onclick = () => {
-  const on = !$("autovol").classList.contains("on");
-  $("autovol").classList.toggle("on", on);
-  api("/api/setting?key=auto_volume&value=" + (on ? 1 : 0));
-};
 
 
 /* Where a preference goes.
@@ -6299,15 +6263,12 @@ async function loadSettings() {
   document.body.classList.toggle("noviz", !viz);
   $("normalize").classList.toggle("on", !!s.normalize);
   $("announce").classList.toggle("on", s.announce !== false);
-  $("autovol").classList.toggle("on", s.auto_volume !== false);
   checkBoot();
   $("boot").classList.toggle("on", !!s.start_on_boot);
   $("bootearly").classList.toggle("on", !!s.start_before_signin);
   $("lockips").classList.toggle("on", !!s.lock_ips);
   $("blockguests").classList.toggle("on", !!s.block_full_guests);
   $("partymode").classList.toggle("on", !!s.party_mode);
-  if (document.activeElement !== $("spotid")) $("spotid").value = s.spotify_client_id || "";
-  $("spotsec").placeholder = s.spotify_set ? "saved" : "Secret";
   document.body.classList.toggle("party", !!s.party_mode);
   if (document.activeElement !== $("addrprefix")) $("addrprefix").value = s.url_prefix || "";
   if (document.activeElement !== $("addrport")) $("addrport").value = s.public_port || 0;

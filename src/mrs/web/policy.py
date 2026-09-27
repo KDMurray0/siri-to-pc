@@ -24,7 +24,7 @@ cast diag audit policy stats accounts accounts/setup accounts/scope accounts/for
 public-address certificate certificate/renew accounts/owner accounts/owner/state
 stream/{video_id}
 autoeq/status autoeq/assign'''.split())
-SCOPED = set('''status play play/video/{video_id} play/pick share share/spotify
+SCOPED = set('''status play play/video/{video_id} play/pick share
 control/{action} session/ended
 session/progress session/here seek queue/{op} cancel radio search play/artist
 play/album lyrics lyrics/search about history block blocks history/forget liked
@@ -41,7 +41,7 @@ boot/status cookies diag output/stats audit policy
 output/stream/{video_id} announce/{aid}.mp3 stream/{video_id} events
 smartplaylists
 autoeq/status stats accounts accounts/check certificate me me/export me/siri
-playlists/job share/spotify accounts/owner/state'''.split())
+playlists/job accounts/owner/state'''.split())
 READ_PARAMS = {
     "sessions": {"close"}, "cache": {"prune"}, "blocked": {"forgive", "clear"},
     "ddns": {"hostname", "user", "secret", "provider", "now"},

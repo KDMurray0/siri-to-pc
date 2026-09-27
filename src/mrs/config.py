@@ -23,17 +23,6 @@ DEFAULTS: dict[str, Any] = {
 
     # playback
     "volume": 70,
-    # The volume follows the clock: quieter late, a little quieter in the
-    # evening, back up in the morning. volume_base is the level you actually
-    # chose — what you set at midnight is remembered as a midnight level, so
-    # the adjustment scales your choice instead of overruling it.
-    "auto_volume": True,
-    "volume_base": None,
-    "evening_hour": 20,
-    "quiet_hour": 23,
-    "wake_hour": 7,
-    "evening_level": 80,      # percent of your level
-    "quiet_level": 55,
     "eq": "flat",
     "normalize": False,
     # Headphone correction from AutoEq, kept per output by its Windows name:
@@ -438,8 +427,6 @@ class Config:
         out["lastfm_set"] = bool(self._data.get("lastfm_session"))
         out["google_set"] = bool(self._data.get("google_client_id")
                                  and self._data.get("google_client_secret"))
-        out["spotify_set"] = bool(self._data.get("spotify_client_id")
-                                  and self._data.get("spotify_client_secret"))
         return out
 
     # -- change notifications --

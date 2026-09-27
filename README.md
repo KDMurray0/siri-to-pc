@@ -43,11 +43,6 @@ take back their own additions and nothing else, and the list stays yours to
 delete. Even a link that expires can put a song in one, because the list
 outlives the evening.
 
-**The volume follows the clock.** Quieter after eleven, eased off after
-eight, back up at seven. The level you set is remembered as the level you
-meant for that time of day, so turning it up at midnight makes midnight
-louder rather than starting an argument. One toggle in settings turns it off.
-
 **Make me a playlist of five hundred.** Lists → *Make one for me*, or say it:
 "500 songs of nu metal and glam metal", "a playlist of Danzig and Black Label
 Society". Bands, genres or both, at the size asked for (up to a thousand). Each

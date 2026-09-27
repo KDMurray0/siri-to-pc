@@ -423,7 +423,14 @@ class Sessions:
         with self._lock:
             rooms = list(self._rooms.items())
         dead: list[tuple[str, str]] = []
+        from .shares import VISIT_GONE, is_visit
         for pid, room in rooms:
+            if is_visit(pid):
+                # Somebody who opened a shared song: gone when their page stops
+                # checking in. There's no pass behind them to revoke.
+                if room.quiet_for() > VISIT_GONE:
+                    dead.append((pid, "left"))
+                continue
             if pid not in alive:
                 dead.append((pid, "revoked"))
             elif now - room.last_seen > IDLE_DEATH:
