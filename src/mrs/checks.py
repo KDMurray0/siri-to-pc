@@ -4641,6 +4641,79 @@ def _run(verbose: bool = False) -> Result:
                           headers=owner_h).status_code == 400)
             say("picked results", c)
 
+            # -- 44. make me a playlist: the size asked for, many bands, their best-known songs --
+            c = _Checker("making a playlist")
+            from .core import builder as _b44
+            from .resolve import catalog as _cat44
+            from .models import Track as _T44
+            import tempfile as _tf44
+
+            def _top(name, limit=100):
+                return [_T44(video_id=f"{name}-{i:02d}", title=f"{name} hit {i}", artist=name,
+                             duration=200) for i in range(30)]
+
+            acts = {"nu metal": [f"NuBand{i}" for i in range(40)],
+                    "glam metal": [f"GlamBand{i}" for i in range(40)]}
+            with _patch.object(_cat44, "artist_top_tracks", _top), \
+                    _patch.object(_b44, "_genre_artists", lambda g, want: acts.get(g, [])[:want]), \
+                    _patch.object(_b44, "anchors_of", lambda what: [
+                        {"kind": "genre", "name": "nu metal"}, {"kind": "genre", "name": "glam metal"}]):
+                big = _b44.build("nu metal and glam metal", songs=200)
+                c("it makes the number of songs asked for", len(big) == 200, str(len(big)))
+                c("...from both genres", {t.artist[:3] for t in big} == {"NuB", "Gla"})
+                per_band = {}
+                for t in big:
+                    per_band[t.artist] = per_band.get(t.artist, 0) + 1
+                c("...spread across many bands, not one band many times",
+                  len(per_band) >= 30 and max(per_band.values()) <= 8,
+                  f"{len(per_band)} bands, most {max(per_band.values())}")
+                c("...each band's best-known songs, not its deep cuts",
+                  all(int(t.video_id.rsplit("-", 1)[1]) < 12 for t in big))
+                c("...and no band twice in a row",
+                  all(a.artist != b.artist for a, b in zip(big, big[1:])))
+                c("...and never more than the ceiling",
+                  len(_b44.build("nu metal", songs=5000)) <= _b44.MAX_SONGS)
+            with _patch.object(_cat44, "artist_top_tracks", _top), \
+                    _patch.object(_b44, "anchors_of", lambda what: [
+                        {"kind": "artist", "name": "Korn"}, {"kind": "artist", "name": "Deftones"}]):
+                two = _b44.build("korn and deftones", songs=20)
+                c("two bands give ten each, dealt out in turn",
+                  len(two) == 20 and [t.artist for t in two[:4]] == ["Korn", "Deftones", "Korn", "Deftones"])
+                with _tf44.TemporaryDirectory() as root44:
+                    from .core.taste import TasteEngine as _TE44
+                    t44 = _TE44(root=_Path(root44))
+                    t44.block(artist="Korn")
+                    c("a band the listener blocked stays out",
+                      all(t.artist != "Korn" for t in _b44.build("korn and deftones", songs=20, taste=t44)))
+
+                    class _Store44:
+                        def __init__(self): self.made = {}
+                        def names(self): return list(self.made)
+                        def create(self, n): self.made[n] = []
+                        def add_many(self, n, ts): self.made[n] += list(ts)
+                    st = _Store44()
+                    job = _b44.start("korn and deftones", songs=12, store=st)
+                    for _ in range(40):
+                        if (_b44.job(job) or {}).get("state") != "building":
+                            break
+                        _t.sleep(0.05)
+                    got = _b44.job(job)
+                    c("a job saves the list and says what it made",
+                      got["state"] == "done" and got["count"] == 12 and len(st.made[got["name"]]) == 12,
+                      str(got))
+            from . import requests as _rq44
+            started = {}
+            with _patch.object(_b44, "start", lambda what, **k: started.update(what=what, **k) or "j1"):
+                said = _rq44.handle_request("make me a 500 song nu metal and glam metal playlist",
+                                            announce=False)
+            c("\"make me a 500 song ... playlist\" goes to the builder with 500 songs",
+              started.get("songs") == 500 and "nu metal" in started.get("what", "")
+              and said.get("status") == "making", str(started)[:120])
+            c("the page can ask for one, and watch it",
+              client.post("/api/playlists/make", json={"what": "x"}, headers=owner_h).status_code == 400
+              and client.get("/api/playlists/job?job=nope", headers=owner_h).status_code == 404)
+            say("making a playlist", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json

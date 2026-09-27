@@ -538,10 +538,33 @@ def _build_playlist(text: str, *, announce: bool, queue, room: str,
     several artists and a single song to build around all behave exactly as
     they do when you ask to play them. The length is the only new idea.
     """
-    made = grammar.playlist_make(text)
+    count = re.search(r"\b(\d{1,4})[\s-]+(?:songs?|tracks?)\b", text, re.I)
+    made = grammar.playlist_make(re.sub(r"\b\d{1,4}[\s-]+(?:songs?|tracks?)\b", " ", text, flags=re.I)
+                                 if count else text)
     if not made:
         return None
     subject, minutes = made
+    if count:
+        # A number of songs is the builder's job: a big list is many bands'
+        # likeliest songs, not the radio padding one search out. It takes a
+        # while, so it goes aside and the list turns up when it's ready.
+        from .core import builder
+        store = _store_for(lists)
+        if store is None:
+            msg = "Playlists need an account or the owner's player"
+            say_to(room, msg)
+            return {"status": "error", "message": msg, "via": "grammar"}
+        n = max(1, min(builder.MAX_SONGS, int(count.group(1))))
+
+        def done(title, tracks):
+            say_to(room, f"{title} is ready: {len(tracks)} songs")
+
+        job = builder.start(subject, songs=n, store=store,
+                            taste=getattr(queue, "taste", None), on_done=done)
+        msg = f"Making a {n}-song {subject} playlist. It'll be in your lists when it's ready"
+        if announce:
+            player.announce(msg, room)
+        return {"status": "making", "message": msg, "via": "grammar", "job": job}
     minutes = float(minutes or config.get("queue_minutes", 30))
 
     store = _store_for(lists)

@@ -431,6 +431,19 @@ a.btn{text-decoration:none;display:inline-block}
 .pltracks:empty{display:none}
 /* A list the house shares. The tag is on the row, not in the name, so a
    list called "Shared" doesn't look like one. */
+/* Make one for me: what it's of, how many, and off it goes. */
+.plmake{margin:4px 0 12px;padding:12px;border:1px solid var(--line);border-radius:12px;
+  background:color-mix(in srgb,var(--accent) 6%,transparent)}
+.plmake b{display:block;font-size:12.5px;margin-bottom:2px}
+.plmake p{font-size:11px;color:var(--sub);margin:0 0 8px}
+.plmake input{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);
+  border-radius:9px;padding:8px 10px;font:inherit;font-size:12.5px;outline:none;margin-bottom:8px}
+.plmake input:focus{border-color:var(--accent)}
+.plmake .sizes{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
+.plmake .sizes button{font:inherit;font-size:11px;padding:4px 9px;border-radius:999px;cursor:pointer;
+  border:1px solid var(--line);background:none;color:var(--sub)}
+.plmake .sizes button.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.plmake .mkstate{font-size:11px;color:var(--sub);margin-top:6px}
 .plhead{font-size:10.5px;font-weight:700;letter-spacing:.06em;
   text-transform:uppercase;color:var(--sub);padding:12px 6px 4px}
 .plshare{font-size:9.5px;font-weight:700;letter-spacing:.05em;
@@ -3465,7 +3478,13 @@ async function loadLists() {
   const rows = (r && r.playlists) || [];
   const house = (r && r.shared) || [];      // the owner's, opened to everyone
   const owner = !!(ME && ME.owner);
-  let html = `<div class="srow" style="border:0"><button class="btn primary" id="plnew">Save current song to a list</button></div>` +
+  let html = `<div class="plmake"><b>Make one for me</b>` +
+    `<p>Bands, genres or both. It picks their best-known songs, weighed against what you play.</p>` +
+    `<input id="mkwhat" placeholder="nu metal and glam metal, or Korn, Deftones and Mötley Crüe" autocomplete="off" spellcheck="false">` +
+    `<div class="sizes" id="mksizes">` + [25, 50, 100, 250, 500].map(n =>
+      `<button type="button" data-n="${n}"${n === 50 ? ' class="on"' : ""}>${n} songs</button>`).join("") + `</div>` +
+    `<button class="btn primary" id="mkgo">Make it</button><div class="mkstate" id="mkstate"></div></div>` +
+    `<div class="srow" style="border:0"><button class="btn primary" id="plnew">Save current song to a list</button></div>` +
     `<div class="plimport"><input id="plspot" placeholder="Paste a Spotify or Apple Music link" autocomplete="off" spellcheck="false">` +
     `<button class="btn" id="plspotgo">Add</button></div>`;
   const dynamic = (smart && smart.playlists) || [];
@@ -3488,6 +3507,30 @@ async function loadLists() {
       house.map(p => listRow(p, true, owner)).join("");
   }
   box.innerHTML = html;
+  $("mksizes").onclick = e => {
+    const b = e.target.closest("button[data-n]"); if (!b) return;
+    $("mksizes").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+  };
+  $("mkgo").onclick = async () => {
+    const what = $("mkwhat").value.trim();
+    if (what.length < 2) { toast("Say what it should be of"); return; }
+    const n = Number(($("mksizes").querySelector(".on") || {}).dataset?.n || 50);
+    $("mkgo").disabled = true;
+    const r = await apiTry("/api/playlists/make?what=" + encodeURIComponent(what) + "&songs=" + n);
+    if (!r.ok) { $("mkgo").disabled = false; toast((r.body && r.body.detail) || "Couldn't start that"); return; }
+    const job = r.body.job;
+    // A big list is a couple of lookups per band, so it's watched until it lands.
+    const watch = async () => {
+      const j = await api("/api/playlists/job?job=" + encodeURIComponent(job));
+      if (!j || !$("mkstate")) return;
+      $("mkstate").textContent = j.state === "done" ? "Made " + j.name + ": " + j.detail
+        : j.state === "failed" ? "Couldn't: " + j.detail : j.detail + "…";
+      if (j.state === "building") { setTimeout(watch, 2000); return; }
+      $("mkgo").disabled = false;
+      if (j.state === "done") { toast("Made " + j.name); setTimeout(loadLists, 600); }
+    };
+    watch();
+  };
   $("plnew").onclick = async () => {
     const name = prompt("List name:");
     if (name) { const res = await api("/api/playlist/add?name=" + encodeURIComponent(name)); toast(res && res.message); loadLists(); }

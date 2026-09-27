@@ -1551,6 +1551,39 @@ def api_smartplaylist_play(request: Request, kind: str, _: bool = Auth):
             "message": f"Added {len(tracks)} from {_SMART_LABELS[kind]}"}
 
 
+@app.get("/api/playlists/make")
+def api_playlists_make(request: Request, what: str = "", songs: int = 0, minutes: int = 0,
+                       name: str = "", _: bool = Auth):
+    """Make a playlist of a given size from a description, in the background.
+
+    "nu metal and glam metal", 500 songs: filled from each band's or genre's
+    most-played songs, weighed against the listener's own history.
+    """
+    from ..core import builder
+    store = _lists_for(request)
+    if store is None:
+        raise HTTPException(409, "Playlists need an account or the owner's player")
+    what = (what or "").strip()[:200]
+    if len(what) < 2:
+        raise HTTPException(400, "Say what it should be of: bands, genres, or both")
+    if not (0 <= songs <= builder.MAX_SONGS and 0 <= minutes <= 60 * 24):
+        raise HTTPException(400, f"Up to {builder.MAX_SONGS} songs")
+    room = _session_for(request)
+    queue = room.queue if room else player.queue
+    job = builder.start(what, songs=songs, minutes=minutes, name=name.strip()[:60],
+                        store=store, taste=getattr(queue, "taste", None))
+    return {"status": "ok", "job": job, "message": f"Making it: {what}"}
+
+
+@app.get("/api/playlists/job")
+def api_playlists_job(job: str = "", _: bool = Auth):
+    from ..core import builder
+    got = builder.job(job)
+    if not got:
+        raise HTTPException(404, "No such job")
+    return {"status": "ok", **got}
+
+
 @app.get("/api/playlists")
 def api_playlists(request: Request, _: bool = Auth):
     mine = _lists_for(request)
