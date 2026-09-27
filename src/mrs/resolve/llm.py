@@ -42,7 +42,8 @@ ALIASES = {
 }
 
 _BLANK = {"kind": "song", "title": "", "artist": "", "album": "", "genre": "",
-          "argument": "", "variant": False, "shuffle": False}
+          "argument": "", "variant": False, "shuffle": False,
+          "when": "now", "count": 0, "items": []}
 
 
 def _shot(said: str, **fields) -> str:
@@ -60,7 +61,11 @@ def _shot(said: str, **fields) -> str:
 # can't teach the model something the parser then refuses.
 EXAMPLES = [
     ("sultans of swing", dict(kind="song", title="Sultans of Swing", artist="Dire Straits")),
-    ("nirvana and foo fighters", dict(kind="artist", artist="Nirvana and Foo Fighters")),
+    ("nirvana and foo fighters", dict(kind="artist", artist="Nirvana and Foo Fighters", genre="grunge")),
+    ("korn and some glam metal", dict(kind="mix", genre="metal", items=[
+        {"kind": "artist", "name": "Korn"}, {"kind": "genre", "name": "glam metal"}])),
+    ("play mother by danzig next", dict(kind="song", title="Mother", artist="Danzig", when="next")),
+    ("five songs by queen", dict(kind="artist", artist="Queen", count=5)),
     ("something chill", dict(kind="genre", genre="chill", shuffle=True)),
     ("shuffle my taylor swift", dict(kind="artist", artist="Taylor Swift", shuffle=True)),
     ("the album rumours", dict(kind="album", title="Rumours", album="Rumours", artist="Fleetwood Mac")),
@@ -75,7 +80,8 @@ SYSTEM = (
     "You turn ONE spoken request for a music player into ONE JSON object. "
     "Reply with the JSON only: no prose, no markdown.\n\n"
     "The fields (leave out any that would be \"\" or false):\n"
-    + json.dumps(_BLANK | {"kind": "song|album|artist|genre|command|none"},
+    + json.dumps(_BLANK | {"kind": "song|album|artist|genre|mix|command|none",
+                           "when": "now|next|end"},
                  separators=(",", ":")) + "\n\n"
     "Choose kind by the FIRST rule that fits:\n"
     "1. command: they are controlling playback, not asking for music. title "
@@ -101,7 +107,12 @@ SYSTEM = (
     "For several, join the names with \" and \" in artist. title stays \"\".\n"
     "6. genre: a genre, mood, decade or activity (chill, 90s, gym). Write "
     "decades as digits (\"90s\", never \"nineties\"). For several, join with "
-    "\" and \". title stays \"\".\n\n"
+    "\" and \". title stays \"\".\n"
+    "7. mix: they name DIFFERENT kinds of thing to play together (a band and a "
+    "genre, a song and a band). items lists each: {kind: artist|song|album|genre, "
+    "name, artist (for a song or album)}. genre: the one genre they share, if "
+    "there is an obvious one. For several bands (kind artist) also put their "
+    "shared genre in genre.\n\n"
     "Also:\n"
     "- Fix obvious dictation errors in names (\"dont stop me now\" -> \"Don't "
     "Stop Me Now\") but never swap in a different song.\n"
@@ -110,7 +121,12 @@ SYSTEM = (
     "- variant is true ONLY if they explicitly ask for a remix, live, acoustic, "
     "cover, sped-up, slowed or instrumental version.\n"
     "- shuffle is true ONLY if they say shuffle, random, mix or surprise me, "
-    "or they ask for a genre or mood. Otherwise false.\n\n"
+    "or they ask for a genre or mood. Otherwise false.\n"
+    "- when: \"next\" if it should play after the current song (play X next, "
+    "up next, after this); \"end\" if it goes on the end of the queue (add X "
+    "to the queue, queue up X). Otherwise leave it out.\n"
+    "- count: a number only if they ask for that many songs (\"five songs by "
+    "X\" -> 5, \"the top 10\" -> 10).\n\n"
     "Examples:\n" + "\n".join(_shot(said, **f) for said, f in EXAMPLES)
 )
 
@@ -264,6 +280,20 @@ def _number(text: str):
 _DOWN = ("quiet", "down", "soft", "lower", "less", "decrease", "reduce")
 
 
+def _items(raw) -> list[dict]:
+    """The things a mix named, checked: a known kind and a name each."""
+    out = []
+    for row in raw if isinstance(raw, list) else []:
+        if not isinstance(row, dict):
+            continue
+        kind = str(row.get("kind") or "").strip().lower()
+        name = str(row.get("name") or "").strip()
+        if kind in ("artist", "song", "album", "genre") and name:
+            out.append({"kind": kind, "name": name[:120],
+                        "artist": str(row.get("artist") or "").strip()[:120]})
+    return out[:6]
+
+
 def _command_plan(word: str, argument: str, said: str) -> Plan | None:
     """A playback command in the words the app understands.
 
@@ -321,12 +351,28 @@ def parse(text: str) -> Plan | None:
         return None
 
     kind = str(data.get("kind") or "").strip().lower()
+    items = _items(data.get("items"))
+    if kind == "mix" and len(items) > 1 and len({i["kind"] for i in items}) == 1             and items[0]["kind"] in ("artist", "genre"):
+        # Two genres, or three bands, is one kind of thing several times over:
+        # the ordinary "X and Y" request, which already deals them out in turn.
+        joined = " and ".join(i["name"] for i in items)
+        data = dict(data, **({"artist": joined} if items[0]["kind"] == "artist"
+                             else {"genre": joined}))
+        kind, items = items[0]["kind"], []
+    if kind == "mix" and len(items) < 2:
+        # A "mix" of one thing is that thing.
+        if not items:
+            return None
+        kind = items[0]["kind"]
+        data = dict(data, **({"artist": items[0]["name"]} if kind == "artist" else
+                             {"genre": items[0]["name"]} if kind == "genre" else
+                             {"title": items[0]["name"], "artist": items[0].get("artist", "")}))
     if kind == "none":
         # The model saying "this isn't about music" is an answer, and an
         # honest one -- better than letting it invent a song to fill the gap.
         # None hands it back to the grammar, exactly as any decline does.
         return None
-    if kind not in ("song", "album", "artist", "genre", "command"):
+    if kind not in ("song", "album", "artist", "genre", "command", "mix"):
         return None
     title = str(data.get("title") or "").strip()
     artist = str(data.get("artist") or "").strip()
@@ -338,6 +384,16 @@ def parse(text: str) -> Plan | None:
     if kind == "command":
         return _command_plan(title, argument, text)
 
+    when = str(data.get("when") or "").strip().lower()
+    mode = {"next": "next", "end": "queue", "queue": "queue", "later": "queue"}.get(when, "play")
+    count = _number(data.get("count"))
+    count = int(max(0, min(500, count))) if count else 0
+    if kind == "mix":
+        names = " and ".join(i["name"] for i in items)
+        plan = Plan(kind="mix", query=names, items=items, theme=genre, mode=mode,
+                    count=count, shuffle=_as_bool(data.get("shuffle")), via="llm",
+                    spoken=text)
+        return plan
     query = {"song": title or album or genre,
              "album": album or title,
              "artist": artist or title,
@@ -347,7 +403,8 @@ def parse(text: str) -> Plan | None:
     plan = Plan(kind=kind, query=query, artist=artist,
                 variant=_as_bool(data.get("variant")) is True,
                 shuffle=_as_bool(data.get("shuffle")),
-                via="llm", spoken=text)
+                via="llm", spoken=text, mode=mode, count=count,
+                theme=genre if kind == "artist" else "")
     # The model gives back one query, so "nirvana and foo fighters" arrives
     # as a single artist and would be searched for as a band of that name.
     # Same reading as the grammar path, and the resolver checks it the same

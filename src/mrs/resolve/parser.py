@@ -37,13 +37,15 @@ def parse(text: str, *, mode: str = "play") -> Plan:
     if llm.available():
         plan = llm.parse(text)
         if plan:
-            plan.mode = mode
+            if mode != "play" or plan.mode not in ("next", "queue"):
+                plan.mode = mode
             log.info("llm: %r -> %s %r (artist=%r)", text, plan.kind, plan.query,
                      plan.artist)
             return plan
 
     # 3. grammar fallback
     plan = grammar.parse(text)
-    plan.mode = mode
+    if mode != "play" or plan.mode not in ("next", "queue"):
+        plan.mode = mode
     log.info("grammar: %r -> %s %r", text, plan.kind, plan.query)
     return plan

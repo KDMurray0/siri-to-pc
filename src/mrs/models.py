@@ -192,6 +192,13 @@ class Plan:
     # "nirvana and foo fighters" is two artists; "thrash and black metal" is
     # two genres. Empty means one thing, which is nearly always.
     seeds: list[str] = field(default_factory=list)
+    # A request that named different kinds of thing at once -- two bands and a
+    # genre -- as [{"kind": "artist", "name": "Danzig"}, ...]. kind is "mix".
+    items: list[dict] = field(default_factory=list)
+    # "five songs by", "the top ten": how many, or 0 for no particular number.
+    count: int = 0
+    # A genre that ties a mix together, for the radio once the mix runs out.
+    theme: str = ""
 
 
 @dataclass

@@ -9,7 +9,7 @@ from itertools import zip_longest
 from ..config import config
 from ..logging_setup import get
 from ..models import Plan, Track, _fold, _strip_article
-from . import catalog
+from . import catalog, ranking
 
 log = get("resolve")
 
@@ -68,7 +68,7 @@ def _one_act(query: str) -> bool:
     return False
 
 
-def _several(plan: Plan, kind: str) -> "Resolution | None":
+def _several(plan: Plan, kind: str, taste=None) -> "Resolution | None":
     """Resolve a request that named more than one thing.
 
     Each seed is resolved on its own and the results are dealt out in turn,
@@ -95,7 +95,7 @@ def _several(plan: Plan, kind: str) -> "Resolution | None":
     for seed in plan.seeds[:4]:          # four is already an odd request
         sub = replace(plan, query=seed, artist="", seeds=[],
                       kind="genre" if as_genre else plan.kind)
-        got = resolve(sub)
+        got = resolve(sub, taste)
         if got and got.tracks:
             parts.append(got)
     if len(parts) < 2:
@@ -120,6 +120,50 @@ def _several(plan: Plan, kind: str) -> "Resolution | None":
     return Resolution(dealt, f"Playing {said}",
                       hold_radio=any(p.hold_radio for p in parts),
                       anchors=[p.tracks[0] for p in parts])
+
+
+def _mix(plan: Plan, taste=None) -> "Resolution | None":
+    """Several different things at once: bands, songs, albums and genres.
+
+    Each is resolved as what it is -- a band's likeliest songs, the song
+    itself, the album, the genre -- and they're dealt out in turn, so the
+    queue opens with one of each. Every one of them is an anchor the radio
+    keeps coming back to, and a genre that ties them together (if the reader
+    gave one) is the theme it stays inside when those run out.
+    """
+    parts: list[Resolution] = []
+    for item in plan.items[:6]:
+        kind = item.get("kind") or "auto"
+        name = (item.get("name") or "").strip()
+        if not name:
+            continue
+        sub = Plan(kind=kind, query=name, artist=item.get("artist", "") or
+                   (name if kind == "artist" else ""), via=plan.via, spoken=plan.spoken)
+        if kind == "artist":
+            sub.query = name
+        got = resolve(sub, taste)
+        if got and got.tracks:
+            parts.append(got)
+    if not parts:
+        return None
+    each = max(3, int(config.get("queue_minutes", 30)) // (2 * len(parts)) + 3)
+    if getattr(plan, "count", 0):
+        each = max(1, plan.count // len(parts) + 1)
+    lanes = [p.tracks[:each] for p in parts]
+    dealt: list[Track] = []
+    seen: set[str] = set()
+    for row in zip_longest(*lanes):
+        for t in row:
+            if t is not None and t.video_id not in seen:
+                seen.add(t.video_id)
+                dealt.append(t)
+    if getattr(plan, "count", 0):
+        dealt = dealt[:plan.count]
+    names = [i.get("name") for i in plan.items[:6] if i.get("name")]
+    said = ", ".join(names[:-1]) + " and " + names[-1] if len(names) > 1 else names[0]
+    return Resolution(dealt, f"Playing {said}",
+                      anchors=[p.tracks[0] for p in parts],
+                      hold_radio=all(p.hold_radio for p in parts))
 
 
 def first_minutes(tracks: list[Track], minutes: float) -> list[Track]:
@@ -147,14 +191,20 @@ def _artist_exact(query: str) -> str | None:
     return None
 
 
-def resolve(plan: Plan) -> Resolution:
+def resolve(plan: Plan, taste=None) -> Resolution:
+    """`taste` is the listener's, so "most likely wanted" means them."""
     kind = plan.kind
     query = (plan.query or "").strip()
+
+    if kind == "mix" and getattr(plan, "items", None):
+        mixed = _mix(plan, taste)
+        if mixed is not None:
+            return mixed
 
     # Named more than one thing? Try it as several, and fall back to one if
     # that turns out to be wrong.
     if plan.seeds and kind in ("auto", "artist", "genre"):
-        several = _several(plan, kind)
+        several = _several(plan, kind, taste)
         if several is not None:
             return several
     if not query:
@@ -178,11 +228,22 @@ def resolve(plan: Plan) -> Resolution:
             plan.artist = name
 
     if kind == "song":
-        hits = catalog.search_songs(query, limit=8, allow_variant=plan.variant)
+        hits = []
         if plan.artist:
-            wanted = plan.artist.lower()
-            preferred = [t for t in hits if wanted in (t.artist or "").lower()]
-            hits = preferred + [t for t in hits if t not in preferred]
+            # "X by Y" means Y's X. Searching the title alone and reordering
+            # the top eight lost whenever Y's recording wasn't among them --
+            # which for a common title is most of the time -- and somebody
+            # else's song played. Ask for both, and take Y's first.
+            both = catalog.search_songs(f"{query} {plan.artist}", limit=8,
+                                        allow_variant=plan.variant)
+            theirs = [t for t in both if ranking.artist_matches(t, plan.artist)]
+            named = [t for t in theirs if ranking.title_matches(t, query)]
+            hits = named + [t for t in theirs if t not in named]
+        if not hits:
+            hits = catalog.search_songs(query, limit=8, allow_variant=plan.variant)
+            if plan.artist:
+                preferred = [t for t in hits if ranking.artist_matches(t, plan.artist)]
+                hits = preferred + [t for t in hits if t not in preferred]
         if not hits:
             # Blocked, region-locked, taken down — YouTube having nothing
             # isn't the same as the record not existing. Try the others
@@ -209,6 +270,12 @@ def resolve(plan: Plan) -> Resolution:
         tracks = catalog.artist_all_tracks(who)
         if not tracks:
             return _nothing(f"I couldn't find {who}")
+        # Their best-known songs, weighed against what this listener plays
+        # and skips -- not side one of the debut.
+        head = ranking.likely(tracks[:100], taste)
+        tracks = head + [t for t in tracks[100:] if t not in head]
+        if getattr(plan, "count", 0):
+            tracks = tracks[:plan.count]
         # Queue about half an hour of them rather than the whole discography;
         # the queue tops itself up from the same catalogue as you listen.
         tracks = first_minutes(tracks, float(config.get("queue_minutes", 30)))

@@ -12,7 +12,9 @@ _WAKE = re.compile(
 _PLAY_SYNONYM = re.compile(
     r"^\s*(?:can you\s+|please\s+)?(?:put on|throw on|gimme|give me|"
     r"i wanna hear|i want to hear|let'?s hear|start playing|start)\s+", re.I)
-_PLAY = re.compile(r"^\s*play\s+", re.I)
+_PLAY = re.compile(r"^\s*(?:play|put\s+on|stick\s+on|throw\s+on|chuck\s+on)\s+", re.I)
+# "some Korn", "a bit of Queen": the words around a name, not part of it.
+_LEAD_FILLER = re.compile(r"^(?:some|a\s+bit\s+of|a\s+little|a\s+few\s+songs\s+by|a\s+few)\s+", re.I)
 
 # Exact transport phrases — high confidence, so they short-circuit the LLM.
 _TRANSPORT = {
@@ -22,6 +24,11 @@ _TRANSPORT = {
     "play": "resume", "keep playing": "resume",
     "next": "next", "skip": "next", "skip this": "next", "next song": "next",
     "next track": "next", "skip song": "next", "skip track": "next",
+    "play next": "next", "play the next one": "next", "play the next song": "next",
+    "skip to the next song": "next", "skip to the next one": "next",
+    "skip to the next track": "next", "go to the next song": "next",
+    "skip this song": "next", "skip this one": "next", "next one": "next",
+    "next please": "next", "skip please": "next", "skip it": "next",
     "previous": "previous", "back": "previous", "go back": "previous",
     "previous song": "previous", "last song": "previous", "prev": "previous",
     "shuffle": "shuffle", "shuffle it": "shuffle",
@@ -180,9 +187,32 @@ def _maybe_split(text: str) -> list[str]:
     return parts
 
 
+_NEXT_TAIL = re.compile(r"\s+(?:up\s+)?next(?:\s+please)?$|\s+after\s+this(?:\s+one|\s+song)?$", re.I)
+_QUEUE_WORDS = re.compile(r"^(?:add|put|stick)\s+(.+?)\s+(?:to|on|in)(?:to)?\s+(?:the\s+)?(?:end\s+of\s+the\s+)?queue$"
+                          r"|^queue(?:\s+up)?\s+(.+)$", re.I)
+
+
 def parse(text: str) -> Plan:
     """Best-effort structural read of a request."""
     raw = clean(text)
+    # "play Mother next" / "add Mother to the queue": where it goes, then what.
+    mode = "play"
+    body = _PLAY.sub("", raw).strip()
+    if _NEXT_TAIL.search(raw) and not transport(raw) and _NEXT_TAIL.sub("", body).strip():
+        raw, mode = _NEXT_TAIL.sub("", raw).strip(), "next"
+        if not _PLAY.match(raw):
+            raw = "play " + raw
+    else:
+        m = _QUEUE_WORDS.match(raw)
+        if m:
+            raw, mode = "play " + (m.group(1) or m.group(2)).strip(), "queue"
+    plan = _parse(raw)
+    if plan.kind != "command":
+        plan.mode = mode
+    return plan
+
+
+def _parse(raw: str) -> Plan:
     plan = Plan(via="grammar", spoken=raw)
 
     cmd = transport(raw)
@@ -193,7 +223,7 @@ def parse(text: str) -> Plan:
         return Plan(kind="command", command=vol[0], query=str(vol[1]),
                     via="grammar", spoken=raw)
 
-    body = _PLAY.sub("", raw).strip()
+    body = _LEAD_FILLER.sub("", _PLAY.sub("", raw).strip()).strip() or _PLAY.sub("", raw).strip()
     if _SHUFFLE.search(body):
         plan.shuffle = True
         body = _SHUFFLE.sub("", body).strip()

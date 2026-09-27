@@ -276,7 +276,7 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
             queue.cancel(user=False)
 
         queue._set_activity("finding", plan.query)
-        res = resolver.resolve(plan)
+        res = resolver.resolve(plan, getattr(queue, "taste", None))
         if not _still_wanted(mine, room):
             log.info("dropped %r — a newer request came in while it resolved", text)
             return {"status": "superseded", "message": "", "via": plan.via}
@@ -295,13 +295,19 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
             shuffle = bool(plan.shuffle) if plan.shuffle is not None else False
         if plan.mode == "next":
             queue.play_next(res.tracks[0])
+            first = res.tracks[0]
+            res.spoken = f"Playing {first.title} next" + (f", by {first.artist}" if first.artist else "")
         elif plan.mode == "queue":
-            queue.enqueue(res.tracks)
+            queue.enqueue(res.tracks[:plan.count] if plan.count else res.tracks)
+            first = res.tracks[0]
+            res.spoken = (f"Added {first.title} to the queue" if len(res.tracks) == 1
+                          else f"Added {len(res.tracks)} songs to the queue")
         else:
             queue.play_now(res.tracks, res.alternates,
                                   anchors=res.anchors, shuffle=shuffle,
                                   hold_radio=res.hold_radio, kind=plan.kind,
-                                  theme=plan.query if plan.kind == "genre" else "")
+                                  theme=(plan.query if plan.kind == "genre"
+                                         else getattr(plan, "theme", "")))
 
         say(res.spoken)
         log.info("%s -> %s (%s, %d tracks)", text, res.spoken, plan.via,

@@ -4500,6 +4500,86 @@ def _run(verbose: bool = False) -> Result:
                 _cfg.set("party_mode", _was41, save=False)
             say("party mode", c)
 
+            # -- 42. most likely wanted, "by" means by, and several things at once --
+            c = _Checker("what gets played")
+            from .resolve import ranking as _rk42, resolver as _rv42, catalog as _cat42
+            from .models import Track as _T42, Plan as _P42
+            from .core.taste import TasteEngine as _TE42
+            import tempfile as _tf42
+            hits = [_T42(video_id=f"d{i:02d}", title=f"Song {i}", artist="Danzig") for i in range(30)]
+            with _tf42.TemporaryDirectory() as root42:
+                t42 = _TE42(root=_Path(root42))
+                t42.toggle_like(hits[14])
+                for _ in range(4):
+                    t42.record(hits[0], 10, 200)            # skipped the biggest hit four times
+                t42.block(hits[1])
+                ranked = _rk42.likely(hits, t42, variety=0.0)
+                c("the hits come first when nothing says otherwise",
+                  [t.video_id for t in _rk42.likely(hits, None, variety=0.0)][:3] == ["d00", "d01", "d02"])
+                c("...a song you like climbs above the ones you don't know",
+                  ranked.index(hits[14]) < 6, str([t.video_id for t in ranked[:8]]))
+                c("...one you keep skipping drops", ranked.index(hits[0]) > 3)
+                c("...and one you blocked isn't there", hits[1] not in ranked)
+            varied = {tuple(t.video_id for t in _rk42.likely(hits, None, seed=n)[:3]) for n in range(12)}
+            c("the same request doesn't open the same way every time", len(varied) > 1)
+            c("...but the deep cuts stay deep",
+              all(_rk42.likely(hits, None, seed=n).index(hits[29]) > 15 for n in range(12)))
+            c("\"by\" is loose on spelling and strict on who",
+              _rk42.artist_matches(_T42(title="Valerie", artist="Mark Ronson, Amy Winehouse"), "amy winehouse")
+              and _rk42.artist_matches(_T42(title="x", artist="AC/DC"), "acdc")
+              and _rk42.artist_matches(_T42(title="x", artist="The Beatles"), "beatles"))
+            c("...and a different band with a similar name isn't them",
+              not _rk42.artist_matches(_T42(title="x", artist="The Black Bon Jovi"), "Bon Jovi"))
+
+            def _songs(q, limit=8, allow_variant=False):
+                if "danzig" in q.lower():
+                    return [_T42(video_id="theirs", title="Mother", artist="Danzig")]
+                return [_T42(video_id="other1", title="Mother", artist="Pink Floyd"),
+                        _T42(video_id="other2", title="Mother", artist="Sugababes")]
+            with _patch.object(_cat42, "search_songs", _songs):
+                got = _rv42.resolve(_P42(kind="song", query="mother", artist="danzig"))
+                c("\"Mother by Danzig\" is Danzig's, not the first Mother on the list",
+                  got.tracks and got.tracks[0].video_id == "theirs", str(got.tracks[:1]))
+
+            def _fake_resolve_part(plan, taste=None):
+                name = plan.query
+                return _rv42.Resolution([_T42(video_id=f"{name[:3]}{i}", title=f"{name} {i}", artist=name)
+                                         for i in range(6)], f"Playing {name}")
+            real_resolve = _rv42.resolve
+            with _patch.object(_rv42, "resolve", lambda p, t=None: real_resolve(p, t) if p.kind == "mix"
+                               else _fake_resolve_part(p, t)):
+                mix = _rv42.resolve(_P42(kind="mix", query="x", items=[
+                    {"kind": "artist", "name": "Korn"}, {"kind": "genre", "name": "glam metal"},
+                    {"kind": "song", "name": "Mother", "artist": "Danzig"}]))
+                c("a mix opens with one of each",
+                  [t.artist for t in mix.tracks[:3]] == ["Korn", "glam metal", "Mother"], str(mix.tracks[:3]))
+                c("...and each is something the radio keeps coming back to", len(mix.anchors) == 3)
+                c("...and it says what it's playing", mix.spoken == "Playing Korn, glam metal and Mother")
+                five = _rv42.resolve(_P42(kind="mix", query="x", count=5, items=[
+                    {"kind": "artist", "name": "Korn"}, {"kind": "artist", "name": "Queen"}]))
+                c("a number asked for is the number played", len(five.tracks) == 5)
+
+            from . import requests as _rq42
+            from .core.queue import QueueManager as _QM42
+            from .core.sink import ListSink as _LS42
+            from .core.taste import NeutralTaste as _NT42
+
+            class _Ctx42:
+                def build(self, *a, **k): return []
+                def quick(self, *a, **k): return []
+            q42 = _QM42(_LS42(), _Ctx42(), taste=_NT42(), session_id="next-check")
+            one = _rv42.Resolution([_T42(video_id="hc1", title="Hotel California", artist="Eagles")],
+                                   "Playing Hotel California by Eagles")
+            with _patch.object(_rq42.resolver, "resolve", lambda p, t=None: one), \
+                    _patch.object(_rq42.parser, "parse",
+                                  lambda text, mode="play": _P42(kind="song", query="hotel california",
+                                                                 mode="next", via="llm")):
+                said = _rq42.handle_request("play hotel california next", queue=q42, announce=False)
+            c("\"play X next\" goes next, and says so",
+              said.get("message") == "Playing Hotel California next, by Eagles"
+              and q42._work and q42._work[0].mode == "next", str(said))
+            say("what gets played", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json

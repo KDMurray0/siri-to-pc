@@ -597,6 +597,40 @@ def search_albums(query: str, limit: int = 3) -> list[dict]:
     return out
 
 
+def artist_top_tracks(artist: str, limit: int = 100) -> list[Track]:
+    """Their songs, most popular first: YouTube Music's own top-songs list.
+
+    The artist page shows five; the list behind "see all" is their top hundred
+    in the order people actually play them, which is the closest thing to
+    "what somebody asking for this band most likely wants".
+    """
+    key = f"artist_top:{artist}:{limit}"
+    hit = _cached(key)
+    if hit is not None:
+        return hit
+    want = Track(title="", artist=artist).primary_artist()
+    browse = _artist_page(artist)
+    out: list[Track] = []
+    if browse:
+        info = _yt(f"artist page {artist!r}", lambda: client().get_artist(browse)) or {}
+        songs = info.get("songs") or {}
+        rows = songs.get("results") or []
+        if songs.get("browseId"):
+            listing = _yt(f"top songs {artist!r}",
+                          lambda: client().get_playlist(songs["browseId"], limit=limit)) or {}
+            rows = listing.get("tracks") or rows
+        seen: set[str] = set()
+        for r in rows:
+            t = to_track(r, "request")
+            if not t.video_id or t.video_id in seen or not _acceptable(t):
+                continue
+            if want and t.primary_artist() != want:
+                continue
+            seen.add(t.video_id)
+            out.append(t)
+    return _store(key, out[:limit])
+
+
 def artist_all_tracks(artist: str, cap: int = 200) -> list[Track]:
     """Everything we can find by one artist — singles plus every album track.
 
@@ -634,6 +668,9 @@ def artist_all_tracks(artist: str, cap: int = 200) -> list[Track]:
     except Exception as exc:
         log.debug("artist search failed for %r: %s", artist, exc)
 
+    # Most popular first, then the discography for everything else -- the
+    # front of this list is what an artist request plays.
+    add(artist_top_tracks(artist))
     if browse_id:
         try:
             info = client().get_artist(browse_id)
