@@ -4969,6 +4969,40 @@ def _run(verbose: bool = False) -> Result:
                 config.update({"owner_email": mail49, "owner_sub": pin49})
             say("owner's Google account", c)
 
+            # -- 50. the volume follows the clock, without blasting the morning --
+            c = _Checker("volume by the clock")
+            from .core import ambient as _amb50
+            from .player import player as _pl50
+            keep50 = {k: config.get(k) for k in ("volume", "volume_base", "auto_volume")}
+            try:
+                config.set("auto_volume", True)
+                with _patch.object(_amb50, "band", lambda now=None: _amb50.NIGHT):
+                    _amb50.ambient.note_manual(82)
+                c("turned up at night, the morning isn't amplified past 100",
+                  config.get("volume_base") == 100, str(config.get("volume_base")))
+                with _patch.object(_amb50, "band", lambda now=None: _amb50.EVENING):
+                    _amb50.ambient.note_manual(40)
+                c("...while an ordinary evening level still scales back up",
+                  config.get("volume_base") == 50, str(config.get("volume_base")))
+                with _patch.object(_amb50, "band", lambda now=None: _amb50.DAY):
+                    _amb50.ambient.note_manual(120)
+                c("...and a level chosen by day is kept as chosen",
+                  config.get("volume_base") == 120, str(config.get("volume_base")))
+                set50 = []
+                with _patch.object(_amb50.ambient, "due", lambda force=False: (60, "Back up for the day")), \
+                        _patch.object(_pl50.mpv, "set", lambda k, v: set50.append((k, v))):
+                    try:
+                        _pl50._follow_the_clock()
+                        crashed = ""
+                    except Exception as exc:
+                        crashed = repr(exc)
+                c("a band change sets the level and doesn't crash the monitor on the way out",
+                  not crashed and set50 == [("volume", 60)], crashed or str(set50))
+            finally:
+                for k, v in keep50.items():
+                    config.set(k, v)
+            say("volume by the clock", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json

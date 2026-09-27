@@ -45,6 +45,16 @@ def band(now: datetime | None = None) -> str:
     return DAY
 
 
+def _daytime(volume: int, f: float) -> int:
+    """The daytime level a level set now stands for. Scaled back up -- but a
+    loud night mustn't make a deafening morning: 82 at 55% was 149 by day,
+    amplified past what anybody set. Never past 100, or what they chose."""
+    got = int(round(volume / (f or 1.0)))
+    if f < 1.0:
+        got = min(got, max(int(volume), 100))
+    return max(0, min(150, got))
+
+
 def factor(which: str | None = None) -> float:
     which = which or band()
     if which == NIGHT:
@@ -74,11 +84,10 @@ class Ambient:
         """
         got = config.get("volume_base")
         if got is None:
-            got = int(config.get("volume", 70))
             # Undo the adjustment currently in force, so the number recorded
             # is the level you'd have had in the daytime.
-            got = int(round(got / (factor() or 1.0)))
-            config.set("volume_base", max(0, min(150, got)))
+            got = _daytime(int(config.get("volume", 70)), factor())
+            config.set("volume_base", got)
         return max(0, min(150, int(got)))
 
     def note_manual(self, volume: int) -> None:
@@ -86,8 +95,7 @@ class Ambient:
         if not self.on():
             config.set("volume_base", int(volume))
             return
-        f = factor() or 1.0
-        want = max(0, min(150, int(round(volume / f))))
+        want = _daytime(volume, factor())
         if want != self.base():
             config.set("volume_base", want)
 

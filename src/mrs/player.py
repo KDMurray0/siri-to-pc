@@ -608,7 +608,8 @@ class PlayerService:
             config.set("volume", want)
         finally:
             self._auto_volume = False
-        log.info("volume %d for the %s", want, ambient.band())
+        from .core.ambient import band
+        log.info("volume %d for the %s", want, band())
         if say:
             bus.publish(Ev.TOAST, f"{say} — volume {want}")
 
