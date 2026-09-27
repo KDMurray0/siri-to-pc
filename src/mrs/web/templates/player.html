@@ -57,11 +57,9 @@ html,body{height:100%;overflow:hidden;background:var(--bg);
    are dead buttons, so they stay hidden until the bridge proves it exists. */
 #pin,#shrink{display:none}
 body.desktop #pin,body.desktop #shrink{display:block}
-/* Settings in the desktop app's own window: the sheet is the whole page. */
-body.settingswin .sheet,body.settingswin:not(.mini) .sheet{position:fixed;inset:0;z-index:200;transform:none;
-  translate:none;width:auto;height:auto;border:0;border-radius:0;box-shadow:none;visibility:visible;transition:none}
-body.settingswin #closeSettings{display:none}
-body.settingswin #pin,body.settingswin #shrink{display:none}
+/* Settings in the desktop app: the window grows and the sheet is all of it. */
+body.setbig .sheet,body.setbig:not(.mini) .sheet{position:fixed;inset:0;z-index:200;
+  translate:none;width:auto;height:auto;border:0;border-radius:0;box-shadow:none}
 /* Sits opposite the window buttons and matches them, so it reads as chrome
    rather than as part of the song. Never in mini — there's no room. */
 .timeleft{position:absolute;top:9px;left:12px;z-index:5;height:28px;
@@ -596,7 +594,12 @@ body.expand .prog{margin-top:10px}
 .stab:hover{color:var(--fg);background:color-mix(in srgb,var(--fg) 5%,transparent)}
 .stab.on{color:var(--fg);background:color-mix(in srgb,var(--accent) 16%,transparent)}
 .stab.on svg{color:var(--accent)}
-.setback{display:none}
+.sheet-head{justify-content:flex-start;gap:12px}
+.setback{display:inline-flex;align-items:center;gap:4px;border:0;background:none;color:var(--fg);
+  font:600 13px/1 inherit;font-family:inherit;padding:7px 12px 7px 6px;border-radius:999px;cursor:pointer}
+.setback svg{width:20px;height:20px;fill:currentColor}
+.setback:hover{background:color-mix(in srgb,var(--fg) 8%,transparent)}
+.setback:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .sheet-body{flex:1;overflow-y:auto;padding:8px 22px 28px;min-width:0}
 @media (max-width:640px){
   .setnav{width:100%;border:0;padding:0 12px 18px}
@@ -607,7 +610,6 @@ body.expand .prog{margin-top:10px}
   .sheet-body{display:none}
   .sheet.picked .setnav{display:none}
   .sheet.picked .sheet-body{display:block}
-  .sheet.picked .setback{display:grid}
 }
 .health{display:none;margin:2px 0 10px;font-size:11.5px;line-height:1.55;
   border:1px solid var(--line);border-radius:9px;padding:9px 11px}
@@ -715,6 +717,15 @@ select,.keyin{background:var(--panel);border:1px solid var(--line);color:var(--f
   font-size:13px}
 .picker-row:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
 .picker-row .cnt{margin-left:auto;font-size:11px;color:var(--sub)}
+.moremenu{padding:6px 0}
+.moremenu .picker-row{gap:12px;font-size:13.5px}
+.moremenu .picker-row svg{width:18px;height:18px;fill:currentColor;flex:0 0 auto;opacity:.85}
+.moremenu hr{border:0;border-top:1px solid var(--line);margin:5px 0}
+.moremenu .picker-row.danger:hover,.moremenu .picker-row.danger.arm{color:var(--bad)}
+.moremenu .picker-row.danger.arm .lab{display:none}
+.moremenu .picker-row.danger.arm::after{content:"Tap again to confirm";position:static;translate:none;
+  padding:0;background:none;box-shadow:none;color:var(--bad);font:600 13.5px/1.2 inherit;font-family:inherit}
+body.live:not(.onsong) .moremenu #download,body.live:not(.onsong) .moremenu #addlist{display:none}
 .sharepick .sharewhat{font-size:13px;font-weight:700;padding:0 13px 2px;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
 .sharepick .shareurl{font-size:11px;color:var(--sub);padding:0 13px 8px;white-space:nowrap;
@@ -967,7 +978,7 @@ body.guest:not(.keeps) .navtab[data-panel="lists"]{display:none}
 /* Unless the house is sharing a list. That one is the owner's and survives
    the morning, so an evening's guest putting a song in it loses nothing —
    which was the whole reason the button was hidden. */
-body.guest:not(.keeps).houselists #addlist{display:grid}
+body.guest:not(.keeps).houselists #addlist{display:flex}
 /* Recently played, likewise: theirs when they have one, and never the
    owner's. On the computer's speakers they're looking at that player, so
    the tab is the owner's history and stays hidden from a link. */
@@ -1533,15 +1544,9 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 
     <div class="row2">
       <button class="ib small heart" id="like" title="Like"><svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54z"/></svg></button>
-      <button class="ib small" id="download" title="Save to Music"><svg viewBox="0 0 24 24"><path d="M11 3h2v7h2.5l-3.5 4-3.5-4H11zM5 18h14v2H5z"/></svg></button>
-      <button class="ib small" id="addlist" title="Add to a playlist"><svg viewBox="0 0 24 24"><path d="M3 6h12v2H3zm0 5h12v2H3zm0 5h8v2H3zm15-9h2v4h4v2h-4v4h-2v-4h-4v-2h4z"/></svg></button>
       <button class="ib small" id="sharebtn" title="Share this song" aria-label="Share this song"><svg viewBox="0 0 24 24"><path d="M18 15.5a2.9 2.9 0 00-2.3 1.1l-6.5-3.3a3 3 0 000-2.6l6.5-3.3A2.9 2.9 0 1015.1 6l-6.6 3.3a3 3 0 100 5.4l6.6 3.3a3 3 0 102.9-2.5z"/></svg></button>
-      <!-- Never again: this recording, or this act at all. A skip is a nudge
-           the scoring weighs up; these two are answers. -->
-      <button class="ib small danger" id="blocksong" title="Never play this song again"
-              aria-label="Never play this song again"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 2a7.9 7.9 0 014.9 1.7L5.7 16.9A8 8 0 0112 4zm0 16a7.9 7.9 0 01-4.9-1.7L18.3 7.1A8 8 0 0112 20z"/></svg></button>
-      <button class="ib small danger" id="blockartist" title="Never play this artist again"
-              aria-label="Never play this artist again"><svg viewBox="0 0 24 24"><path d="M12 12a4 4 0 100-8 4 4 0 000 8zm-8 8a8 8 0 0113.4-5.9l-1.5 1.4A6 6 0 006.1 20H4zm14.7-.9l-1.8-1.8 1.8-1.8-1.4-1.4-1.8 1.8-1.8-1.8-1.4 1.4 1.8 1.8-1.8 1.8 1.4 1.4 1.8-1.8 1.8 1.8 1.4-1.4z"/></svg></button>
+      <button class="ib small" id="morebtn" title="More" aria-label="More" aria-haspopup="menu"
+              aria-expanded="false"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
       <div class="vol">
         <button class="ib small" id="volicon" title="Choose output device"
                 aria-label="Choose output device"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9.2v5.6h3.8L11.5 19V5l-4.7 4.2z"/><path d="M14 9.4a3.6 3.6 0 010 5.2" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg></button>
@@ -1603,6 +1608,15 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
     <div class="panel" id="panel-lists"></div>
   </div>
 
+  <div class="picker moremenu" id="moremenu" role="menu" aria-label="More">
+    <div class="picker-row" id="download" role="menuitem"><svg viewBox="0 0 24 24"><path d="M11 3h2v7h2.5l-3.5 4-3.5-4H11zM5 18h14v2H5z"/></svg><span class="lab">Save to Music</span></div>
+    <div class="picker-row" id="addlist" role="menuitem"><svg viewBox="0 0 24 24"><path d="M3 6h12v2H3zm0 5h12v2H3zm0 5h8v2H3zm15-9h2v4h4v2h-4v4h-2v-4h-4v-2h4z"/></svg><span class="lab">Add to a playlist</span></div>
+    <hr>
+    <!-- Never again: this recording, or this act at all. A skip is a nudge
+         the scoring weighs up; these two are answers. -->
+    <div class="picker-row danger" id="blocksong" role="menuitem"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 2a7.9 7.9 0 014.9 1.7L5.7 16.9A8 8 0 0112 4zm0 16a7.9 7.9 0 01-4.9-1.7L18.3 7.1A8 8 0 0112 20z"/></svg><span class="lab">Never play this song</span></div>
+    <div class="picker-row danger" id="blockartist" role="menuitem"><svg viewBox="0 0 24 24"><path d="M12 12a4 4 0 100-8 4 4 0 000 8zm-8 8a8 8 0 0113.4-5.9l-1.5 1.4A6 6 0 006.1 20H4zm14.7-.9l-1.8-1.8 1.8-1.8-1.4-1.4-1.8 1.8-1.8-1.8-1.4 1.4 1.8 1.8-1.8 1.8 1.4 1.4 1.8-1.8 1.8 1.8 1.4-1.4z"/></svg><span class="lab">Never play this artist</span></div>
+  </div>
   <div class="picker sharepick" id="sharepick">
     <div class="picker-head">Share this song<button class="pickx" id="shareclose">Close</button></div>
     <div class="sharewhat" id="sharewhat"></div>
@@ -1664,9 +1678,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 
   <div class="sheet" id="sheet">
     <div class="sheet-head">
-      <button class="ib small setback" id="setback" aria-label="Back to settings"><svg viewBox="0 0 24 24"><path d="M15.4 5.4L14 4l-8 8 8 8 1.4-1.4L8.8 12z"/></svg></button>
+      <button class="setback" id="setback" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15.4 5.4L14 4l-8 8 8 8 1.4-1.4L8.8 12z"/></svg><span>Back</span></button>
       <h2 id="settitle">Settings</h2>
-      <button class="ib small" id="closeSettings" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M19 6.4L17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg></button>
     </div>
     <div class="sheet-main">
     <nav class="setnav" id="sheettabs" aria-label="Settings sections">
@@ -2029,8 +2042,6 @@ const BASE = "{{ base }}";
  * describing the shared player on a page that was about to become a phone.
  * The server already knows; it says so in the html. */
 const GUEST = "{{ is_guest }}" === "1";
-const SETTINGS_WIN = new URLSearchParams(location.search).get("view") === "settings";
-if (SETTINGS_WIN) document.body.classList.add("settingswin");
 const SIGNED_IN = "{{ signed_in_as }}";
 const SIGN_IN_OFFERED = "{{ sign_in_offered }}" === "1";
 const SIGNED_IN_NAME = "{{ signed_in_name }}";
@@ -2608,14 +2619,37 @@ async function blockThis(byArtist) {
                                       : "Couldn't undo that");
   });
 }
+/* The ⋯ menu: the things you want now and then, off the main row. */
+const moremenu = $("moremenu");
+function closeMore() {
+  moremenu.classList.remove("show");
+  $("morebtn").setAttribute("aria-expanded", "false");
+  moremenu.querySelectorAll(".arm").forEach(disarmDanger);
+}
+$("morebtn").onclick = e => {
+  e.stopPropagation();
+  if (moremenu.classList.contains("show")) { closeMore(); return; }
+  const b = $("morebtn").getBoundingClientRect();
+  moremenu.style.bottom = (window.innerHeight - b.top + 8) + "px";
+  if (isWide()) moremenu.style.left = Math.max(12, Math.min(window.innerWidth - 272, b.left - 24)) + "px";
+  moremenu.classList.add("show");
+  $("morebtn").setAttribute("aria-expanded", "true");
+};
+document.addEventListener("click", e => {
+  if (moremenu.classList.contains("show") && !moremenu.contains(e.target) &&
+      !e.target.closest("#morebtn")) closeMore();
+});
 $("blocksong").onclick = e => {
-  if (armDanger(e.currentTarget, "block this song")) blockThis(false);
+  e.stopPropagation();
+  if (armDanger(e.currentTarget, "block this song")) { closeMore(); blockThis(false); }
 };
 $("blockartist").onclick = e => {
-  if (armDanger(e.currentTarget, "block this artist")) blockThis(true);
+  e.stopPropagation();
+  if (armDanger(e.currentTarget, "block this artist")) { closeMore(); blockThis(true); }
 };
 
 $("download").onclick = async () => {
+  closeMore();
   const r = await api("/api/download");
   toast(r && r.ok ? (r.message || "Saved") : "Nothing to save");
 };
@@ -3838,15 +3872,12 @@ $("panel-lists").addEventListener("click", async e => {
 /* ── settings ──────────────────────────────────────────────────────── */
 const settingsNarrow = () => window.matchMedia("(max-width:640px)").matches;
 $("openSettings").onclick = () => {
-  // The desktop app opens them in a window of their own -- or here, if it can't.
+  // The desktop app's window grows to fit them, and shrinks back after.
   const b = bridge();
-  if (b && b.open_settings && !SETTINGS_WIN) {
-    Promise.resolve(b.open_settings("")).then(ok => { if (!ok) openSheetHere(); }, openSheetHere);
-    return;
+  if (b && b.set_expanded) {
+    document.body.classList.add("setbig");
+    Promise.resolve(b.set_expanded(true)).catch(() => {});
   }
-  openSheetHere();
-};
-function openSheetHere() {
   $("sheet").classList.add("open");
   // Narrow, it opens on the list of sections; wide, on the first one.
   $("sheet").classList.remove("picked");
@@ -3856,11 +3887,37 @@ function openSheetHere() {
     (on && on.offsetParent ? on : document.querySelector('.stab[data-s="sound"]')).click();
   }
   loadSettings();
-}
-$("setback").onclick = () => {
-  $("sheet").classList.remove("picked");
-  $("settitle").textContent = "Settings";
 };
+function closeSettings() {
+  $("sheet").classList.remove("open", "picked");
+  $("settitle").textContent = "Settings";
+  if (document.body.classList.contains("setbig")) {
+    document.body.classList.remove("setbig");
+    const b = bridge();
+    if (b && b.set_expanded) Promise.resolve(b.set_expanded(false)).catch(() => {});
+  }
+}
+/* One way out, top left, always there: back to the list of sections when
+   inside one on a narrow screen, otherwise back to the player. */
+$("setback").onclick = () => {
+  if (settingsNarrow() && $("sheet").classList.contains("picked")) {
+    $("sheet").classList.remove("picked");
+    $("settitle").textContent = "Settings";
+    return;
+  }
+  closeSettings();
+};
+addEventListener("keydown", e => {
+  if (e.key === "Escape" && $("sheet").classList.contains("open")) $("setback").onclick();
+});
+// The window grows a moment after the sheet opens: once it's wide, show a section.
+addEventListener("resize", () => {
+  if (!$("sheet").classList.contains("open") || settingsNarrow()) return;
+  if (!document.querySelector(".spane.open")) {
+    const on = document.querySelector(".stab.on");
+    (on && on.offsetParent ? on : document.querySelector('.stab[data-s="sound"]')).click();
+  }
+});
 
 function showSheetTab(name) {
   const tab = document.querySelector('.stab[data-s="' + name + '"]');
@@ -4029,7 +4086,6 @@ $("cachemb").onchange = async () => {
   loadCache();
 };
 
-$("closeSettings").onclick = () => $("sheet").classList.remove("open");
 
 function buildChips(id, options, onPick) {
   const box = $(id); box.innerHTML = "";
@@ -5894,6 +5950,7 @@ async function openPicker() {
 }
 $("addlist").onclick = e => {
   e.stopPropagation();
+  closeMore();
   picker.classList.contains("show") ? picker.classList.remove("show") : openPicker();
 };
 $("pickerlist").addEventListener("click", async e => {
@@ -6722,7 +6779,7 @@ setInterval(() => {
 /* ── keyboard ──────────────────────────────────────────────────────── */
 document.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT") return;
-  if (SETTINGS_WIN) return;         // space on a toggle is not play/pause
+  if ($("sheet").classList.contains("open")) return;   // space on a toggle isn't play
   const k = e.key.toLowerCase();
   if (k === " ") { e.preventDefault(); $("play").onclick(); }
   else if (k === "arrowright") seekTo(state.position + 10);
@@ -6749,28 +6806,6 @@ if (cast.on) castEls.forEach(el => { try { el.volume = 0.7; } catch (e) {} });
    refreshed hourly — well inside its twelve-hour life. */
 loadWhoami().then(refreshToken).then(connect).catch(connect);
 
-/* The settings window and the flyout are two pages. What one changes the
-   other shows at once: the theme and glass live in this browser's storage,
-   the rest comes back from the server. */
-const setsync = ("BroadcastChannel" in window) ? new BroadcastChannel("mrs-settings") : null;
-if (SETTINGS_WIN) {
-  loadWhoami().then(() => {
-    $("openSettings").onclick();
-    const s = new URLSearchParams(location.search).get("s");
-    const tab = s && document.querySelector('.stab[data-s="' + CSS.escape(s) + '"]');
-    if (tab) tab.click();
-  });
-  let tell = null;
-  const told = () => { clearTimeout(tell); tell = setTimeout(() => setsync && setsync.postMessage("changed"), 500); };
-  $("sheet").addEventListener("click", told);
-  $("sheet").addEventListener("change", told);
-} else if (setsync) {
-  setsync.onmessage = () => {
-    setTheme(localStorage.getItem("theme") || curTheme, false);
-    paintGlass();
-    loadSettings();
-  };
-}
 setInterval(refreshToken, 60 * 60 * 1000);
 api("/api/settings").then(s => { if (s && s.theme) setTheme(s.theme, false); });
 api("/api/status").then(d => { if (d) { applyStatus(d); renderQueue(d.queue); } });

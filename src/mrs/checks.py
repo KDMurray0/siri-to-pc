@@ -4867,28 +4867,28 @@ def _run(verbose: bool = False) -> Result:
               'yield _sse({"type": "ping"})' in api47 and '": keepalive"' not in api47)
             say("the phone as the speaker", c)
 
-            # -- 48. settings in a window of their own, in the desktop app --
+            # -- 48. settings grow the desktop window, and there's a way back --
             c = _Checker("settings window")
             page48 = (Path(__file__).parent / "web" / "templates" / "player.html").read_text("utf-8")
             launch48 = (Path(__file__).parents[2] / "launcher.pyw")
             launch48 = launch48.read_text("utf-8") if launch48.exists() else ""
-            c("the desktop app's gear opens a window, not the 400px sheet",
-              "if (b && b.open_settings && !SETTINGS_WIN) {" in page48)
-            c("...and if the window can't be made, the sheet opens here instead",
-              'Promise.resolve(b.open_settings("")).then(ok => { if (!ok) openSheetHere(); }, openSheetHere);'
-              in page48 and (not launch48 or ('log.warning("settings window: %s", exc)' in launch48
-                                              and "return settings_window(" in launch48)))
-            c("...which is one window, brought forward if it's already open",
-              not launch48 or ("def settings_window(" in launch48 and "win.restore()" in launch48
-                               and "_settings_win.update(win=None)" in launch48))
-            c("...and can't pin, drag or hide the flyout",
-              not launch48 or ("class SettingsBridge:" in launch48 and "js_api=SettingsBridge()" in launch48))
-            c("in that window the sheet is the page, and space doesn't play",
-              "body.settingswin:not(.mini) .sheet{position:fixed;inset:0" in page48
-              and "if (SETTINGS_WIN) return;" in page48)
-            c("what it changes, the flyout shows at once",
-              'new BroadcastChannel("mrs-settings")' in page48 and "setsync.onmessage" in page48)
-            got48 = client.get("/player?view=settings", headers=owner_h)
+            c("the desktop app's window grows to fit settings, not a second window",
+              "b.set_expanded(true)" in page48 and "open_settings" not in page48
+              and (not launch48 or ("def set_expanded(self, on) -> bool:" in launch48
+                                    and "settings_window" not in launch48)))
+            c("...and shrinks back to where it was",
+              "b.set_expanded(false)" in page48
+              and (not launch48 or "self._before_expand = None" in launch48))
+            c("there's a Back button, top left, always",
+              '<button class="setback" id="setback" aria-label="Back">' in page48
+              and ".setback{display:inline-flex" in page48 and 'id="closeSettings"' not in page48)
+            c("Escape goes back too, and space on a toggle doesn't play",
+              'e.key === "Escape" && $("sheet").classList.contains("open")' in page48
+              and 'if ($("sheet").classList.contains("open")) return;' in page48)
+            c("the rarely used ones sit behind a ⋯ menu",
+              'id="morebtn"' in page48 and 'id="moremenu"' in page48
+              and page48.index('id="download"') > page48.index('id="moremenu"'))
+            got48 = client.get("/player", headers=owner_h)
             c("the page itself opens as usual", got48.status_code == 200, str(got48.status_code))
             lan48 = config.get("lan_open_devices", False)
             try:
@@ -5828,7 +5828,7 @@ def _run(verbose: bool = False) -> Result:
             c("the page protects destructive controls and keeps the device icon visible",
               all(mark in template_text for mark in
                   ('function armDanger(button, action)', 'function toastUndo(msg, onUndo)',
-                   '.danger.arm::after', 'class="ib small danger" id="blocksong"',
+                   '.danger.arm::after', 'class="picker-row danger" id="blocksong"',
                    'class="pickx danger sesskick"',
                    'if (!armDanger(del, "delete this list")) return;',
                    '<button class="ib small" id="volicon"',

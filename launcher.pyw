@@ -223,6 +223,7 @@ class MONITORINFO(ctypes.Structure):
 
 class Flyout:
     W, H = 400, 640
+    EXP_W, EXP_H = 960, 700          # settings: the same window, bigger
     MINI_W = 344
     MINI_IDLE_H = 80
     MINI_HOVER_H = 108
@@ -235,6 +236,7 @@ class Flyout:
         self._pinned = False
         self._moving = False
         self._mini = False
+        self._before_expand = None   # where it was before settings grew it
         self._resize_gen = 0
         self._ever_focused = False   # don't auto-hide before you've used it
         self._fs_active = False
@@ -424,6 +426,49 @@ class Flyout:
                     pass
 
         threading.Thread(target=run, daemon=True).start()
+
+    def _animate_to(self, x: int, y: int, w: int, ht: int, dur: float = 0.18,
+                    steps: int = 10) -> None:
+        self._resize_gen += 1
+        gen = self._resize_gen
+        h = self.hwnd()
+        if not h:
+            return
+        r = self._rect()
+        sx, sy, sw, sh = r.left, r.top, r.right - r.left, r.bottom - r.top
+
+        def run() -> None:
+            for i in range(1, steps + 1):
+                if gen != self._resize_gen:
+                    return
+                f = i / steps
+                try:
+                    U32.SetWindowPos(h, 0, int(sx + (x - sx) * f), int(sy + (y - sy) * f),
+                                     int(sw + (w - sw) * f), int(sh + (ht - sh) * f),
+                                     SWP_NOZORDER | SWP_NOACTIVATE)
+                except Exception:
+                    return
+                time.sleep(dur / steps)
+        threading.Thread(target=run, daemon=True).start()
+
+    def set_expanded(self, on) -> bool:
+        """Settings open in this window, made big enough for them, and it goes
+        back to exactly where it was when they close."""
+        if on and self._before_expand is None and not self._mini:
+            r = self._rect()
+            self._before_expand = (r.left, r.top, r.right - r.left, r.bottom - r.top)
+            wa = self._work_area()
+            w = min(Flyout.EXP_W, wa.right - wa.left - 24)
+            ht = min(Flyout.EXP_H, wa.bottom - wa.top - 24)
+            # Grows away from the corner it lives in: left and up from the tray.
+            x, y = self._clamp(r.right - w, r.bottom - ht, w, ht)
+            self._animate_to(x, y, w, ht)
+            return True
+        if not on and self._before_expand is not None:
+            x, y, w, ht = self._before_expand
+            self._before_expand = None
+            self._animate_to(x, y, w, ht)
+        return bool(on)
 
     def set_mini(self, on) -> bool:
         self._mini = bool(on)
@@ -646,14 +691,8 @@ class Bridge:
         threading.Thread(target=sign_in_window, daemon=True, name="signin").start()
         return True
 
-    def open_settings(self, section=""):
-        # Made here, not on a thread: if it can't be, the page hears False and
-        # opens them in the flyout rather than the gear doing nothing.
-        try:
-            return settings_window(str(section or ""))
-        except Exception as exc:
-            log.warning("settings window: %s", exc)
-            return False
+    def set_expanded(self, on):
+        return flyout.set_expanded(on) if flyout else False
 
     def open_external(self, url):
         """Open a link in the user's actual browser.
@@ -674,61 +713,6 @@ class Bridge:
 
 
 flyout: Flyout | None = None
-
-
-class SettingsBridge:
-    """What the settings window may ask of the app: links and the YouTube
-    sign-in. Not the flyout's pin, drag and hide -- it isn't the flyout."""
-
-    def sign_in(self):
-        return Bridge().sign_in()
-
-    def open_external(self, url):
-        return Bridge().open_external(url)
-
-
-_settings_win: dict = {"win": None}
-
-
-def settings_window(section: str = "") -> bool:
-    """Settings in a window of its own, sized for them.
-
-    The flyout is 400 pixels wide; ten sections of settings were never going
-    to sit well in it. One window: asked again, the open one comes forward.
-    """
-    import urllib.parse
-    win = _settings_win["win"]
-    if win is not None:
-        try:
-            win.restore()
-            win.show()
-            win.on_top = True
-            win.on_top = False
-            return True
-        except Exception:
-            _settings_win["win"] = None
-    port = int(srv.runtime.get("port") or config.get("port", 7420))
-    path = f"/player?key={config.get('api_key', '')}&view=settings"
-    if section:
-        path += "&s=" + urllib.parse.quote(section)
-    win = webview.create_window(
-        "Settings - Music Request Server", url=srv.local_url(port, path),
-        js_api=SettingsBridge(), width=980, height=720, min_size=(420, 520),
-        background_color="#0e0f16")
-    _settings_win["win"] = win
-    win.events.closed += lambda: _settings_win.update(win=None)
-    return True
-
-# Straight to YouTube, not to a Google login form. You press "Sign in"
-# yourself, in your own time — the old flow drove the login itself and closed
-# the moment it thought it was finished, which was usually too early.
-SIGNIN_URL = "https://www.youtube.com/"
-# where the cookies we need actually live
-COOKIE_STOPS = ("https://music.youtube.com/", "https://www.youtube.com/",
-                "https://accounts.google.com/")
-
-SIGNIN_POLL = 3.0          # seconds between "are we signed in yet" checks
-SIGNIN_GIVE_UP = 15 * 60   # stop watching after this long
 
 
 def sign_in_window() -> None:
