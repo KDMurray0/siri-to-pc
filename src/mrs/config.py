@@ -428,13 +428,15 @@ class Config:
     def public(self) -> dict[str, Any]:
         """Everything except secrets — safe to hand to the UI."""
         hidden = {"api_key", "groq_api_key", "lastfm_secret", "lastfm_session",
-                  "ddns_password", "google_client_secret"}
+                  "ddns_password", "google_client_secret", "spotify_client_secret"}
         out = {k: v for k, v in self._data.items() if k not in hidden}
         out["groq_set"] = bool(self._data.get("groq_api_key"))
         out["ddns_set"] = bool(self._data.get("ddns_password"))
         out["lastfm_set"] = bool(self._data.get("lastfm_session"))
         out["google_set"] = bool(self._data.get("google_client_id")
                                  and self._data.get("google_client_secret"))
+        out["spotify_set"] = bool(self._data.get("spotify_client_id")
+                                  and self._data.get("spotify_client_secret"))
         return out
 
     # -- change notifications --

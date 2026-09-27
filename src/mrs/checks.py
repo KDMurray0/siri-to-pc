@@ -79,6 +79,9 @@ _UNGUARDED_BY_DESIGN = {
     "/auth/claim": "finishing a sign-up: needs the short-lived cookie the "
                    "callback set, which names a Google identity we verified",
     "/privacy":   "the notice has to be readable before anyone signs up",
+    "/s/{sid}":   "a shared song: plays that song for anyone with the link, nothing else",
+    "/s/{sid}/audio": "that one shared song's audio, rate limited",
+    "/s/{sid}/spotify": "the shared song's Spotify link",
     "/download/client": "offered on the sign-in page, before anybody has an "
                         "account; holds no secret and is rate limited",
     "/auth/signout": "throws a cookie away; there is nothing to guard",
@@ -4713,6 +4716,66 @@ def _run(verbose: bool = False) -> Result:
               client.post("/api/playlists/make", json={"what": "x"}, headers=owner_h).status_code == 400
               and client.get("/api/playlists/job?job=nope", headers=owner_h).status_code == 404)
             say("making a playlist", c)
+
+            # -- 45. sharing a song: a link that plays that song, and nothing else --
+            c = _Checker("sharing a song")
+            from .core import shares as _sh45
+            from .web import api as _api45
+            import os as _os45, tempfile as _tf45
+            made = client.post("/api/share", json={"video_id": "SHARE00001", "title": "Mother",
+                                                   "artist": "Danzig", "art": "https://img/x.jpg",
+                                                   "duration": 205}, headers=owner_h)
+            c("the owner can share what's playing", made.status_code == 200
+              and "/s/" in made.json().get("url", ""), made.text[:120])
+            sid = made.json()["id"]
+            again = client.post("/api/share", json={"video_id": "SHARE00001", "title": "Mother"},
+                                headers=owner_h).json()
+            c("...and sharing it again is the same link", again["id"] == sid)
+            c("nobody without a way in can make one",
+              client.post("/api/share", json={"video_id": "x"}).status_code in (401, 403))
+            _bans.forgive("testclient")
+            page = client.get(f"/s/{sid}")
+            c("the link opens for anyone, no sign-in", page.status_code == 200, str(page.status_code))
+            c("...with the tags a chat app turns into a card",
+              'property="og:title" content="Mother · Danzig"' in page.text
+              and 'property="og:image" content="https://img/x.jpg"' in page.text
+              and 'name="twitter:card"' in page.text)
+            c("a link that isn't one, or has run out, says so plainly",
+              client.get("/s/nope").status_code == 404)
+            with _patch.object(_api45, "_share_fetch", lambda row, ip: None), \
+                    _patch.object(_api45.cast_mod, "serve", lambda vid, tune="", fmt="": ("", "missing")):
+                c("its audio says \"nearly\" while it's being fetched",
+                  client.get(f"/s/{sid}/audio").status_code == 503)
+            served = []
+            with _tf45.NamedTemporaryFile(suffix=".m4a", delete=False) as fh:
+                fh.write(b"\x00" * 64)
+            with _patch.object(_api45.cast_mod, "serve",
+                               lambda vid, tune="", fmt="": served.append(vid) or (fh.name, "ready")):
+                got = client.get(f"/s/{sid}/audio?fmt=aac", headers={"Range": "bytes=0-9"})
+            _os45.unlink(fh.name)
+            c("...and then serves that song, and only that song",
+              got.status_code == 206 and served == ["SHARE00001"], f"{got.status_code} {served}")
+            c("a share id is not a way into anything else",
+              client.get("/api/status", headers={"X-Music-Key": sid}).status_code in (401, 403)
+              and client.get(f"/api/status?token={sid}").status_code in (401, 403))
+            _bans.forgive("testclient")
+            asked = []
+            with _patch.object(_sh45, "spotify_ready", lambda: True), _patch.object(_sh45, "_songlink",
+                               lambda row: asked.append(row["video_id"]) or "https://open.spotify.com/track/abc"):
+                one = client.get(f"/api/share/spotify?id={sid}", headers=owner_h).json()
+                two = client.get(f"/s/{sid}/spotify").json()
+            c("its Spotify twin is found once and remembered",
+              one["spotify"] == two["spotify"] == "https://open.spotify.com/track/abc" and asked == ["SHARE00001"])
+            c("without a Spotify app it says so rather than failing",
+              client.get(f"/api/share/spotify?id={sid}", headers=owner_h).json().get("ready") is False)
+            with _patch.object(_sh45, "_songlink", lambda row: "https://evil.example/x"):
+                other = _sh45.create({"video_id": "SHARE00002", "title": "x"}, by="owner")
+                c("...and only a real Spotify address is ever handed out",
+                  _sh45.spotify(other["id"]) == "")
+            _sh45.create({"video_id": "SHARE00003", "title": "y"}, by="g-45454545")
+            c("deleting an account deletes the songs it shared",
+              _sh45.forget_by("g-45454545") == 1 and _sh45.forget_by("g-45454545") == 0)
+            say("sharing a song", c)
 
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")

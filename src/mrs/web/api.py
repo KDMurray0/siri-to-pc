@@ -850,6 +850,117 @@ def api_play_pick(request: Request, items: str = "", mode: str = "play", _: bool
     return play_picks(picked, mode, queue=room.queue if room else None)
 
 
+# ── sharing a song ───────────────────────────────────────────────────
+
+def _share_base(request: Request) -> str:
+    """Where a shared link points: the public address when there is one."""
+    from ..core import net
+    host = (config.get("ddns_hostname") or "").strip()
+    return net.public_base(host) if host else str(request.base_url).rstrip("/") + _pfx.base_of(request)
+
+
+@app.get("/api/share")
+def api_share(request: Request, video_id: str = "", title: str = "", artist: str = "",
+              art: str = "", duration: int = 0, _: bool = Auth):
+    """A link to one song, for anyone, that plays that song and nothing else."""
+    from ..core import shares
+    row = getattr(request.state, "pass_row", None) or {}
+    who = str(row.get("id") or "owner")
+    try:
+        got = shares.create({"video_id": video_id, "title": title, "artist": artist,
+                             "art": art, "duration": duration}, by=who)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"status": "ok", "id": got["id"], "url": _share_base(request) + "/s/" + got["id"],
+            "spotify": got.get("spotify", "")}
+
+
+@app.get("/api/share/spotify")
+def api_share_spotify(id: str = "", _: bool = Auth):
+    """The same song's Spotify link: what embeds nicely almost everywhere."""
+    from ..core import shares
+    if not shares.get(id):
+        raise HTTPException(404, "No such share")
+    if not shares.spotify_ready():
+        return {"status": "ok", "spotify": "", "ready": False,
+                "message": "Spotify links need a Spotify app in Settings > Connections"}
+    link = shares.spotify(id)
+    return {"status": "ok", "spotify": link, "ready": True,
+            "message": "" if link else "Spotify doesn't seem to have this one"}
+
+
+_SHARE_FETCHES: dict[str, list[float]] = {}
+_SHARE_LOCK = threading.Lock()
+_SHARE_BUSY = threading.BoundedSemaphore(2)
+
+
+def _share_fetch(row: dict, ip: str) -> None:
+    """Get the song ready to stream, if it isn't: a few an hour per address,
+    two at a time, so a posted link can't turn into a download queue."""
+    from ..models import Track
+    if downloader.cached(row["video_id"]):
+        return
+    now = time.time()
+    with _SHARE_LOCK:
+        seen = [t for t in _SHARE_FETCHES.get(ip, []) if now - t < 3600]
+        if len(seen) >= 12:
+            return
+        _SHARE_FETCHES[ip] = seen + [now]
+        if len(_SHARE_FETCHES) > 512:
+            for k in [k for k, v in _SHARE_FETCHES.items() if now - v[-1] > 3600]:
+                _SHARE_FETCHES.pop(k, None)
+
+    def work():
+        if not _SHARE_BUSY.acquire(timeout=1):
+            return
+        try:
+            downloader.fetch(Track(video_id=row["video_id"], title=row.get("title", ""),
+                                   artist=row.get("artist", ""), origin="share"))
+        except Exception as exc:
+            log.info("couldn't fetch a shared song: %s", exc)
+        finally:
+            _SHARE_BUSY.release()
+    threading.Thread(target=work, daemon=True, name="share-fetch").start()
+
+
+@app.get("/s/{sid}", response_class=HTMLResponse)
+def share_page(request: Request, sid: str):
+    """The shared song. Public: that's the point of a link you send someone."""
+    from ..core import shares
+    row = shares.get(sid)
+    if not row:
+        return _signin_page("That link has run out, or was never a song.", 404,
+                            base=_pfx.base_of(request))
+    _share_fetch(row, _client_ip(request))
+    base = _pfx.base_of(request)
+    return templates.TemplateResponse(request, "share.html", {
+        "song": row, "server_name": config.get("server_name", "Music Request"),
+        "url": _share_base(request) + "/s/" + sid, "base": base})
+
+
+@app.get("/s/{sid}/audio")
+def share_audio(request: Request, sid: str, fmt: str = ""):
+    """That song's audio, and only that song's."""
+    from ..core import shares
+    row = shares.get(sid)
+    if not row:
+        raise HTTPException(404, "No such song")
+    path, state = cast_mod.serve(row["video_id"], "", fmt)
+    if state != "ready" or not path:
+        if state == "missing":
+            _share_fetch(row, _client_ip(request))
+        return JSONResponse({"status": "arriving"}, status_code=503, headers={"Retry-After": "2"})
+    return _range_response(request, Path(path))
+
+
+@app.get("/s/{sid}/spotify")
+def share_spotify(sid: str):
+    from ..core import shares
+    if not shares.get(sid):
+        raise HTTPException(404, "No such song")
+    return {"spotify": shares.spotify(sid)}
+
+
 @app.get("/api/control/{action}")
 def api_control(request: Request, action: str, value: int | None = None,
                 _: bool = Auth):
@@ -1867,6 +1978,7 @@ _SETTABLE = {
     "google_client_id": str, "google_client_secret": str, "owner_email": str,
     "new_account_scope": str, "server_name": str,
     "url_prefix": str, "public_port": int, "movies_url": str, "https_mode": str,
+    "spotify_client_id": str, "spotify_client_secret": str,
     "lan_hostname": str,
     "tailscale": str, "tailscale_exe": str, "cache_size_mb": int,
     "allow_key_in_url": bool, "port": int,

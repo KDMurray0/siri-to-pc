@@ -75,6 +75,8 @@ def erase(sub: str) -> dict:
     # Their Siri keys go before the account, so a key can never outlive the
     # person it acts for.
     report["siri_keys"] = sec.siri_forget(pid)
+    from ..core import shares
+    report["shares"] = shares.forget_by(pid)
     report["usage"] = stats.erase(pid)
     report["credits"] = playlists.scrub_person(pid, person.get("name", ""))
     report["audit"] = audit.scrub(f"account:{pid}")
