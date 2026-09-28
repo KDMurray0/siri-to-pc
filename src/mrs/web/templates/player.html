@@ -223,12 +223,15 @@ body.live .onair{display:inline-flex;align-items:center;gap:5px;
 .magic:disabled{opacity:.45;pointer-events:none}
 .magic.hide{display:none}
 body.mini .magic{display:none}
-.qactions{display:flex;gap:6px;margin-top:7px;max-height:0;overflow:hidden;opacity:0;
-  transition:max-height .2s ease,opacity .2s ease}
-.qactions.show{max-height:40px;opacity:1}
-.qbtn{background:var(--panel);border:1px solid var(--line);color:var(--sub);
-  border-radius:9px;padding:6px 10px;font-size:11.5px;cursor:pointer;font-family:inherit}
-.qbtn:hover{color:var(--accent);border-color:var(--accent)}
+.qactions{display:flex;gap:6px;margin-top:8px;max-height:0;overflow:hidden;opacity:0;
+  transform:translateY(-4px);transition:max-height .18s ease,opacity .15s ease,transform .18s ease}
+.qactions.show{max-height:44px;opacity:1;transform:none}
+.qbtn{flex:1 1 0;min-width:0;height:34px;background:var(--panel);border:1px solid var(--line);
+  color:var(--fg);border-radius:11px;padding:0 8px;font-family:inherit;font-weight:600;font-size:12.5px;line-height:1;
+  cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  transition:background .12s,border-color .12s,color .12s,transform .08s}
+.qbtn:hover{border-color:var(--accent);color:var(--accent)}
+.qbtn:active{transform:scale(.97)}
 /* A list still filling up: it's there, named, and visibly working. */
 .plspin{width:13px;height:13px;flex:0 0 auto;border-radius:50%;
   border:2px solid var(--line);border-top-color:var(--accent);
@@ -263,6 +266,7 @@ body.guest:not(.keeps) #addimport{display:none}
 .pchip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pchip button{border:0;background:none;color:var(--sub);cursor:pointer;font-size:13px;line-height:1;padding:0 4px}
 .qbtn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.qbtn.primary:hover{color:var(--accent-ink);filter:brightness(1.08)}
 .qbtn[hidden]{display:none}
 .rres .qi{width:30px;height:30px;border-radius:6px;object-fit:cover;background:var(--bg);flex:0 0 auto}
 /* A row with no cover gets a faint note rather than an empty hole or the
@@ -583,7 +587,7 @@ body.expand .prog{margin-top:10px}
 .navlbl{font-size:10px;color:var(--sub);text-transform:uppercase;letter-spacing:.08em;
   font-weight:700;margin:14px 10px 4px}
 .stab{display:grid;grid-template-columns:20px 1fr auto;align-items:center;gap:11px;width:100%;
-  background:none;border:0;color:var(--sub);font:600 12.5px/1.3 inherit;font-family:inherit;
+  background:none;border:0;color:var(--sub);font-family:inherit;font-weight:600;font-size:12.5px;line-height:1.3;
   text-align:left;padding:9px 10px;cursor:pointer;border-radius:10px}
 .stab svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;
   stroke-linecap:round;stroke-linejoin:round}
@@ -594,9 +598,15 @@ body.expand .prog{margin-top:10px}
 .stab:hover{color:var(--fg);background:color-mix(in srgb,var(--fg) 5%,transparent)}
 .stab.on{color:var(--fg);background:color-mix(in srgb,var(--accent) 16%,transparent)}
 .stab.on svg{color:var(--accent)}
-.sheet-head{justify-content:flex-start;gap:12px}
+.sheet-head{justify-content:flex-start;gap:12px;position:relative}
+/* The window has no frame: in the desktop app the head is what you hold. */
+.sheetgrab{display:none}
+body.desktop .sheetgrab{display:block;position:absolute;top:7px;left:50%;translate:-50% 0;
+  width:40px;height:5px;border-radius:3px;background:color-mix(in srgb,var(--fg) 28%,transparent)}
+body.desktop .sheet-head{cursor:move;padding-top:22px}
+body.desktop .sheet-head button{cursor:pointer}
 .setback{display:inline-flex;align-items:center;gap:4px;border:0;background:none;color:var(--fg);
-  font:600 13px/1 inherit;font-family:inherit;padding:7px 12px 7px 6px;border-radius:999px;cursor:pointer}
+  font-family:inherit;font-weight:600;font-size:13px;line-height:1;padding:7px 12px 7px 6px;border-radius:999px;cursor:pointer}
 .setback svg{width:20px;height:20px;fill:currentColor}
 .setback:hover{background:color-mix(in srgb,var(--fg) 8%,transparent)}
 .setback:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -724,7 +734,7 @@ select,.keyin{background:var(--panel);border:1px solid var(--line);color:var(--f
 .moremenu .picker-row.danger:hover,.moremenu .picker-row.danger.arm{color:var(--bad)}
 .moremenu .picker-row.danger.arm .lab{display:none}
 .moremenu .picker-row.danger.arm::after{content:"Tap again to confirm";position:static;translate:none;
-  padding:0;background:none;box-shadow:none;color:var(--bad);font:600 13.5px/1.2 inherit;font-family:inherit}
+  padding:0;background:none;box-shadow:none;color:var(--bad);font-family:inherit;font-weight:600;font-size:13.5px;line-height:1.2}
 body.live:not(.onsong) .moremenu #download,body.live:not(.onsong) .moremenu #addlist{display:none}
 .sharepick .sharewhat{font-size:13px;font-weight:700;padding:0 13px 2px;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
@@ -744,6 +754,9 @@ body.live:not(.onsong) .moremenu #download,body.live:not(.onsong) .moremenu #add
   padding:9px 16px;border-radius:22px;opacity:0;pointer-events:none;
   transition:opacity .2s,transform .2s;max-width:88%;text-align:center}
 .toast.show{opacity:1;transform:translate(-50%,0)}
+body.mini .toast{bottom:auto;top:50%;left:12px;right:12px;max-width:none;transform:translate(0,-40%);
+  font-size:11.5px;padding:7px 12px;z-index:40}
+body.mini .toast.show{transform:translate(0,-50%)}
 .toast.action{display:flex;align-items:center;gap:10px;pointer-events:auto}
 .toast.action button{background:transparent;color:inherit;border:1px solid currentColor;
   border-radius:12px;padding:3px 8px;font:inherit;cursor:pointer}
@@ -753,7 +766,7 @@ body.live:not(.onsong) .moremenu #download,body.live:not(.onsong) .moremenu #add
    Constant width. Idle shows art + name; hovering lifts the text to the top
    of the cover and drops the transport into the space that makes. */
 body.mini .prog,body.mini .search,
-body.mini .nav,body.mini .panel,body.mini .toast,
+body.mini .nav,body.mini .panel,
 body.mini #shuffle,body.mini #repeat,body.mini .activity,
 body.mini .vol,body.mini .row2,body.mini .devpick{display:none}
 /* The wash, sideways. On the full player the cover's colour bleeds down from
@@ -1154,7 +1167,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
      top of it, so it steps over the row whenever the row is there. */
   body:not(.mini) .results{top:calc(100% + 6px);bottom:auto;
     max-height:min(420px,52vh)}
-  body:not(.mini) .search:has(#qactions.show) .results{top:calc(100% + 42px)}
+  body:not(.mini) .search:has(#qactions.show) .results{top:calc(100% + 8px + var(--qa-h,42px))}
 
   /* Lyrics get the room the desktop has without turning into a poster, and
      stay in the app's own face — a serif in here reads as a different
@@ -1568,11 +1581,11 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
       </div>
       <div class="pickchips" id="pickchips" hidden></div>
       <div class="qactions" id="qactions">
-        <button class="qbtn primary" id="pickplay" hidden>Play</button>
-        <button class="qbtn" id="picktogether" hidden>Play together</button>
-        <button class="qbtn" id="addnext">Play next</button>
-        <button class="qbtn" id="addqueue">Add to queue</button>
-        <button class="qbtn" id="radio">Radio</button>
+        <button class="qbtn primary" id="pickplay" title="Play now — or double-click a result">Play</button>
+        <button class="qbtn" id="addnext" title="Straight after this song">Play next</button>
+        <button class="qbtn" id="addqueue" title="At the end of the queue">Play after</button>
+        <button class="qbtn" id="picktogether" hidden title="Mix it in with what's playing">Together</button>
+        <button class="qbtn" id="radio" title="More like what's playing">Radio</button>
         <button class="qbtn" id="addimport">Import as playlist</button>
       </div>
     </div>
@@ -1677,7 +1690,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   <div class="toast" id="toast"></div>
 
   <div class="sheet" id="sheet">
-    <div class="sheet-head">
+    <div class="sheet-head" id="sheethead">
+      <i class="sheetgrab" aria-hidden="true"></i>
       <button class="setback" id="setback" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15.4 5.4L14 4l-8 8 8 8 1.4-1.4L8.8 12z"/></svg><span>Back</span></button>
       <h2 id="settitle">Settings</h2>
     </div>
@@ -2379,6 +2393,10 @@ function openExternal(url) {
   if (b && b.open_external) { b.open_external(url); return; }
   window.open(url, "_blank");
 }
+$("sheethead").addEventListener("mousedown", e => {
+  if (e.button !== 0 || e.target.closest("button")) return;
+  const b = bridge(); if (b && b.begin_move) b.begin_move();
+});
 document.querySelectorAll(".topdrag,.drag").forEach(el => {
   el.addEventListener("mousedown", e => {
     if (e.button === 0) { const b = bridge(); if (b && b.begin_move) b.begin_move(); }
@@ -2771,6 +2789,7 @@ let searchT, searchSeq = 0;
 $("q").addEventListener("input", () => {
   const v = $("q").value.trim();
   $("qactions").classList.toggle("show", v.length > 0 || picks.length > 0);
+  qaHeight();
   document.body.classList.toggle("pastedlink", isLink(v));
   clearTimeout(searchT);
   if (v.length < 2) { hideResults(); return; }
@@ -2779,19 +2798,21 @@ $("q").addEventListener("input", () => {
 $("q").addEventListener("keydown", e => {
   if (e.key === "Enter") {
     // What's picked wins over what's typed: that's what they chose.
-    if (picks.length) { playPicks(picks.length > 1 ? "together" : "play"); return; }
+    if (picks.length) { playPicks("play"); return; }
     const v = $("q").value.trim(); if (!v) return;
     closeSearch();
     apiSay("/api/play?q=" + encodeURIComponent(v), true)
       .then(r => { if (r) toast(r.message); });
   } else if (e.key === "Escape") { closeSearch(); }
 });
-/* Picking. A tap on a song, band or album picks it; a second tap on the only
-   pick plays it; the buttons act on the picks -- or, with none, on the top
-   result, never on a fresh search that might land somewhere else. Picks
-   survive a new search, so two bands found separately can play together. */
+/* Picking. One click on a song, band, album or playlist picks it; a double
+   click plays it there and then. The buttons act on the picks -- or, with
+   none, on the top result, never on a fresh search that might land somewhere
+   else. Picks survive a new search, so two bands found separately can go on
+   together. Picked songs play first, in the order picked; then the bands,
+   albums and playlists are mixed. */
 let picks = [];
-const PICKABLE = new Set(["song", "artist", "album"]);
+const PICKABLE = new Set(["song", "artist", "album", "playlist"]);
 const pickKey = row => row.dataset.act + ":" +
   (row.dataset.v || ((row.dataset.n || "") + "|" + (row.dataset.ar || "")));
 const pickOf = row => ({ key: pickKey(row), kind: row.dataset.act, video_id: row.dataset.v || "",
@@ -2804,10 +2825,17 @@ function paintPicks() {
     `<span class="pchip"><span>${esc(p.kind === "song" ? p.title : p.name)}</span>` +
     `<button type="button" data-i="${i}" aria-label="Unpick">×</button></span>`).join("");
   $("pickchips").hidden = !picks.length;
-  $("pickplay").hidden = !picks.length;
-  $("picktogether").hidden = picks.length < 2;
-  $("pickplay").textContent = picks.length > 1 ? "Play these" : "Play";
+  // Together is for bands, albums and playlists: mixing them in with what's on.
+  $("picktogether").hidden = !picks.some(p => p.kind !== "song");
+  $("radio").hidden = picks.length > 0;
   if (picks.length) $("qactions").classList.add("show");
+  qaHeight();
+}
+/* The results hang below the action row when the search sits at the top. */
+function qaHeight() {
+  const h = ($("qactions").classList.contains("show") ? 42 : 0) +
+            ($("pickchips").hidden ? 0 : $("pickchips").offsetHeight + 7);
+  $("results").style.setProperty("--qa-h", h + "px");
 }
 function topPick() {
   if (!$("results").classList.contains("show")) return null;
@@ -2829,7 +2857,12 @@ $("pickchips").addEventListener("mousedown", e => {
   picks.splice(Number(b.dataset.i), 1);
   paintPicks();
 });
-$("pickplay").onclick = () => playPicks(picks.length > 1 ? "together" : "play");
+$("pickplay").onclick = () => {
+  if (picks.length) { playPicks("play"); return; }
+  const v = $("q").value.trim(); if (!v) return;
+  closeSearch();
+  apiSay("/api/play?q=" + encodeURIComponent(v), true).then(r => { if (r) toast(r.message); });
+};
 $("picktogether").onclick = () => playPicks("together");
 
 function closeSearch() {
@@ -2957,6 +2990,15 @@ async function showResults(v) {
   paintPicks();
 }
 const hideResults = () => $("results").classList.remove("show");
+/* Double click: play it now. The two clicks before it picked and unpicked it,
+   so the picks are as they were. */
+$("results").addEventListener("dblclick", e => {
+  const row = e.target.closest(".rres");
+  if (!row || !PICKABLE.has(row.dataset.act)) return;
+  const key = pickKey(row);
+  picks = picks.filter(p => p.key !== key);
+  playPicks("play", [pickOf(row)]);
+});
 
 $("results").addEventListener("mousedown", async e => {
   const row = e.target.closest(".rres");
@@ -2965,7 +3007,6 @@ $("results").addEventListener("mousedown", async e => {
   const act = row.dataset.act;
   if (PICKABLE.has(act)) {
     const key = pickKey(row), at = picks.findIndex(p => p.key === key);
-    if (at >= 0 && picks.length === 1) { playPicks("play"); return; }
     if (at >= 0) picks.splice(at, 1); else picks.push(pickOf(row));
     paintPicks();
     return;
@@ -5948,9 +5989,10 @@ async function openPicker() {
   picker.classList.add("show");
   $("newlist").value = "";
 }
-$("addlist").onclick = e => {
+$("addlist").onclick = async e => {
   e.stopPropagation();
   closeMore();
+  if (mini) { await $("shrink").onclick(); openPicker(); return; }
   picker.classList.contains("show") ? picker.classList.remove("show") : openPicker();
 };
 $("pickerlist").addEventListener("click", async e => {
@@ -6414,8 +6456,12 @@ function miniHover(on) {
   document.body.classList.toggle("mini-hover", on);
   const b = bridge(); if (b && b.set_mini_hover) b.set_mini_hover(on);
 }
-document.documentElement.addEventListener("mouseenter", () => miniHover(true));
-document.documentElement.addEventListener("mouseleave", () => miniHover(false));
+let hoverOff = 0;
+document.documentElement.addEventListener("mouseenter", () => { clearTimeout(hoverOff); miniHover(true); });
+document.documentElement.addEventListener("mouseleave", () => {
+  clearTimeout(hoverOff);
+  hoverOff = setTimeout(() => miniHover(false), 320);
+});
 
 let pinned = false;
 $("pin").onclick = () => {

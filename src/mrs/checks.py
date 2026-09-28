@@ -4588,12 +4588,25 @@ def _run(verbose: bool = False) -> Result:
                 q = fresh()
                 got = _rq43.play_picks([{"kind": "artist", "name": "Danzig"},
                                         {"kind": "artist", "name": "Black Label Society"}, song(9)],
-                                       "together", queue=q, announce=False)
-                order = [w.track.artist for w in q._work][:3]
-                c("picks played together open with one of each",
-                  order == ["Danzig", "Black Label Society", "A"], str(order))
-                c("...each one an anchor the radio comes back to", len(q._anchors) == 3)
-                c("...and it says so", got["message"] == "Playing Danzig, Black Label Society and Song 9 together")
+                                       "play", queue=q, announce=False)
+                order = [w.track.artist for w in q._work][:4]
+                c("picked songs play first, then the bands mixed one of each",
+                  order == ["A", "Danzig", "Black Label Society", "Danzig"], str(order))
+                c("...each pick an anchor the radio comes back to", len(q._anchors) == 3)
+                c("...and it says so", got["message"] == "Playing Danzig, Black Label Society and Song 9")
+                q = fresh()
+                on43 = _T43(video_id="NOW00001", title="Witching Hour", artist="Venom")
+                with _patch.object(q, "current_track", lambda: on43):
+                    got = _rq43.play_picks([{"kind": "artist", "name": "Sodom"}], "together",
+                                           queue=q, announce=False)
+                order = [w.track.artist for w in q._work][:4]
+                c("together mixes the pick in with what's on: both bands, taking turns",
+                  order == ["Venom", "Sodom", "Venom", "Sodom"], str(order))
+                c("...without cutting off the song that's playing",
+                  all(w.mode == "next" for w in q._work) and q.sink.path() == "C:/x/on.m4a")
+                c("...and the radio steers by both from then on",
+                  sorted(a.artist for a in q._anchors) == ["Sodom", "Venom"]
+                  and got["message"] == "Playing Venom and Sodom together")
                 c("an empty pick is refused plainly",
                   _rq43.play_picks([], "play", queue=fresh())["status"] == "error")
             c("the route is anyone's who can play music, not only the owner's",

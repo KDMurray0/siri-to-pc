@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import re
 import threading
 import time
@@ -1016,6 +1017,13 @@ def _picked(item: dict, taste) -> tuple[list[Track], "resolver.Resolution | None
     """What one picked search result stands for: the song, or the band's
     likeliest songs, or the album."""
     kind = str(item.get("kind") or "song")
+    if kind == "playlist":
+        # One of theirs, shuffled: "together" with a playlist means its songs
+        # turn up among the rest, not the whole list first.
+        from .core.playlists import playlists
+        got = [t for t in playlists.tracks(str(item.get("name") or "")) if t.video_id or t.url]
+        random.shuffle(got)
+        return got[:40], None
     if kind == "song" and item.get("video_id"):
         return [Track(video_id=str(item["video_id"]), title=str(item.get("title") or ""),
                       artist=str(item.get("artist") or ""), art=str(item.get("art") or ""),
@@ -1034,10 +1042,12 @@ def play_picks(items: list[dict], mode: str = "play", *, queue=None,
                announce: bool = True) -> dict:
     """What was picked in the search results, acted on as asked.
 
-    One pick is played as itself. Several, or "together", are dealt out in turn
-    -- a band, an album and two songs open with one of each -- and every pick is
-    an anchor the radio keeps returning to. Next and Queue use exactly the
-    picks, never a fresh search that might land somewhere else.
+    One pick is played as itself. Several: the picked songs first, in the order
+    they were picked, then the bands, albums and playlists dealt out in turn --
+    and every pick is an anchor the radio keeps returning to. "Together" mixes
+    the picks into what's already on, without cutting it off: Danzig playing,
+    Sodom picked, and now it's both. Next and Queue use exactly the picks,
+    never a fresh search that might land somewhere else.
     """
     queue = queue if queue is not None else player.queue
     room = getattr(queue, "session_id", "") if queue is not player.queue else ""
@@ -1056,6 +1066,8 @@ def play_picks(items: list[dict], mode: str = "play", *, queue=None,
             names.append(item.get("name") or item.get("title") or tracks[0].title)
     if not lanes:
         return {"status": "not_found", "message": "Couldn't find those"}
+    if mode == "together":
+        return _together(queue, parts, lanes, names, taste, room, announce)
 
     def say(msg: str) -> None:
         if announce and msg:
@@ -1093,18 +1105,67 @@ def play_picks(items: list[dict], mode: str = "play", *, queue=None,
         msg = (f"Playing {first.title}" + (f" by {first.artist}" if first.artist else "")
                if kind == "song" else (res.spoken if res else f"Playing {names[0]}"))
     else:
-        from itertools import zip_longest
-        dealt, seen = [], set()
-        for row in zip_longest(*[lane[:12] for lane in lanes]):
-            for t in row:
-                if t is not None and t.video_id not in seen:
-                    seen.add(t.video_id)
-                    dealt.append(t)
+        dealt = _songs_then_mix(parts, lanes)
         queue.play_now(dealt, anchors=[lane[0] for lane in lanes], kind="mix")
-        said = ", ".join(names[:-1]) + " and " + names[-1]
-        msg = f"Playing {said} together"
+        if all((i.get("kind") or "song") == "song" for i, _ in parts):
+            msg = f"Playing {len(lanes)} songs, then more like them"
+        else:
+            msg = f"Playing {_listed(names)}"
     say(msg)
     return {"status": "played", "message": msg, "tracks": len(lanes)}
+
+
+def _listed(names: list[str]) -> str:
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _songs_then_mix(parts, lanes) -> list[Track]:
+    """The picked songs, in the order they were picked; then the bands, albums
+    and playlists dealt out one of each at a time."""
+    from itertools import zip_longest
+    songs = [t for (item, _), lane in zip(parts, lanes)
+             if (item.get("kind") or "song") == "song" for t in lane]
+    groups = [lane[:12] for (item, _), lane in zip(parts, lanes)
+              if (item.get("kind") or "song") != "song"]
+    out, seen = [], set()
+    for t in songs + [t for row in zip_longest(*groups) for t in row if t is not None]:
+        key = t.video_id or t.url
+        if key and key not in seen:
+            seen.add(key)
+            out.append(t)
+    return out
+
+
+def _together(queue, parts, lanes, names, taste, room, announce) -> dict:
+    """Mix the picks into what's on. The song playing carries on; the mix goes
+    in straight after it, and the radio steers by all of it from then on."""
+    now = queue.current_track() if hasattr(queue, "current_track") else None
+    lead = (now.artist or "").split(",")[0].strip() if now else ""
+    same = lambda a, b: _fold((a or "").lower()).strip() == _fold((b or "").lower()).strip()
+    if lead and not any(same(lead, str(i.get("name") or i.get("artist") or "")) for i, _ in parts):
+        mine, res = _picked({"kind": "artist", "name": lead}, taste)
+        if mine:
+            mine = [t for t in mine if t.video_id != (now.video_id if now else "")]
+            parts = [({"kind": "artist", "name": lead}, res)] + list(parts)
+            lanes = [mine] + list(lanes)
+            names = [lead] + list(names)
+    dealt = _songs_then_mix(parts, lanes)[:24]
+    if not now:
+        queue.play_now(dealt, anchors=[lane[0] for lane in lanes], kind="mix")
+    else:
+        with queue._lock:
+            queue._anchors = [lane[0] for lane in lanes]
+            queue._request_kind = "mix"
+            queue._hold_radio = False
+            queue._end_after_run = False
+            queue._pool.clear()
+        for t in reversed(dealt):
+            t.reason = t.reason or "asked"
+            queue.play_next(t)
+    msg = f"Playing {_listed(names)} together"
+    if announce:
+        player.announce(msg, room)
+    return {"status": "played", "message": msg, "tracks": len(dealt)}
 
 
 def play_video(video_id: str, *, title: str = "", artist: str = "", art: str = "",
