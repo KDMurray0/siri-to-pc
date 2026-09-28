@@ -5010,6 +5010,42 @@ def _run(verbose: bool = False) -> Result:
               str(owner51[:3])[:160])
             say("stream pings", c)
 
+            # -- 52. no name is used that nothing defines ---------------------
+            # compileall can't see these: a deleted constant is only a NameError
+            # the day somebody presses the button that needs it.
+            c = _Checker("names")
+            import ast as _ast52
+            import builtins as _bi52
+
+            def _undefined52(path):
+                tree = _ast52.parse(path.read_text("utf-8"))
+                made = set(dir(_bi52)) | {"__file__", "__name__", "__doc__", "__spec__"}
+                for n in _ast52.walk(tree):
+                    if isinstance(n, _ast52.Name) and isinstance(n.ctx, (_ast52.Store, _ast52.Del)):
+                        made.add(n.id)
+                    elif isinstance(n, (_ast52.FunctionDef, _ast52.AsyncFunctionDef, _ast52.ClassDef)):
+                        made.add(n.name)
+                    elif isinstance(n, _ast52.arg):
+                        made.add(n.arg)
+                    elif isinstance(n, (_ast52.Import, _ast52.ImportFrom)):
+                        for a in n.names:
+                            made.add((a.asname or a.name).split(".")[0])
+                    elif isinstance(n, _ast52.ExceptHandler) and n.name:
+                        made.add(n.name)
+                    elif isinstance(n, (_ast52.Global, _ast52.Nonlocal)):
+                        made.update(n.names)
+                    elif isinstance(n, _ast52.MatchAs) and n.name:
+                        made.add(n.name)
+                return sorted({n.id for n in _ast52.walk(tree)
+                               if isinstance(n, _ast52.Name) and isinstance(n.ctx, _ast52.Load)
+                               and n.id not in made})
+            root52 = Path(__file__).parents[2]
+            files52 = [p for p in (root52 / "launcher.pyw", root52 / "client.pyw") if p.exists()]
+            files52 += sorted(Path(__file__).parent.rglob("*.py"))
+            bad52 = {str(p.name): u for p in files52 if (u := _undefined52(p))}
+            c("every name the app uses is defined somewhere", not bad52, str(bad52)[:300])
+            say("names", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json

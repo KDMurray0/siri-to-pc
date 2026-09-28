@@ -715,6 +715,18 @@ class Bridge:
 flyout: Flyout | None = None
 
 
+# Straight to YouTube, not to a Google login form. You press "Sign in"
+# yourself, in your own time — the old flow drove the login itself and closed
+# the moment it thought it was finished, which was usually too early.
+SIGNIN_URL = "https://www.youtube.com/"
+# where the cookies we need actually live
+COOKIE_STOPS = ("https://music.youtube.com/", "https://www.youtube.com/",
+                "https://accounts.google.com/")
+
+SIGNIN_POLL = 3.0          # seconds between "are we signed in yet" checks
+SIGNIN_GIVE_UP = 15 * 60   # stop watching after this long
+
+
 def sign_in_window() -> None:
     """Open YouTube and wait. No clock, no driving the form.
 
