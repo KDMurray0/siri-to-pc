@@ -1106,40 +1106,35 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
    whatever cell falls free. Never in mini: that one is a fixed-width bar
    by definition, and it owns .stage's grid already. */
 @media (min-width:900px) and (min-height:520px){
+  /* The same player as the three-zone layout, minus its middle column:
+     the record and its controls down the left, the queue card on the right.
+     Lyrics are a tab in the card until there's room to give them a column. */
   body:not(.mini) .stage{
     display:grid;
-    /* One number for the sidebar and one for the margin, so the toggle can
-       be placed against the sidebar's edge and collapsing it is a matter of
-       setting the first to zero. */
     --side:clamp(300px,20vw,520px);
-    --edge:30px;
-    grid-template-columns:minmax(0,1fr) var(--side);
-    /* the cover's row takes the slack, so it floats centred in whatever
-       height is left over instead of the controls doing so */
-    grid-template-rows:auto minmax(0,1fr) auto auto auto auto;
-    column-gap:clamp(20px,2.4vw,36px);
-    /* top padding clears the clock chip and the window buttons, which in
-       this layout have real content underneath them, not empty wash */
-    padding:46px 30px 24px}
+    --edge:clamp(26px,2.6vw,48px);
+    --gap2:clamp(18px,1.8vw,30px);
+    --deck:clamp(220px,calc(100vh - 470px),min(500px,42vw));
+    grid-template-columns:var(--deck) minmax(0,760px);
+    justify-content:center;
+    grid-template-rows:auto minmax(0,1fr) auto auto auto auto auto minmax(0,1fr);
+    column-gap:var(--gap2);
+    padding:46px var(--edge) 24px}
 
-  body:not(.mini) .search  {grid-area:1/1;margin-top:0}
-  body:not(.mini) .art-wrap{grid-area:2/1;margin-top:0;max-height:none;
-    align-items:center;min-height:0}
-  body:not(.mini) .meta    {grid-area:3/1;margin-top:22px;min-height:58px}
-  body:not(.mini) .prog    {grid-area:4/1;margin-top:16px}
-  body:not(.mini) .controls{grid-area:5/1;margin-top:18px;gap:18px}
-  body:not(.mini) .row2    {grid-area:6/1}
+  body:not(.mini) .search  {grid-area:1/1;margin-top:0;margin-bottom:clamp(14px,2vh,26px)}
+  body:not(.mini) .art-wrap{grid-area:3/1;margin-top:0;max-height:none;
+    align-items:start;min-height:0}
+  body:not(.mini) .meta    {grid-area:4/1;margin-top:18px;min-height:0;text-align:left}
+  body:not(.mini) .prog    {grid-area:5/1;margin-top:14px}
+  body:not(.mini) .controls{grid-area:6/1;margin-top:14px;gap:10px;justify-content:space-between}
+  body:not(.mini) .row2    {grid-area:7/1}
   body:not(.mini) .nav     {grid-area:1/2;align-self:end}
   body:not(.mini) .panel   {grid-column:2;grid-row:2/-1;margin-top:0;min-height:0}
 
-  /* The cover takes the height its row was left, up to a limit — measured
-     against the row rather than the viewport, because a viewport-sized
-     cover doesn't know what the controls underneath it need and on a short
-     window it simply grows down through the title. */
+  /* the cover fills its column: a portrait of the record, not the view */
   body:not(.mini) .art,
-  body:not(.mini) .artnote{height:min(100%,760px);width:auto;
-    max-width:100%;aspect-ratio:1}
-  body:not(.mini) .art{border-radius:24px}
+  body:not(.mini) .artnote{width:100%;height:auto;max-height:none;aspect-ratio:1}
+  body:not(.mini) .art{border-radius:22px}
   /* On 16:9 the left column runs to about 1400px, and a title, a seek bar
      and five buttons stretched across all of it is mostly gap. The cover is
      square so it can only ever answer the height; the rest sits in a column
@@ -1151,21 +1146,27 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   body:not(.mini) .meta,
   body:not(.mini) .prog,
   body:not(.mini) .controls,
-  body:not(.mini) .row2{max-width:820px;margin-left:auto;margin-right:auto;
-    width:100%}
-  body:not(.mini) .title{font-size:27px}
-  body:not(.mini) .artist{font-size:14.5px;margin-top:5px}
+  body:not(.mini) .row2{max-width:none;margin-left:0;margin-right:0;width:100%}
+  /* Type that answers to the room it has, not one size for every screen. */
+  body:not(.mini) .title{font-size:clamp(21px,.9vw + 11px,36px)}
+  body:not(.mini) .artist{font-size:clamp(13.5px,.35vw + 9px,19px);margin-top:5px}
+  body:not(.mini) .search input{font-size:clamp(14px,.3vw + 10px,17px)}
+  body:not(.mini) .q .qn{font-size:clamp(12.5px,.3vw + 8px,16px)}
+  body:not(.mini) .q .qa{font-size:clamp(11px,.2vw + 8px,13.5px)}
+  body:not(.mini) .q .qi{width:clamp(34px,1.6vw + 12px,48px);height:clamp(34px,1.6vw + 12px,48px)}
+  body:not(.mini) .navtab{font-size:clamp(11px,.25vw + 7.5px,13.5px)}
   body:not(.mini) .ambient{height:64%;opacity:.26}
 
-  body:not(.mini) .controls .ib svg{width:24px;height:24px}
-  body:not(.mini) .controls .play{width:62px;height:62px;border-radius:20px}
-  body:not(.mini) .controls .play svg{width:27px;height:27px}
+  body:not(.mini) .controls .ib{width:34px;height:34px}
+  body:not(.mini) .controls .ib svg{width:19px;height:19px}
+  body:not(.mini) .controls .play{width:48px;height:48px;border-radius:16px}
+  body:not(.mini) .controls .play svg{width:22px;height:22px}
 
   /* liking, saving, playlists and volume become one strip along the
      bottom rather than a second row of the transport */
   body:not(.mini) .row2{margin-top:18px;padding-top:14px;gap:12px;
     border-top:1px solid var(--line)}
-  body:not(.mini) .vol{flex:0 1 240px;margin-left:auto}
+  body:not(.mini) .vol{flex:1 1 auto;margin-left:8px}
 
   /* the field is at the top now, so its results belong below it and not
      hanging above the ceiling. Opening upward, the dropdown cleared the
@@ -1276,11 +1277,16 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   body:not(.mini).sidehid .stage{--side:0px;padding-right:0}
   body:not(.mini).sidehid .nav,
   body:not(.mini).sidehid .panel{opacity:0;pointer-events:none}
-  /* Room that opens up should be used, not left as margin. */
+  /* Queue folded away: the player column stands alone, centred and a size
+     up, rather than hard against the left wall of an empty window. */
+  body:not(.mini).sidehid .stage{grid-template-columns:minmax(0,1fr) 0px;justify-content:normal}
+  body:not(.mini).sidehid .search,
+  body:not(.mini).sidehid .art-wrap,
   body:not(.mini).sidehid .meta,
   body:not(.mini).sidehid .prog,
   body:not(.mini).sidehid .controls,
-  body:not(.mini).sidehid .row2{max-width:1040px}
+  body:not(.mini).sidehid .row2{width:min(100%,clamp(260px,calc(100vh - 420px),620px));
+    justify-self:center}
   body:not(.mini).sidehid .sidetoggle{border-radius:8px 0 0 8px}
   /* The panels were carrying more inner padding than a list of rows needs,
      which pushed the scrollbar in off the edge of the column. */
@@ -1340,6 +1346,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
        there is room for it; see the breakpoint. */
     --deck:clamp(220px,calc(100vh - 470px),500px);
     grid-template-columns:var(--deck) minmax(0,1fr) var(--side);
+    justify-content:normal;
     /* Slack above the player as well as below it, so the whole left column
        sits in the middle of its own height. Pinned to the top it left a
        growing hole underneath every time the cover came down a size. */
@@ -1379,8 +1386,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   body:not(.mini) .artnote{width:100%;height:auto;max-height:none;
     aspect-ratio:1}
   body:not(.mini) .art{border-radius:20px}
-  body:not(.mini) .title{font-size:clamp(20px,1.5vw,27px)}
-  body:not(.mini) .artist{font-size:clamp(12.5px,.9vw,15px)}
+  body:not(.mini) .title{font-size:clamp(21px,.9vw + 11px,40px)}
+  body:not(.mini) .artist{font-size:clamp(13.5px,.4vw + 8.5px,20px)}
   /* they're a column now, so they stop pretending to be centred */
   body:not(.mini) .meta,
   body:not(.mini) .prog,
@@ -1426,7 +1433,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
      you're on picked out by a gradient sweeping across each word. Same
      size relationship as the sidebar version, same weight, same way of
      saying which line is which. The room is the only thing that changes. */
-  body:not(.mini) #panel-lyrics .lrow{font-size:clamp(17px,4cqi,34px);
+  body:not(.mini) #panel-lyrics .lrow{font-size:clamp(18px,4.7cqi,40px);
     line-height:1.55;padding:6px 0;font-weight:600;letter-spacing:0}
   body:not(.mini) #panel-lyrics .lrow.active{font-weight:800}
   /* The panel already carries the vertical room, so the message shouldn't
@@ -1485,10 +1492,59 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   body:not(.mini) .meta{margin-top:12px;min-height:46px}
   body:not(.mini) .prog{margin-top:10px}
   body:not(.mini) .controls{margin-top:10px;gap:15px}
-  body:not(.mini) .controls .play{width:52px;height:52px;border-radius:17px}
-  body:not(.mini) .controls .play svg{width:23px;height:23px}
   body:not(.mini) .row2,
   body:not(.mini).expand .row2{margin-top:10px;padding-top:10px}
+}
+
+/* ── four zones ────────────────────────────────────────────────────────
+   Past 1800px: the player, the words, the queue, and a drawer for the song
+   and the band -- where it came from, who made it -- that used to take turns
+   with the lyrics. Now nobody waits. */
+@media (min-width:1800px) and (min-height:620px){
+  body:not(.mini) .stage{
+    --drawer:clamp(300px,16vw,440px);
+    --side:clamp(300px,17vw,440px);
+    grid-template-columns:var(--deck) minmax(0,1fr) var(--side) var(--drawer)}
+  body:not(.mini).sidehid .stage{grid-template-columns:var(--deck) minmax(0,1fr) 0px var(--drawer)}
+  body:not(.mini) #panel-lyrics,
+  body:not(.mini).about #panel-lyrics{display:block}
+  body:not(.mini) #panel-about,
+  body:not(.mini).about #panel-about{
+    display:block;grid-column:4;grid-row:2/-1;margin:0;min-height:0;overflow-y:auto;
+    padding:14px 16px 18px;align-self:stretch;
+    background:color-mix(in srgb,var(--panel) 88%,transparent);
+    border:1px solid var(--line);border-radius:14px}
+  body:not(.mini) .drawerhead{display:block;grid-column:4;grid-row:1;align-self:end;
+    font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--sub);padding:0 4px 10px}
+  body:not(.mini) .lyrswitch,
+  body:not(.mini) #openAbout{display:none}
+  body:not(.mini) .navtab[data-panel="about"]{display:none}
+}
+.drawerhead{display:none}
+
+/* ── phone on its side ────────────────────────────────────────────────
+   390px of height. Stacked, the tabs took all of it and every panel was
+   left at zero. Side by side instead: the player on the left, the search,
+   tabs and whichever panel on the right with the height they need. */
+@media (orientation:landscape) and (max-height:519px) and (min-width:560px){
+  body:not(.mini) .stage{display:grid;
+    grid-template-columns:minmax(230px,42%) minmax(0,1fr);
+    grid-template-rows:auto auto auto auto auto minmax(0,1fr);
+    column-gap:18px;padding:12px 16px 10px;height:100%}
+  body:not(.mini) .art-wrap{grid-area:1/1;margin:0;max-height:none;justify-content:center}
+  body:not(.mini) .art,body:not(.mini) .artnote{width:min(96px,22vh);height:auto;aspect-ratio:1}
+  body:not(.mini) .meta{grid-area:2/1;margin-top:6px;min-height:0}
+  body:not(.mini) .title{font-size:16px}
+  body:not(.mini) .artist{font-size:12px}
+  body:not(.mini) .prog{grid-area:3/1;margin-top:6px}
+  body:not(.mini) .controls{grid-area:4/1;margin-top:6px}
+  body:not(.mini) .controls .play{width:44px;height:44px}
+  body:not(.mini) .row2{grid-area:5/1;margin-top:6px}
+  body:not(.mini) .search{grid-area:1/2;margin:0}
+  body:not(.mini) .nav{grid-area:2/2;margin-top:6px}
+  body:not(.mini) .panel{grid-column:2;grid-row:3/-1;margin-top:6px;min-height:0}
+  body:not(.mini) .results{top:calc(100% + 6px);bottom:auto;max-height:60vh}
 }
 </style>
 </head>
@@ -1622,6 +1678,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
     </div>
     <div class="panel open" id="panel-queue"></div>
     <div class="panel" id="panel-lyrics"></div>
+    <div class="drawerhead" aria-hidden="true">About this song</div>
     <div class="panel" id="panel-about"></div>
     <div class="panel" id="panel-recent"></div>
     <div class="panel" id="panel-lists"></div>
@@ -3124,10 +3181,13 @@ document.querySelectorAll(".navtab[data-panel]").forEach(tab => tab.onclick = ()
    Where the words live decides what the ⓘ button does. In the wide
    layout the story takes the middle column the lyrics were using; in
    the sidebar layouts it is a panel like any other. */
+const DRAWER_AT = window.matchMedia("(min-width:1800px) and (min-height:620px)");
 function aboutOpen() {
+  if (DRAWER_AT.matches && !document.body.classList.contains("mini")) return true;
   return lyricsPinned() ? document.body.classList.contains("about")
                         : activePanel === "about";
 }
+DRAWER_AT.addEventListener("change", () => { if (aboutOpen()) loadAbout(true); });
 function showAbout(on) {
   document.body.classList.toggle("about", !!on);
   document.querySelectorAll("#lyrswitch button").forEach(

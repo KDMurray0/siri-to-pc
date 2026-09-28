@@ -5174,6 +5174,27 @@ def _run(verbose: bool = False) -> Result:
               and len(tries53) == 2, f"{states53} {_b53.job(jid53)}")
             say("like, groq, fits", c)
 
+            # -- 54. every screen size gets a real layout -----------------------
+            c = _Checker("layouts")
+            page54 = (Path(__file__).parent / "web" / "templates" / "player.html").read_text("utf-8")
+            c("between 900 and 1500 it's the three-zone player minus the lyrics column",
+              "grid-template-columns:var(--deck) minmax(0,760px);" in page54
+              and "body:not(.mini) .art-wrap{grid-area:3/1;" in page54)
+            c("past 1800 there are four: player, words, queue and the song's drawer",
+              "@media (min-width:1800px) and (min-height:620px){" in page54
+              and "grid-template-columns:var(--deck) minmax(0,1fr) var(--side) var(--drawer)}" in page54
+              and 'const DRAWER_AT = window.matchMedia("(min-width:1800px) and (min-height:620px)");' in page54)
+            c("a phone on its side gets side-by-side panels, not zero-height ones",
+              "@media (orientation:landscape) and (max-height:519px) and (min-width:560px){" in page54
+              and "body:not(.mini) .panel{grid-column:2;grid-row:3/-1;" in page54)
+            c("type answers to the room: the title and the words scale",
+              "body:not(.mini) .title{font-size:clamp(21px,.9vw + 11px,40px)}" in page54
+              and "#panel-lyrics{container-type:inline-size}" in page54)
+            c("the words keep time: colour on the beat, the swell for as long as it's held",
+              'w.style.animationName = "wordfill, wordswell, wordrelease";' in page54
+              and "@keyframes wordswell {" in page54 and "@keyframes wordsing" not in page54)
+            say("layouts", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json
