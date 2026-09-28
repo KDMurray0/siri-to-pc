@@ -8,12 +8,16 @@ returns "false" as a string.
 from __future__ import annotations
 
 import json
+import os
+import re
+import threading
+import time
 import urllib.error
 import urllib.request
 
 from ..config import config
 from ..logging_setup import get
-from ..models import Plan
+from ..models import Plan, _fold
 from .conjunction import split_seeds
 
 log = get("groq")
@@ -41,6 +45,99 @@ ALIASES = {
     "similar": "more_like_this", "more_like": "more_like_this",
 }
 
+# ── the free tier, kept to ────────────────────────────────────────────
+# Groq says in every reply how many tokens are left this minute and when the
+# minute resets. Read that, and a request that can't be afforded goes straight
+# to the local parser instead of waiting on a 429 -- and nothing is asked at all
+# until the reset. The same text asked twice is answered from memory.
+_limit = {"left": None, "reset_at": 0.0, "cool_until": 0.0}
+_cache: dict[str, tuple[float, dict]] = {}
+_CACHE_DAYS = 14
+_cache_lock = threading.Lock()
+
+
+def _seconds(v: str | None) -> float:
+    """Groq's "1.5s", "5m45.6s", "120ms" as seconds."""
+    total = 0.0
+    for n, unit in re.findall(r"([\d.]+)(ms|h|m|s)", str(v or "")):
+        total += float(n) * {"ms": 0.001, "s": 1, "m": 60, "h": 3600}[unit]
+    return total
+
+
+def _note_limits(headers) -> None:
+    try:
+        left = headers.get("x-ratelimit-remaining-tokens")
+        if left is not None:
+            _limit["left"] = int(float(left))
+            _limit["reset_at"] = time.monotonic() + _seconds(headers.get("x-ratelimit-reset-tokens"))
+    except Exception:
+        pass
+
+
+def resting() -> float:
+    """Seconds until Groq should be asked again; 0 when it can be now."""
+    return max(0.0, _limit["cool_until"] - time.monotonic())
+
+
+def _affordable(cost: int) -> bool:
+    now = time.monotonic()
+    if now < _limit["cool_until"]:
+        return False
+    if _limit["left"] is not None and now < _limit["reset_at"] and _limit["left"] < cost:
+        _limit["cool_until"] = _limit["reset_at"]
+        return False
+    return True
+
+
+def _cache_on() -> bool:
+    return os.environ.get("MRS_TESTING") != "1"
+
+
+def _cache_key(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip().lower())
+
+
+def _cache_file():
+    from ..paths import data_dir
+    return data_dir() / "groq_cache.json"
+
+
+def _cache_load() -> None:
+    if _cache or not _cache_on():
+        return
+    try:
+        raw = json.loads(_cache_file().read_text("utf-8"))
+        cutoff = time.time() - _CACHE_DAYS * 86400
+        with _cache_lock:
+            _cache.update({k: (t, v) for k, (t, v) in raw.items() if t > cutoff and isinstance(v, dict)})
+    except Exception:
+        pass
+
+
+def _cache_get(text: str) -> dict | None:
+    if not _cache_on():
+        return None
+    _cache_load()
+    with _cache_lock:
+        hit = _cache.get(_cache_key(text))
+    return dict(hit[1]) if hit and hit[0] > time.time() - _CACHE_DAYS * 86400 else None
+
+
+def _cache_put(text: str, data: dict) -> None:
+    if not _cache_on():
+        return
+    from ..paths import write_atomic
+    with _cache_lock:
+        _cache[_cache_key(text)] = (time.time(), data)
+        if len(_cache) > 600:
+            for k in sorted(_cache, key=lambda k: _cache[k][0])[:100]:
+                _cache.pop(k, None)
+        snapshot = dict(_cache)
+    try:
+        write_atomic(_cache_file(), json.dumps(snapshot))
+    except Exception as exc:
+        log.debug("couldn't keep the groq cache: %s", exc)
+
 _BLANK = {"kind": "song", "title": "", "artist": "", "album": "", "genre": "",
           "argument": "", "variant": False, "shuffle": False,
           "when": "now", "count": 0, "items": []}
@@ -66,67 +163,54 @@ EXAMPLES = [
         {"kind": "artist", "name": "Korn"}, {"kind": "genre", "name": "glam metal"}])),
     ("play mother by danzig next", dict(kind="song", title="Mother", artist="Danzig", when="next")),
     ("five songs by queen", dict(kind="artist", artist="Queen", count=5)),
+    ("songs like motorhead", dict(kind="similar", artist="Motörhead")),
     ("something chill", dict(kind="genre", genre="chill", shuffle=True)),
     ("shuffle my taylor swift", dict(kind="artist", artist="Taylor Swift", shuffle=True)),
     ("the album rumours", dict(kind="album", title="Rumours", album="Rumours", artist="Fleetwood Mac")),
     ("set it to forty", dict(kind="command", title="volume", argument="40")),
     ("crank it up", dict(kind="command", title="volume_delta", argument="10")),
     ("skip this one", dict(kind="command", title="next")),
+    ("keep this one", dict(kind="command", title="save")),
     ("add this to my road trip playlist", dict(kind="command", title="add_to_playlist", argument="road trip")),
     ("what's the weather like", dict(kind="none")),
 ]
 
 SYSTEM = (
-    "You turn ONE spoken request for a music player into ONE JSON object. "
-    "Reply with the JSON only: no prose, no markdown.\n\n"
-    "The fields (leave out any that would be \"\" or false):\n"
-    + json.dumps(_BLANK | {"kind": "song|album|artist|genre|mix|command|none",
+    # Every token here is paid for on every request, out of a shared free-tier
+    # minute: say each rule once, plainly.
+    "Turn ONE spoken music-player request into ONE JSON object, JSON only. "
+    "Fields (omit any that would be \"\" or false): "
+    + json.dumps(_BLANK | {"kind": "song|album|artist|genre|similar|mix|command|none",
                            "when": "now|next|end"},
-                 separators=(",", ":")) + "\n\n"
-    "Choose kind by the FIRST rule that fits:\n"
-    "1. command: they are controlling playback, not asking for music. title "
-    "MUST be exactly one of: " + ", ".join(COMMANDS) + ". Map what they said "
-    "to the nearest: stop/hold on/pause that = pause; keep going/carry on = "
-    "resume; skip/next one = next; go back/last song = previous; silence = "
-    "mute; I love this = like; more like this = more_like_this; keep or "
-    "download this = save. argument: for volume a number 0-150 (\"forty\" -> "
-    "\"40\"); for volume_delta \"10\" for louder/turn it up/crank it, \"-10\" "
-    "for quieter/turn it down, or the amount they said; for add_to_playlist "
-    "the playlist's name; otherwise \"\". If they NAME music (a song, album, "
-    "artist or genre) it is never a command, even with a word like shuffle, "
-    "play or skip in it: \"shuffle my Taylor Swift\" is the artist Taylor Swift "
-    "with shuffle true. shuffle is the command only when no music is named.\n"
-    "2. none: nothing to do with music or playback (weather, maths, chat).\n"
-    "3. song: a specific track; the default when a title is named. Keep the "
-    "FULL title and never shorten it (\"i want to break free\" is \"I Want to "
-    "Break Free\", not \"Break Free\"). artist is who recorded it: use what they "
-    "said; if they didn't, fill in the artist of the well-known recording. "
-    "Leave \"\" only if you genuinely don't know the song.\n"
-    "4. album: they say album/record/LP, or name an album rather than a song.\n"
-    "5. artist: a performer or band (\"some X\", \"songs by X\", \"play X\"). "
-    "For several, join the names with \" and \" in artist. title stays \"\".\n"
-    "6. genre: a genre, mood, decade or activity (chill, 90s, gym). Write "
-    "decades as digits (\"90s\", never \"nineties\"). For several, join with "
-    "\" and \". title stays \"\".\n"
-    "7. mix: they name DIFFERENT kinds of thing to play together (a band and a "
-    "genre, a song and a band). items lists each: {kind: artist|song|album|genre, "
-    "name, artist (for a song or album)}. genre: the one genre they share, if "
-    "there is an obvious one. For several bands (kind artist) also put their "
-    "shared genre in genre.\n\n"
-    "Also:\n"
-    "- Fix obvious dictation errors in names (\"dont stop me now\" -> \"Don't "
-    "Stop Me Now\") but never swap in a different song.\n"
-    "- Word order varies: \"coming undone korn\", \"korn coming undone\" and "
-    "\"coming undone by korn\" all mean title \"Coming Undone\", artist \"Korn\".\n"
-    "- variant is true ONLY if they explicitly ask for a remix, live, acoustic, "
-    "cover, sped-up, slowed or instrumental version.\n"
-    "- shuffle is true ONLY if they say shuffle, random, mix or surprise me, "
-    "or they ask for a genre or mood. Otherwise false.\n"
-    "- when: \"next\" if it should play after the current song (play X next, "
-    "up next, after this); \"end\" if it goes on the end of the queue (add X "
-    "to the queue, queue up X). Otherwise leave it out.\n"
-    "- count: a number only if they ask for that many songs (\"five songs by "
-    "X\" -> 5, \"the top 10\" -> 10).\n\n"
+                 separators=(",", ":")) + "\n"
+    "kind = the FIRST that fits:\n"
+    "1 command: controlling playback, naming no music. title is exactly one of: "
+    + ", ".join(COMMANDS) + ". stop/hold=pause, keep going/carry on=resume, "
+    "skip=next, go back=previous, silence=mute, love this=like, keep this/download "
+    "this=save. argument: volume 0-150 "
+    "(\"forty\"->\"40\"); volume_delta \"10\" louder, \"-10\" quieter; "
+    "add_to_playlist the list's name. Named music is never a command: \"shuffle "
+    "my Taylor Swift\" is artist + shuffle.\n"
+    "2 none: not about music.\n"
+    "3 song: a track. Keep the FULL title (\"i want to break free\" is I Want to "
+    "Break Free). artist: as said, else the well-known recording's.\n"
+    "4 album: they say album/record, or name an album.\n"
+    "5 similar: music LIKE someone, not by them (songs like X, bands similar to X, "
+    "sounds like X). artist = X.\n"
+    "6 artist: a band or performer; a band whose name is also one of their songs "
+    "(play motorhead) is the band. Several: join with \" and \" and put the genre "
+    "they share in genre.\n"
+    "7 genre: genre, mood, decade (\"90s\"), activity. Several: join with \" and \".\n"
+    "8 mix: DIFFERENT kinds together (a band and a genre, a song and a band). "
+    "items: [{kind: artist|song|album|genre, name, artist}] where name is the "
+    "song, album, band or genre; genre = what they share.\n"
+    "Every thing named becomes an anchor the radio keeps returning to: never drop "
+    "one, keep the order said.\n"
+    "Fix dictation in names, never swap songs. \"coming undone korn\" = title "
+    "Coming Undone, artist Korn. variant only for remix/live/acoustic/cover/sped "
+    "up/slowed/instrumental. shuffle only for shuffle/random/surprise, or a genre "
+    "or mood. when: \"next\" (play X next, after this), \"end\" (add to the queue). "
+    "count: only when a number of songs is asked for.\n"
     "Examples:\n" + "\n".join(_shot(said, **f) for said, f in EXAMPLES)
 )
 
@@ -146,19 +230,34 @@ def _model() -> str:
 
 
 def _post(body: dict, timeout: float) -> dict:
+    # gpt-oss thinks before it answers, and the thinking is billed against the
+    # same minute. Parsing a request doesn't need much of it.
+    if "gpt-oss" in str(body.get("model", "")) and "reasoning_effort" not in body:
+        body = dict(body, reasoning_effort="low")
     req = urllib.request.Request(
         API_URL, data=json.dumps(body).encode(), method="POST",
         headers={"Authorization": f"Bearer {config.get('groq_api_key')}",
                  "Content-Type": "application/json",
                  # Cloudflare blocks the default urllib UA outright.
                  "User-Agent": "MusicRequestServer/2.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            _note_limits(r.headers)
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            wait = _seconds(e.headers.get("x-ratelimit-reset-tokens")) or \
+                float(e.headers.get("retry-after") or 20)
+            _limit["cool_until"] = time.monotonic() + max(2.0, wait)
+            log.info("Groq is resting for %.0fs", max(2.0, wait))
+        raise
 
 
 def ask_json(system: str, user: str, timeout: float = 8.0) -> dict | None:
     """One JSON answer, or None. For callers that aren't the request parser."""
     if not available() or not user.strip():
+        return None
+    if not _affordable((len(system) + len(user)) // 3 + 300):
         return None
     try:
         payload = _post({
@@ -280,6 +379,16 @@ def _number(text: str):
 _DOWN = ("quiet", "down", "soft", "lower", "less", "decrease", "reduce")
 
 
+def _same_name(a: str, b: str) -> bool:
+    fold = lambda x: re.sub(r"[^a-z0-9]", "", _fold((x or "").lower()))
+    return bool(fold(a)) and fold(a) == fold(b)
+
+
+_SOME = re.compile(r"^(?:some|a\s+bit\s+of|a\s+little)\s+", re.I)
+# What a model leaves in "name" when it's split "some Black Label Society" badly.
+_FILLER_NAMES = {"some", "any", "a bit", "a bit of", "a little", "stuff", "songs", "music", ""}
+
+
 def _items(raw) -> list[dict]:
     """The things a mix named, checked: a known kind and a name each."""
     out = []
@@ -287,10 +396,15 @@ def _items(raw) -> list[dict]:
         if not isinstance(row, dict):
             continue
         kind = str(row.get("kind") or "").strip().lower()
-        name = str(row.get("name") or "").strip()
+        name = str(row.get("name") or row.get("title") or row.get("album") or "").strip()
+        artist = str(row.get("artist") or "").strip()
+        # "...and some Black Label Society" is the band, however the model
+        # filed it: a song whose name is only its artist is that artist.
+        if kind == "song" and artist and (_same_name(_SOME.sub("", name), artist)
+                                          or name.strip().lower() in _FILLER_NAMES):
+            kind, name = "artist", artist
         if kind in ("artist", "song", "album", "genre") and name:
-            out.append({"kind": kind, "name": name[:120],
-                        "artist": str(row.get("artist") or "").strip()[:120]})
+            out.append({"kind": kind, "name": name[:120], "artist": artist[:120]})
     return out[:6]
 
 
@@ -328,14 +442,22 @@ def parse(text: str) -> Plan | None:
     """Return a Plan, or None so the caller falls back to the grammar."""
     if not available() or not text.strip():
         return None
+    data = _cache_get(text)
+    if data is None:
+        if not _affordable((len(SYSTEM) + len(text)) // 3 + 200):
+            log.info("Groq resting %.0fs more -- local parser", resting())
+            return None
     try:
-        payload = _post({
-            "model": _model(), "temperature": 0,
-            "response_format": {"type": "json_object"},
-            "messages": [{"role": "system", "content": SYSTEM},
-                         {"role": "user", "content": text.strip()}],
-        }, float(config.get("groq_timeout", 4)))
-        data = json.loads(payload["choices"][0]["message"]["content"])
+        if data is None:
+            payload = _post({
+                "model": _model(), "temperature": 0, "max_completion_tokens": 400,
+                "response_format": {"type": "json_object"},
+                "messages": [{"role": "system", "content": SYSTEM},
+                             {"role": "user", "content": text.strip()}],
+            }, float(config.get("groq_timeout", 4)))
+            data = json.loads(payload["choices"][0]["message"]["content"])
+            if isinstance(data, dict):
+                _cache_put(text, data)
     except urllib.error.HTTPError as e:
         detail = ""
         try:
@@ -372,7 +494,7 @@ def parse(text: str) -> Plan | None:
         # honest one -- better than letting it invent a song to fill the gap.
         # None hands it back to the grammar, exactly as any decline does.
         return None
-    if kind not in ("song", "album", "artist", "genre", "command", "mix"):
+    if kind not in ("song", "album", "artist", "genre", "similar", "command", "mix"):
         return None
     title = str(data.get("title") or "").strip()
     artist = str(data.get("artist") or "").strip()
@@ -394,9 +516,14 @@ def parse(text: str) -> Plan | None:
                     count=count, shuffle=_as_bool(data.get("shuffle")), via="llm",
                     spoken=text)
         return plan
+    if kind == "song" and not album and artist and (not title or _same_name(title, artist)):
+        # "the top 10 metallica songs": a song with no name is the band; and
+        # "play motorhead" is the band, not their song called Motorhead.
+        kind = "artist"
     query = {"song": title or album or genre,
              "album": album or title,
              "artist": artist or title,
+             "similar": artist or title,
              "genre": genre or title}.get(kind, "")
     if not query:
         return None

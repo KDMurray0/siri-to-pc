@@ -77,6 +77,28 @@ def clean(text: str) -> str:
     return t.strip().strip("?.!,")
 
 
+_LIKE = re.compile(
+    r"^(?:(?:play|put\s+on|find|give\s+me|i\s+want)\s+)?(?:some\s+|more\s+|other\s+)?"
+    r"(?:songs?|stuff|music|bands?|artists?|tracks?|something|anything|things)\s+"
+    r"(?:that\s+sounds?\s+|that\s+sound\s+|that\s+are\s+)?(?:like|similar\s+to)\s+(?P<who>.{2,60})$"
+    r"|^(?:(?:play|put\s+on)\s+)?(?:something\s+)?(?:similar\s+to|in\s+the\s+vein\s+of|sounds?\s+like)\s+"
+    r"(?P<who2>.{2,60})$", re.I)
+
+
+def similar(text: str) -> str | None:
+    """"songs like motorhead", "bands similar to slayer": who it should sound
+    like -- which is other bands, not that one."""
+    m = _LIKE.match(clean(text))
+    if not m:
+        return None
+    who = (m.group("who") or m.group("who2") or "").strip(" .!?")
+    # "more stuff like this" is about what's on: that's more_like_this.
+    if who.lower() in ("this", "that", "it", "this one", "this song", "that one",
+                       "what's playing", "whats playing", "the current song"):
+        return None
+    return who or None
+
+
 def transport(text: str) -> str | None:
     """An exact control phrase, or None."""
     key = re.sub(r"[^a-z ]", "", clean(text).lower()).strip()

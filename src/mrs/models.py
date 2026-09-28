@@ -179,7 +179,7 @@ class Candidate:
 @dataclass
 class Plan:
     """What the parser decided a request means."""
-    kind: str = "song"        # song | album | artist | genre | command | playlist
+    kind: str = "song"        # song | album | artist | genre | similar | command | playlist
     query: str = ""
     artist: str = ""
     command: str = ""

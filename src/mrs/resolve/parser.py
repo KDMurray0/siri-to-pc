@@ -33,17 +33,30 @@ def parse(text: str, *, mode: str = "play") -> Plan:
         return Plan(kind="command", command="add_to_playlist", query=listname,
                     via="grammar", spoken=text, mode=mode)
 
-    # 2. the LLM, when we have one
+    # 2. "songs like X": certain enough to need nobody else's opinion
+    who = grammar.similar(text)
+    if who:
+        return Plan(kind="similar", query=who, artist=who, via="grammar", spoken=text,
+                    mode=mode)
+
+    # 3. the LLM, when we have one
     if llm.available():
         plan = llm.parse(text)
         if plan:
             if mode != "play" or plan.mode not in ("next", "queue"):
                 plan.mode = mode
+            # Where it goes is said in plain words the grammar reads exactly;
+            # the model sometimes files "after this" at the end of the queue.
+            if plan.kind != "command" and mode == "play":
+                if grammar._NEXT_TAIL.search(grammar.clean(text)):
+                    plan.mode = "next"
+                elif grammar._QUEUE_WORDS.match(grammar.clean(text)):
+                    plan.mode = "queue"
             log.info("llm: %r -> %s %r (artist=%r)", text, plan.kind, plan.query,
                      plan.artist)
             return plan
 
-    # 3. grammar fallback
+    # 4. grammar fallback
     plan = grammar.parse(text)
     if mode != "play" or plan.mode not in ("next", "queue"):
         plan.mode = mode

@@ -1728,7 +1728,7 @@ def api_smartplaylist_play(request: Request, kind: str, _: bool = Auth):
 
 @app.get("/api/playlists/make")
 def api_playlists_make(request: Request, what: str = "", songs: int = 0, minutes: int = 0,
-                       name: str = "", _: bool = Auth):
+                       name: str = "", strict: int = 1, _: bool = Auth):
     """Make a playlist of a given size from a description, in the background.
 
     "nu metal and glam metal", 500 songs: filled from each band's or genre's
@@ -1746,7 +1746,7 @@ def api_playlists_make(request: Request, what: str = "", songs: int = 0, minutes
     room = _session_for(request)
     queue = room.queue if room else player.queue
     job = builder.start(what, songs=songs, minutes=minutes, name=name.strip()[:60],
-                        store=store, taste=getattr(queue, "taste", None))
+                        store=store, taste=getattr(queue, "taste", None), strict=bool(strict))
     return {"status": "ok", "job": job, "message": f"Making it: {what}"}
 
 

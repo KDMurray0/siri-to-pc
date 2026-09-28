@@ -5059,6 +5059,121 @@ def _run(verbose: bool = False) -> Result:
             c("every name the app uses is defined somewhere", not bad52, str(bad52)[:300])
             say("names", c)
 
+            # -- 53. like someone, not by them; Groq kept to its limits; playlists that fit --
+            c = _Checker("like, groq, fits")
+            import time as _t53
+            from .resolve import grammar as _g53, parser as _p53, resolver as _rv53, llm as _llm53
+            from .core import builder as _b53
+            from .models import Track as _T53
+            c("\"songs like motorhead\" is about other bands",
+              _g53.similar("play songs like motorhead") == "motorhead"
+              and _g53.similar("bands similar to slayer") == "slayer"
+              and _g53.similar("stuff that sounds like venom") == "venom"
+              and _g53.similar("play motorhead") is None and _g53.similar("mother by danzig") is None
+              and _g53.similar("play more stuff like this") is None)
+            p53 = _p53.parse("songs like motorhead")
+            c("...decided here, without spending a Groq call on it",
+              p53.kind == "similar" and p53.artist == "motorhead" and p53.via == "grammar")
+            tops53 = lambda name, limit=30: [_T53(video_id=f"{name[:3]}{i}", title=f"{name} {i}",
+                                                  artist=name) for i in range(6)]
+            from .core import kin as _kin53
+            with _patch.object(_kin53.kin, "prime", lambda t: ["Motörhead", "Venom", "Tank", "Girlschool"]), \
+                    _patch.object(_rv53.catalog, "artist_top_tracks", tops53):
+                r53 = _rv53.resolve(p53)
+            c("...played as the bands next to them, taking turns, and not them again",
+              [t.artist for t in r53.tracks[:3]] == ["Venom", "Tank", "Girlschool"]
+              and not any(t.artist.lower().startswith("mot") for t in r53.tracks), str([t.artist for t in r53.tracks[:5]]))
+            c("...with the radio still steered by the band asked about",
+              r53.anchors and r53.anchors[0].artist == "motorhead" and r53.spoken == "Playing bands like motorhead")
+            from .core.queue import QueueManager as _QM53
+            from .core.sink import ListSink as _LS53
+            from .core.context import ContextBuilder as _CB53
+            from .core.taste import NeutralTaste as _NT53
+            q53 = _QM53(_LS53(), _CB53(_rv53.catalog, taste=_NT53()), taste=_NT53(), session_id="like-check")
+            q53.play_now(r53.tracks, anchors=r53.anchors, kind="similar")
+            c("...and the queue carries on into radio rather than stopping", q53._end_after_run is False)
+            # -- Groq, kept to the free tier
+            saved53 = dict(_llm53._limit)
+            try:
+                class _H(dict):
+                    def get(self, k, d=None):
+                        return dict.get(self, k.lower(), d)
+                _llm53._note_limits(_H({"x-ratelimit-remaining-tokens": "150", "x-ratelimit-reset-tokens": "7.5s"}))
+                c("Groq's own count of what's left is read", _llm53._limit["left"] == 150
+                  and 6 < _llm53._limit["reset_at"] - _t53.monotonic() <= 7.6)
+                calls53 = []
+                with _patch.object(_llm53, "available", lambda: True), \
+                        _patch.object(_llm53, "_post", lambda b, t: calls53.append(b) or {}):
+                    got53 = _llm53.parse("play some thrash")
+                c("a request it can't afford goes to the local parser without asking",
+                  got53 is None and calls53 == [] and _llm53.resting() > 5)
+                import urllib.error as _ue53
+                _llm53._limit.update(left=None, reset_at=0.0, cool_until=0.0)
+
+                def _429(req, timeout=0):
+                    raise _ue53.HTTPError(req.full_url, 429, "slow down",
+                                          _H({"x-ratelimit-reset-tokens": "12s"}), None)
+                with _patch.object(_llm53, "available", lambda: True), \
+                        _patch.object(_llm53.urllib.request, "urlopen", _429):
+                    _llm53.parse("play some thrash")
+                c("a 429 rests it for as long as Groq said", 11 < _llm53.resting() <= 12.1)
+            finally:
+                _llm53._limit.clear(); _llm53._limit.update(saved53)
+            import tempfile as _tf53, os as _os53
+            with _tf53.TemporaryDirectory() as d53, _patch.object(_llm53, "_cache_on", lambda: True), \
+                    _patch.object(_llm53, "_cache_file", lambda: Path(d53) / "g.json"), \
+                    _patch.object(_llm53, "available", lambda: True):
+                _llm53._cache.clear()
+                asked53 = []
+                reply = {"choices": [{"message": {"content": '{"kind":"artist","artist":"Sodom"}'}}]}
+                with _patch.object(_llm53, "_post", lambda b, t: asked53.append(1) or reply):
+                    one, two = _llm53.parse("put on sodom"), _llm53.parse("Put on   Sodom")
+                c("the same request twice is asked of Groq once",
+                  len(asked53) == 1 and one.query == two.query == "Sodom")
+                _llm53._cache.clear()
+            c("gpt-oss is asked to think briefly", "reasoning_effort" in
+              Path(_llm53.__file__).read_text("utf-8"))
+            c("the prompt knows about \"like\" and anchors, and stays small",
+              "5 similar:" in _llm53.SYSTEM and "anchor" in _llm53.SYSTEM and len(_llm53.SYSTEM) < 3800)
+            # -- playlists: songs that fit, and waiting for Groq
+            fake53 = [_T53(video_id=f"F{i:03}", title=f"Fit {i}", artist=f"Band {i % 5}") for i in range(30)]
+            with _patch.object(_b53, "anchors_of", lambda w: [{"kind": "artist", "name": "Korn"}]), \
+                    _patch.object(_b53, "_groq_songs", lambda w, n: [(t.artist, t.title) for t in fake53]), \
+                    _patch.object(_b53, "_found", lambda a, t: next(x for x in fake53 if x.title == t)), \
+                    _patch.object(_llm53, "available", lambda: True), \
+                    _patch.object(_b53, "_lane_for_artist", lambda n, k, taste: []):
+                fit53 = _b53.build("korn", songs=20, strict=False)
+            c("\"songs that fit\" is Groq's picks, checked against the catalogue",
+              len(fit53) == 20 and fit53[0].video_id == "F000")
+            tries53 = []
+
+            def _flaky(*a, **k):
+                tries53.append(1)
+                if len(tries53) == 1:
+                    raise _b53.GroqBusy(30)
+                return fake53[:10]
+
+            class _Now:
+                def __init__(self, wait, fn):
+                    self.fn = fn
+                    self.daemon = True
+
+                def start(self):
+                    states53.append("waiting" if any(j.get("state") == "waiting" and j.get("what") == "korn"
+                                                     for j in list(_b53._jobs.values())) else "?")
+                    self.fn()
+            states53 = []
+            with _patch.object(_b53, "build", _flaky), _patch.object(_b53.threading, "Timer", _Now):
+                jid53 = _b53.start("korn", songs=10, strict=False)
+                for _ in range(100):
+                    if (_b53.job(jid53) or {}).get("state") == "done":
+                        break
+                    _t53.sleep(0.02)
+            c("while Groq rests the job waits and says so, then makes it by itself",
+              states53 == ["waiting"] and (_b53.job(jid53) or {}).get("state") == "done"
+              and len(tries53) == 2, f"{states53} {_b53.job(jid53)}")
+            say("like, groq, fits", c)
+
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
             import json as _json

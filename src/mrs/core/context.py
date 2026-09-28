@@ -15,6 +15,7 @@ from ..models import (Candidate, Track, is_channel_act, is_derivative,
                       norm_title, _fold,
                       _strip_article)
 from .era import era, gap as era_gap
+from .fame import fame
 from .kin import kin as kinstore
 from .tags import _CATCH_ALL, _flatten, tagstore
 from .taste import taste as _default_taste
@@ -890,6 +891,9 @@ class ContextBuilder:
                 continue
 
             score = SOURCE_WEIGHT.get(source, 1.0)
+            # Records people actually play, over a stranger's: a lift for a
+            # well-known act, a real penalty for one almost nobody listens to.
+            score += fame.boost(track)
             # Somebody other than the tag cache says this belongs here
             vouched = source == "near"
 
@@ -1078,6 +1082,11 @@ class ContextBuilder:
             if source == "root" and root_words:
                 own = tagstore.get(track)
                 if own and not _matches(root_words, own):
+                    continue
+                # Not known to belong, and not known at all: that's how a
+                # death-metal record got into a country queue. Only a genuinely
+                # well-known act gets the benefit of the doubt.
+                if not own and (fame.listeners(track) or 0) < 150_000:
                     continue
 
             # You asked for a genre, so the genre is the brief. Tracks whose

@@ -8,6 +8,13 @@ hundred times. Everything is dealt out so no act runs back to back.
 
 It takes a while for a big list -- two lookups per artist -- so it runs aside
 and the list fills in when it's done.
+
+Strict: only songs by those bands, from those albums, in those genres. Not
+strict: songs that fit -- Groq names well-known songs (or, for a long list,
+bands) that sound like the description, and each is checked against the real
+catalogue before it goes in. When Groq is resting the job waits, says when it
+will start, and starts by itself; with no Groq at all, the bands Deezer files
+next to the ones named stand in.
 """
 
 from __future__ import annotations
@@ -28,6 +35,14 @@ _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
 
 
+class GroqBusy(Exception):
+    """Groq can't be asked right now; try again in `wait` seconds."""
+
+    def __init__(self, wait: float) -> None:
+        super().__init__(f"Groq is resting for {wait:.0f}s")
+        self.wait = max(5.0, float(wait))
+
+
 def anchors_of(what: str) -> list[dict]:
     """What the description names, as [{"kind": "artist"|"genre"|"song", "name"}]."""
     from ..resolve import parser
@@ -35,6 +50,8 @@ def anchors_of(what: str) -> list[dict]:
     plan = parser.parse(what)
     if plan.kind == "mix" and plan.items:
         return [dict(i) for i in plan.items]
+    if plan.kind == "album" and plan.query:
+        return [{"kind": "album", "name": plan.query, "artist": plan.artist}]
     names = plan.seeds or ([plan.query] if plan.query else [])
     kind = plan.kind if plan.kind in ("artist", "genre", "song") else ""
     out = []
@@ -124,8 +141,96 @@ def _deal(lanes: list[list[Track]]) -> list[Track]:
     return out
 
 
+def _lane_for_album(name: str, artist: str, taste) -> list[Track]:
+    from ..resolve import resolver
+    res = resolver.resolve(Plan(kind="album", query=name, artist=artist), taste)
+    return list(res.tracks) if res else []
+
+
+def _found(artist: str, title: str) -> Track | None:
+    """A song Groq named, if it's really out there -- by that band, that title."""
+    from ..resolve import catalog, ranking
+    try:
+        hits = catalog.search_songs(f"{title} {artist}", limit=6)
+    except Exception:
+        return None
+    for t in hits or []:
+        if ranking.artist_matches(t, artist) and ranking.title_matches(t, title):
+            return t
+    return None
+
+
+_CURATE = (
+    "You curate playlists. Reply with JSON only. Pick music that FITS the "
+    "description: the named bands, albums and genres, and other artists that "
+    "clearly share that sound. Prefer well-known songs -- hits and fan "
+    "favourites, never obscure deep cuts. Vary the artists; at most three songs "
+    "by any one artist.")
+
+
+def _groq_songs(what: str, n: int) -> list[tuple[str, str]]:
+    from ..resolve import llm
+    got = llm.ask_json(_CURATE + ' Format: {"songs":[{"artist":"","title":""}]}',
+                       f"{min(90, n)} songs that fit: {what}", timeout=30)
+    if got is None and llm.resting() > 0:
+        raise GroqBusy(llm.resting())
+    rows = (got or {}).get("songs") or []
+    return [(str(r.get("artist") or "").strip(), str(r.get("title") or "").strip())
+            for r in rows if isinstance(r, dict) and r.get("artist") and r.get("title")]
+
+
+def _groq_artists(what: str, n: int) -> list[str]:
+    from ..resolve import llm
+    got = llm.ask_json(_CURATE + ' Format: {"artists":[""]}, best-known first.',
+                       f"{min(120, n)} artists that fit: {what}", timeout=30)
+    if got is None and llm.resting() > 0:
+        raise GroqBusy(llm.resting())
+    return [str(a).strip() for a in (got or {}).get("artists") or [] if str(a).strip()]
+
+
+def _fits(what: str, anchors: list[dict], songs: int, taste, progress) -> list[Track]:
+    """Songs that fit rather than songs by: Groq's picks, checked against the
+    catalogue; the named bands' own likeliest songs mixed in."""
+    from concurrent.futures import ThreadPoolExecutor
+    from ..resolve import llm
+    named = [a["name"] for a in anchors if a["kind"] == "artist"]
+    picked: list[Track] = []
+    artists: list[str] = []
+    if llm.available():
+        if songs <= 80:
+            if progress:
+                progress("Asking Groq for songs that fit")
+            asks = _groq_songs(what, round(songs * 1.3))
+            if progress:
+                progress(f"Checking {len(asks)} songs")
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                picked = [t for t in pool.map(lambda at: _found(*at), asks) if t]
+        else:
+            if progress:
+                progress("Asking Groq for bands that fit")
+            artists = _groq_artists(what, max(12, songs // 5))
+    if len(picked) < songs:
+        if not artists:
+            from .kin import kin
+            for name in named:
+                artists += kin.prime(Track(title="", artist=name))[:8]
+        pool_names = list(dict.fromkeys(named + artists))
+        per = max(2, min(6, songs // max(1, len(pool_names)) + 1))
+        lanes = []
+        for i, name in enumerate(pool_names):
+            got = _lane_for_artist(name, per, taste)
+            if got:
+                lanes.append(got)
+            if progress:
+                progress(f"{name}: {i + 1} of {len(pool_names)} bands")
+            if len(picked) + sum(len(x) for x in lanes) >= songs * 1.1:
+                break
+        picked += _deal(lanes)
+    return _deal([picked])
+
+
 def build(what: str, *, songs: int = 0, minutes: int = 0, taste=None,
-          progress=None) -> list[Track]:
+          progress=None, strict: bool = True) -> list[Track]:
     """The tracks, not yet saved anywhere."""
     anchors = anchors_of(what)
     if not anchors:
@@ -133,6 +238,11 @@ def build(what: str, *, songs: int = 0, minutes: int = 0, taste=None,
     if not songs:
         songs = max(10, round((minutes or 60) * 60 / 215))
     songs = max(1, min(MAX_SONGS, int(songs)))
+    if not strict:
+        tracks = _fits(what, anchors, songs, taste, progress)
+        if taste is not None:
+            tracks = [t for t in tracks if not taste.is_blocked(t)]
+        return tracks[:songs]
     share = math.ceil(songs * 1.15 / len(anchors))          # a little over, for losses
     lanes = []
     for a in anchors:
@@ -145,6 +255,8 @@ def build(what: str, *, songs: int = 0, minutes: int = 0, taste=None,
             if lane and lane[0].artist:
                 lane += _lane_for_artist(lane[0].artist.split(",")[0], share - 1, taste)
             lanes.append(lane)
+        elif a["kind"] == "album":
+            lanes.append(_lane_for_album(a["name"], a.get("artist", ""), taste))
         else:
             lanes.append(_lane_for_artist(a["name"], share, taste))
         if progress:
@@ -156,13 +268,14 @@ def build(what: str, *, songs: int = 0, minutes: int = 0, taste=None,
 
 
 def start(what: str, *, songs: int = 0, minutes: int = 0, name: str = "",
-          store=None, taste=None, on_done=None) -> str:
+          store=None, taste=None, on_done=None, strict: bool = True,
+          job_id: str = "") -> str:
     """Build in the background and save it as a playlist. Returns a job id."""
     import secrets
-    job = secrets.token_hex(4)
+    job = job_id or secrets.token_hex(4)
     with _lock:
         _jobs[job] = {"what": what, "state": "building", "detail": "Reading what you asked for",
-                      "at": time.time(), "name": name, "count": 0}
+                      "at": time.time(), "name": name, "count": 0, "strict": strict}
 
     def note(detail: str) -> None:
         with _lock:
@@ -170,7 +283,8 @@ def start(what: str, *, songs: int = 0, minutes: int = 0, name: str = "",
 
     def work() -> None:
         try:
-            tracks = build(what, songs=songs, minutes=minutes, taste=taste, progress=note)
+            tracks = build(what, songs=songs, minutes=minutes, taste=taste, progress=note,
+                           strict=strict)
             if not tracks:
                 raise RuntimeError(f"couldn't find anything for {what}")
             title = name or _title(what, songs or len(tracks))
@@ -183,8 +297,21 @@ def start(what: str, *, songs: int = 0, minutes: int = 0, name: str = "",
                 _jobs[job].update(state="done", name=title, count=len(tracks), minutes=mins,
                                   detail=f"{len(tracks)} songs, about {mins} minutes")
             log.info("built %r: %d songs for %r", title, len(tracks), what)
+            _forget_waiting(job)
             if on_done:
                 on_done(title, tracks)
+        except GroqBusy as busy:
+            # Cooking, not failed: it goes again the moment Groq will answer.
+            at = time.time() + busy.wait
+            with _lock:
+                _jobs[job].update(state="waiting", ready_at=at,
+                                  detail=f"Cooking that up -- Groq is busy, starting in about {busy.wait:.0f}s")
+            _keep_waiting(job, what, songs, minutes, name, strict, store)
+            timer = threading.Timer(busy.wait, lambda: start(
+                what, songs=songs, minutes=minutes, name=name, store=store, taste=taste,
+                on_done=on_done, strict=strict, job_id=job))
+            timer.daemon = True
+            timer.start()
         except Exception as exc:
             with _lock:
                 _jobs[job].update(state="failed", detail=str(exc)[:160])
@@ -192,6 +319,59 @@ def start(what: str, *, songs: int = 0, minutes: int = 0, name: str = "",
 
     threading.Thread(target=work, daemon=True, name="playlist-build").start()
     return job
+
+
+# Waiting jobs for the owner's own lists are written down, so a restart while
+# Groq rests doesn't lose them; a listener's are held in memory.
+def _waiting_file():
+    from ..paths import data_dir
+    return data_dir() / "playlist_jobs.json"
+
+
+def _keep_waiting(job, what, songs, minutes, name, strict, store) -> None:
+    from .playlists import playlists
+    if store is not playlists:
+        return
+    import json
+    from ..paths import write_atomic
+    rows = _read_waiting()
+    rows[job] = {"what": what, "songs": songs, "minutes": minutes, "name": name, "strict": strict}
+    try:
+        write_atomic(_waiting_file(), json.dumps(rows))
+    except Exception as exc:
+        log.debug("couldn't keep a waiting playlist job: %s", exc)
+
+
+def _read_waiting() -> dict:
+    import json
+    try:
+        got = json.loads(_waiting_file().read_text("utf-8"))
+        return got if isinstance(got, dict) else {}
+    except Exception:
+        return {}
+
+
+def _forget_waiting(job) -> None:
+    rows = _read_waiting()
+    if rows.pop(job, None) is not None:
+        import json
+        from ..paths import write_atomic
+        try:
+            write_atomic(_waiting_file(), json.dumps(rows))
+        except Exception:
+            pass
+
+
+def resume_waiting() -> int:
+    """At start-up: anything still cooking when the app last stopped."""
+    from .playlists import playlists
+    from .taste import taste
+    rows = _read_waiting()
+    for job_id, r in rows.items():
+        start(r.get("what", ""), songs=int(r.get("songs") or 0), minutes=int(r.get("minutes") or 0),
+              name=r.get("name", ""), store=playlists, taste=taste,
+              strict=bool(r.get("strict", True)), job_id=job_id)
+    return len(rows)
 
 
 def job(job_id: str) -> dict | None:

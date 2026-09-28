@@ -455,6 +455,12 @@ def run() -> None:
     ddns.start()
     certkeeper.start()
     flusher.start()
+    # A playlist that was waiting on Groq when the app last stopped.
+    try:
+        from .core import builder
+        builder.resume_waiting()
+    except Exception as exc:
+        log.debug("couldn't resume waiting playlists: %s", exc)
     port = pick_port(config.get("port", 7420))
     runtime["port"] = port
     loop = asyncio.new_event_loop()

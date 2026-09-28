@@ -32,6 +32,40 @@ class Resolution:
 
 
 
+def _similar(plan: Plan, taste=None) -> "Resolution":
+    """"Songs like Motorhead": the bands that sit next to them, each one's
+    best-known songs, taken in turn -- not Motorhead again. The radio keeps
+    steering by Motorhead's sound afterwards."""
+    from concurrent.futures import ThreadPoolExecutor
+    from ..core.kin import kin
+    who = (plan.artist or plan.query).strip()
+    near = [n for n in kin.prime(Track(title="", artist=who))
+            if not ranking.artist_matches(Track(title="", artist=n), who)][:8]
+    if not near:
+        # Nobody known next to them: their own radio, which drifts outward.
+        got = resolve(replace(plan, kind="artist"), taste)
+        if got:
+            got.spoken = f"Playing music like {who}"
+        return got
+
+    def best(name: str) -> list[Track]:
+        tops = catalog.artist_top_tracks(name, limit=30)
+        return ranking.likely(tops, taste, variety=0.2)[:4] if tops else []
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        lanes = [lane for lane in pool.map(best, near) if lane]
+    if not lanes:
+        return _nothing(f"Couldn't find anything like {who}")
+    dealt, seen = [], set()
+    for row in zip_longest(*lanes):
+        for t in row:
+            if t is not None and t.video_id not in seen:
+                seen.add(t.video_id)
+                dealt.append(t)
+    own = catalog.artist_top_tracks(who, limit=5)
+    anchors = ([own[0]] if own else []) + [lane[0] for lane in lanes[:3]]
+    return Resolution(dealt[:40], f"Playing bands like {who}", anchors=anchors)
+
+
 def _nothing(said: str) -> "Resolution":
     """Nothing came back — but say which kind of nothing it was.
 
@@ -195,6 +229,9 @@ def resolve(plan: Plan, taste=None) -> Resolution:
     """`taste` is the listener's, so "most likely wanted" means them."""
     kind = plan.kind
     query = (plan.query or "").strip()
+
+    if kind == "similar" and query:
+        return _similar(plan, taste)
 
     if kind == "mix" and getattr(plan, "items", None):
         mixed = _mix(plan, taste)

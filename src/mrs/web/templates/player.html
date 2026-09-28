@@ -450,6 +450,12 @@ a.btn{text-decoration:none;display:inline-block}
 .plmake .sizes button{font:inherit;font-size:11px;padding:4px 9px;border-radius:999px;cursor:pointer;
   border:1px solid var(--line);background:none;color:var(--sub)}
 .plmake .sizes button.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.plmake .strict{display:flex;gap:0;margin-bottom:8px;border:1px solid var(--line);border-radius:10px;
+  overflow:hidden}
+.plmake .strict button{flex:1;font:inherit;font-size:11.5px;font-weight:600;padding:7px 6px;border:0;
+  background:none;color:var(--sub);cursor:pointer;transition:background .12s,color .12s}
+.plmake .strict button.on{background:var(--accent);color:var(--accent-ink)}
+.plmake .mkstate{font-size:11.5px;color:var(--sub);margin-top:6px;min-height:1em}
 .plmake .mkstate{font-size:11px;color:var(--sub);margin-top:6px}
 .plhead{font-size:10.5px;font-weight:700;letter-spacing:.06em;
   text-transform:uppercase;color:var(--sub);padding:12px 6px 4px}
@@ -469,7 +475,8 @@ a.btn{text-decoration:none;display:inline-block}
 
 /* lyrics */
 .lyrics{padding:4px 2px;text-align:center}
-.lyrics .lrow{font-size:14.5px;line-height:1.5;color:var(--sub);padding:5px 4px;font-weight:600;
+#panel-lyrics{container-type:inline-size}
+.lyrics .lrow{font-size:clamp(16px,4.6cqi,30px);line-height:1.5;color:var(--sub);padding:5px 4px;font-weight:600;
   opacity:.55;overflow-wrap:anywhere;transition:color .2s,opacity .2s}
 .lyrics .lrow.active{color:var(--fg);font-weight:800;opacity:1}
 /* A line you can jump to should look like one. manipulation kills the tap
@@ -514,7 +521,7 @@ a.btn{text-decoration:none;display:inline-block}
    enough to land with the voice, slow enough not to blink. */
 @keyframes wordfill {
   0%   { color:var(--sub); opacity:.5 }
-  22%  { color:var(--fg);  opacity:1 }
+  30%  { color:var(--fg);  opacity:1 }
   100% { color:var(--fg);  opacity:1 }
 }
 .lyrics .lrow.active .w.now{transition:none}
@@ -522,21 +529,20 @@ a.btn{text-decoration:none;display:inline-block}
    as it's held: --hold is how long this word is sung, 0 to 1, so a quick "the"
    barely stirs and a held note swells. Then it lets go and settles. */
 @property --hold { syntax:'<number>'; inherits:false; initial-value:0; }
-@keyframes wordsing {
-  0%   { color:var(--sub); opacity:.5; transform:translateY(0) scale(1); text-shadow:none }
-  16%  { color:var(--fg); opacity:1;
-         transform:translateY(calc(-1px - var(--hold) * 1px)) scale(calc(1 + var(--hold) * .025));
-         text-shadow:0 0 calc(3px + var(--hold) * 6px) color-mix(in srgb,var(--fg) 30%,transparent) }
-  100% { color:var(--fg); opacity:1;
-         transform:translateY(calc(-1.5px - var(--hold) * 2.5px)) scale(calc(1.02 + var(--hold) * .07));
-         text-shadow:0 0 calc(5px + var(--hold) * 16px) color-mix(in srgb,var(--fg) calc(30% + var(--hold) * 45%),transparent),
-                     0 0 calc(2px + var(--hold) * 4px) color-mix(in srgb,var(--accent) calc(var(--hold) * 60%),transparent) }
+/* The swell, separate from the colour so the colour keeps time exactly: it
+   runs the whole length of the word, smoothly, so a held note keeps growing
+   and glowing until it's let go -- and a quick "the" barely moves. */
+@keyframes wordswell {
+  0%   { transform:none; text-shadow:0 0 0 transparent }
+  100% { transform:translateY(calc(var(--hold) * -4px)) scale(calc(1 + var(--hold) * .16));
+         text-shadow:0 0 calc(4px + var(--hold) * 22px) color-mix(in srgb,var(--fg) calc(16% + var(--hold) * 58%),transparent),
+                     0 0 calc(var(--hold) * 9px) color-mix(in srgb,var(--accent) calc(var(--hold) * 70%),transparent) }
 }
 @keyframes wordrelease {
-  from { color:var(--fg); opacity:1;
-         transform:translateY(calc(-1.5px - var(--hold) * 2.5px)) scale(calc(1.02 + var(--hold) * .07));
-         text-shadow:0 0 calc(5px + var(--hold) * 16px) color-mix(in srgb,var(--fg) calc(30% + var(--hold) * 45%),transparent) }
-  to   { color:var(--fg); opacity:1; transform:none; text-shadow:none }
+  from { transform:translateY(calc(var(--hold) * -4px)) scale(calc(1 + var(--hold) * .16));
+         text-shadow:0 0 calc(4px + var(--hold) * 22px) color-mix(in srgb,var(--fg) calc(16% + var(--hold) * 58%),transparent),
+                     0 0 calc(var(--hold) * 9px) color-mix(in srgb,var(--accent) calc(var(--hold) * 70%),transparent) }
+  to   { transform:none; text-shadow:0 0 0 transparent }
 }
 @media (prefers-reduced-motion:reduce){
   .lyrics .lrow .w{transition:color .22s ease,opacity .22s ease}
@@ -1172,7 +1178,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   /* Lyrics get the room the desktop has without turning into a poster, and
      stay in the app's own face — a serif in here reads as a different
      program's window. */
-  body:not(.mini) .lyrics .lrow{font-size:clamp(15px,1.15vw,19px);
+  body:not(.mini) .lyrics .lrow{font-size:clamp(16px,4.2cqi,32px);
     line-height:1.62;padding:6px 8px}
   /* The fade belongs to the panel, not the rows. Dimming individual lines
      steps: a line at 30% sits next to one at 30% and the list just stops at
@@ -1420,7 +1426,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
      you're on picked out by a gradient sweeping across each word. Same
      size relationship as the sidebar version, same weight, same way of
      saying which line is which. The room is the only thing that changes. */
-  body:not(.mini) #panel-lyrics .lrow{font-size:clamp(15px,1.1vw,20px);
+  body:not(.mini) #panel-lyrics .lrow{font-size:clamp(17px,4cqi,34px);
     line-height:1.55;padding:6px 0;font-weight:600;letter-spacing:0}
   body:not(.mini) #panel-lyrics .lrow.active{font-weight:800}
   /* The panel already carries the vertical room, so the message shouldn't
@@ -3600,12 +3606,18 @@ function litWords(box, s, idx, pos) {
         // Sung, then let go: the swell runs for the word's own length and
         // the release picks up where it ends. How long it's held is how big
         // it gets.
-        w.style.setProperty("--hold", Math.max(0.12, Math.min(1, (dur - 0.12) / 0.9)).toFixed(3));
-        w.style.animationName = "wordsing, wordrelease";
-        w.style.animationDuration = dur.toFixed(3) + "s, .7s";
-        w.style.animationTimingFunction = "cubic-bezier(.2,.7,.3,1), ease-out";
-        w.style.animationDelay = (from - pos).toFixed(3) + "s, " + (to - pos).toFixed(3) + "s";
-        w.style.animationFillMode = "both, forwards";
+        // Colour on the beat (linear, as it always was); the swell and glow
+        // build for as long as the word is held; the release takes longer
+        // after a long note than a short one.
+        const hold = Math.pow(Math.max(0.04, Math.min(1, (dur - 0.22) / 1.1)), 0.9);
+        w.style.setProperty("--hold", hold.toFixed(3));
+        w.style.animationName = "wordfill, wordswell, wordrelease";
+        w.style.animationDuration = dur.toFixed(3) + "s, " + dur.toFixed(3) + "s, " +
+                                    (0.45 + hold * 0.55).toFixed(2) + "s";
+        w.style.animationTimingFunction = "linear, cubic-bezier(.35,0,.25,1), cubic-bezier(.25,.7,.2,1)";
+        w.style.animationDelay = (from - pos).toFixed(3) + "s, " + (from - pos).toFixed(3) + "s, " +
+                                 (to - pos).toFixed(3) + "s";
+        w.style.animationFillMode = "both, both, forwards";
       }
     }
   });
@@ -3770,10 +3782,13 @@ async function loadLists() {
   const house = (r && r.shared) || [];      // the owner's, opened to everyone
   const owner = !!(ME && ME.owner);
   let html = `<div class="plmake"><b>Make one for me</b>` +
-    `<p>Bands, genres or both. It picks their best-known songs, weighed against what you play.</p>` +
+    `<p>Bands, albums, genres, or all three. Their best-known songs, weighed against what you play.</p>` +
     `<input id="mkwhat" placeholder="nu metal and glam metal, or Korn, Deftones and Mötley Crüe" autocomplete="off" spellcheck="false">` +
     `<div class="sizes" id="mksizes">` + [25, 50, 100, 250, 500].map(n =>
       `<button type="button" data-n="${n}"${n === 50 ? ' class="on"' : ""}>${n} songs</button>`).join("") + `</div>` +
+    `<div class="strict" id="mkstrict" role="radiogroup" aria-label="How strict">` +
+      `<button type="button" data-strict="1" class="on" role="radio" aria-checked="true">Only these</button>` +
+      `<button type="button" data-strict="0" role="radio" aria-checked="false">Songs that fit</button></div>` +
     `<button class="btn primary" id="mkgo">Make it</button><div class="mkstate" id="mkstate"></div></div>` +
     `<div class="srow" style="border:0"><button class="btn primary" id="plnew">Save current song to a list</button></div>` +
     `<div class="plimport"><input id="plspot" placeholder="Paste a Spotify or Apple Music link" autocomplete="off" spellcheck="false">` +
@@ -3802,12 +3817,19 @@ async function loadLists() {
     const b = e.target.closest("button[data-n]"); if (!b) return;
     $("mksizes").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
   };
+  $("mkstrict").onclick = e => {
+    const b = e.target.closest("button[data-strict]"); if (!b) return;
+    $("mkstrict").querySelectorAll("button").forEach(x => {
+      x.classList.toggle("on", x === b); x.setAttribute("aria-checked", x === b ? "true" : "false"); });
+  };
   $("mkgo").onclick = async () => {
     const what = $("mkwhat").value.trim();
     if (what.length < 2) { toast("Say what it should be of"); return; }
     const n = Number(($("mksizes").querySelector(".on") || {}).dataset?.n || 50);
+    const strict = ($("mkstrict").querySelector(".on") || {}).dataset?.strict || "1";
     $("mkgo").disabled = true;
-    const r = await apiTry("/api/playlists/make?what=" + encodeURIComponent(what) + "&songs=" + n);
+    const r = await apiTry("/api/playlists/make?what=" + encodeURIComponent(what) + "&songs=" + n +
+                           "&strict=" + strict);
     if (!r.ok) { $("mkgo").disabled = false; toast((r.body && r.body.detail) || "Couldn't start that"); return; }
     const job = r.body.job;
     // A big list is a couple of lookups per band, so it's watched until it lands.
@@ -3816,7 +3838,9 @@ async function loadLists() {
       if (!j || !$("mkstate")) return;
       $("mkstate").textContent = j.state === "done" ? "Made " + j.name + ": " + j.detail
         : j.state === "failed" ? "Couldn't: " + j.detail : j.detail + "…";
-      if (j.state === "building") { setTimeout(watch, 2000); return; }
+      // Waiting on Groq is still cooking: keep watching, it starts by itself.
+      if (j.state === "building" || j.state === "waiting") {
+        setTimeout(watch, j.state === "waiting" ? 4000 : 2000); return; }
       $("mkgo").disabled = false;
       if (j.state === "done") { toast("Made " + j.name); setTimeout(loadLists, 600); }
     };
