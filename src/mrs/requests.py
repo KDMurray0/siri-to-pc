@@ -1066,7 +1066,7 @@ def play_picks(items: list[dict], mode: str = "play", *, queue=None,
     room = getattr(queue, "session_id", "") if queue is not player.queue else ""
     if room:
         queue.note_request()
-    items = [i for i in (items or []) if isinstance(i, dict)][:8]
+    items = [i for i in (items or []) if isinstance(i, dict)][:30]
     if not items:
         return {"status": "error", "message": "Nothing picked"}
     taste = getattr(queue, "taste", None)

@@ -99,6 +99,67 @@ def similar(text: str) -> str | None:
     return who or None
 
 
+# A pasted list of songs. "add these and some others: A by X, B by Y", one
+# per line, "X - A". Parsed here, not by the model: the model dropped half.
+_LIST_LEAD = re.compile(
+    r"^\s*(?:(?:can you|please)\s+)?(?:(?:add|play|queue|put\s+on|make\s+(?:me\s+)?"
+    r"(?:a\s+)?(?:playlist|list|mix)(?:\s+(?:of|with))?)\b[^:\n]{0,60}:|[^:\n]{0,60}"
+    r"\b(?:these|this list|the following)\b[^:\n]{0,40}:)\s*", re.I)
+_LIST_MORE = re.compile(
+    r"(?:^|[,;\n]|\s)\s*(?:(?:and|plus|&|with|then)\s+)?(?:some|a\s+few|a\s+bunch\s+of|"
+    r"more|other|similar)\s*(?:others?|more|songs?|tracks?|stuff|ones?|bangers|tunes)?"
+    r"(?:\s+(?:like|similar\s+to)\s+(?:them|these|those|that|this|it))?\s*[.!]*\s*$", re.I)
+_LIST_BULLET = re.compile(r"^\s*(?:\d{1,3}[.)]\s*|[-*•·]\s+)")
+_LIST_DASH = re.compile(r"^(?P<a>.+?)\s+[-–—]\s+(?P<b>.+)$")
+# The last " by ": "Killed by Death by Motorhead" is a song by Motorhead.
+_LIST_BY = re.compile(r"^(?P<title>.+)\s+by\s+(?P<artist>.+)$", re.I)
+
+
+def song_list(text: str) -> tuple[list[dict], bool] | None:
+    """(items, and_others) for a list of songs, or None when it isn't one.
+
+    Items are {"kind": "song", "name": title, "artist": artist}; a dash is
+    either way round, so it's marked "either" for the resolver to try both.
+    Bare names in the list come back as artists or genres.
+    """
+    raw = (text or "").strip()
+    body = _LIST_LEAD.sub("", raw, count=1)
+    lead = raw[:len(raw) - len(body)]
+    more = bool(re.search(r"\b(?:some|a\s+few|more|others?|similar)\b", lead, re.I))
+    m = _LIST_MORE.search(body)
+    if m and m.start() > 0:
+        more, body = True, body[:m.start()]
+    lines = [ln for ln in (s.strip() for s in body.splitlines()) if ln]
+    if len(lines) >= 2:
+        bits = lines
+    else:
+        bits = [b.strip() for b in re.split(r"\s*[;,]\s*", body) if b.strip()]
+        # "..., A by X and B by Y": the last "and" joins two songs.
+        if bits and re.search(r"\s+by\s+.+\s+and\s+.+\s+by\s+", bits[-1], re.I):
+            bits[-1:] = re.split(r"\s+and\s+(?=.+\s+by\s+)", bits[-1], maxsplit=1, flags=re.I)
+    items: list[dict] = []
+    songs = 0
+    for bit in bits:
+        bit = _LIST_BULLET.sub("", bit).strip().strip("\"'").strip()
+        if not bit:
+            continue
+        by, dash = _LIST_BY.match(bit), _LIST_DASH.match(bit)
+        if by:
+            items.append({"kind": "song", "name": by["title"].strip(" \"'"),
+                          "artist": by["artist"].strip(" \"'")})
+            songs += 1
+        elif dash:
+            items.append({"kind": "song", "name": dash["b"].strip(" \"'"),
+                          "artist": dash["a"].strip(" \"'"), "either": True})
+            songs += 1
+        else:
+            items.append({"kind": "genre" if looks_like_genre(bit) else "artist",
+                          "name": bit, "artist": ""})
+    if len(items) < 2 or songs < 2:
+        return None
+    return items[:60], more
+
+
 def transport(text: str) -> str | None:
     """An exact control phrase, or None."""
     key = re.sub(r"[^a-z ]", "", clean(text).lower()).strip()

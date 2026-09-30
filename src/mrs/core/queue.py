@@ -8,6 +8,7 @@ download costs a candidate instead of killing the whole refill.
 
 from __future__ import annotations
 
+import math
 import random
 import json
 import threading
@@ -244,6 +245,25 @@ class WorkItem:
     ready_path: str = ""
 
 
+# How hard shuffle leans on taste: a playlist a lot, the radio a little.
+SMART_LIST, SMART_RADIO = 1.6, 0.6
+
+
+def smart_order(items: list, score, strength: float, track=lambda x: x) -> list:
+    """Shuffle, but what you skip drifts to the back and what you love comes
+    round sooner. Weighted random order: each draws u ** (1 / weight), so a
+    song you always skip can still turn up, just rarely early.
+    """
+    def weight(x) -> float:
+        try:
+            return math.exp(strength * float(score(track(x)) or 0.0))
+        except Exception:
+            return 1.0
+    keyed = [(random.random() ** (1.0 / weight(x)), i) for i, x in enumerate(items)]
+    keyed.sort(reverse=True)
+    return [items[i] for _, i in keyed]
+
+
 def spread_lanes(lanes):
     """Evenly distribute whole lanes, preserving every lane's relative order."""
     ranked = [((i + .5) / len(lane), group, item)
@@ -400,7 +420,7 @@ class QueueManager:
             self.enqueue(tracks[:1])
             return
         if shuffle or self._pref_shuffle():
-            random.shuffle(tracks)
+            tracks = smart_order(tracks, self.taste.score, SMART_LIST)
             tracks = _cached_first(tracks)
         with self._lock:
             self._work.clear()
@@ -601,15 +621,21 @@ class QueueManager:
             fixed = [w for w in self._work if w.mode != "append"]
             rest = [w for w in self._work if w.mode == "append"]
             if len(rest) > 1:
-                random.shuffle(rest)
+                rest = smart_order(rest, self.taste.score, SMART_LIST, lambda w: w.track)
                 self._work.clear()
                 self._work.extend(fixed + rest)
 
         if len(live) < 2:
             self.publish_queue()
             return
-        want = live[:]
-        random.shuffle(want)
+        # What you asked for leans hard on taste; the radio's own picks lightly.
+        def lean(path: str) -> float:
+            t = self._meta.get(path)
+            if t is None:
+                return 0.0
+            s = self.taste.score(t)
+            return s * (SMART_RADIO / SMART_LIST) if path in self._radio_paths else s
+        want = smart_order(live, lean, SMART_LIST)
         # Selection sort: put the right file in each slot in turn, tracking
         # where everything has moved to as we go.
         for slot, name in enumerate(want):
@@ -783,8 +809,7 @@ class QueueManager:
                 # shuffle mode: pick from the good ones rather than the best
                 # one. usable[:12] is a copy, so shuffling that shuffled
                 # nothing and shuffle mode played the same order as normal.
-                head = usable[:12]
-                random.shuffle(head)
+                head = smart_order(usable[:12], self.taste.score, SMART_RADIO, lambda c: c.track)
                 usable[:len(head)] = head
             usable = [c for c in usable if c.track.key() not in self._claimed]
             if not usable:

@@ -165,39 +165,62 @@ def _mix(plan: Plan, taste=None) -> "Resolution | None":
     keeps coming back to, and a genre that ties them together (if the reader
     gave one) is the theme it stays inside when those run out.
     """
-    parts: list[Resolution] = []
-    for item in plan.items[:6]:
-        kind = item.get("kind") or "auto"
-        name = (item.get("name") or "").strip()
-        if not name:
-            continue
-        sub = Plan(kind=kind, query=name, artist=item.get("artist", "") or
-                   (name if kind == "artist" else ""), via=plan.via, spoken=plan.spoken)
-        if kind == "artist":
-            sub.query = name
-        got = resolve(sub, taste)
-        if got and got.tracks:
-            parts.append(got)
+    from concurrent.futures import ThreadPoolExecutor
+    items = [i for i in plan.items[:MIX_MAX] if (i.get("name") or "").strip()]
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        got = list(pool.map(lambda i: _mix_item(i, plan, taste), items))
+    songs = [r for i, r in zip(items, got) if r and i.get("kind") == "song"]
+    rest = [r for i, r in zip(items, got) if r and i.get("kind") != "song"]
+    parts = songs + rest
     if not parts:
         return None
-    each = max(3, int(config.get("queue_minutes", 30)) // (2 * len(parts)) + 3)
-    if getattr(plan, "count", 0):
-        each = max(1, plan.count // len(parts) + 1)
-    lanes = [p.tracks[:each] for p in parts]
+    # Every named song once, in the order given; the bands and genres after.
+    first = [r.tracks[0] for r in songs]
+    each = max(3, int(config.get("queue_minutes", 30)) // (2 * max(1, len(rest))) + 3)
+    if getattr(plan, "count", 0) and rest:
+        each = max(1, max(0, plan.count - len(first)) // len(rest) + 1)
+    lanes = [p.tracks[:each] for p in rest]
     dealt: list[Track] = []
     seen: set[str] = set()
-    for row in zip_longest(*lanes):
-        for t in row:
-            if t is not None and t.video_id not in seen:
-                seen.add(t.video_id)
-                dealt.append(t)
+    for t in first + [t for row in zip_longest(*lanes) for t in row]:
+        if t is not None and t.video_id not in seen and not (t.key() and t.key() in seen):
+            seen.add(t.video_id)
+            if t.key():
+                seen.add(t.key())
+            dealt.append(t)
     if getattr(plan, "count", 0):
-        dealt = dealt[:plan.count]
-    names = [i.get("name") for i in plan.items[:6] if i.get("name")]
-    said = ", ".join(names[:-1]) + " and " + names[-1] if len(names) > 1 else names[0]
+        dealt = dealt[:max(plan.count, len(first))]
+    missed = len(items) - len(parts)
+    if len(songs) > 3:
+        said = f"{len(songs)} songs" + (f" and {len(rest)} more" if rest else "")
+    else:
+        names = [i.get("name") for i in items if i.get("name")]
+        said = ", ".join(names[:-1]) + " and " + names[-1] if len(names) > 1 else names[0]
+    if missed:
+        said += f" (couldn't find {missed})"
     return Resolution(dealt, f"Playing {said}",
                       anchors=[p.tracks[0] for p in parts],
                       hold_radio=all(p.hold_radio for p in parts))
+
+
+MIX_MAX = 40
+
+
+def _mix_item(item: dict, plan: Plan, taste=None) -> "Resolution | None":
+    kind = item.get("kind") or "auto"
+    name = (item.get("name") or "").strip()
+    artist = item.get("artist", "") or (name if kind == "artist" else "")
+    got = resolve(Plan(kind=kind, query=name, artist=artist, via=plan.via,
+                       spoken=plan.spoken), taste)
+    if kind == "song" and item.get("either") and artist:
+        # "X - Y" is written both ways round. Keep the reading whose song is
+        # by the band it names.
+        if not (got and got.tracks and ranking.artist_matches(got.tracks[0], artist)):
+            other = resolve(Plan(kind="song", query=artist, artist=name, via=plan.via,
+                                 spoken=plan.spoken), taste)
+            if other and other.tracks and ranking.artist_matches(other.tracks[0], name):
+                got = other
+    return got if got and got.tracks else None
 
 
 def first_minutes(tracks: list[Track], minutes: float) -> list[Track]:

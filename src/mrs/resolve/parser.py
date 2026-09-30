@@ -39,6 +39,13 @@ def parse(text: str, *, mode: str = "play") -> Plan:
         return Plan(kind="similar", query=who, artist=who, via="grammar", spoken=text,
                     mode=mode)
 
+    # A pasted list of songs: every one of them, in order. The model used to
+    # drop half of a long list.
+    listed = grammar.song_list(text)
+    if listed:
+        items, _more = listed
+        return Plan(kind="mix", items=items, via="grammar", spoken=text, mode=mode)
+
     # 3. the LLM, when we have one
     if llm.available():
         plan = llm.parse(text)

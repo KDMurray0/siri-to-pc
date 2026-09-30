@@ -20,9 +20,10 @@ next to the ones named stand in.
 from __future__ import annotations
 
 import math
-import random
+import re
 import threading
 import time
+from collections import Counter
 from itertools import zip_longest
 
 from ..logging_setup import get
@@ -162,19 +163,6 @@ def _by_listeners(names: list[str]) -> list[str]:
     return [names[i] for i in order]
 
 
-def _lane_for_artist(name: str, n: int, taste, *, explore: bool = False) -> list[Track]:
-    from ..resolve import catalog, ranking
-    ranked = ranking.likely(catalog.artist_top_tracks(name), taste)
-    if not explore or len(ranked) <= n + 5:
-        return ranked[:n]
-    # A discovery list must not be hundreds of artists' top three songs.
-    # Retain strong anchors, then deliberately reach into the catalogue.
-    familiar = ranked[:max(1, round(n * .55))]
-    deeper = ranked[max(8, n):min(len(ranked), max(35, n * 5))]
-    stride = max(1, len(deeper) // max(1, n - len(familiar)))
-    return (familiar + deeper[::stride])[:n]
-
-
 def _lane_for_genre(genre: str, n: int, taste, progress=None) -> list[Track]:
     """A genre's share: a few likeliest songs from each of its top acts."""
     per_act = max(2, min(8, round(math.sqrt(n))))
@@ -204,21 +192,6 @@ def _deal(lanes: list[list[Track]]) -> list[Track]:
     return out
 
 
-def _flow(lanes: list[list[Track]], seed: str) -> list[Track]:
-    """Short artist runs with variation, rather than a one-per-band loop."""
-    import hashlib
-    rng = random.Random(int.from_bytes(hashlib.sha256(seed.encode()).digest()[:8], "big"))
-    chunks = []
-    for lane in lanes:
-        at = 0
-        while at < len(lane):
-            take = rng.choice((1, 2, 2, 3))
-            chunks.append(lane[at:at + take])
-            at += take
-    rng.shuffle(chunks)
-    return _deal([list(t for chunk in chunks for t in chunk)])
-
-
 def _lane_for_album(name: str, artist: str, taste) -> list[Track]:
     from ..resolve import resolver
     res = resolver.resolve(Plan(kind="album", query=name, artist=artist), taste)
@@ -244,13 +217,14 @@ def _found(artist: str, title: str) -> Track | None:
 
 
 _CURATE = (
-    "You are a thoughtful human DJ. Reply with JSON only. Interpret the whole "
-    "request as a sound and mood, not a quota per artist or genre. Mix known "
-    "anchors with convincing deep cuts and adjacent, lesser-known artists; "
-    "reach further when the listener asks for discovery. Repeat an artist "
-    "when several of their songs genuinely fit. Never suggest tribute bands, "
-    "karaoke, re-recordings or covers unless requested. Prefer the original "
-    "artist and recording. Listening history is a gentle clue, not a cage.")
+    "You curate playlists. Reply with JSON only. Pick music that FITS: the "
+    "named bands, albums and genres, and other artists that clearly share "
+    "their sound. Stay inside the subgenres they share. Prefer each band's "
+    "best-known songs -- hits and fan favourites -- and leave out the ones "
+    "that don't sound like the rest (a thrash band's ballad, a metal band's "
+    "acoustic single). Vary the artists; at most three songs by any one. "
+    "Never tribute bands, karaoke, re-recordings, live versions or covers "
+    "unless asked.")
 
 
 def _listener_context(taste) -> str:
@@ -287,91 +261,416 @@ def _groq_artists(what: str, n: int, context: str = "") -> list[str]:
     return [str(a).strip() for a in (got or {}).get("artists") or [] if str(a).strip()]
 
 
+# -- the shared sound ----------------------------------------------------
+
+# Tags that say nothing about how a band sounds.
+_JUNK_TAGS = {
+    "seen live", "favorites", "favourites", "favorite", "favourite", "awesome",
+    "love", "best", "classic", "legend", "legends", "cult", "underrated", "all",
+    "male vocalists", "female vocalists", "male vocalist", "female vocalist",
+    "american", "british", "english", "german", "brazilian", "swedish", "norwegian",
+    "french", "finnish", "canadian", "australian", "uk", "usa", "us", "polish",
+    "dutch", "italian", "japanese", "spanish", "danish", "swiss", "irish", "scottish",
+    "60s", "70s", "80s", "90s", "00s", "10s", "20s", "music", "band", "bands"}
+# Words too broad to tell one lane of heavy music from another.
+_BROAD = {"metal", "rock", "music", "and", "n", "roll", "the"}
+# What makes a song the odd one out in its band's catalogue.
+_SOFT_TAGS = {"ballad", "ballads", "power ballad", "power ballads", "acoustic",
+              "love songs", "love song", "slow", "mellow", "soft rock", "chill",
+              "piano", "cover", "covers", "country", "christmas", "soundtrack"}
+_TAG_CHECKS = 320          # song lookups one build may spend on Last.fm
+
+
+def _tags(track: Track, artist: bool = False) -> dict[str, int]:
+    """Last.fm tags for a song or its band, from the shared cache when held."""
+    from .tags import tagstore
+    if not tagstore.enabled():
+        return {}
+    tagstore.load()
+    key = tagstore._artist_key(track) if artist else tagstore._track_key(track)
+    with tagstore._lock:
+        hit = tagstore._cache.get(key)
+        if hit is not None:
+            return hit
+        if key in tagstore._missing:
+            return {}
+    who = (track.artist or "").split(",")[0].strip()
+    try:
+        found = tagstore._fetch_artist(who) if artist else tagstore._fetch_track(who, track.title)
+    except Exception:
+        return {}
+    with tagstore._lock:
+        if found:
+            tagstore._cache[key] = found
+        else:
+            tagstore._missing.add(key)
+    return found
+
+
+def _top(cloud: dict[str, int], n: int = 8) -> list[str]:
+    return [t for t, _ in sorted(cloud.items(), key=lambda kv: -kv[1])
+            if t not in _JUNK_TAGS][:n]
+
+
+def _words(tag: str) -> set[str]:
+    return set(re.findall(r"[a-z]+", tag.lower())) - _BROAD
+
+
+def core_sound(names: list[str]) -> list[str]:
+    """The subgenres most of these bands share, most shared first.
+
+    Sodom, Slayer, Morbid Angel and Venom come out as thrash, death, speed
+    and black metal: the lane a list of them stays in.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    if not names:
+        return []
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        clouds = [c for c in pool.map(lambda n: _tags(Track(title="", artist=n), artist=True),
+                                      names[:40]) if c]
+    if not clouds:
+        return []
+    if len(clouds) == 1:
+        return _top(clouds[0], 4)
+    # "metal" and "rock" are on every band here and tell no lane from another.
+    shared = Counter(t for c in clouds for t in _top(c) if _words(t))
+    need = max(2, math.ceil(len(clouds) * .3))
+    core = [t for t, n in shared.most_common() if n >= need]
+    return (core or [t for t, _ in shared.most_common(3)])[:8]
+
+
+def _sounds_like(tags: list[str], core: list[str]) -> bool | None:
+    """Do these tags sit in the core's lane? None when they can't say."""
+    want = set(core)
+    lane = set().union(*(_words(t) for t in core)) if core else set()
+    told = False
+    for t in tags:
+        if t in want:
+            return True
+        w = _words(t)
+        if w:
+            told = True
+            if w & lane:
+                return True
+    return False if told else None
+
+
+def _fits_sound(track: Track, core: list[str]) -> int:
+    """2 it fits, 1 can't tell, 0 it's the odd one out."""
+    cloud = _tags(track)
+    if not cloud:
+        return 1
+    ranked = sorted(cloud.items(), key=lambda kv: -kv[1])[:10]
+    peak = ranked[0][1] or 1
+    if sum(c for t, c in ranked if t in _SOFT_TAGS) / peak >= .35:
+        return 0
+    said = _sounds_like([t for t, _ in ranked if t not in _JUNK_TAGS], core)
+    return 1 if said is None else (2 if said else 0)
+
+
+# -- filling it ------------------------------------------------------------
+
+def _band_songs(name: str, taste) -> list[Track]:
+    """A band's songs, most played first, barely shuffled."""
+    from ..models import is_derivative
+    from ..resolve import catalog, ranking
+    ranked = ranking.likely(catalog.artist_top_tracks(name), taste, variety=.08)
+    return [t for t in ranked if not is_derivative(t.title)]
+
+
+def _lane_for_artist(name: str, n: int, taste, **_) -> list[Track]:
+    return _band_songs(name, taste)[:n]
+
+
+_VET = ("You vet playlists. Reply with JSON only: {\"odd\":[numbers]}. List only "
+        "clear cases; most lists have few or none.")
+_VET_MAX = 240
+
+
+def _odd_ones(tracks: list[Track], core: list[str], what: str = "") -> set[str]:
+    """Which of these don't belong: a thrash band's ballad, an acoustic single,
+    one band covering another's song. Groq knows; Last.fm's song tags mostly
+    don't (Nothing Else Matters has none at all)."""
+    from ..resolve import llm
+    rows = tracks[:_VET_MAX]
+    if len(rows) < 3 or not llm.available():
+        return set()
+    sound = ", ".join(core[:5]) or what[:200]
+    lines = "\n".join(f"{i}. {t.title} - {(t.artist or '').split(',')[0]}"
+                      for i, t in enumerate(rows))
+    got = llm.ask_json(_VET, f"A playlist in the sound of: {sound}. Which of these are "
+                       "the odd ones out: ballads and slow songs (even famous ones), acoustic "
+                       "songs, a band's cover of someone else's song, or a different style "
+                       "from the rest? A band's usual-sounding hits are not odd.\n" + lines,
+                       timeout=30) or {}
+    odd = got.get("odd") if isinstance(got.get("odd"), list) else []
+    return {rows[i].key() for i in odd if isinstance(i, int) and 0 <= i < len(rows)}
+
+
+def _listeners(track: Track) -> int:
+    from .tags import tagstore
+    if not tagstore.enabled():
+        return 0
+    try:
+        info = tagstore._call({"method": "track.getInfo", "track": track.title,
+                               "artist": (track.artist or "").split(",")[0].strip()})
+        return int((info.get("track") or {}).get("listeners") or 0)
+    except Exception:
+        return 0
+
+
+def _covers(bands: list[list[Track]]) -> set[str]:
+    """Keys of one band's version of another band's song: Motorhead's Enter
+    Sandman. The original is the one more people listen to; without Last.fm,
+    the one higher up its own band's list."""
+    seen: dict[str, list[tuple[int, Track]]] = {}
+    for band in bands:
+        for rank, t in enumerate(band):
+            title = t.key().partition("|")[2]
+            if title:
+                seen.setdefault(title, []).append((rank, t))
+    out = set()
+    for versions in seen.values():
+        if len({t.primary_artist() for _, t in versions}) < 2:
+            continue
+        heard = [_listeners(t) for _, t in versions]
+        best = max(range(len(versions)), key=lambda i: (heard[i], -versions[i][0]))
+        out |= {t.key() for i, (_, t) in enumerate(versions) if i != best}
+    return out
+
+
+def _fill(names: list[str], songs: int, taste, core: list[str], progress=None,
+          label: str = "bands") -> tuple[list[Track], list[Track]]:
+    """(fitting, held back) for a set of bands.
+
+    Each band's best-known songs that sound like the rest of the list, dealt
+    out so no band runs on, going deeper into each only while there aren't
+    enough. Songs that don't fit the shared sound are held back for when
+    there still aren't.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    if not names or songs <= 0:
+        return [], []
+    per = max(2, math.ceil(songs * 1.15 / len(names)))
+    depth = per * 3
+    budget = _TAG_CHECKS
+    found: list[list[Track]] = []
+    for i, name in enumerate(names):
+        found.append(_band_songs(name, taste)[:depth])
+        if progress:
+            progress(f"{name}: {i + 1} of {len(names)} {label}", found[-1][:per])
+    # The likeliest few of each band are what gets vetted: those are the ones
+    # that would go in.
+    look = min(per + 6, max(3, _VET_MAX // max(1, len(found))))
+    front = [t for band in found for t in band[:look]]
+    if progress and core:
+        progress(f"Checking {len(front)} songs fit the sound")
+    odd = _odd_ones(front, core, ", ".join(names[:12])) | _covers(found)
+    lanes: list[list[Track]] = []
+    held: list[Track] = []
+    for ranked in found:
+        n = min(len(ranked), look, max(0, budget)) if core else 0
+        budget -= n
+        if n:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                marks = list(pool.map(lambda t: _fits_sound(t, core), ranked[:n]))
+        else:
+            marks = []
+        marks += [1] * (len(ranked) - len(marks))
+        marks = [0 if t.key() in odd else m for t, m in zip(ranked, marks)]
+        good = [t for t, m in zip(ranked, marks) if m]
+        held += [t for t, m in zip(ranked, marks) if not m]
+        if good:
+            lanes.append(good)
+    take = per
+    out = _deal([lane[:take] for lane in lanes])
+    while len(out) < songs and any(len(lane) > take for lane in lanes):
+        take += max(1, per // 2)
+        out = _deal([lane[:take] for lane in lanes])
+    return out, held
+
+
+def _kin_bands(named: list[str], core: list[str], limit: int) -> list[str]:
+    """Bands filed next to the named ones that share their sound."""
+    from concurrent.futures import ThreadPoolExecutor
+    from .kin import kin
+    have = {n.casefold() for n in named}
+    out: list[str] = []
+    for name in named:
+        for k in kin.prime(Track(title="", artist=name))[:8]:
+            if k.casefold() not in have:
+                have.add(k.casefold())
+                out.append(k)
+    if core and out:
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            clouds = list(pool.map(lambda n: _tags(Track(title="", artist=n), artist=True),
+                                   out[:limit * 2]))
+        out = [n for n, c in zip(out, clouds) if not c or _sounds_like(_top(c, 6), core) is not False]
+    return out[:limit]
+
+
+def _is_band(name: str) -> bool:
+    from ..resolve import catalog, ranking
+    want = ranking._name(name).replace(" ", "")
+    return bool(want) and any(ranking._name(r.get("name", "")).replace(" ", "") == want
+                              for r in catalog.search_artists(name, limit=3))
+
+
+def _unmerge(anchors: list[dict]) -> list[dict]:
+    """"hellhammer Motorhead": a comma that went missing between two bands."""
+    from concurrent.futures import ThreadPoolExecutor
+    multi = [a["name"] for a in anchors
+             if a["kind"] == "artist" and 2 <= len(a["name"].split()) <= 5]
+    if not multi:
+        return anchors
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        real = dict(zip(multi, pool.map(_is_band, multi)))
+    out = []
+    for a in anchors:
+        if a["kind"] == "artist" and real.get(a["name"]) is False:
+            words = a["name"].split()
+            for cut in range(1, len(words)):
+                left, right = " ".join(words[:cut]), " ".join(words[cut:])
+                if _is_band(left) and _is_band(right):
+                    out += [{**a, "name": left}, {**a, "name": right}]
+                    break
+            else:
+                out.append(a)
+        else:
+            out.append(a)
+    return out
+
+
+def _named_songs(anchors: list[dict], taste) -> list[Track]:
+    """Every song they named that's out there, in the order they named it."""
+    from concurrent.futures import ThreadPoolExecutor
+    from ..resolve import resolver
+    wanted = [a for a in anchors if a["kind"] == "song"]
+    if not wanted:
+        return []
+    plan = Plan(kind="mix", via="builder")
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        got = list(pool.map(lambda a: resolver._mix_item(a, plan, taste), wanted))
+    return _deal([[r.tracks[0] for r in got if r]])
+
+
+def _bands_of(anchors: list[dict], first: list[Track]) -> list[str]:
+    names = [a["name"] for a in anchors if a["kind"] == "artist"]
+    names += [a["artist"] for a in anchors if a["kind"] == "album" and a.get("artist")]
+    names += [t.artist.split(",")[0].strip() for t in first if t.artist]
+    return list(dict.fromkeys(n for n in names if n))
+
+
 def _fits(what: str, anchors: list[dict], songs: int, taste, progress,
-          context: list[Track] | None = None) -> list[Track]:
+          context: list[Track] | None = None, first: list[Track] | None = None,
+          core: list[str] | None = None) -> list[Track]:
     """Songs that fit rather than songs by: Groq's picks, checked against the
-    catalogue; the named bands' own likeliest songs mixed in."""
+    catalogue and the shared sound; the named bands' best-known songs, then
+    bands that sound like them, when that isn't enough."""
     from concurrent.futures import ThreadPoolExecutor
     from ..resolve import llm
-    named = [a["name"] for a in anchors if a["kind"] == "artist"]
+    first = list(first or [])
+    core = list(core or [])
+    named = _bands_of(anchors, first)
     picked: list[Track] = []
+    held: list[Track] = []
     artists: list[str] = []
-    clue = _listener_context(taste)
+    clue = (f" Shared sound: {', '.join(core[:6])}." if core else "") + _listener_context(taste)
     if context:
         clue += " Existing playlist's theme: " + "; ".join(
             f"{t.title} by {t.artist}" for t in context[:20])[:700]
-    if llm.available():
-        if songs <= 80:
+    room = max(0, songs - len(first))
+    if llm.available() and room:
+        if room <= 80:
             if progress:
                 progress("Asking Groq for songs that fit")
-            asks = _groq_songs(what, round(songs * 1.3), clue)
+            asks = _groq_songs(what, round(room * 1.3), clue)
             if progress:
                 progress(f"Checking {len(asks)} songs")
             with ThreadPoolExecutor(max_workers=6) as pool:
-                picked = [t for t in pool.map(lambda at: _found(*at), asks) if t]
+                found = [t for t in pool.map(lambda at: _found(*at), asks) if t]
+                marks = list(pool.map(lambda t: _fits_sound(t, core), found)) if core \
+                    else [1] * len(found)
+            odd = _odd_ones(found, core, what)
+            marks = [0 if t.key() in odd else m for t, m in zip(found, marks)]
+            picked = [t for t, m in zip(found, marks) if m]
+            held = [t for t, m in zip(found, marks) if not m]
             if progress:
                 progress(f"Matched {len(picked)} real recordings", picked)
         else:
             if progress:
                 progress("Asking Groq for bands that fit")
-            artists = _groq_artists(what, max(12, songs // 5), clue)
-    if len(picked) < songs:
-        if not artists:
-            from .kin import kin
-            for name in named:
-                artists += kin.prime(Track(title="", artist=name))[:8]
-        pool_names = list(dict.fromkeys(named + artists))
-        per = max(2, songs // max(1, len(pool_names)) + 2)
-        lanes = []
-        for i, name in enumerate(pool_names):
-            got = _lane_for_artist(name, per, taste, explore=True)
-            if got:
-                lanes.append(got)
-            if progress:
-                progress(f"{name}: {i + 1} of {len(pool_names)} artists", got)
-            if len(picked) + sum(len(x) for x in lanes) >= songs * 1.1:
-                break
-        picked += _flow(lanes, what)
-    return _deal([picked])
+            artists = _groq_artists(what, max(12, room // 5), clue)
+    tracks = _deal([first + picked])
+    # Every band they named gets a look in, whatever Groq thought.
+    from ..resolve import ranking
+    missing = [n for n in named if not any(ranking.artist_matches(t, n) for t in tracks)]
+    if missing and picked:
+        got, off = _fill(missing, 2 * len(missing), taste, core, progress)
+        tracks = _deal([tracks + got])
+        held += off
+    if len(tracks) < songs and named:
+        got, off = _fill(named, songs - len(tracks), taste, core, progress)
+        tracks = _deal([tracks + got])
+        held += off
+    if len(tracks) < songs:
+        more = [a for a in artists if a.casefold() not in {n.casefold() for n in named}]
+        more = more or _kin_bands(named, core, max(8, (songs - len(tracks)) // 3))
+        got, off = _fill(more, songs - len(tracks), taste, core, progress, label="more bands")
+        tracks = _deal([tracks + got])
+        held += off
+    if len(tracks) < songs:
+        tracks = _deal([tracks + held])
+    # The songs they named stay where they are; the rest is dealt out by band,
+    # so three of one band don't run back to back.
+    keep = {t.key() for t in first}
+    lanes: dict[str, list[Track]] = {}
+    for t in tracks:
+        if t.key() not in keep:
+            lanes.setdefault(t.primary_artist(), []).append(t)
+    return first + _deal(list(lanes.values()))
 
 
 def build(what: str, *, songs: int = 0, minutes: int = 0, taste=None,
           progress=None, strict: bool = False,
           context: list[Track] | None = None) -> list[Track]:
     """The tracks, not yet saved anywhere."""
-    anchors = anchors_of(what)
+    anchors = _unmerge(anchors_of(what))
     if not anchors:
         return []
-    if not songs:
-        songs = max(10, round((minutes or 60) * 60 / 215))
-    songs = max(1, min(MAX_SONGS, int(songs)))
+    songs = wanted_size(songs, minutes)
+    first = _named_songs(anchors, taste)
+    songs = max(songs, len(first))
+    named = _bands_of(anchors, first)
+    core = core_sound(named) if len(named) >= 2 or not strict else []
+    if progress and core:
+        progress("Keeping to " + ", ".join(core[:4]))
     if not strict:
-        tracks = _fits(what, anchors, songs, taste, progress, context)
-        if taste is not None:
-            tracks = [t for t in tracks if not taste.is_blocked(t)]
-        return tracks[:songs]
-    share = math.ceil(songs * 1.15 / len(anchors))          # a little over, for losses
-    lanes = []
-    for a in anchors:
-        if a["kind"] == "genre":
-            lanes.append(_lane_for_genre(a["name"], share, taste, progress))
-        elif a["kind"] == "song":
-            from ..resolve import resolver
-            res = resolver.resolve(Plan(kind="song", query=a["name"], artist=a.get("artist", "")), taste)
-            lane = list(res.tracks[:1]) if res else []
-            if lane and lane[0].artist:
-                lane += _lane_for_artist(lane[0].artist.split(",")[0], share - 1, taste)
-            lanes.append(lane)
-        elif a["kind"] == "album":
-            lanes.append(_lane_for_album(a["name"], a.get("artist", ""), taste))
-        else:
-            lanes.append(_lane_for_artist(a["name"], share, taste))
-        if progress:
-            progress(f"{a['name']}: {len(lanes[-1])} songs", lanes[-1])
-    tracks = _deal([lane for lane in lanes if lane])
+        tracks = _fits(what, anchors, songs, taste, progress, context, first, core)
+    else:
+        rest = [a for a in anchors if a["kind"] in ("genre", "album")]
+        share = math.ceil(songs * 1.15 / max(1, len(rest) + len(named)))
+        lanes = []
+        for a in rest:
+            if a["kind"] == "genre":
+                lanes.append(_lane_for_genre(a["name"], share, taste, progress))
+            else:
+                lanes.append(_lane_for_album(a["name"], a.get("artist", ""), taste))
+            if progress:
+                progress(f"{a['name']}: {len(lanes[-1])} songs", lanes[-1])
+        bands, held = _fill(named, share * len(named), taste, core, progress)
+        tracks = _deal([first + _deal([lane for lane in lanes if lane] + [bands])])
+        if len(tracks) < songs:
+            tracks = _deal([tracks + held])
     if taste is not None:
         tracks = [t for t in tracks if not taste.is_blocked(t)]
     return tracks[:songs]
+
+
+def wanted_size(songs: int = 0, minutes: int = 0) -> int:
+    if not songs:
+        songs = max(10, round((minutes or 60) * 60 / 215))
+    return max(1, min(MAX_SONGS, int(songs)))
 
 
 def start(what: str, *, songs: int = 0, minutes: int = 0, name: str = "",
@@ -418,10 +717,13 @@ def start(what: str, *, songs: int = 0, minutes: int = 0, name: str = "",
             else:
                 added = len(tracks)
             mins = round(sum(t.duration or 215 for t in tracks) / 60)
+            asked = wanted_size(songs, minutes)
+            short = (f" -- {len(tracks)} of {asked} was all that fit"
+                     if len(tracks) < asked else "")
             with _lock:
                 _jobs[job].update(state="done", name=title, count=added, minutes=mins,
-                                  detail=f"{added} songs added" if target else
-                                  f"{len(tracks)} songs, about {mins} minutes")
+                                  detail=(f"{added} songs added" if target else
+                                          f"{len(tracks)} songs, about {mins} minutes") + short)
             log.info("built %r: %d songs for %r", title, len(tracks), what)
             _forget_waiting(job)
             if on_done:

@@ -410,7 +410,7 @@ def _items(raw) -> list[dict]:
             kind, name = "artist", artist
         if kind in ("artist", "song", "album", "genre") and name:
             out.append({"kind": kind, "name": name[:120], "artist": artist[:120]})
-    return out[:6]
+    return out[:40]
 
 
 def _command_plan(word: str, argument: str, said: str) -> Plan | None:
@@ -448,14 +448,17 @@ def parse(text: str) -> Plan | None:
     if not available() or not text.strip():
         return None
     data = _cache_get(text)
+    # A long list needs room to answer: 400 tokens cut a twelve-item mix off
+    # mid-JSON, and the whole request fell back to the grammar.
+    room = min(1400, 400 + 40 * len(re.findall(r"[,;\n]|\band\b", text)))
     if data is None:
-        if not _affordable((len(SYSTEM) + len(text)) // 3 + 200):
+        if not _affordable((len(SYSTEM) + len(text)) // 3 + room // 2):
             log.info("Groq resting %.0fs more -- local parser", resting())
             return None
     try:
         if data is None:
             payload = _post({
-                "model": _model(), "temperature": 0, "max_completion_tokens": 400,
+                "model": _model(), "temperature": 0, "max_completion_tokens": room,
                 "response_format": {"type": "json_object"},
                 "messages": [{"role": "system", "content": SYSTEM},
                              {"role": "user", "content": text.strip()}],

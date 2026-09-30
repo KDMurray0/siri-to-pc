@@ -4555,8 +4555,10 @@ def _run(verbose: bool = False) -> Result:
                 mix = _rv42.resolve(_P42(kind="mix", query="x", items=[
                     {"kind": "artist", "name": "Korn"}, {"kind": "genre", "name": "glam metal"},
                     {"kind": "song", "name": "Mother", "artist": "Danzig"}]))
-                c("a mix opens with one of each",
-                  [t.artist for t in mix.tracks[:3]] == ["Korn", "glam metal", "Mother"], str(mix.tracks[:3]))
+                c("a mix opens with the song named, then one of each of the rest",
+                  [t.artist for t in mix.tracks[:3]] == ["Mother", "Korn", "glam metal"], str(mix.tracks[:3]))
+                c("...and a named song is that one song, not six",
+                  sum(t.artist == "Mother" for t in mix.tracks) == 1)
                 c("...and each is something the radio keeps coming back to", len(mix.anchors) == 3)
                 c("...and it says what it's playing", mix.spoken == "Playing Korn, glam metal and Mother")
                 five = _rv42.resolve(_P42(kind="mix", query="x", count=5, items=[
@@ -5278,7 +5280,10 @@ def _run(verbose: bool = False) -> Result:
                     _patch.object(_b53, "_groq_songs", lambda w, n, context="": [(t.artist, t.title) for t in fake53]), \
                     _patch.object(_b53, "_found", lambda a, t: next(x for x in fake53 if x.title == t)), \
                     _patch.object(_llm53, "available", lambda: True), \
-                    _patch.object(_b53, "_lane_for_artist", lambda n, k, taste, **kwargs: []):
+                    _patch.object(_b53, "_lane_for_artist", lambda n, k, taste, **kwargs: []), \
+                    _patch.object(_b53, "_band_songs", lambda n, taste: []), \
+                    _patch.object(_b53, "_odd_ones", lambda *a, **k: set()), \
+                    _patch.object(_b53, "_unmerge", lambda a: a):
                 fit53 = _b53.build("korn", songs=20, strict=False)
             c("\"songs that fit\" is Groq's picks, checked against the catalogue",
               len(fit53) == 20 and fit53[0].video_id == "F000")
@@ -5350,6 +5355,140 @@ def _run(verbose: bool = False) -> Result:
               'w.style.animationName = "wordfill, wordswell, wordrelease";' in page54
               and "@keyframes wordswell {" in page54 and "@keyframes wordsing" not in page54)
             say("layouts", c)
+
+            # -- 56. a list is the whole list -----------------------------------
+            c = _Checker("whole lists")
+            from .resolve import grammar as _g56, resolver as _rv56, ranking as _rk56
+            from .core import builder as _b56
+            from .models import Plan as _P56, Track as _T56
+            twelve = ", ".join(f"Song {i} by Band {i}" for i in range(12))
+            got56 = _g56.song_list("add these and some others: " + twelve)
+            c("a pasted list of twelve songs is twelve songs",
+              got56 and len(got56[0]) == 12 and got56[0][11] == {
+                  "kind": "song", "name": "Song 11", "artist": "Band 11"}, str(got56))
+            c("...and \"and some others\" is heard", got56 and got56[1] is True)
+            lines56 = _g56.song_list("1. Metallica - One\n2. Angel of Death - Slayer\n- Sepultura")
+            c("one per line, dashes either way round, bare names as bands",
+              lines56 and [i["kind"] for i in lines56[0]] == ["song", "song", "artist"]
+              and lines56[0][0].get("either") and not lines56[1], str(lines56))
+            c("\"Killed by Death by Motorhead\" is by Motorhead",
+              (_g56.song_list("Killed by Death by Motorhead, Mother by Danzig") or [[{}]])[0][0]
+              .get("artist") == "Motorhead")
+            c("one song, or two bands, isn't a list",
+              _g56.song_list("master of puppets by metallica") is None
+              and _g56.song_list("play slayer and sodom") is None)
+            from .resolve import parser as _pa56
+            c("the parser takes a list before the model can drop half of it",
+              _pa56.parse(twelve).kind == "mix" and len(_pa56.parse(twelve).items) == 12)
+
+            def _one(plan, taste=None):
+                # "Artist - Title" written the other way round finds nothing by
+                # the named band until it's turned round.
+                if plan.kind != "song":
+                    return _rv56.Resolution([_T56(video_id="x" + plan.query[:4], title="t",
+                                                  artist=plan.query)], "")
+                return _rv56.Resolution([_T56(video_id=f"{plan.artist}-{plan.query}",
+                                              title=plan.query, artist=plan.artist)], "")
+            real56 = _rv56.resolve
+            items56 = [{"kind": "song", "name": f"Song {i}", "artist": f"Band {i}"} for i in range(12)]
+            with _patch.object(_rv56, "resolve", lambda p, t=None: real56(p, t) if p.kind == "mix"
+                               else _one(p, t)):
+                mix56 = _rv56.resolve(_P56(kind="mix", items=items56 + [{"kind": "artist", "name": "Korn"}]))
+            c("a mix of twelve songs and a band plays all twelve first, in order",
+              [t.title for t in mix56.tracks[:12]] == [f"Song {i}" for i in range(12)]
+              and mix56.tracks[12].artist == "Korn", str([t.title for t in mix56.tracks[:13]]))
+
+            def _flip(plan, taste=None):
+                if plan.query == "Metallica":
+                    return _rv56.Resolution([_T56(video_id="wrong", title="Metallica", artist="Tribute")], "")
+                return _rv56.Resolution([_T56(video_id="one", title=plan.query, artist=plan.artist)], "")
+            with _patch.object(_rv56, "resolve", _flip):
+                flip56 = _rv56._mix_item({"kind": "song", "name": "Metallica", "artist": "One",
+                                          "either": True}, _P56(kind="mix"))
+            c("\"One - Metallica\" is tried the other way round when the first reading is wrong",
+              flip56 and flip56.tracks[0].video_id == "one" and flip56.tracks[0].artist == "Metallica")
+
+            # The shared sound. Fake Last.fm: thrash bands, one ballad each,
+            # and one band that isn't in the lane at all.
+            band_tags = {"slayer": {"thrash metal": 100, "speed metal": 40},
+                         "sodom": {"thrash metal": 100, "german": 80, "speed metal": 50},
+                         "exodus": {"thrash metal": 100, "bay area thrash": 30},
+                         "morbid angel": {"death metal": 100, "thrash metal": 20}}
+            song_tags = {"Ballad": {"ballad": 100, "metal": 60},
+                         "Pop": {"pop": 100, "dance": 70}}
+
+            def _tags56(track, artist=False):
+                if artist:
+                    return band_tags.get(track.artist.lower(), {})
+                for word, cloud in song_tags.items():
+                    if word in track.title:
+                        return cloud
+                return {"thrash metal": 50}
+
+            def _band56(name, taste):
+                songs = [_T56(video_id=f"{name}{i}", title=f"{name} hit {i}", artist=name) for i in range(8)]
+                songs.insert(1, _T56(video_id=f"{name}B", title=f"{name} Ballad", artist=name))
+                songs.append(_T56(video_id=f"{name}dup", title=f"{name} hit 0 (Remastered)", artist=name))
+                return songs
+            with _patch.object(_b56, "_tags", _tags56):
+                core56 = _b56.core_sound(["Slayer", "Sodom", "Exodus", "Morbid Angel"])
+                c("the sound they share is found, and a nationality isn't one",
+                  core56[:1] == ["thrash metal"] and "german" not in core56, str(core56))
+                c("a ballad is the odd one out", _b56._fits_sound(
+                    _T56(title="Slayer Ballad", artist="Slayer"), core56) == 0)
+                c("\"thrash\" on its own is still thrash", _b56._sounds_like(["crossover thrash"], core56))
+                with _patch.object(_b56, "_band_songs", _band56):
+                    few56, held56 = _b56._fill(["Slayer", "Sodom"], 6, None, core56)
+                    c("a band's odd songs are held back while there are enough others",
+                      len(few56) >= 6 and not any("Ballad" in t.title for t in few56)
+                      and len(held56) == 2, str([t.title for t in few56]))
+                    c("...and its best-known songs come first",
+                      [t.title for t in few56[:2]] == ["Slayer hit 0", "Sodom hit 0"])
+                    lots56, _ = _b56._fill(["Slayer", "Sodom"], 40, None, core56)
+                    c("no song twice, remaster or not",
+                      len({t.key() for t in lots56}) == len(lots56))
+                    with _patch.object(_b56, "anchors_of", lambda w: [
+                            {"kind": "artist", "name": "Slayer"}, {"kind": "artist", "name": "Sodom"}]), \
+                            _patch.object(_b56, "_unmerge", lambda a: a):
+                        all56 = _b56.build("slayer, sodom", songs=40, strict=True)
+                    c("short of songs, the held-back ones go in rather than a short list",
+                      any("Ballad" in t.title for t in all56) and len(all56) == len({t.key() for t in all56}))
+            with _patch.object(_b56, "_is_band", lambda n: n.lower() in ("hellhammer", "motorhead",
+                                                                       "celtic frost")):
+                un56 = _b56._unmerge([{"kind": "artist", "name": "hellhammer Motorhead", "artist": ""},
+                                      {"kind": "artist", "name": "Celtic Frost", "artist": ""}])
+            c("a missing comma between two bands is put back",
+              [a["name"] for a in un56] == ["hellhammer", "Motorhead", "Celtic Frost"], str(un56))
+            c("the prompt asks for well-known songs in the shared sound, not deep cuts",
+              "best-known" in _b56._CURATE and "deep cut" not in _b56._CURATE)
+            with _patch.object(_b56, "_listeners",
+                               lambda t: 2_000_000 if t.artist == "Metallica" else 50_000):
+                c("a cover is the less-played version of a song two bands here share",
+                  _b56._covers([[_T56(title="Enter Sandman", artist="Motorhead")],
+                                [_T56(title="x", artist="Metallica"),
+                                 _T56(title="Enter Sandman", artist="Metallica")]])
+                  == {"motorhead|enter sandman"})
+
+            # Smart shuffle: what you skip drifts back, what you love comes forward;
+            # the radio leans the same way, only less.
+            from .core import queue as _q56
+            songs56 = list(range(20))
+            liked = lambda i: 1.0 if i == 0 else (-1.0 if i == 19 else 0.0)
+            pos_l = [0.0, 0.0]
+            pos_r = [0.0, 0.0]
+            for _ in range(400):
+                o = _q56.smart_order(songs56, liked, _q56.SMART_LIST)
+                pos_l[0] += o.index(0); pos_l[1] += o.index(19)
+                o = _q56.smart_order(songs56, liked, _q56.SMART_RADIO)
+                pos_r[0] += o.index(0); pos_r[1] += o.index(19)
+            c("in a shuffled playlist the loved song comes early and the skipped one late",
+              pos_l[0] / 400 < 6 and pos_l[1] / 400 > 13, f"{pos_l[0]/400:.1f} {pos_l[1]/400:.1f}")
+            c("...and the radio leans that way less",
+              pos_l[0] < pos_r[0] < 400 * 9.5 and pos_l[1] > pos_r[1] > 400 * 9.5,
+              f"{pos_r[0]/400:.1f} {pos_r[1]/400:.1f}")
+            c("everything still gets played: a shuffle is a reordering",
+              sorted(_q56.smart_order(songs56, liked, _q56.SMART_LIST)) == songs56)
+            say("whole lists", c)
 
             # -- 55. the page's own script must actually parse --------------
             # The dead-player bug: all 1121 checks passed while a duplicated
