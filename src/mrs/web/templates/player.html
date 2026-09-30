@@ -1257,9 +1257,11 @@ body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
        the same place and the same size at every width, so nothing slides
        around as the window changes and a cover never balloons into the
        empty air of a wide screen. */
-    --cover:clamp(240px,calc(100dvh - 310px),440px);
-    --panelw:clamp(340px,calc(100dvh - 400px),480px);
-    display:grid;grid-template-columns:minmax(240px,var(--cover)) minmax(340px,var(--panelw));
+    /* The cover takes the height; the list is only as wide as a song title
+       and its buttons need. */
+    --panelw:clamp(300px,26vw,370px);--navh:38px;
+    --cover:clamp(240px,min(calc(100dvh - 290px),calc(100vw - var(--panelw) - 2 * var(--edge) - var(--gap2))),600px);
+    display:grid;grid-template-columns:minmax(240px,var(--cover)) minmax(300px,var(--panelw));
     grid-template-rows:auto minmax(0,1fr) auto auto minmax(0,1fr);
     column-gap:var(--gap2);justify-content:center;
     padding:28px var(--edge) 100px;
@@ -1279,12 +1281,15 @@ body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
     min-height:60px;margin:16px 0 0;text-align:left}
   body:not(.mini) .title{font-size:28px;line-height:1.2}
   body:not(.mini) .artist{font-size:15px;margin-top:5px}
-  body:not(.mini) .nav{grid-area:1/2;align-self:end;margin:0;overflow:hidden;
+  /* The list's box starts level with the top of the cover and ends level
+     with the artist line: one block, centred as one, never under the search. */
+  body:not(.mini) .nav{grid-area:3/2;align-self:start;z-index:2;margin:0;overflow:hidden;
+    height:var(--navh);box-sizing:border-box;
     padding:9px 10px 8px;background:color-mix(in srgb,var(--panel) 88%,transparent);
     border:1px solid var(--line);border-radius:12px 12px 0 0}
   body:not(.mini) .navtab{font-size:11px}
   body:not(.mini) .navtab.on::after{bottom:-9px}
-  body:not(.mini) .panel{grid-column:2;grid-row:2/6;min-height:0;margin:0;
+  body:not(.mini) .panel{grid-column:2;grid-row:3/5;min-height:0;margin:var(--navh) 0 0;
     padding:8px;background:color-mix(in srgb,var(--panel) 88%,transparent);
     border:1px solid var(--line);border-top:0;border-radius:0 0 12px 12px}
   body:not(.mini) .q{gap:12px;padding:6px 8px;margin:5px 0;min-height:44px}
@@ -1315,16 +1320,26 @@ body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
     border:1px solid var(--line);border-right:0;border-radius:8px 0 0 8px;
     background:var(--panel);color:var(--sub);font-size:15px;line-height:1;font-family:inherit;cursor:pointer}
   body:not(.mini) .sidetoggle:hover{color:var(--fg)}
-  body:not(.mini).sidehid .stage{grid-template-columns:minmax(240px,var(--cover)) 0px}
+  /* Queue folded away: the words take its place, as far as the window can
+     hold them. */
   body:not(.mini).sidehid .nav,body:not(.mini).sidehid .panel{visibility:hidden;pointer-events:none}
+  body:not(.mini).sidehid #panel-lyrics{display:block;visibility:visible;pointer-events:auto;
+    grid-column:2;grid-row:2/6;min-height:0;margin:0;background:none;border:0;border-radius:0;
+    padding:0 8px 30vh;text-align:left;scrollbar-width:none;
+    -webkit-mask-image:linear-gradient(to bottom,transparent,#000 9%,#000 86%,transparent);
+    mask-image:linear-gradient(to bottom,transparent,#000 9%,#000 86%,transparent)}
+  body:not(.mini).sidehid #panel-lyrics .lyrlead{display:block;height:24vh}
+  body:not(.mini).sidehid #panel-lyrics .lrow{font-size:clamp(20px,2.1vw,28px);line-height:1.6;font-weight:600}
+  body:not(.mini).sidehid #panel-lyrics .lrow.active{font-weight:800}
   body:not(.mini).sidehid .sidetoggle span{transform:rotate(180deg)}
 
   body:not(.mini) .transport{position:fixed;inset:auto 0 0;z-index:30;display:grid;
-    /* The right-hand cluster is auto-sized, never squeezed: when space runs
-       out the track text and the padding give it up first. */
-    grid-template-columns:minmax(120px,1fr) minmax(240px,1fr) auto;
-    grid-template-rows:36px 22px;align-items:center;column-gap:16px;
-    width:100%;height:76px;padding:7px 20px 10px;border:0;
+    /* Equal outer columns keep the play button on the window's centre line.
+       Room runs out in this order: the side padding, then the track text and
+       the progress bar; the volume cluster keeps its width to the end. */
+    grid-template-columns:minmax(0,1fr) minmax(200px,600px) minmax(max-content,1fr);
+    grid-template-rows:36px 22px;align-items:center;column-gap:clamp(8px,1.4vw,16px);
+    width:100%;height:76px;padding:7px clamp(8px,1.6vw,24px) 10px;border:0;
     border-top:1px solid var(--line);border-radius:0;background:var(--bg);
     box-shadow:0 -5px 22px #0002}
   body:not(.mini) .bartrack{display:flex;grid-column:1;grid-row:1/3;min-width:0}
@@ -1376,18 +1391,36 @@ body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
 }
 @media (min-width:900px) and (max-width:1100px) and (min-height:520px){
   body:not(.mini) .stage{--edge:20px;--gap2:20px}
-  /* Here only the padding and the gap give up. The volume cluster keeps
-     its full size: it is auto-sized, and there is room for it. */
-  body:not(.mini) .transport{column-gap:12px;padding-inline:14px}
 }
 @media (min-width:1500px) and (min-height:520px){
   body:not(.mini) .stage{--gap2:36px;
-    /* Wide window: the words get the room. Artwork and queue keep their
-       fixed sizes; the lyric column takes whatever width is left. */
-    grid-template-columns:minmax(300px,440px) minmax(360px,1fr) minmax(320px,420px)}
-  body:not(.mini) .search{grid-area:1/1/2/4;width:min(100%,720px)}
-  body:not(.mini) .nav{grid-area:1/3}
+    /* Wide window: the words get the room, and the controls sit under them
+       instead of along the bottom of the screen. The cover grows with the
+       height; the queue stays a list's width. */
+    --cover:clamp(300px,calc(100dvh - 330px),560px);--panelw:clamp(320px,20vw,380px);
+    grid-template-columns:var(--cover) minmax(380px,1fr) var(--panelw);
+    grid-template-rows:auto minmax(0,1fr) auto auto minmax(0,1fr) auto;
+    padding-bottom:22px}
+  /* One axis: search, words and deck all centre on the middle column. */
+  body:not(.mini) .search{grid-area:1/2;width:min(100%,720px)}
+  body:not(.mini) #panel-lyrics{scrollbar-width:none}
+  body:not(.mini) #panel-lyrics::-webkit-scrollbar{display:none}
+  body:not(.mini) .nav{grid-area:3/3}
   body:not(.mini) .panel{grid-column:3}
+  /* The deck: progress over the buttons, centred under the words. The title
+     is already under the cover, so the bar's copy of it goes. */
+  body:not(.mini) .transport{position:relative;inset:auto;grid-area:6/2;z-index:3;
+    justify-self:center;width:min(100%,660px);height:auto;padding:10px 0 0;
+    grid-template-columns:minmax(max-content,1fr) auto minmax(max-content,1fr);
+    grid-template-rows:auto 40px;row-gap:6px;
+    background:none;border:0;box-shadow:none}
+  body:not(.mini) .bartrack{display:none}
+  body:not(.mini) .transport .prog{grid-area:1/1/2/4}
+  body:not(.mini) .transport .controls{grid-area:2/2;gap:22px}
+  body:not(.mini) .transport .controls .ib{width:36px;height:36px}
+  body:not(.mini) .transport .controls .play{width:44px;height:44px;border-radius:14px}
+  body:not(.mini) .transport .row2{grid-area:2/3/3/4}
+  body:not(.mini) .transport .times{font-size:11px}
   body:not(.mini) #panel-lyrics,body:not(.mini) #panel-about{grid-column:2;grid-row:2/6;
     visibility:visible;pointer-events:auto;min-height:0;background:none;border:0;border-radius:0;
     margin:0;padding-inline:24px;align-self:stretch}
@@ -1396,7 +1429,7 @@ body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
     mask-image:linear-gradient(to bottom,transparent,#000 9%,#000 88%,transparent)}
   body:not(.mini) #panel-lyrics .lyrlead{display:block;height:32vh}
   body:not(.mini) #panel-lyrics .lrow{font-size:32px;line-height:1.65;padding:6px 4px;
-    max-width:1000px;margin-inline:auto;font-weight:600}
+    max-width:min(100%,720px);margin-inline:auto;font-weight:600}
   body:not(.mini) #panel-lyrics .lrow.active{font-weight:800}
   body:not(.mini) #panel-lyrics>.muted{margin-top:30vh;font-size:14px}
   body:not(.mini) #panel-about{display:none;padding-block:54px 20px;overflow-y:auto}
@@ -1407,7 +1440,9 @@ body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
     justify-self:center;gap:2px;padding:3px;border-radius:999px;z-index:3;
     background:var(--panel);border:1px solid var(--line)}
   body:not(.mini) .navtab[data-panel="lyrics"],body:not(.mini) #openAbout{display:none}
-  body:not(.mini).sidehid .stage{grid-template-columns:minmax(300px,440px) minmax(360px,1fr) 0px}
+  body:not(.mini).sidehid .stage{grid-template-columns:var(--cover) minmax(380px,1fr) 0px}
+  body:not(.mini).sidehid #panel-lyrics{grid-row:2/6;padding:0 24px 40vh}
+  body:not(.mini).sidehid #panel-lyrics .lrow{font-size:32px;line-height:1.65}
 }
 /* Resting view: the old covermode collapse is gone on purpose. Rest keeps
    the very same two columns as playback (the :not(.hastrack):not(.hasqueue)
@@ -1418,7 +1453,7 @@ body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
    same two columns as the rest of the range rather than a dead middle. */
 @media (min-width:1500px) and (min-height:520px){
   body:not(.mini):not(.hastrack):not(.hasqueue) .stage{
-    grid-template-columns:minmax(300px,440px) minmax(340px,480px)}
+    grid-template-columns:var(--cover) minmax(340px,480px)}
 }
 @media (min-width:900px) and (min-height:520px) and (max-height:680px){
   body:not(.mini) .stage{padding-top:18px}
@@ -2173,6 +2208,8 @@ function setSide(hidden, remember) {
   if (remember !== false) {
     try { localStorage.setItem("sidehid", hidden ? "1" : "0"); } catch (e) {}
   }
+  // The words fill the queue's place; they need loading and placing.
+  setTimeout(() => { if (lyricsPinned()) { lastLine = -1; loadLyrics(); syncLyrics(state.position); } }, 0);
 }
 try { setSide(localStorage.getItem("sidehid") === "1", false); } catch (e) {}
 // A resting view is temporary. Opening the queue dismisses it until the
@@ -3604,8 +3641,8 @@ async function pollLyricAlignment(want, generation) {
    time, so everything that used to wait for the Lyrics tab to be open has to
    stop asking whether it is. */
 const PINNED_AT = window.matchMedia("(min-width:1500px) and (min-height:520px)");
-const lyricsPinned = () =>
-  PINNED_AT.matches && !document.body.classList.contains("mini");
+const lyricsPinned = () => !document.body.classList.contains("mini") &&
+  (PINNED_AT.matches || (WIDE.matches && document.body.classList.contains("sidehid")));
 PINNED_AT.addEventListener("change", () => { if (lyricsPinned()) loadLyrics(); });
 
 const STILL = window.matchMedia("(prefers-reduced-motion: reduce)");

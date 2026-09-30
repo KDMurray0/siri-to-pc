@@ -5319,10 +5319,18 @@ def _run(verbose: bool = False) -> Result:
             # -- 54. every screen size gets a real layout -----------------------
             c = _Checker("layouts")
             page54 = (Path(__file__).parent / "web" / "templates" / "player.html").read_text("utf-8")
-            c("between 900 and 1500 it's the two-column player minus the lyrics column",
-              "grid-template-columns:minmax(240px,var(--cover)) minmax(340px,var(--panelw));" in page54
-              and "--cover:clamp(240px,calc(100dvh - 310px),440px);" in page54
+            c("between 900 and 1500: a big cover and a list only as wide as it needs",
+              "grid-template-columns:minmax(240px,var(--cover)) minmax(300px,var(--panelw));" in page54
+              and "--panelw:clamp(300px,26vw,370px);" in page54
+              and "--cover:clamp(240px,min(calc(100dvh - 290px)" in page54
               and "body:not(.mini) .art-wrap{grid-area:3/1;" in page54)
+            c("the list's box lines up with the cover and never runs under the search",
+              "body:not(.mini) .nav{grid-area:3/2;align-self:start;" in page54
+              and "body:not(.mini) .panel{grid-column:2;grid-row:3/5;" in page54
+              and "body:not(.mini) .nav{grid-area:1/" not in page54)
+            c("fold the queue away and the words take its place",
+              "body:not(.mini).sidehid #panel-lyrics{display:block;" in page54
+              and 'WIDE.matches && document.body.classList.contains("sidehid")' in page54)
             c("the columns are capped and centred, so a wide window keeps its balance",
               "justify-content:center;" in page54
               and "minmax(260px,.9fr)" not in page54
@@ -5336,13 +5344,14 @@ def _run(verbose: bool = False) -> Result:
               "body:not(.mini):not(.hastrack):not(.hasqueue) .meta{display:block;visibility:hidden}" in page54
               and "min-height:60px;margin:16px 0 0;text-align:left" in page54
               and "padding-bottom:28px" not in page54)
-            c("the transport never squeezes the volume before the padding gives",
-              "grid-template-columns:minmax(120px,1fr) minmax(240px,1fr) auto;" in page54
+            c("the bar keeps play on the centre line; padding gives first, the volume last",
+              "grid-template-columns:minmax(0,1fr) minmax(200px,600px) minmax(max-content,1fr);" in page54
+              and "padding:7px clamp(8px,1.6vw,24px) 10px" in page54
               and "body:not(.mini) .transport .vol{flex:0 0 auto;max-width:150px;" in page54
               and "body:not(.mini) .transport .vol{max-width:90px}" not in page54)
-            c("wide screens keep three columns and use a fixed bottom transport",
-              "grid-template-columns:minmax(300px,440px) minmax(360px,1fr) minmax(320px,420px)" in page54
-              and "position:fixed;inset:auto 0 0;z-index:30;display:grid;" in page54
+            c("wide screens: the controls and the progress bar sit under the words",
+              "grid-template-columns:var(--cover) minmax(380px,1fr) var(--panelw);" in page54
+              and "body:not(.mini) .transport{position:relative;inset:auto;grid-area:6/2;" in page54
               and "Words timed to this recording" not in page54
               and "DRAWER_AT" not in page54 and "--drawer:" not in page54)
             c("a phone on its side gets side-by-side panels, not zero-height ones",
