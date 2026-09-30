@@ -99,6 +99,20 @@ def _call(path: str) -> list:
     raise last or RuntimeError("no mirror answered")
 
 
+def clean_art(value) -> str:
+    """The station list's image field is free text: some rows literally
+    carry the string "null" in it, and a truthiness check renders that as
+    <img src=\"null\"> — a 404 and a broken glyph. Only a real image link
+    counts as an image."""
+    s = str(value or "").strip()
+    low = s.lower()
+    if low in ("", "null", "none", "undefined"):
+        return ""
+    if not low.startswith(("http://", "https://")):
+        return ""
+    return s
+
+
 def _to_track(row: dict) -> Track | None:
     url = (row.get("url_resolved") or row.get("url") or "").strip()
     name = (row.get("name") or "").strip()
@@ -107,7 +121,7 @@ def _to_track(row: dict) -> Track | None:
     return Track(
         title=name,
         artist=(row.get("country") or "Radio").strip() or "Radio",
-        art=(row.get("favicon") or "").strip(),
+        art=clean_art(row.get("favicon")),
         url=url,
         source="radio",
         origin="request",

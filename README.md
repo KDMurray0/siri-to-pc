@@ -56,17 +56,26 @@ results to pick it; tap again to play. With picks made, *Play*, *Next* and
 several bands or albums out in turn and keeps the radio steering by all of
 them. "Play Mother by Danzig next" works out loud too, and says so.
 
-**Share a song.** The share button makes a link that plays that one song for
-anyone who opens it — no account, no sign-in, nothing else reachable — and
-turns into a card with the cover when pasted into Discord, iMessage or
-WhatsApp. It expires after thirty days. With a free Spotify developer app in
-Settings → Connections, it can hand out the Spotify link as well.
+**Share a song.** The share button makes a public link with square album artwork
+and the song title/artist in a compact summary preview, without a video player,
+description or site-name line. Chat apps decide the final layout. Opening the
+link starts the full player on that song in a fresh
+private session for each visitor, even if they are already signed in. It plays
+on their device and cannot control the owner's speakers. No listener profile,
+listening history, pass or usage statistics are saved. After 90 seconds without
+a client heartbeat, the in-memory session and credential are discarded. Shared
+media and ordinary anonymous caches are reusable; they are not listener records.
+Browsers that block autoplay show the play button. The public song link itself
+lasts thirty days; expired visits can start again from it.
 
 **Lyrics that sing.** Heavier words, and each one lifts, grows and glows while
 it's sung — more the longer it's held.
 
-**A glass mini player.** The shrunk bar can be a slab of glass over the cover:
-bent at the edges, tinted by the album. Settings → Look.
+**An optional glass mini player.** On Windows 10 (2004+) and Windows 11, turn
+on the setting in Look to make the shrunk bar bend the desktop behind it, with
+the album's colour fading from left to right. This local effect omits the mini player from
+screenshots while active; turning it off restores normal capture. If desktop
+capture is unavailable, the glass uses a neutral background.
 
 **Party mode.** One song per request, the queue never runs dry, and it only
 plays on the speakers.

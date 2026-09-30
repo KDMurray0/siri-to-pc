@@ -2,206 +2,63 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<meta name="theme-color" content="#0f0e13">
-<title>{{ song.title }}{% if song.artist %} · {{ song.artist }}{% endif %}</title>
-<meta property="og:type" content="video.other">
-<meta property="og:site_name" content="{{ server_name }}">
-<meta property="og:title" content="{{ song.title }}{% if song.artist %} · {{ song.artist }}{% endif %}">
-<meta property="og:description" content="Tap to listen.">
+<title>{{ song.title }}{% if song.artist %} - {{ song.artist }}{% endif %}</title>
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#2B2D31">
+<meta property="og:type" content="website">
+<meta property="og:title" content="{{ song.title }}{% if song.artist %} - {{ song.artist }}{% endif %}">
 <meta property="og:url" content="{{ url }}">
-{% if song.art %}<meta property="og:image" content="{{ song.art }}">
-{% endif %}<meta property="og:video" content="{{ video }}">
-<meta property="og:video:url" content="{{ video }}">
-<meta property="og:video:secure_url" content="{{ video }}">
-<meta property="og:video:type" content="video/mp4">
-<meta property="og:video:width" content="{{ side }}">
-<meta property="og:video:height" content="{{ side }}">
+<meta property="og:image" content="{{ cover }}">
+<meta property="og:image:secure_url" content="{{ cover }}">
+<meta property="og:image:type" content="image/jpeg">
+<meta property="og:image:width" content="{{ width }}">
+<meta property="og:image:height" content="{{ height }}">
+<meta property="og:image:alt" content="{{ song.title }}{% if song.artist %} by {{ song.artist }}{% endif %}">
+<meta name="twitter:title" content="{{ song.title }}{% if song.artist %} - {{ song.artist }}{% endif %}">
+<meta name="twitter:image" content="{{ cover }}">
 <style>
-:root{--bg:#0f0e13;--ink:#f4f1ec;--sub:#a29d95;--line:#2a2830;
-  --sans:ui-sans-serif,"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
-  --display:"Segoe UI Variable Display","Segoe UI",ui-sans-serif,system-ui,sans-serif}
-*{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%}
-body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--sans);display:grid;place-items:center;
-  padding:24px 16px;overflow:hidden;-webkit-font-smoothing:antialiased}
-.wash{position:fixed;inset:-20%;z-index:0;background:center/cover;filter:blur(70px) saturate(1.4);
-  opacity:.4;transform:scale(1.2);transition:background-image .6s}
-main{position:relative;z-index:1;width:min(380px,100%);text-align:center}
-.cover{width:min(300px,76vw);aspect-ratio:1;border-radius:18px;margin:0 auto 22px;background:#1d1c22 center/cover;
-  box-shadow:0 24px 60px -18px rgba(0,0,0,.8)}
-h1{font:800 24px/1.2 var(--display);letter-spacing:-.02em;overflow-wrap:anywhere}
-.by{color:var(--sub);margin-top:4px;font-size:16px}
-.bar{height:4px;border-radius:2px;background:rgba(255,255,255,.18);margin:22px 8px 6px;overflow:hidden;cursor:pointer}
-.bar i{display:block;height:100%;width:0;background:var(--ink)}
-.times{display:flex;justify-content:space-between;font-size:11.5px;color:var(--sub);margin:0 8px;
-  font-variant-numeric:tabular-nums}
-.ctl{display:flex;align-items:center;justify-content:center;gap:26px;margin-top:16px}
-.ctl button{border:0;background:none;color:var(--ink);cursor:pointer;display:grid;place-items:center}
-.ctl svg{fill:currentColor}
-.ctl .play{width:66px;height:66px;border-radius:50%;background:var(--ink);color:#111;
-  box-shadow:0 10px 30px rgba(0,0,0,.4)}
-.ctl .play svg{width:28px;height:28px}
-.ctl .skip svg{width:26px;height:26px}
-.ctl .skip:disabled{opacity:.35;cursor:default}
-.note{margin-top:14px;font-size:12.5px;color:var(--sub);min-height:1.5em}
-.after{margin-top:6px;font-size:12px;color:var(--sub);min-height:1.4em;white-space:nowrap;overflow:hidden;
-  text-overflow:ellipsis}
-.links{margin-top:18px}
-.links a{font-size:13px;color:var(--ink);text-decoration:none;padding:8px 14px;border-radius:999px;
-  border:1px solid var(--line);background:rgba(255,255,255,.04)}
-.links a:hover{border-color:var(--sub)}
+*{box-sizing:border-box}body{margin:0;min-height:100dvh;display:grid;place-items:center;
+  background:#0d0e12;color:#f6f5fa;font:15px/1.5 system-ui,sans-serif;padding:20px}
+main{width:min(360px,100%)}.card{display:block;width:100%;height:auto;aspect-ratio:1;object-fit:cover;border-radius:18px;
+  box-shadow:0 20px 60px #0005}.actions{display:flex;gap:16px;align-items:center;
+  justify-content:space-between;padding:15px 4px}p{margin:0;color:#b8b7c2;font-size:13px}
+button{border:0;border-radius:12px;background:#f5f4f9;color:#171820;font:600 13px system-ui;
+  padding:12px 18px;cursor:pointer;white-space:nowrap}button:hover{background:white}
+button:focus-visible{outline:3px solid #aab7ff;outline-offset:4px}button:disabled{opacity:.6}
+@media(max-width:480px){.actions{align-items:flex-start;flex-direction:column}}
 </style>
 </head>
 <body>
-<div class="wash" id="wash" {% if song.art %}style="background-image:url('{{ song.art }}')"{% endif %}></div>
 <main>
-  <div class="cover" id="cover" {% if song.art %}style="background-image:url('{{ song.art }}')"{% endif %}></div>
-  <h1 id="title">{{ song.title }}</h1>
-  <p class="by" id="artist">{{ song.artist }}</p>
-  <div class="bar" id="bar"><i id="fill"></i></div>
-  <div class="times"><span id="at">0:00</span><span id="len">{% if song.duration %}{{ (song.duration // 60) }}:{{ '%02d' % (song.duration % 60) }}{% endif %}</span></div>
-  <div class="ctl">
-    <button class="play" id="play" aria-label="Play"><svg viewBox="0 0 24 24" id="icon"><path d="M8 5v14l11-7z"/></svg></button>
-    <button class="skip" id="next" aria-label="Next song" disabled><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6zm10-12h2v12h-2z"/></svg></button>
-  </div>
-  <p class="note" id="note"></p>
-  <p class="after" id="after"></p>
-  <div class="links"><a href="{{ base }}/">Get your own</a></div>
-  <audio id="audio" preload="auto" playsinline></audio>
+  <img class="card" src="{{ cover }}" width="{{ width }}" height="{{ height }}" alt="{{ song.title }} by {{ song.artist }}">
+  <form class="actions" id="open" action="{{ base }}/s/{{ song.id }}/player" method="post">
+    <p id="note" role="status">Opening your private player…</p>
+    <button id="start" type="submit">Open player</button>
+  </form>
 </main>
 <script>
-/* Every person who opens this gets a session of their own: the song, then
-   the radio from it. It checks in every fifteen seconds; stop, and the
-   session goes. */
-const SID = {{ song.id | tojson }}, BASE = {{ base | tojson }};
-const $ = id => document.getElementById(id), audio = $("audio");
-const FMT = (() => { const p = document.createElement("audio");
-  for (const [n, t] of [["webm", 'audio/webm; codecs="opus"'], ["mp4opus", 'audio/mp4; codecs="opus"']])
-    if (p.canPlayType && p.canPlayType(t) === "probably") return n;
-  return "aac"; })();
-const mmss = s => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
-let VISIT = "", vid = "", nextId = "", want = false, joining = null;
-
-async function call(path, body) {
-  const r = await fetch(BASE + "/s/" + SID + path, {
-    method: body === undefined ? "GET" : "POST",
-    headers: body === undefined ? {} : { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body) }).catch(() => null);
-  if (!r) return { gone: false, err: "offline" };
-  if (r.status === 410) return { gone: true };
-  const j = await r.json().catch(() => ({}));
-  return r.ok ? j : { err: (j && j.detail) || "Something went wrong" };
-}
-function join() {
-  if (!joining) joining = call("/join", {}).then(r => {
-    joining = null;
-    if (r.visit) { VISIT = r.visit; show(r); }
-    else $("note").textContent = r.err || "Couldn't open this one";
-    return !!r.visit;
-  });
-  return joining;
-}
-const mine = p => "/v/" + VISIT + p;
-const src = id => BASE + "/s/" + SID + mine("/audio/" + encodeURIComponent(id)) + "?fmt=" + FMT;
-
-function show(r) {
-  const t = (r.now && r.now.track) || {};
-  nextId = r.next || "";
-  $("next").disabled = !nextId && !t.video_id;
-  $("after").textContent = r.next_title ? "Up next: " + r.next_title : "";
-  if (!t.video_id || t.video_id === vid) return;
-  vid = t.video_id;
-  $("title").textContent = t.name || "";
-  $("artist").textContent = t.artist || "";
-  if (t.art) { $("cover").style.backgroundImage = $("wash").style.backgroundImage = "url('" + t.art + "')"; }
-  if (t.duration) $("len").textContent = mmss(t.duration);
-  document.title = (t.name || "") + (t.artist ? " · " + t.artist : "");
-  if ("mediaSession" in navigator) {
-    try { navigator.mediaSession.metadata = new MediaMetadata({ title: t.name || "", artist: t.artist || "",
-      artwork: t.art ? [{ src: t.art, sizes: "512x512", type: "image/jpeg" }] : [] }); } catch (e) {}
-  }
-  load();
-}
-/* The first song is still being fetched when the page opens: ask until it's there. */
-async function until(ready, tries = 90) {
-  for (let i = 0; i < tries; i++) { if (await ready()) return true; await new Promise(r => setTimeout(r, 1500)); }
-  return false;
-}
-async function load() {
-  const me = vid;
-  $("note").textContent = "Getting it ready…";
-  const ok = await until(async () => {
-    if (me !== vid) return true;
-    const r = await fetch(src(me), { headers: { Range: "bytes=0-1" } }).catch(() => null);
-    return r && (r.status === 206 || r.status === 200);
-  });
-  if (me !== vid) return;
-  if (!ok) { $("note").textContent = "Couldn't get this one ready."; return; }
-  $("note").textContent = "";
-  audio.src = src(me);
-  if (want) audio.play().catch(() => { $("note").textContent = "Tap play to start it."; });
-}
-async function refresh() {
-  if (!VISIT) return;
-  const r = await call(mine(""));
-  if (r.gone) { VISIT = ""; vid = ""; await join(); return; }
-  if (!r.err) show(r);
-}
-$("play").onclick = async () => {
-  if (!audio.paused) { want = false; audio.pause(); return; }
-  want = true;
-  if (!VISIT && !(await join())) return;
-  if (!vid) { await until(async () => { await refresh(); return !!vid; }, 60); return; }
-  if (audio.src) audio.play().catch(() => {});
-};
-$("next").onclick = async () => {
-  if (!VISIT) return;
-  want = true;
-  const r = await call(mine("/next"), {});
-  if (r.gone) { VISIT = ""; return join(); }
-  show(r);
-};
-audio.onended = async () => {
-  const r = await call(mine("/ended"), {});
-  if (r.gone) { VISIT = ""; vid = ""; await join(); return; }
-  show(r);
-  if (!r.now || !r.now.track || !r.now.track.video_id)
-    await until(async () => { await refresh(); return !!vid; }, 60);
-};
-audio.onplay = () => $("icon").innerHTML = '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>';
-audio.onpause = () => $("icon").innerHTML = '<path d="M8 5v14l11-7z"/>';
-audio.ontimeupdate = () => {
-  $("at").textContent = mmss(audio.currentTime);
-  if (audio.duration && isFinite(audio.duration)) {
-    $("fill").style.width = (100 * audio.currentTime / audio.duration) + "%";
-    $("len").textContent = mmss(audio.duration);
-  }
-};
-$("bar").onclick = e => {
-  if (!audio.duration) return;
-  const r = $("bar").getBoundingClientRect();
-  audio.currentTime = audio.duration * Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
-};
-if ("mediaSession" in navigator) {
+const form = document.getElementById("open"), note = document.getElementById("note"),
+      button = document.getElementById("start");
+let opening = false;
+async function openPlayer() {
+  if (opening) return;
+  opening = true; button.disabled = true;
+  note.textContent = "Opening your private player…";
   try {
-    navigator.mediaSession.setActionHandler("play", () => $("play").onclick());
-    navigator.mediaSession.setActionHandler("pause", () => { want = false; audio.pause(); });
-    navigator.mediaSession.setActionHandler("nexttrack", () => $("next").onclick());
-  } catch (e) {}
+    const response = await fetch(form.action, {method:"POST", headers:{Accept:"application/json"}});
+    const data = await response.json();
+    if (!response.ok || !data.url) throw new Error(data.detail || "Couldn't open this song.");
+    location.replace(data.url);
+  } catch (error) {
+    note.textContent = error.message || "Couldn't connect. Try again.";
+    opening = false; button.disabled = false;
+  }
 }
-// The heartbeat. When it stops -- tab closed, phone gone -- the session goes.
-setInterval(async () => {
-  if (!VISIT) return;
-  const r = await call(mine("/beat"), { pos: audio.currentTime || 0, paused: audio.paused });
-  if (r.gone) { VISIT = ""; if (want) { vid = ""; join(); } }
-  else if (!r.err) show(r);
-}, 15000);
-addEventListener("pagehide", () => {
-  if (VISIT && navigator.sendBeacon) navigator.sendBeacon(BASE + "/s/" + SID + mine("/leave"));
-});
-join();
+form.addEventListener("submit", event => { event.preventDefault(); openPlayer(); });
+// Crawlers read the metadata/image; a real browser starts its own visit.
+openPlayer();
 </script>
 </body>
 </html>

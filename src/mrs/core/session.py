@@ -343,7 +343,8 @@ class Sessions:
             if room is None:
                 room = Session(pass_id, name, scope, profile)
                 self._rooms[pass_id] = room
-                log.info("opened a session for %r (%s)", room.id[:8], room.scope)
+                if not pass_id.startswith("v-"):
+                    log.info("opened a session for %r (%s)", room.id[:8], room.scope)
             # Keep registration and activation as one transaction.  Otherwise
             # close() can remove the room after this lock is released but
             # before start(), leaving an orphaned queue and heartbeat running
@@ -371,6 +372,9 @@ class Sessions:
             room = self._rooms.pop(pass_id, None)
         if not room:
             return False
+        from .shares import is_visit, forget_visit
+        if is_visit(pass_id):
+            forget_visit(pass_id)
         room.stop()
         # Tell the page. Every event carries the session that produced it and
         # is delivered on that, so once the session is gone nothing stamped
@@ -383,7 +387,8 @@ class Sessions:
             bus.publish(Ev.QUEUE, {"rows": [], "session": pass_id})
         except Exception as exc:
             log.debug("couldn't announce the end of %s: %s", pass_id, exc)
-        log.info("closed the session for %r", room.id[:8])
+        if not is_visit(pass_id):
+            log.info("closed the session for %r", room.id[:8])
         return True
 
     def listing(self) -> list[dict]:
@@ -411,11 +416,11 @@ class Sessions:
     def reap(self) -> int:
         """Pause whoever has dropped off, let go of whoever isn't coming back.
 
-        Also drops sessions whose pass was revoked, so taking a link away
-        stops the music that link is playing rather than only the next thing
-        it asks for.
+        Also drops sessions whose account or pass lost access, so revocation
+        stops the current music rather than only blocking the next request.
         """
         from ..web.security import list_passes
+        from ..web import accounts
 
         alive = {p["id"] for p in list_passes()
                  if not p["revoked"] and not p["expired"]}
@@ -423,15 +428,25 @@ class Sessions:
         with self._lock:
             rooms = list(self._rooms.items())
         dead: list[tuple[str, str]] = []
-        from .shares import VISIT_GONE, is_visit
+        from .shares import VISIT_GONE, is_visit, player_alive
         for pid, room in rooms:
             if is_visit(pid):
                 # Somebody who opened a shared song: gone when their page stops
                 # checking in. There's no pass behind them to revoke.
-                if room.quiet_for() > VISIT_GONE:
+                if room.quiet_for() > VISIT_GONE or not player_alive(pid):
                     dead.append((pid, "left"))
                 continue
-            if pid not in alive:
+            # Signed-in listeners use their Google profile id, which is not
+            # a legacy pass. Looking only in the pass store revoked every
+            # account session on the first watchdog tick. Validate against
+            # the identity that owns the room, including deletion/blocking.
+            if pid.startswith("g-"):
+                account = accounts.by_profile(pid)
+                authorised = bool(account and account.get("scope") in
+                                  ("owner", "full", "phone"))
+            else:
+                authorised = pid in alive
+            if not authorised:
                 dead.append((pid, "revoked"))
             elif now - room.last_seen > IDLE_DEATH:
                 dead.append((pid, "quiet"))

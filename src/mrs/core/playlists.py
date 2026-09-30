@@ -69,6 +69,7 @@ class Playlists:
         self._session = session
         self._lock = threading.RLock()
         self._downloading: set[str] = set()
+        self._importing: set[str] = set()
 
     # -- layout --------------------------------------------------------
     def root(self) -> Path:
@@ -84,14 +85,24 @@ class Playlists:
     def _folder_path(self, name: str) -> Path:
         """Find a current folder, or an exact-name folder from an old build."""
         p = self._inside(_playlist_leaf(name))
-        if p.exists():
+        if p.exists() and self._display_name(p) == (name or "").strip():
             return p
+        # Display names can change without moving downloaded audio. Resolve
+        # the saved identity first; never reuse another list's old directory.
+        for folder in self.root().iterdir():
+            if folder.is_dir() and self._display_name(folder) == (name or "").strip():
+                return folder
         # Builds before DATA-017 used the lossy _safe_name form. Retain an
         # old folder only when its saved display name exactly matches, so a
         # new colliding spelling cannot target a different existing list.
         legacy = self._inside(_safe_name(name))
         if legacy != p and legacy.is_dir() and self._display_name(legacy) == (name or "").strip():
             return legacy
+        if p.exists():
+            suffix = hashlib.sha256((name or "").encode()).hexdigest()[:12]
+            p = self._inside(_playlist_leaf(name) + "-" + suffix)
+            while p.exists():
+                p = self._inside(p.name + "-copy")
         return p
 
     def _index(self, name: str) -> Path:
@@ -322,6 +333,57 @@ class Playlists:
         return exact + partial
 
     # -- writes --------------------------------------------------------
+    def new(self, name: str) -> dict:
+        name = (name or "").strip()
+        if not name or len(name) > 120:
+            return {"ok": False, "message": "Use a playlist name between 1 and 120 characters"}
+        with self._lock:
+            if any(n.casefold() == name.casefold() for n in self.names()):
+                return {"ok": False, "message": "A playlist already has that name"}
+            self.create(name)
+        return {"ok": True, "name": name, "message": f"Created {name}"}
+
+    def rename(self, name: str, new_name: str) -> dict:
+        new_name = (new_name or "").strip()
+        if not new_name or len(new_name) > 120:
+            return {"ok": False, "message": "Use a playlist name between 1 and 120 characters"}
+        with self._lock:
+            if name in self._downloading or name in self._importing:
+                return {"ok": False, "message": "Wait for this playlist to finish importing or downloading"}
+            folder = self._folder_path(name)
+            if not (folder / "tracks.json").is_file():
+                return {"ok": False, "message": "That playlist no longer exists"}
+            if any(n != name and n.casefold() == new_name.casefold() for n in self.names()):
+                return {"ok": False, "message": "A playlist already has that name"}
+            # Keep paths, offline files, collaboration flags and credits intact.
+            write_atomic(folder / "name.txt", new_name)
+        self._save_event()
+        return {"ok": True, "name": new_name, "message": f"Renamed to {new_name}"}
+
+    def import_copy(self, name: str, tracks: list[Track]) -> dict:
+        """A share is a copy, never an accidental merge with an existing list."""
+        with self._lock:
+            base = (name or "Shared playlist").strip()[:100]
+            used = {n.casefold() for n in self.names()}
+            label, number = base, 2
+            while label.casefold() in used:
+                label = f"{base} ({number})"
+                number += 1
+            self.create(label)
+            seen = set()
+            unique = []
+            for track in tracks:
+                if not track or not (track.video_id or track.url):
+                    continue
+                key = norm_title(track.title, track.artist)
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique.append(track)
+            self._save(label, [t.to_dict() for t in unique])
+        return {"ok": True, "name": label, "count": len(unique),
+                "message": f"Imported {label} — {len(unique)} songs"}
+
     def create(self, name: str) -> str:
         with self._lock:
             folder = self.folder(name)
@@ -387,6 +449,7 @@ class Playlists:
             seen = {norm_title(r.get("title", ""), r.get("artist", ""))
                     for r in rows}
             added = 0
+            newly_added = []
             for t in good:
                 key = norm_title(t.title, t.artist)
                 if key in seen:
@@ -394,10 +457,11 @@ class Playlists:
                 seen.add(key)
                 rows.append(t.to_dict())
                 added += 1
+                newly_added.append(t)
             if added:
                 self._save(name, rows)
         if added:
-            self._credit(name, good, by, by_id)
+            self._credit(name, newly_added, by, by_id)
         if added and config.get("playlist_download"):
             self.download_async(name)
         return {"ok": True, "message": f"Added {added} to {name}",

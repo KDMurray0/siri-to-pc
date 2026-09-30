@@ -24,7 +24,6 @@ addresses and is kept for a day for security.
 from __future__ import annotations
 
 import json
-import shutil
 import time
 
 from ..core import stats
@@ -75,8 +74,8 @@ def erase(sub: str) -> dict:
     # Their Siri keys go before the account, so a key can never outlive the
     # person it acts for.
     report["siri_keys"] = sec.siri_forget(pid)
-    from ..core import shares
-    report["shares"] = shares.forget_by(pid)
+    from ..core import shares, playlist_shares
+    report["shares"] = shares.forget_by(pid) + playlist_shares.forget_by(pid)
     report["usage"] = stats.erase(pid)
     report["credits"] = playlists.scrub_person(pid, person.get("name", ""))
     report["audit"] = audit.scrub(f"account:{pid}")

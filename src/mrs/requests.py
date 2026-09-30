@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import random
 import re
 import threading
 import time
@@ -11,7 +10,6 @@ from .config import config
 from .core.extras import caster
 from .core.library import library
 from .core.playlists import playlists
-from .core.taste import taste
 from .events import Ev, bus
 from .logging_setup import get, spawn
 from .models import Plan, Track, _fold
@@ -295,9 +293,16 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
         else:
             shuffle = bool(plan.shuffle) if plan.shuffle is not None else False
         if plan.mode == "next":
-            queue.play_next(res.tracks[0])
-            first = res.tracks[0]
-            res.spoken = f"Playing {first.title} next" + (f", by {first.artist}" if first.artist else "")
+            chosen = (res.tracks[:plan.count] if plan.count > 1 else
+                      res.tracks if plan.kind == "mix" and plan.items and
+                      all(i.get("kind") == "song" for i in plan.items) else
+                      res.tracks[:1])
+            for track in reversed(chosen):
+                queue.play_next(track)
+            first = chosen[0]
+            res.spoken = (f"Playing {len(chosen)} songs next" if len(chosen) > 1 else
+                          f"Playing {first.title} next" +
+                          (f", by {first.artist}" if first.artist else ""))
         elif plan.mode == "queue":
             queue.enqueue(res.tracks[:plan.count] if plan.count else res.tracks)
             first = res.tracks[0]
@@ -852,7 +857,6 @@ def _import_link(reader, service: str, url: str, *,
     rather than asking for one right now.
     """
     queue = queue if queue is not None else player.queue
-    from .core.playlists import playlists
     # Whose library the result is filed in. A guest's own, if they have one;
     # theirs is the only place it should go, and it used to go into the
     # owner's — a stranger's Spotify link filing itself in your collection.
@@ -867,6 +871,7 @@ def _import_link(reader, service: str, url: str, *,
         say_to(room, f"Reading that {service} link…")
     verb = "Playing" if play else "Saved"
     guard = getattr(queue, "import_era", lambda: 0)()
+    importing_name = [""]
 
     def work() -> None:
         names = reader.track_names(url)
@@ -877,6 +882,10 @@ def _import_link(reader, service: str, url: str, *,
             return
 
         label = reader.link_name(url) or f"{service} import"
+        importing_name[0] = label
+        if store is not None:
+            with store._lock:
+                store._importing.add(label)
         if not quiet:
             say_to(room, f"{label}: {len(names)} tracks, matching them up…")
 
@@ -888,6 +897,9 @@ def _import_link(reader, service: str, url: str, *,
             once every track had been found, and only if you happened to
             leave the tab and come back.
             """
+            if not busy and store is not None:
+                with store._lock:
+                    store._importing.discard(label)
             evt = {"playlists": True, "importing": label if busy else "",
                    "found": done, "total": len(names)}
             if room:
@@ -965,6 +977,9 @@ def _import_link(reader, service: str, url: str, *,
             say_to(room, msg)
 
     def unstick(_exc):
+        if store is not None:
+            with store._lock:
+                store._importing.discard(importing_name[0])
         # Whatever went wrong, the spinner has to come back down — the line
         # that lowers it sits three statements past the one that threw.
         if not quiet:
@@ -995,7 +1010,7 @@ def add_spotify(url: str, queue=None, room: str = "", lists=OWN) -> dict:
         return _import_spotify(url, **common)
     if applemusic.is_apple_url(url):
         return _import_apple(url, **common)
-    return {"status": "error", "message": "That isn't a Spotify or Apple Music link"}
+    return {"status": "error", "message": "Use a shared playlist link from this server, Spotify or Apple Music"}
 
 
 def play_station(url: str, name: str = "", art: str = "", queue=None) -> dict:
@@ -1004,8 +1019,8 @@ def play_station(url: str, name: str = "", art: str = "", queue=None) -> dict:
     from .core import radio
     if not radio.is_known_stream(url):
         return {"status": "error", "message": "Choose a station from the search results"}
-    track = Track(title=name or "Radio", artist="Radio", art=art, url=url,
-                  source="radio", origin="request", reason="asked")
+    track = Track(title=name or "Radio", artist="Radio", art=radio.clean_art(art),
+                  url=url, source="radio", origin="request", reason="asked")
     queue.play_now([track], kind="radio")
     msg = f"Tuned to {track.title}"
     say_to(getattr(queue, "session_id", ""), msg)
@@ -1013,17 +1028,15 @@ def play_station(url: str, name: str = "", art: str = "", queue=None) -> dict:
     return {"status": "played", "message": msg, "via": "radio"}
 
 
-def _picked(item: dict, taste) -> tuple[list[Track], "resolver.Resolution | None"]:
+def _picked(item: dict, taste, lists=OWN) -> tuple[list[Track], "resolver.Resolution | None"]:
     """What one picked search result stands for: the song, or the band's
     likeliest songs, or the album."""
     kind = str(item.get("kind") or "song")
     if kind == "playlist":
-        # One of theirs, shuffled: "together" with a playlist means its songs
-        # turn up among the rest, not the whole list first.
-        from .core.playlists import playlists
-        got = [t for t in playlists.tracks(str(item.get("name") or "")) if t.video_id or t.url]
-        random.shuffle(got)
-        return got[:40], None
+        store = _store_for(lists)
+        got = [t for t in store.tracks(str(item.get("name") or ""))
+               if t.video_id or t.url] if store is not None else []
+        return got, None
     if kind == "song" and item.get("video_id"):
         return [Track(video_id=str(item["video_id"]), title=str(item.get("title") or ""),
                       artist=str(item.get("artist") or ""), art=str(item.get("art") or ""),
@@ -1039,7 +1052,7 @@ def _picked(item: dict, taste) -> tuple[list[Track], "resolver.Resolution | None
 
 
 def play_picks(items: list[dict], mode: str = "play", *, queue=None,
-               announce: bool = True) -> dict:
+               announce: bool = True, lists=OWN) -> dict:
     """What was picked in the search results, acted on as asked.
 
     One pick is played as itself. Several: the picked songs first, in the order
@@ -1059,7 +1072,7 @@ def play_picks(items: list[dict], mode: str = "play", *, queue=None,
     taste = getattr(queue, "taste", None)
     lanes, parts, names = [], [], []
     for item in items:
-        tracks, res = _picked(item, taste)
+        tracks, res = _picked(item, taste, lists)
         if tracks:
             lanes.append(tracks)
             parts.append((item, res))
@@ -1101,12 +1114,12 @@ def play_picks(items: list[dict], mode: str = "play", *, queue=None,
         kind = item.get("kind") or "song"
         queue.play_now(lanes[0], res.alternates if res else None,
                        anchors=res.anchors if res else None,
-                       hold_radio=bool(res and res.hold_radio), kind=kind)
+                       hold_radio=kind == "playlist" or bool(res and res.hold_radio), kind=kind)
         msg = (f"Playing {first.title}" + (f" by {first.artist}" if first.artist else "")
                if kind == "song" else (res.spoken if res else f"Playing {names[0]}"))
     else:
         dealt = _songs_then_mix(parts, lanes)
-        queue.play_now(dealt, anchors=[lane[0] for lane in lanes], kind="mix")
+        queue.play_now(dealt, anchors=[lane[0] for lane in lanes], kind="mix", hold_radio=True)
         if all((i.get("kind") or "song") == "song" for i, _ in parts):
             msg = f"Playing {len(lanes)} songs, then more like them"
         else:
@@ -1122,18 +1135,12 @@ def _listed(names: list[str]) -> str:
 def _songs_then_mix(parts, lanes) -> list[Track]:
     """The picked songs, in the order they were picked; then the bands, albums
     and playlists dealt out one of each at a time."""
-    from itertools import zip_longest
+    from .core.queue import spread_lanes
     songs = [t for (item, _), lane in zip(parts, lanes)
              if (item.get("kind") or "song") == "song" for t in lane]
-    groups = [lane[:12] for (item, _), lane in zip(parts, lanes)
+    groups = [lane for (item, _), lane in zip(parts, lanes)
               if (item.get("kind") or "song") != "song"]
-    out, seen = [], set()
-    for t in songs + [t for row in zip_longest(*groups) for t in row if t is not None]:
-        key = t.video_id or t.url
-        if key and key not in seen:
-            seen.add(key)
-            out.append(t)
-    return out
+    return songs + spread_lanes(groups)
 
 
 def _together(queue, parts, lanes, names, taste, room, announce) -> dict:
@@ -1141,27 +1148,24 @@ def _together(queue, parts, lanes, names, taste, room, announce) -> dict:
     in straight after it, and the radio steers by all of it from then on."""
     now = queue.current_track() if hasattr(queue, "current_track") else None
     lead = (now.artist or "").split(",")[0].strip() if now else ""
-    same = lambda a, b: _fold((a or "").lower()).strip() == _fold((b or "").lower()).strip()
-    if lead and not any(same(lead, str(i.get("name") or i.get("artist") or "")) for i, _ in parts):
+    def same(a, b):
+        return _fold((a or "").lower()).strip() == _fold((b or "").lower()).strip()
+    mandatory = queue.mandatory_tracks()
+    if not mandatory and lead and not any(same(lead, str(i.get("name") or i.get("artist") or "")) for i, _ in parts):
         mine, res = _picked({"kind": "artist", "name": lead}, taste)
         if mine:
             mine = [t for t in mine if t.video_id != (now.video_id if now else "")]
             parts = [({"kind": "artist", "name": lead}, res)] + list(parts)
             lanes = [mine] + list(lanes)
             names = [lead] + list(names)
-    dealt = _songs_then_mix(parts, lanes)[:24]
-    if not now:
-        queue.play_now(dealt, anchors=[lane[0] for lane in lanes], kind="mix")
+    dealt = _songs_then_mix(parts, lanes)
+    anchors = [lane[0] for lane in lanes if lane]
+    if now and not any(same(a.artist, now.artist) for a in anchors):
+        anchors.insert(0, now)
+    if not now and not mandatory:
+        queue.play_now(dealt, anchors=anchors, kind="mix", hold_radio=True)
     else:
-        with queue._lock:
-            queue._anchors = [lane[0] for lane in lanes]
-            queue._request_kind = "mix"
-            queue._hold_radio = False
-            queue._end_after_run = False
-            queue._pool.clear()
-        for t in reversed(dealt):
-            t.reason = t.reason or "asked"
-            queue.play_next(t)
+        queue.spread_in(dealt, anchors)
     msg = f"Playing {_listed(names)} together"
     if announce:
         player.announce(msg, room)

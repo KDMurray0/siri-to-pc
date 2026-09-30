@@ -12,6 +12,7 @@ from concurrent.futures import TimeoutError as FuturesTimeout
 import json
 import math
 import mimetypes
+import re
 import urllib.parse
 import shutil
 import threading
@@ -54,6 +55,11 @@ from ..requests import (add_spotify, handle_request, play_for_you,
 from ..resolve import catalog, llm, lyrics as lyrics_mod, spotify
 
 log = get("api")
+
+# The most songs a non-owner may ask the builder for at once. A big build is
+# the most expensive thing this app does, and a public link outlives the
+# evening; the owner keeps the ceiling because it is their machine.
+GUEST_MAX_SONGS = 200
 
 NEWLINE = chr(10)
 
@@ -101,11 +107,21 @@ async def _door(request: Request, call_next):
                 {"detail": "POST parameters belong in the JSON body"},
                 status_code=400)
 
-    resp = await call_next(request)
+    from ..logging_setup import private_listen
+    credential = (request.headers.get("X-Music-Key") or request.headers.get("X-API-Key")
+                  or request.query_params.get("token") or request.query_params.get("key") or "")
+    private_context = private_listen.set(credential.startswith("share.") or
+                                        request.url.path.startswith("/s/") and
+                                        request.url.path.endswith(("/player", "/join")))
+    try:
+        resp = await call_next(request)
+    finally:
+        private_listen.reset(private_context)
     # The owner's trail: changes to the machine, not every skip and progress
     # tick — those arrive every few seconds per listener and would rewrite
     # the file each time.
-    if (route and route.path[5:] in OWNER_ROUTES
+    if (route and not (getattr(request.state, "pass_row", None) or {}).get("ephemeral")
+            and route.path[5:] in OWNER_ROUTES
             and (route.path[5:] not in READ_ONLY_ROUTES
                  if request.method == "POST" else
                  api_changes(route.path, request.query_params,
@@ -130,6 +146,10 @@ async def _door(request: Request, call_next):
         _set_session(resp, request, renew)
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "SAMEORIGIN"
+    # These directives work with the app's existing inline player code while
+    # ruling out injected base URLs, plugin content and foreign framing.
+    resp.headers["Content-Security-Policy"] = (
+        "base-uri 'none'; object-src 'none'; frame-ancestors 'self'; form-action 'self'")
     return resp
 
 
@@ -263,6 +283,19 @@ def _link_row(expected: str, candidate: str, request: Request | None = None) -> 
     pass, the player's own pass for <audio> urls, and an account's Siri keys.
     Everything else was handed to a person, which is what accounts replaced.
     """
+    if candidate.startswith("share."):
+        from ..core import shares
+        row = shares.player_row(candidate, heartbeat=bool(request is not None and
+                               request.url.path == "/api/session/progress" and
+                               request.method == "POST"))
+        if not row:
+            raise HTTPException(410, "This private listen has ended. Open the shared song again.")
+        if request is not None:
+            path = request.url.path
+            if path == "/api/share" or (path.startswith("/api/playlist/") and
+                                        path != "/api/playlist/play"):
+                raise HTTPException(403, "This private listen does not save data")
+        return row
     row = sec.read_token(expected, candidate)
     if not row:
         # Ours, once, and no longer good. That is somebody's old Shortcut or
@@ -279,7 +312,7 @@ def _link_row(expected: str, candidate: str, request: Request | None = None) -> 
     return row
 
 
-def _opens_as_owner(ip: str) -> bool:
+def _opens_as_owner(request: Request) -> bool:
     """Does a visit from here get the owner's player without signing in?
 
     This computer, always (with lan_open on). Other devices on the wifi used to
@@ -289,17 +322,41 @@ def _opens_as_owner(ip: str) -> bool:
     owner's own phone once, then it's remembered -- unless lan_open_devices
     says the whole house is trusted.
     """
+    import ipaddress
     from .security import is_home
+    ip = _client_ip(request)
     if not (is_home(ip) and config.get("lan_open", True)):
         return False
+    # A browser can resolve an attacker-controlled hostname to 127.0.0.1.
+    # Treating that connection as local would render the owner's master key
+    # into a same-origin page readable by the attacker's site.
+    host = (request.url.hostname or "").lower().rstrip(".")
+    known = {"localhost", str(config.get("ddns_hostname") or "").lower().rstrip("."),
+             str(config.get("lan_hostname") or "").lower().rstrip(".")}
+    host_ip = None
+    if host not in known:
+        try:
+            host_ip = ipaddress.ip_address(host)
+        except ValueError:
+            return False
     if ip.startswith("127.") or ip in ("::1", "localhost"):
-        return True
+        # A public hostname forwarded by a local reverse proxy still has a
+        # loopback peer. Only the app's actual loopback URL gets implicit owner.
+        return host == "localhost" or bool(host_ip and host_ip.is_loopback)
     return not google.configured() or bool(config.get("lan_open_devices", False))
 
 
 def require_key(request: Request, key: str = Query(default=""),
                 token: str = Query(default="")) -> bool:
     expected = config.get("api_key") or ""
+    # An explicit private-share credential wins over an existing account cookie.
+    # Otherwise opening a song while signed in would replace that account's queue.
+    private = next((c for c in (request.headers.get("X-Music-Key", ""),
+                                request.headers.get("X-API-Key", ""), token, key)
+                    if c.startswith("share.")), "")
+    if private:
+        request.state.pass_row = _link_row(expected, private, request)
+        return _check_ip_lock(_client_ip(request))
     if not expected:
         return True                      # no key set: nothing to check
     ip = _client_ip(request)
@@ -351,6 +408,8 @@ def require_key(request: Request, key: str = Query(default=""),
 
 def is_owner(request: Request, key: str = "") -> bool:
     """Did this arrive with the actual key, rather than a token?"""
+    if (getattr(request.state, "pass_row", None) or {}).get("ephemeral"):
+        return False
     expected = config.get("api_key") or ""
     if not expected:
         return True
@@ -408,7 +467,6 @@ async def index(request: Request, key: str = Query(default=""),
     is still an invitation credential; signing in gives that person a durable
     identity after the invitation has been checked.
     """
-    from .security import is_home
     # One address, two applications. With Music at a path and a Movies address
     # written down, the bare address is a choice; each has its own door and its
     # own sign-in. Reached through the path, it is Music as always.
@@ -421,7 +479,7 @@ async def index(request: Request, key: str = Query(default=""),
     offered = (token or key
                or request.headers.get("X-Music-Key")
                or request.headers.get("X-API-Key") or "")
-    home_owner = _opens_as_owner(ip) and not offered
+    home_owner = _opens_as_owner(request) and not offered
     row = _account_row(request)
 
     def landing(blocked=False):
@@ -466,13 +524,12 @@ async def setup_page(request: Request, key: str = Query(default=""),
     Owner-only, because it prints the master key straight into the html. On
     the home network it opens as it always has.
     """
-    from .security import is_home
 
     ip = _client_ip(request)
     offered = (token or key
                or request.headers.get("X-Music-Key")
                or request.headers.get("X-API-Key") or "")
-    home = _opens_as_owner(ip) and not offered
+    home = _opens_as_owner(request) and not offered
     if not home:
         require_key(request, key, token)
         if not is_owner(request, key):
@@ -558,7 +615,6 @@ def _serve_page(request: Request, name: str, key: str, token: str):
     everything; a shared link's token, and it can listen and nothing else.
     """
     ip = _client_ip(request)
-    from .security import is_home
 
     # Someone who arrived holding a credential is judged on it, wherever they
     # are. Without this, a guest on a phone-only link who happens to be in the
@@ -572,7 +628,7 @@ def _serve_page(request: Request, name: str, key: str, token: str):
                # account opening the page from the sofa would be handed the
                # owner's copy by the open-home rule.
                or request.cookies.get(SESSION_COOKIE, "") or "")
-    home = _opens_as_owner(ip) and not offered
+    home = _opens_as_owner(request) and not offered
 
     if not home:
         try:
@@ -586,6 +642,8 @@ def _serve_page(request: Request, name: str, key: str, token: str):
     owner = home or is_owner(request, key)
     row = getattr(request.state, "pass_row", None) or {}
     creds = config.get("api_key", "") if owner else (token or key)
+    if row.get("ephemeral") and not creds:
+        creds = request.headers.get("X-Music-Key") or request.headers.get("X-API-Key", "")
     signed_in = getattr(request.state, "account", None)
     if signed_in:
         # The cookie is the credential, and it goes with every request this
@@ -602,7 +660,7 @@ def _serve_page(request: Request, name: str, key: str, token: str):
     # to load neutral and ask, which left a window where its own requests went
     # out saying the wrong thing about where they should play — and left the
     # capsule showing whatever the markup happened to say.
-    return templates.TemplateResponse(request, name, {
+    response = templates.TemplateResponse(request, name, {
         "api_key": creds,
         # Which calls are reads, from the same table the server enforces, so
         # the pages can't drift from it.
@@ -610,6 +668,7 @@ def _serve_page(request: Request, name: str, key: str, token: str):
                                 if "{" not in k),
         "is_guest": "0" if owner else "1",
         "scope": "owner" if owner else (row.get("scope") or "full"),
+        "private_share": row.get("share_id", ""),
         "announce_duck_db": config.get("announce_duck_db", -12.0),
         "announce_voice_gain_db": config.get("announce_voice_gain_db", 0.0),
         "signed_in_as": (signed_in or {}).get("email", ""),
@@ -619,6 +678,8 @@ def _serve_page(request: Request, name: str, key: str, token: str):
                                    and not owner) else "0",
         "client_available": "1" if _client_build() else "0",
     })
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 # ── health + events ───────────────────────────────────────────────────
@@ -866,10 +927,16 @@ def api_play_pick(request: Request, items: str = "", mode: str = "play", _: bool
     if not room:
         _guard_shared(request)
     from ..requests import play_picks
-    return play_picks(picked, mode, queue=room.queue if room else None)
+    return play_picks(picked, mode, queue=room.queue if room else None,
+                      lists=_lists_for(request))
 
 
 # ── sharing a song ───────────────────────────────────────────────────
+
+# Bump when the card metadata changes. Discord keys its unfurl cache by the
+# full URL, so a versioned share URL lets the improved card replace an older
+# failed preview without changing the share id or playback route.
+SHARE_CARD_VERSION = "4"
 
 def _share_base(request: Request) -> str:
     """Where a shared link points: the public address when there is one."""
@@ -890,9 +957,11 @@ def api_share(request: Request, video_id: str = "", title: str = "", artist: str
                              "art": art, "duration": duration}, by=who)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    # The chat card's video, made now so it's there when the link is pasted.
-    shares.make_embed_soon(got)
-    return {"status": "ok", "id": got["id"], "url": _share_base(request) + "/s/" + got["id"]}
+    # The compact preview is artwork only. Do not download/transcode a video
+    # that the page no longer advertises to crawlers.
+    return {"status": "ok", "id": got["id"],
+            "url": (_share_base(request) + "/s/" + got["id"]
+                    + "?v=" + SHARE_CARD_VERSION)}
 
 
 @app.get("/s/{sid}", response_class=HTMLResponse)
@@ -903,11 +972,61 @@ def share_page(request: Request, sid: str):
     if not row:
         return _signin_page("That link has run out, or was never a song.", 404,
                             base=_pfx.base_of(request))
-    url = _share_base(request) + "/s/" + sid
-    return templates.TemplateResponse(request, "share.html", {
-        "song": row, "server_name": config.get("server_name", "Music Request"),
-        "url": url, "video": url + "/embed.mp4", "side": shares.EMBED_SIDE,
+    path_url = _share_base(request) + "/s/" + sid
+    version = SHARE_CARD_VERSION if request.query_params.get("v") == SHARE_CARD_VERSION else ""
+    url = path_url + (("?v=" + version) if version else "")
+    cover = path_url + "/cover.jpg" + (("?v=" + version) if version else "")
+    response = templates.TemplateResponse(request, "share.html", {
+        "song": row, "url": url, "cover": cover,
+        "width": shares.EMBED_SIDE, "height": shares.EMBED_SIDE,
         "base": _pfx.base_of(request)})
+    # The metadata is public; visiting it never allocates a private session.
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return response
+
+
+@app.get("/s/{sid}/card.jpg")
+def share_card(sid: str):
+    from ..core import shares
+    row = shares.get(sid)
+    if not row:
+        raise HTTPException(404, "No such song")
+    return FileResponse(shares.card(row), media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=300"})
+
+
+@app.post("/s/{sid}/player")
+def share_player(request: Request, sid: str):
+    """Only a browser action mints a private visit; crawler GETs stay stateless."""
+    from ..core import shares
+    origin = request.headers.get("origin")
+    if origin and not _same_origin(origin, request):
+        raise HTTPException(403, "Cross-origin request refused")
+    try:
+        token, _ = shares.join(sid, _client_ip(request), full_player=True)
+    except LookupError:
+        raise HTTPException(404, "That link has run out")
+    except shares.Busy as exc:
+        raise HTTPException(429, str(exc))
+    url = _pfx.base_of(request) + "/player?token=share." + token
+    headers = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
+    if "application/json" in request.headers.get("accept", ""):
+        return JSONResponse({"url": url}, headers=headers)
+    return RedirectResponse(url, status_code=303, headers=headers)
+
+
+@app.get("/s/{sid}/cover.jpg")
+def share_cover(sid: str):
+    """A stable first-party cover URL for Discord, iMessage and link cards."""
+    from ..core import shares
+    row = shares.get(sid)
+    if not row:
+        raise HTTPException(404, "No such song")
+    path = shares._cover(row)
+    if not path or not path.exists() or path.stat().st_size <= 2000:
+        raise HTTPException(404, "No cover for this song")
+    return FileResponse(path, media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=86400, immutable"})
 
 
 @app.get("/s/{sid}/embed.mp4")
@@ -918,7 +1037,7 @@ def share_embed(request: Request, sid: str):
     row = shares.get(sid)
     if not row:
         raise HTTPException(404, "No such song")
-    path = shares.embed_file(row["video_id"])
+    path = shares.embed_file(shares.media_key(row))
     if not (path.exists() and path.stat().st_size > 2000):
         shares.make_embed_soon(row)
         for _ in range(50):
@@ -930,6 +1049,8 @@ def share_embed(request: Request, sid: str):
                                 headers={"Retry-After": "5"})
     resp = _range_response(request, path)
     resp.headers["content-type"] = "video/mp4"
+    resp.headers["Cache-Control"] = "public, max-age=86400, immutable"
+    resp.headers["Content-Disposition"] = "inline"
     return resp
 
 
@@ -1087,7 +1208,8 @@ def api_session_ended(request: Request, _: bool = Auth):
     # Their taste learns from what they actually sat through, the same way
     # the owner's does from mpv's monitor loop.
     room.note_played(room.current(), room.position)
-    sec.note_use(room.id, plays=1)
+    if not (getattr(request.state, "pass_row", None) or {}).get("ephemeral"):
+        sec.note_use(room.id, plays=1)
     room.sink.advance()
     room.rewound()
     room.queue.publish_queue(force=True)
@@ -1105,7 +1227,7 @@ def api_session_progress(request: Request, pos: float = 0.0, _: bool = Auth):
     if room:
         moved = room.mark_position(pos)
         room.touch()
-        if moved:
+        if moved and not (getattr(request.state, "pass_row", None) or {}).get("ephemeral"):
             sec.note_use(room.id, seconds=moved)
     return {"status": "ok"}
 
@@ -1127,6 +1249,8 @@ def api_session_here(request: Request, on: int = 1, at: float = 0.0,
     row = getattr(request.state, "pass_row", None)
     if not row or row.get("internal") or row.get("owner"):
         return {"status": "ok", "shared": True}
+    if row.get("scope") == "phone":
+        raise HTTPException(403, "This session plays only on your device")
     room = sessions.find(row["id"])
     moved = ""
     if carry:
@@ -1337,7 +1461,7 @@ def api_search(request: Request, q: str, limit: int = 12, _: bool = Auth):
     body = {
         "status": "ok",
         "playlists": [{"kind": "playlist", **p}
-                      for p in playlists.summary()
+                      for p in (_lists_for(request).summary() if _lists_for(request) else [])
                       if q.lower() in p["name"].lower()],
         "library": [t.to_dict() for t in library.search(q, limit=4)],
         "artists": catalog.search_artists(q, limit=2),
@@ -1399,7 +1523,8 @@ def api_lyrics(request: Request, _: bool = Auth):
         # out.
         _guard_rate(room, request)
         data = lyrics_mod.get_lyrics(track.title, track.artist, track.duration)
-    return {"status": "ok", "lyrics": data}
+    from ..resolve import lyric_alignment
+    return {"status": "ok", "lyrics": lyric_alignment.enrich(track, data)}
 
 
 @app.get("/api/lyrics/search")
@@ -1623,7 +1748,7 @@ def _smart_store(request: Request):
     return me.taste if me is not None and me.permanent else None
 
 
-def _smart_rows(store, kind: str, limit: int = 100):
+def _smart_rows(store, kind: str, limit: int = 200):
     """Build a live playlist from one listener's own saved listening data."""
     from ..models import Track
 
@@ -1704,15 +1829,15 @@ def api_smartplaylists(request: Request, kind: str = "", _: bool = Auth):
 
 
 @app.get("/api/smartplaylists/play")
-def api_smartplaylist_play(request: Request, kind: str, _: bool = Auth):
-    """Add up to fifty current smart-list tracks to the caller's queue."""
+def api_smartplaylist_play(request: Request, kind: str, start: int = 0, _: bool = Auth):
+    """Play a live history list as a real playlist, in its current order."""
     if kind not in _SMART_LABELS:
         raise HTTPException(400, "Unknown smart playlist")
     store = _smart_store(request)
     if store is None:
         raise HTTPException(403, "Smart playlists need a permanent link")
     from ..models import Track
-    tracks = [Track.from_dict(row) for row in _smart_rows(store, kind, 50)]
+    tracks = [Track.from_dict(row) for row in _smart_rows(store, kind, 200)]
     if not tracks:
         return {"status": "ok", "added": 0,
                 "message": f"{_SMART_LABELS[kind]} is empty"}
@@ -1721,14 +1846,15 @@ def api_smartplaylist_play(request: Request, kind: str, _: bool = Auth):
     if not room:
         _guard_shared(request)
     queue = room.queue if room else player.queue
-    queue.enqueue(tracks, imported=True)
+    tracks = tracks[max(0, min(start, len(tracks) - 1)):]
+    queue.play_now(tracks, hold_radio=True, kind="playlist")
     return {"status": "ok", "added": len(tracks),
-            "message": f"Added {len(tracks)} from {_SMART_LABELS[kind]}"}
+            "message": f"Playing {_SMART_LABELS[kind]} · {len(tracks)} songs"}
 
 
 @app.get("/api/playlists/make")
 def api_playlists_make(request: Request, what: str = "", songs: int = 0, minutes: int = 0,
-                       name: str = "", strict: int = 1, _: bool = Auth):
+                       name: str = "", target: str = "", strict: int = 0, _: bool = Auth):
     """Make a playlist of a given size from a description, in the background.
 
     "nu metal and glam metal", 500 songs: filled from each band's or genre's
@@ -1738,22 +1864,36 @@ def api_playlists_make(request: Request, what: str = "", songs: int = 0, minutes
     store = _lists_for(request)
     if store is None:
         raise HTTPException(409, "Playlists need an account or the owner's player")
-    what = (what or "").strip()[:200]
+    what = (what or "").strip()
+    if len(what) > 4000:
+        raise HTTPException(400, "Describe the playlist in 4,000 characters or fewer")
     if len(what) < 2:
         raise HTTPException(400, "Say what it should be of: bands, genres, or both")
-    if not (0 <= songs <= builder.MAX_SONGS and 0 <= minutes <= 60 * 24):
-        raise HTTPException(400, f"Up to {builder.MAX_SONGS} songs")
+    cap = builder.MAX_SONGS if is_owner(request) else GUEST_MAX_SONGS
+    if not (0 <= songs <= cap and 0 <= minutes <= 60 * 24):
+        raise HTTPException(400, f"Up to {cap} songs")
+    songs = min(max(songs, 0), cap)
+    if target and target not in store.names():
+        raise HTTPException(404, "Choose an existing playlist to add to")
     room = _session_for(request)
     queue = room.queue if room else player.queue
-    job = builder.start(what, songs=songs, minutes=minutes, name=name.strip()[:60],
-                        store=store, taste=getattr(queue, "taste", None), strict=bool(strict))
+    _guard_rate(room, request)
+    try:
+        job = builder.start(what, songs=songs, minutes=minutes, name=name.strip()[:60],
+                            target=target, store=store, taste=getattr(queue, "taste", None),
+                            strict=bool(strict))
+    except builder.BuildBusy as exc:
+        raise HTTPException(429, str(exc)) from None
     return {"status": "ok", "job": job, "message": f"Making it: {what}"}
 
 
 @app.get("/api/playlists/job")
-def api_playlists_job(job: str = "", _: bool = Auth):
+def api_playlists_job(request: Request, job: str = "", _: bool = Auth):
     from ..core import builder
-    got = builder.job(job)
+    store = _lists_for(request)
+    if store is None:
+        raise HTTPException(403, "Playlists need an account or the owner's player")
+    got = builder.job(job, store=store)
     if not got:
         raise HTTPException(404, "No such job")
     return {"status": "ok", **got}
@@ -1774,6 +1914,117 @@ def api_playlists(request: Request, _: bool = Auth):
     return {"status": "ok", "playlists": mine.summary(), "shared": house,
             "folder": str(mine.root()) if mine is playlists else "",
             "download": bool(config.get("playlist_download"))}
+
+
+# ── issue reports ─────────────────────────────────────────────────────
+
+# A report is a note on the owner's machine. Before the words touch a file
+# they lose what a text file shouldn't carry: control characters that can
+# repaint a terminal, bidirectional overrides that make a note read as
+# something different from what was typed, and zero-width characters that
+# hide edits. Newlines stay — a report that can't break a line is hard to
+# read. And the words never steer a file name.
+_REPORT_JUNK = re.compile(
+    r"[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u0080-\u009f"
+    r"\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
+
+
+def _scrub_report(text: str, limit: int) -> str:
+    text = _REPORT_JUNK.sub("", text or "")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text[:limit].strip()
+
+
+REPORT_CAP_PER_HOUR = 5
+_report_rate_lock = threading.Lock()
+_report_rate: dict[str, list[float]] = {}
+
+
+def _report_admit(request: Request) -> None:
+    """A few notes an hour per person, the way _guard_rate counts.
+
+    The pass is the person; a caller without one falls back to the address.
+    The counter is pruned as it grows so a long-running server doesn't keep
+    a list of every address it has ever seen.
+    """
+    row = getattr(request.state, "pass_row", None) or {}
+    who = row.get("id") or _client_ip(request) or "anonymous"
+    now = time.monotonic()
+    with _report_rate_lock:
+        recent = [at for at in _report_rate.get(who, []) if now - at < 3600]
+        if len(recent) >= REPORT_CAP_PER_HOUR:
+            raise HTTPException(
+                429, "A few notes an hour is plenty — the last one was saved")
+        recent.append(now)
+        _report_rate[who] = recent
+        if len(_report_rate) > 512:
+            for pid in [pid for pid, times in _report_rate.items()
+                        if not any(now - at < 3600 for at in times)]:
+                _report_rate.pop(pid, None)
+
+
+@app.get("/api/report")
+def api_report(request: Request, message: str = "", doing: str = "",
+               _: bool = Auth):
+    """Write an issue note to the data folder, for the owner to read.
+
+    Guests may use it — during a public test that is the point. The note is
+    scrubbed and length-capped before it touches a file, and the message
+    never names the file, so nothing here can steer a write elsewhere.
+    """
+    import secrets
+    from ..paths import data_dir, write_atomic
+
+    msg = _scrub_report(message, 8000)
+    if len(msg) < 4:
+        raise HTTPException(400, "Give the note a sentence — four characters at least")
+    doing = _scrub_report(doing, 300)
+    _report_admit(request)
+
+    row = getattr(request.state, "pass_row", None) or {}
+    who = ("the owner" if is_owner(request)
+           else "a guest" + (f" (pass …{row['id'][-4:]})" if row.get("id") else ""))
+    now = time.localtime()
+    lines = [
+        "Issue report",
+        f"Time (local): {time.strftime('%Y-%m-%d %H:%M:%S', now)}",
+        f"App version: {__version__}",
+        f"Reporter: {who}",
+        f"From address: {_client_ip(request)}",
+        f"Client: {_scrub_report(request.headers.get('user-agent', ''), 200)}",
+        "",
+    ]
+    if doing:
+        lines += [f"What they were doing: {doing}", ""]
+    lines += ["Report:", msg, ""]
+    text = "\n".join(lines)
+
+    folder = data_dir() / "reports"
+    folder.mkdir(parents=True, exist_ok=True)
+    name = f"report-{time.strftime('%Y%m%d-%H%M%S', now)}-{secrets.token_hex(3)}.txt"
+    write_atomic(folder / name, text)
+    log.info("issue report saved: %s (from %s)", name, who)
+    return {"status": "ok", "file": name, "message": "Saved — the owner will see it"}
+
+
+@app.get("/api/playlists/suggest")
+def api_playlist_suggest(request: Request, _: bool = Auth):
+    """A prompt drawn only from this listener's own listening history."""
+    room = _session_for(request)
+    mine = room.queue.taste if room else taste
+    names = [r.get("artist", "") for r in mine.top_artists(4)]
+    names = list(dict.fromkeys(n for n in names if n))[:3]
+    if not names:
+        recent = mine.recent(12)
+        names = list(dict.fromkeys(r.get("artist", "") for r in recent
+                                   if isinstance(r, dict) and r.get("artist")))[:3]
+    if not names:
+        return {"status": "ok", "suggestion": ""}
+    if len(names) == 1:
+        suggestion = f"{names[0]} and the deeper songs around that sound"
+    else:
+        suggestion = f"A flowing mix of {', '.join(names[:-1])} and {names[-1]}, with some deeper cuts"
+    return {"status": "ok", "suggestion": suggestion}
 
 
 @app.get("/api/station")
@@ -1834,6 +2085,16 @@ def api_spotify_add(request: Request, url: str = "", _: bool = Auth):
         raise HTTPException(
             403, "Saving a list needs a permanent link — this one expires")
     room = _session_for(request)
+    from ..core import playlist_shares
+    sid = playlist_shares.id_from_url(url, [_share_base(request),
+        str(request.base_url).rstrip("/") + _pfx.base_of(request)])
+    if sid:
+        row = playlist_shares.get(sid)
+        if not row:
+            raise HTTPException(404, "That playlist link has expired or was removed")
+        from ..models import Track
+        got = mine.import_copy(row["name"], [Track(**t) for t in row["tracks"]])
+        return {"status": "ok", **got}
     return add_spotify(url, queue=room.queue if room else None,
                        room=room.id if room else "", lists=mine)
 
@@ -1862,7 +2123,7 @@ def _whoid(request: Request) -> str:
 def api_playlist(request: Request, op: str, name: str = "",
                  shuffle: bool = False, video_id: str = "", title: str = "",
                  artist: str = "", art: str = "", start: int = 0,
-                 shared: bool = False, on: int = 1,
+                 shared: bool = False, on: int = 1, new_name: str = "", format: str = "csv",
                  _: bool = Auth):
     """Make and play lists — the caller's own, not always the owner's.
 
@@ -1879,7 +2140,7 @@ def api_playlist(request: Request, op: str, name: str = "",
         # owner's gets the same answer as if it weren't there.
         if not playlists.is_shared(name):
             raise HTTPException(403, "That list isn't shared")
-        if op in ("delete", "download", "share", "create"):
+        if op in ("delete", "download", "share", "create", "rename", "link"):
             raise HTTPException(403, "That's the owner's to do")
         mine = playlists
     elif mine is None:
@@ -1893,9 +2154,55 @@ def api_playlist(request: Request, op: str, name: str = "",
                     if room_id else {"playlists": True})
 
     if op == "create":
-        mine.create(name)
-        changed()
-        return {"status": "ok", "message": f"Created {name}"}
+        got = mine.new(name)
+        return {"status": "ok" if got["ok"] else "error", **got}
+    if op == "contains":
+        from ..models import norm_title
+        current = room.current() if room else player.queue.current_track()
+        if not current:
+            return {"status": "ok", "playlists": []}
+        key = norm_title(current.title, current.artist)
+        found = []
+        # Shared: only the list they named. The owner's other names stay private.
+        for list_name in ([name] if shared else mine.names()):
+            match = next((t for t in mine.tracks(list_name)
+                          if norm_title(t.title, t.artist) == key), None)
+            if match:
+                found.append({"name": list_name, "video_id": match.video_id})
+        return {"status": "ok", "playlists": found}
+    if op == "export":
+        import csv
+        import io
+        if name not in mine.names():
+            raise HTTPException(404, "Playlist not found")
+        if format not in ("csv", "txt"):
+            raise HTTPException(400, "Choose CSV or TXT")
+        output = io.StringIO(newline="")
+        writer = csv.writer(output)
+        writer.writerow(["Title", "Artist", "Album", "Duration (seconds)", "URL"])
+        def safe_cell(value):
+            text = str(value or "")
+            return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) else text
+        for t in mine.tracks(name):
+            writer.writerow([safe_cell(t.title), safe_cell(t.artist), safe_cell(t.album), int(t.duration or 0),
+                             t.url or ("https://music.youtube.com/watch?v=" + t.video_id
+                                       if t.video_id else "")])
+        filename = "playlist." + format
+        return Response(content="\ufeff" + output.getvalue(),
+                        media_type="text/csv" if format == "csv" else "text/plain",
+                        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+    if op == "rename":
+        got = mine.rename(name, new_name)
+        return {"status": "ok" if got["ok"] else "error", **got}
+    if op == "link":
+        from ..core import playlist_shares
+        row = getattr(request.state, "pass_row", None) or {}
+        try:
+            got = playlist_shares.create(name, mine.tracks(name), str(row.get("id") or "owner"))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return {"status": "ok", "url": _share_base(request) + "/p/" + got["id"],
+                "message": "Playlist link ready"}
     if op == "share":
         if _profile_for(request) is not None:
             raise HTTPException(403, "That's the owner's to do")
@@ -1939,6 +2246,7 @@ def api_playlist(request: Request, op: str, name: str = "",
             tracks = list(mine.tracks(name))
             if not tracks:
                 return {"status": "ok", "ok": False, "message": "That list is empty"}
+            tracks = tracks[max(0, min(start, len(tracks) - 1)):]
             room.queue.play_now(tracks, shuffle=shuffle, hold_radio=True,
                                 kind="playlist")
             return {"status": "ok", "ok": True,
@@ -1959,6 +2267,18 @@ def api_playlist(request: Request, op: str, name: str = "",
         return {"status": "ok", "tracks": rows,
                 "shared": mine.is_shared(name), "me": who}
     raise HTTPException(404, "unknown playlist operation")
+
+
+@app.get("/p/{sid}", response_class=HTMLResponse)
+def playlist_share_page(request: Request, sid: str):
+    from ..core import playlist_shares
+    row = playlist_shares.get(sid)
+    if not row:
+        return _signin_page("That playlist link has expired or was removed.", 404,
+                            base=_pfx.base_of(request))
+    return templates.TemplateResponse(request, "playlist_share.html", {
+        "playlist": row, "url": _share_base(request) + "/p/" + sid,
+        "base": _pfx.base_of(request)}, headers={"Cache-Control": "public, max-age=300"})
 
 
 # ── settings ──────────────────────────────────────────────────────────
@@ -2147,6 +2467,11 @@ def _session_for(request: Request):
     from ..core.profile import profiles
     from ..core.session import sessions
     row = getattr(request.state, "pass_row", None)
+    if row and row.get("ephemeral"):
+        room = sessions.find(row["id"])
+        if room is None:
+            raise HTTPException(410, "This private listen has ended")
+        return room
     if not row or row.get("internal") or row.get("owner"):
         return None                       # the owner's, i.e. the shared one
     here = request.headers.get("X-Play-Here", "") == "1"
@@ -2165,6 +2490,8 @@ def _profile_for(request: Request):
     """
     from ..core.profile import profiles
     row = getattr(request.state, "pass_row", None)
+    if row and row.get("ephemeral"):
+        return _session_for(request).profile
     if not row or row.get("internal") or row.get("owner"):
         return None
     return profiles.for_row(row)
@@ -2209,7 +2536,8 @@ def _guard_rate(room, request: Request | None = None) -> None:
                     for pid in [pid for pid, times in _shared_rate.items()
                                 if not any(now - at < 3600 for at in times)]:
                         _shared_rate.pop(pid, None)
-        sec.note_use(row["id"], requests=1, ip=_client_ip(request))
+        if not row.get("ephemeral"):
+            sec.note_use(row["id"], requests=1, ip=_client_ip(request))
     else:
         stats.note(stats.HOUSE, requests=1)
 
@@ -2432,6 +2760,8 @@ def _note_served(request: Request, sent: int) -> None:
     if sent <= 0:
         return
     row = getattr(request.state, "pass_row", None) or {}
+    if row.get("ephemeral"):
+        return
     who = row.get("id") if row.get("id") and not (row.get("internal")
                                                   or row.get("owner")) else stats.HOUSE
     stats.note(who, bytes_out=sent)
@@ -3453,7 +3783,6 @@ def api_cookies_import(path: str = "", _: bool = Owner):
 @app.get("/api/cookies/grab")
 def api_cookies_grab(browser: str, close: int = 0, _: bool = Owner):
     """Opt-in: wait for a browser to close (or close it) and take its cookies."""
-    import threading
     if close:
         if not config.get("cookie_close_browser_optin"):
             return {"status": "error",
@@ -4325,7 +4654,7 @@ def api_stats(_: bool = Owner):
     for row in stats_mod.links():
         links.append({**row, **named.get(row["id"], {})})
     return {"status": "ok", "house": stats_mod.house(months=6), "links": links,
-            "month": stats_mod.month_of()}
+            "month": stats_mod.month_of(), "registered_users": accounts.count()}
 
 
 @app.get("/api/diag")

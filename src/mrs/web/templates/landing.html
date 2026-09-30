@@ -184,6 +184,42 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
   .wash i,.mark b,.mark56 b,.caret{animation:none}
   .queue li{transition:none}
 }
+/* Signing in is a trust decision. Keep the page still, legible and focused
+   on the real account flow instead of a simulated product demonstration. */
+:root{--bg:#101114;--panel:#191b20;--line:#32353b;--ink:#f2f2f1;
+  --sub:#adb1b7;--faint:#858a92;--accent:#d9ad78;--accent-ink:#17120d}
+.wash,body::after{display:none}
+.mark b,.mark56 b{animation:none}
+.stage{max-width:1100px;grid-template-columns:minmax(0,1fr) minmax(350px,420px);
+  gap:clamp(36px,6vw,80px);padding:48px 30px}
+.brand{font:650 12px var(--sans);letter-spacing:.08em;margin-bottom:24px}
+.pitch h1{font-size:clamp(36px,4vw,52px);line-height:1.1;font-weight:700}
+.pitch h1 em{color:var(--ink)}
+.sub{margin-top:18px;max-width:42ch;font-size:16px;line-height:1.55}
+.facts{margin-top:30px;gap:0;max-width:40ch}
+.facts li{display:block;padding:12px 0;border-top:1px solid var(--line);
+  font-size:13.5px;line-height:1.5}
+.facts li svg{display:none}
+.door{max-width:none;padding:30px;border:1px solid var(--line);
+  border-radius:16px;background:var(--panel);text-align:left;justify-items:stretch}
+.mark56{justify-content:flex-start;height:26px;margin:0 0 16px}
+.mark56 b{height:18px!important}
+h1.display{font-size:26px;line-height:1.2;font-weight:700;text-transform:none;
+  letter-spacing:-.025em;margin-bottom:8px}
+.door .lede{margin:0 0 18px;max-width:none;font-size:14px;line-height:1.5}
+.gbtn{width:100%;height:46px;margin:4px 0 0;justify-content:center;
+  box-shadow:none;font-size:14px}
+.gbtn:hover{box-shadow:0 3px 10px #0005}
+.signin-fine{margin:14px 0 0;max-width:none;font-size:12px;line-height:1.5}
+.foot{justify-content:flex-start;margin-top:22px;padding-top:15px}
+@media (max-width:860px){
+  .stage{display:flex;flex-direction:column;gap:28px;padding:24px 18px 36px}
+  .pitch{display:block;order:2}
+  .door{order:1;padding:24px}
+  .pitch h1{font-size:29px;margin:0}
+  .sub{font-size:14px;margin-top:12px}
+  .facts{margin-top:20px}
+}
 </style>
 </head>
 <body>
@@ -192,30 +228,18 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
 <main class="stage">
   <section class="pitch">
     <div class="brand"><span class="mark" aria-hidden="true"><b></b><b></b><b></b><b></b></span>{{ server_name }}</div>
-    <h1>Ask for a song.<br><em>It works out the rest.</em></h1>
-    <p class="sub">Say or type a song, a band, an album or a mood. It finds it, plays it, and keeps the
-      queue going on its own &mdash; and once you&rsquo;re signed in, your queue, your history and your
-      playlists follow you to every device you use.</p>
+    <h1>Pick a song.<br><em>Keep listening.</em></h1>
+    <p class="sub">Search by song, artist, album or mood. Your queue and playlists
+      follow your account across devices.</p>
 
-    <div class="demo" aria-hidden="true">
-      <div class="ask">
-        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
-        <span class="txt idle" id="typed">Play anything &mdash; a song, artist, vibe, or Spotify link</span><i class="caret"></i>
-      </div>
-      <ol class="queue" id="queue">
-        <li><span class="cv"></span><span><span class="t">&nbsp;</span><span class="a">&nbsp;</span></span></li>
-        <li><span class="cv"></span><span><span class="t">&nbsp;</span><span class="a">&nbsp;</span></span></li>
-        <li><span class="cv"></span><span><span class="t">&nbsp;</span><span class="a">&nbsp;</span></span></li>
-      </ol>
-    </div>
 
     <ul class="facts">
       <li><svg viewBox="0 0 24 24"><path d="M12 3v11m0 0l-4-4m4 4l4-4"/><path d="M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg>
-        <span><b>Bring your playlists.</b> Paste a Spotify or Apple Music playlist and it&rsquo;s here, every song, ready to play.</span></li>
+        <span><b>Bring your playlists.</b> Import from a supported music link or make your own.</span></li>
       <li><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M9 9.5c0-1.4 1.3-2.3 3-2.3s3 .9 3 2.2c0 2.7-6 1.5-6 4.5 0 1.3 1.3 2.4 3 2.4s3-1 3-2.3M12 5.5v1.7m0 9.6v1.7"/></svg>
-        <span><b>Free, and no adverts.</b> No subscription and nothing cutting in between songs.</span></li>
+        <span><b>Choose your queue.</b> Play a song now, add it next, or build a mix.</span></li>
       <li><svg viewBox="0 0 24 24"><rect x="3" y="5" width="13" height="10" rx="1.5"/><path d="M7 19h5M9.5 15v4"/><rect x="18" y="8" width="3.5" height="9" rx="1"/></svg>
-        <span><b>Play it anywhere.</b> Your phone, your laptop or the desktop app, and your queue and playlists come with you.</span></li>
+        <span><b>Your listening is yours.</b> Taste tracking is optional and can be changed later.</span></li>
     </ul>
   </section>
 
@@ -260,40 +284,10 @@ label.f{display:block;font:600 12px var(--mono);letter-spacing:.06em;text-transf
     <div class="foot"><a href="{{ base }}/auth/signout">Cancel</a></div>
 
   {% elif google %}
-    <p class="lede">Sign in with Google. No password to make or forget.</p>
-    {% if error %}<p class="err" role="alert" style="margin-top:16px">{{ error }}</p>{% endif %}
-    <div class="sw">
-      <input type="radio" name="tab" id="t-login" {% if tab != "signup" %}checked{% endif %}>
-      <input type="radio" name="tab" id="t-signup" {% if tab == "signup" %}checked{% endif %}>
-      <div class="tabs">
-        <label for="t-login">Log in</label><label for="t-signup">Sign up</label>
-        <span class="pill" aria-hidden="true"></span>
-      </div>
-
-      <div class="panes">
-        <div class="pane p-login">
-          <p class="lede" style="margin:0 0 4px">Been here before? Welcome back.</p>
-          <a class="gbtn" href="{{ base }}/auth/google/start?next=/player">
-            <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-            Log in with Google</a>
-        </div>
-        <div class="pane p-signup">
-          <form method="post" action="{{ base }}/auth/google/start">
-            <input type="hidden" name="next" value="/player">
-            <label class="f" for="sname">What should we call you?</label>
-            <input class="fld" id="sname" name="name" value="{{ name }}" maxlength="40" required autocomplete="nickname" placeholder="Your name">
-            <label class="chk"><input type="checkbox" name="terms" value="1" required{% if terms %} checked{% endif %}>
-              <span>I&rsquo;ve read the <a href="{{ base }}/privacy" target="_blank" rel="noopener">privacy notice</a> and I&rsquo;m happy with it.</span></label>
-            <label class="chk"><input type="checkbox" name="tracking" value="1"{% if tracking %} checked{% endif %}>
-              <span><b>Learn what I like</b><span class="opt">optional</span><br>Remember what I play and skip, to tune my radio and suggestions. Off unless you tick this; change it any time in Settings.</span></label>
-            <button class="gbtn" type="submit">
-              <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-              Sign up with Google</button>
-          </form>
-        </div>
-      </div>
-    </div>
-    <p class="signin-fine">It only learns your taste if you say so.</p>
+    <p class="lede">Sign in to listen and keep your library across devices.</p>
+    {% if error %}<p class="err" role="alert">{{ error }}</p>{% endif %}
+    <a class="gbtn" href="{{ base }}/auth/google/start?next=/player"><svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg><span>Continue with Google</span></a>
+    <p class="signin-fine">New here? After Google confirms your account, you can choose a name and privacy settings.</p>
     <div class="foot">
       {% if client_available %}<a class="app" id="getapp" href="{{ base }}/download/client"><svg viewBox="0 0 24 24"><path d="M12 4v10m0 0l-4-4m4 4l4-4M5 19h14"/></svg>Get the Windows app</a>{% endif %}
       <a href="{{ base }}/privacy">Privacy notice</a>
@@ -313,89 +307,6 @@ const BASE = "{{ base }}";
 // Already in the app: there's nothing to download. pywebview puts its object on
 // the page (a moment after load), which a browser never has.
 addEventListener("pywebviewready", () => { const a = document.getElementById("getapp"); if (a) a.hidden = true; });
-(function demo() {
-  const typed = document.getElementById("typed");
-  const rows = document.querySelectorAll("#queue li");
-  if (!typed || !rows.length) return;
-  // Real requests and what they would bring up. Shuffled, so a second look
-  // isn't the same as the first.
-  const SCRIPT = [
-    ["something chill", [["Weightless", "Marconi Union"], ["Holocene", "Bon Iver"], ["Sunset Lover", "Petit Biscuit"]]],
-    ["play sultans of swing", [["Sultans of Swing", "Dire Straits"], ["Money for Nothing", "Dire Straits"], ["Walk of Life", "Dire Straits"]]],
-    ["nirvana and foo fighters", [["Everlong", "Foo Fighters"], ["Come as You Are", "Nirvana"], ["The Pretender", "Foo Fighters"]]],
-    ["the album rumours", [["Dreams", "Fleetwood Mac"], ["Go Your Own Way", "Fleetwood Mac"], ["The Chain", "Fleetwood Mac"]]],
-    ["80s synthpop", [["Take On Me", "a-ha"], ["Don't You Want Me", "The Human League"], ["Just Can't Get Enough", "Depeche Mode"]]],
-    ["songs like mr brightside", [["Mr. Brightside", "The Killers"], ["Take Me Out", "Franz Ferdinand"], ["Seven Nation Army", "The White Stripes"]]],
-    ["something to focus to", [["Nuvole Bianche", "Ludovico Einaudi"], ["Experience", "Ludovico Einaudi"], ["Intro", "The xx"]]],
-    ["dancing queen", [["Dancing Queen", "ABBA"], ["Mamma Mia", "ABBA"], ["Gimme! Gimme! Gimme!", "ABBA"]]],
-    ["workout metal", [["Duality", "Slipknot"], ["Down with the Sickness", "Disturbed"], ["Bodies", "Drowning Pool"]]],
-    ["the one that goes is this the real life", [["Bohemian Rhapsody", "Queen"], ["Don't Stop Me Now", "Queen"], ["Somebody to Love", "Queen"]]],
-    ["rainy day indie", [["Motion Sickness", "Phoebe Bridgers"], ["Skinny Love", "Bon Iver"], ["Fake Plastic Trees", "Radiohead"]]],
-    ["90s hip hop", [["Juicy", "The Notorious B.I.G."], ["California Love", "2Pac"], ["C.R.E.A.M.", "Wu-Tang Clan"]]],
-    ["taylor swift but only the sad ones", [["All Too Well", "Taylor Swift"], ["exile", "Taylor Swift"], ["my tears ricochet", "Taylor Swift"]]],
-    ["arctic monkeys am", [["Do I Wanna Know?", "Arctic Monkeys"], ["R U Mine?", "Arctic Monkeys"], ["Arabella", "Arctic Monkeys"]]],
-    ["road trip classics", [["Life Is a Highway", "Tom Cochrane"], ["Born to Run", "Bruce Springsteen"], ["Take It Easy", "Eagles"]]],
-    ["play hotel california next", [["Hotel California", "Eagles"], ["Dreams", "Fleetwood Mac"], ["Go Your Own Way", "Fleetwood Mac"]]],
-    ["lofi to study to", [["Aruarian Dance", "Nujabes"], ["Feather", "Nujabes"], ["Luv(sic.) Part 3", "Nujabes"]]],
-    ["open.spotify.com/playlist/37i9dQ…", [["Blinding Lights", "The Weeknd"], ["Levitating", "Dua Lipa"], ["Heat Waves", "Glass Animals"]]],
-    ["daft punk", [["Get Lucky", "Daft Punk"], ["One More Time", "Daft Punk"], ["Instant Crush", "Daft Punk"]]],
-    ["sad songs for a breakup", [["Someone Like You", "Adele"], ["Liability", "Lorde"], ["drivers license", "Olivia Rodrigo"]]],
-    ["danzig and black label society", [["Mother", "Danzig"], ["Stillborn", "Black Label Society"], ["Twist of Cain", "Danzig"]]],
-    ["70s funk", [["Superstition", "Stevie Wonder"], ["September", "Earth, Wind & Fire"], ["Play That Funky Music", "Wild Cherry"]]],
-    ["that song from stranger things", [["Running Up That Hill", "Kate Bush"], ["Master of Puppets", "Metallica"], ["Should I Stay or Should I Go", "The Clash"]]],
-    ["something upbeat for cooking", [["Valerie", "Mark Ronson, Amy Winehouse"], ["Uptown Funk", "Mark Ronson, Bruno Mars"], ["Happy", "Pharrell Williams"]]],
-    ["pink floyd dark side of the moon", [["Time", "Pink Floyd"], ["Money", "Pink Floyd"], ["Breathe (In the Air)", "Pink Floyd"]]],
-    ["jazz for a late night", [["So What", "Miles Davis"], ["Take Five", "The Dave Brubeck Quartet"], ["My Favorite Things", "John Coltrane"]]],
-    ["2000s emo", [["Welcome to the Black Parade", "My Chemical Romance"], ["Sugar, We're Goin Down", "Fall Out Boy"], ["The Middle", "Jimmy Eat World"]]],
-    ["kendrick lamar", [["HUMBLE.", "Kendrick Lamar"], ["Alright", "Kendrick Lamar"], ["Money Trees", "Kendrick Lamar"]]],
-    ["chill house", [["Innerbloom", "RÜFÜS DU SOL"], ["Cola", "CamelPhat, Elderbrook"], ["Losing It", "FISHER"]]],
-    ["dolly parton and johnny cash", [["Jolene", "Dolly Parton"], ["Ring of Fire", "Johnny Cash"], ["9 to 5", "Dolly Parton"]]],
-    ["classical for sleeping", [["Clair de Lune", "Claude Debussy"], ["Gymnopédie No. 1", "Erik Satie"], ["Spiegel im Spiegel", "Arvo Pärt"]]],
-    ["grunge", [["Black Hole Sun", "Soundgarden"], ["Would?", "Alice in Chains"], ["Alive", "Pearl Jam"]]],
-    ["a lazy sunday morning", [["Here Comes the Sun", "The Beatles"], ["Banana Pancakes", "Jack Johnson"], ["Put Your Records On", "Corinne Bailey Rae"]]],
-    ["something like billie eilish", [["bad guy", "Billie Eilish"], ["Royals", "Lorde"], ["Glimpse of Us", "Joji"]]],
-    ["play me some bowie", [["Heroes", "David Bowie"], ["Starman", "David Bowie"], ["Life on Mars?", "David Bowie"]]],
-    ["nu metal and glam metal", [["Freak on a Leash", "Korn"], ["Kickstart My Heart", "Mötley Crüe"], ["In the End", "Linkin Park"]]],
-    ["the weeknd after hours", [["Blinding Lights", "The Weeknd"], ["Save Your Tears", "The Weeknd"], ["In Your Eyes", "The Weeknd"]]],
-    ["irish pub songs", [["Whiskey in the Jar", "Thin Lizzy"], ["Dirty Old Town", "The Pogues"], ["The Irish Rover", "The Pogues, The Dubliners"]]],
-    ["k-pop", [["Dynamite", "BTS"], ["How You Like That", "BLACKPINK"], ["Super Shy", "NewJeans"]]],
-    ["songs about the sea", [["Sloop John B", "The Beach Boys"], ["(Sittin' On) The Dock of the Bay", "Otis Redding"], ["Beyond the Sea", "Bobby Darin"]]],
-    ["britpop", [["Wonderwall", "Oasis"], ["Song 2", "Blur"], ["Common People", "Pulp"]]],
-    ["ac/dc back in black", [["Back in Black", "AC/DC"], ["Highway to Hell", "AC/DC"], ["Thunderstruck", "AC/DC"]]],
-    ["reggae", [["Three Little Birds", "Bob Marley & The Wailers"], ["Red Red Wine", "UB40"], ["Is This Love", "Bob Marley & The Wailers"]]],
-    ["film scores", [["Cornfield Chase", "Hans Zimmer"], ["Now We Are Free", "Hans Zimmer, Lisa Gerrard"], ["Hedwig's Theme", "John Williams"]]],
-    ["the song that goes i gotta feeling", [["I Gotta Feeling", "Black Eyed Peas"], ["Boom Boom Pow", "Black Eyed Peas"], ["Where Is the Love?", "Black Eyed Peas"]]]
-  ];
-  for (let i = SCRIPT.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1)); [SCRIPT[i], SCRIPT[j]] = [SCRIPT[j], SCRIPT[i]];
-  }
-  // A cover in the colour of its own name: the same title always gets the same one.
-  const cover = t => { let h = 7; for (const c of t) h = (h * 31 + c.charCodeAt(0)) % 360;
-    return `linear-gradient(135deg,hsl(${h} 72% 58%),hsl(${(h + 48) % 360} 62% 34%))`; };
-  const show = list => rows.forEach((r, i) => {
-    const [t, a] = list[i] || ["", ""];
-    r.classList.remove("in");
-    r.querySelector(".cv").style.background = t ? cover(t) : "transparent";
-    r.querySelector(".t").textContent = t || " "; r.querySelector(".a").textContent = a || " ";
-    if (t) setTimeout(() => r.classList.add("in"), 120 + i * 140);
-  });
-  const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if (still) { typed.classList.remove("idle"); typed.textContent = SCRIPT[0][0]; show(SCRIPT[0][1]); return; }
-  const wait = ms => new Promise(r => setTimeout(r, ms));
-  (async () => {
-    await wait(700);
-    for (let i = 0; ; i = (i + 1) % SCRIPT.length) {
-      const [ask, list] = SCRIPT[i];
-      typed.classList.remove("idle"); typed.textContent = "";
-      for (const ch of ask) { typed.textContent += ch; await wait(48 + Math.random() * 60); }
-      await wait(350); show(list); await wait(3600);
-      show([]);
-      while (typed.textContent.length) { typed.textContent = typed.textContent.slice(0, -1); await wait(16); }
-      await wait(350);
-    }
-  })();
-})();
-
 // The blocked page: a person's own data is theirs to take or remove.
 (function own() {
   const ask = document.getElementById("askgone"); if (!ask) return;

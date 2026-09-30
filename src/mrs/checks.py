@@ -80,6 +80,10 @@ _UNGUARDED_BY_DESIGN = {
                    "callback set, which names a Google identity we verified",
     "/privacy":   "the notice has to be readable before anyone signs up",
     "/s/{sid}":   "a shared song: plays that song for anyone with the link, nothing else",
+    "/p/{sid}":   "a public, read-only playlist snapshot with an unguessable link",
+    "/s/{sid}/cover.jpg": "the public cover for a shared link's chat card",
+    "/s/{sid}/card.jpg": "a baked, album-coloured song preview for crawlers",
+    "/s/{sid}/player": "POST opens a rate-limited in-memory personal player session",
     "/s/{sid}/embed.mp4": "the shared song as a video for a chat card, made once",
     "/s/{sid}/join": "opening a shared song: a session of its own, rate limited per "
                      "address and capped overall",
@@ -999,6 +1003,21 @@ def _run(verbose: bool = False) -> Result:
                              tok=phone)
                     c(f"{op.split('&')[0]} on a private list is refused",
                       r2.status_code == 403, str(r2.status_code))
+                # "Which lists have this song" can't be a way to read the
+                # owner's private list names.
+                from unittest.mock import patch as _patch
+                from .core.session import Session as _Sess
+                from .player import player as _plr
+                on_air = _T(video_id="own-x", title="Owner's pick", artist="Someone")
+                with _patch.object(_Sess, "current", lambda self: on_air), \
+                     _patch.object(_plr.queue, "current_track", lambda: on_air):
+                    r3 = get("/api/playlist/contains?name=" + quote(SHARED)
+                             + "&shared=1", tok=phone)
+                    got3 = [row["name"] for row in r3.json().get("playlists", [])] \
+                        if r3.status_code == 200 else []
+                    c("contains on a shared list names only that list",
+                      PRIVATE not in got3, str(got3))
+                    c("...and still finds it there", SHARED in got3, str(got3))
                 c("the owner can still see all of theirs",
                   {SHARED, PRIVATE} <=
                   {r["name"] for r in get("/api/playlists").json()["playlists"]})
@@ -1982,7 +2001,7 @@ def _run(verbose: bool = False) -> Result:
             c("the phone pausing us is passed on",
               "if (!cast.on || el.ended || Date.now() - cast.hush < 800) return;" in src_html)
             c("a late lyrics answer for the last track is dropped",
-              "if (state.trackKey !== want || lyricKey !== want) return;" in src_html)
+              "if (generation !== lyricGeneration || state.trackKey !== want || lyricKey !== want) return;" in src_html)
             wave = _re2.search(r"\.miniwave\{display:flex[^}]*\}", src_html)
             c("no dark tab behind the level meter",
               wave and "gradient" not in wave.group(0))
@@ -2246,6 +2265,9 @@ def _run(verbose: bool = False) -> Result:
             r = client.get("/api/stats", headers=owner_h)
             c("the owner can read the numbers", r.status_code == 200
               and "house" in r.json(), str(r.status_code))
+            from .web import accounts as _accounts_stats
+            c("the owner sees the current number of signed-in users",
+              r.json().get("registered_users") == _accounts_stats.count())
             c("a link cannot",
               client.get("/api/stats", headers={"X-Music-Key": phone}).status_code == 403)
             body = r.json()
@@ -2478,9 +2500,11 @@ def _run(verbose: bool = False) -> Result:
             with _patch("mrs.web.security.is_home", lambda ip: False):
                 home = client.get("/", follow_redirects=False)
                 c("a stranger meets a sign-in page, not the player",
-                  home.status_code == 200 and "Log in with Google" in home.text
-                  and "Sign up with Google" in home.text,
+                  home.status_code == 200 and "Continue with Google" in home.text,
                   str(home.status_code))
+                c("public pages cannot set a base URL or load plugin content",
+                  "base-uri 'none'" in home.headers.get("content-security-policy", "")
+                  and "object-src 'none'" in home.headers.get("content-security-policy", ""))
                 signed = client.get("/", cookies=_sign_in_as("1234567890"),
                                     follow_redirects=False)
                 c("someone signed in is sent straight to the player",
@@ -2495,18 +2519,35 @@ def _run(verbose: bool = False) -> Result:
                 _acc.set_scope("1234567890", "phone")
             with _patch("mrs.web.security.is_home", lambda ip: True):
                 from .web import api as _api25
+                from starlette.requests import Request as _Request25
+                def local_request(host):
+                    return _Request25({"type": "http", "scheme": "http", "path": "/",
+                                       "root_path": "", "query_string": b"",
+                                       "server": ("127.0.0.1", 29544),
+                                       "client": ("127.0.0.1", 1234),
+                                       "headers": [(b"host", host.encode())]})
                 c("this computer goes straight in",
-                  _api25._opens_as_owner("127.0.0.1") is True)
+                  _api25._opens_as_owner(local_request("127.0.0.1:29544")) is True)
+                c("an attacker host resolving to loopback cannot get owner access",
+                  _api25._opens_as_owner(local_request("music.attacker.test")) is False)
+                old_ddns = _cfg.get("ddns_hostname")
+                _cfg.set("ddns_hostname", "music.example.test", save=False)
+                try:
+                    c("a public hostname forwarded through loopback is still a visitor",
+                      _api25._opens_as_owner(local_request("music.example.test")) is False)
+                finally:
+                    _cfg.set("ddns_hostname", old_ddns, save=False)
                 other = client.get("/", follow_redirects=False)
                 c("another device on the wifi signs in like everyone else, once sign-in exists",
-                  other.status_code == 200 and "Log in with Google" in other.text,
+                  other.status_code == 200 and "Continue with Google" in other.text,
                   str(other.status_code))
                 c("...so a guest typing 192.168.x.x isn't handed the owner's page",
                   'const GUEST = "0"' not in client.get("/player").text)
                 _cfg.set("lan_open_devices", True, save=False)
                 try:
                     c("with the whole house trusted, the owner at home goes straight in",
-                      client.get("/", follow_redirects=False).headers.get("location") == "/player")
+                      client.get("/", headers={"Host": "127.0.0.1:29544"},
+                                 follow_redirects=False).headers.get("location") == "/player")
                 finally:
                     _cfg.set("lan_open_devices", False, save=False)
                 _bans.forgive("testclient")
@@ -3587,7 +3628,7 @@ def _run(verbose: bool = False) -> Result:
                 c("nor is the player's own pass",
                   client.get("/api/status", headers={"X-Music-Key": inner["token"]}).status_code == 200)
                 SUB_L = "99900111"
-                _acc2.admit(SUB_L, "linkless@example.com", "Linkless", terms=True)
+                _acc2.admit(SUB_L, "linkless@example.com", "Linkless", scope="phone", terms=True)
                 c("a signed-in account never needed one",
                   client.get("/api/status",
                              cookies={_COOKIE: sec.session_cookie(now_key(), SUB_L)}
@@ -3943,16 +3984,16 @@ def _run(verbose: bool = False) -> Result:
                     door = client.get("/music/")
                     c("...and the path is still Music's own front door",
                       door.status_code == 200 and "What are we in the mood for" not in door.text
-                      and "Log in with Google" in door.text, str(door.status_code))
+                      and "Continue with Google" in door.text, str(door.status_code))
                     _put("movies_url", "")
                     plain = client.get("/")
                     c("without a movies address there is nothing to choose between",
                       "What are we in the mood for" not in plain.text
-                      and "Log in with Google" in plain.text)
+                      and "Continue with Google" in plain.text)
                     _put("url_prefix", "")
                     _put("movies_url", "https://movies.example.test:8443/")
                     c("without a path the bare address is Music, whatever else is set",
-                      "Log in with Google" in client.get("/").text)
+                      "Continue with Google" in client.get("/").text)
             finally:
                 for k, v in _keep32.items():
                     config.set(k, v, save=False)
@@ -4603,7 +4644,7 @@ def _run(verbose: bool = False) -> Result:
                 c("together mixes the pick in with what's on: both bands, taking turns",
                   order == ["Venom", "Sodom", "Venom", "Sodom"], str(order))
                 c("...without cutting off the song that's playing",
-                  all(w.mode == "next" for w in q._work) and q.sink.path() == "C:/x/on.m4a")
+                  all(w.mode == "append" for w in q._work) and q.sink.path() == "C:/x/on.m4a")
                 c("...and the radio steers by both from then on",
                   sorted(a.artist for a in q._anchors) == ["Sodom", "Venom"]
                   and got["message"] == "Playing Venom and Sodom together")
@@ -4634,7 +4675,7 @@ def _run(verbose: bool = False) -> Result:
                     _patch.object(_b44, "_genre_artists", lambda g, want: acts.get(g, [])[:want]), \
                     _patch.object(_b44, "anchors_of", lambda what: [
                         {"kind": "genre", "name": "nu metal"}, {"kind": "genre", "name": "glam metal"}]):
-                big = _b44.build("nu metal and glam metal", songs=200)
+                big = _b44.build("nu metal and glam metal", songs=200, strict=True)
                 c("it makes the number of songs asked for", len(big) == 200, str(len(big)))
                 c("...from both genres", {t.artist[:3] for t in big} == {"NuB", "Gla"})
                 per_band = {}
@@ -4648,11 +4689,11 @@ def _run(verbose: bool = False) -> Result:
                 c("...and no band twice in a row",
                   all(a.artist != b.artist for a, b in zip(big, big[1:])))
                 c("...and never more than the ceiling",
-                  len(_b44.build("nu metal", songs=5000)) <= _b44.MAX_SONGS)
+                  len(_b44.build("nu metal", songs=5000, strict=True)) <= _b44.MAX_SONGS)
             with _patch.object(_cat44, "artist_top_tracks", _top), \
                     _patch.object(_b44, "anchors_of", lambda what: [
                         {"kind": "artist", "name": "Korn"}, {"kind": "artist", "name": "Deftones"}]):
-                two = _b44.build("korn and deftones", songs=20)
+                two = _b44.build("korn and deftones", songs=20, strict=True)
                 c("two bands give ten each, dealt out in turn",
                   len(two) == 20 and [t.artist for t in two[:4]] == ["Korn", "Deftones", "Korn", "Deftones"])
                 with _tf44.TemporaryDirectory() as root44:
@@ -4660,15 +4701,16 @@ def _run(verbose: bool = False) -> Result:
                     t44 = _TE44(root=_Path(root44))
                     t44.block(artist="Korn")
                     c("a band the listener blocked stays out",
-                      all(t.artist != "Korn" for t in _b44.build("korn and deftones", songs=20, taste=t44)))
+                      all(t.artist != "Korn" for t in _b44.build("korn and deftones", songs=20, taste=t44, strict=True)))
 
                     class _Store44:
                         def __init__(self): self.made = {}
+                        def root(self): return _Path(root44)
                         def names(self): return list(self.made)
                         def create(self, n): self.made[n] = []
                         def add_many(self, n, ts): self.made[n] += list(ts)
                     st = _Store44()
-                    job = _b44.start("korn and deftones", songs=12, store=st)
+                    job = _b44.start("korn and deftones", songs=12, store=st, strict=True)
                     for _ in range(40):
                         if (_b44.job(job) or {}).get("state") != "building":
                             break
@@ -4698,12 +4740,16 @@ def _run(verbose: bool = False) -> Result:
             from .models import Track as _T45
             from .web import api as _api45
             import os as _os45, tempfile as _tf45, time as _time45
+            import io as _io45
+            from PIL import Image as _I45
             _sh45._joins.clear()
-            made = client.post("/api/share", json={"video_id": "SHARE00001", "title": "Mother",
+            with _patch.object(_sh45, "make_embed_soon", side_effect=AssertionError("artwork shares must not transcode video")):
+                made = client.post("/api/share", json={"video_id": "SHARE00001", "title": "Mother",
                                                    "artist": "Danzig", "art": "https://img/x.jpg",
                                                    "duration": 258.484535}, headers=owner_h)
             c("the owner can share what's playing -- even a song whose length isn't whole seconds",
-              made.status_code == 200 and "/s/" in made.json().get("url", ""), made.text[:160])
+              made.status_code == 200 and "/s/" in made.json().get("url", "")
+              and made.json().get("url", "").endswith("?v=" + _api45.SHARE_CARD_VERSION), made.text[:160])
             sid = made.json()["id"]
             c("...and the length is kept as whole seconds", _sh45.get(sid)["duration"] == 258)
             again = client.post("/api/share", json={"video_id": "SHARE00001", "title": "Mother"},
@@ -4714,21 +4760,46 @@ def _run(verbose: bool = False) -> Result:
             _bans.forgive("testclient")
             page = client.get(f"/s/{sid}")
             c("the link opens for anyone, no sign-in", page.status_code == 200, str(page.status_code))
-            c("...with a video a chat app plays in place, and the cover",
-              'property="og:video" content="' in page.text and "/s/" + sid + "/embed.mp4" in page.text
-              and 'property="og:video:type" content="video/mp4"' in page.text
-              and 'property="og:image" content="https://img/x.jpg"' in page.text)
+            c("...with a compact album-art preview and a combined title",
+              f"/s/{sid}/cover.jpg" in page.text
+              and 'name="twitter:card" content="summary"' in page.text
+              and 'property="og:title" content="Mother - Danzig"' in page.text
+              and 'name="theme-color" content="#2B2D31"' in page.text
+              and page.headers.get("cache-control", "").startswith("public, max-age="))
+            c("no video or extra metadata rows can enlarge the preview",
+              all(tag not in page.text for tag in ("og:video", "og:description", "og:site_name",
+                                                   "twitter:description", "summary_large_image", "/card.jpg")))
+            c("the artwork is square and the link still opens the real player",
+              'property="og:image:width" content="720"' in page.text
+              and 'property="og:image:height" content="720"' in page.text
+              and '/player" method="post"' in page.text and 'location.replace(data.url)' in page.text)
             c("...and nothing of Spotify's", "spotify" not in page.text.lower()
               and not hasattr(_sh45, "spotify")
               and client.get(f"/api/share/spotify?id={sid}", headers=owner_h).status_code == 404)
             c("a link that isn't one, or has run out, says so plainly",
               client.get("/s/nope").status_code == 404)
-            clip = _sh45.embed_file("SHARE00001")
+            clip = _sh45.embed_file(_sh45.media_key(_sh45.get(sid)))
             clip.write_bytes(b"\x00" * 4096)
             vid45 = client.get(f"/s/{sid}/embed.mp4", headers={"Range": "bytes=0-99"})
             c("the chat card's video is served as a video", vid45.status_code == 206
               and vid45.headers.get("content-type", "").startswith("video/mp4"),
               f"{vid45.status_code} {vid45.headers.get('content-type')}")
+            c("the chat card's video is publicly cacheable and inline",
+              vid45.headers.get("cache-control", "").startswith("public, max-age=")
+              and vid45.headers.get("content-disposition") == "inline")
+            cover45 = _sh45.cover_file("SHARE00001")
+            _I45.new("RGB", (720, 720), (70, 30, 90)).save(cover45, "JPEG")
+            try:
+                image45 = client.get(f"/s/{sid}/cover.jpg")
+                c("the chat card's cover is served by this host",
+                  image45.status_code == 200
+                  and image45.headers.get("content-type", "").startswith("image/jpeg")
+                  and image45.headers.get("cache-control", "").startswith("public, max-age="),
+                  f"{image45.status_code} {image45.headers.get('content-type')}")
+                with _I45.open(_io45.BytesIO(image45.content)) as square45:
+                    c("the actual crawler asset matches its square metadata", square45.size == (720, 720))
+            finally:
+                cover45.unlink(missing_ok=True)
             clip.unlink()
             asked = []
             with _patch.object(_QM45, "play_now", lambda self, tracks, *a, **k: asked.append(
@@ -4773,6 +4844,64 @@ def _run(verbose: bool = False) -> Result:
             for t45, v45 in list(_sh45._visits.items()):
                 _sh45.leave(v45["sid"], t45)
             _sh45._joins.clear()
+            # Private full player: a crawler GET is stateless, each browser
+            # POST is distinct, and cookies cannot turn it into an owner's room.
+            before45 = set(_ss45._rooms)
+            client.get(f"/s/{sid}", headers={"User-Agent": "Discordbot/2.0"})
+            c("crawler previews never allocate a listener", set(_ss45._rooms) == before45)
+            c("private sessions cannot be opened with a crawler GET",
+              client.get(f"/s/{sid}/player").status_code == 405)
+            c("cross-origin session creation is rejected", client.post(f"/s/{sid}/player",
+              headers={"Origin": "https://elsewhere.invalid", "Accept": "application/json"}).status_code == 403)
+            with _patch.object(_QM45, "play_now", lambda self, tracks, *a, **k: asked.append(
+                    (self.session_id, [t.video_id for t in tracks]))):
+                open45 = [client.post(f"/s/{sid}/player", headers={"Accept": "application/json"})
+                          for _ in range(2)]
+            creds45 = [r.json()["url"].split("token=", 1)[1] for r in open45]
+            rows45 = [_sh45.player_row(cred) for cred in creds45]
+            c("each click gets a fresh private player starting on the shared track",
+              rows45[0]["id"] != rows45[1]["id"] and asked[-1][1] == ["SHARE00001"])
+            private_h45 = {"X-Music-Key": creds45[0]}
+            private_page45 = client.get(open45[0].json()["url"])
+            c("it opens the full player as a phone guest without caching credentials",
+              private_page45.status_code == 200 and 'const GUEST = "1"' in private_page45.text
+              and 'const SCOPE = "phone"' in private_page45.text
+              and private_page45.headers.get("cache-control") == "no-store")
+            with _patch.object(_api45, "_account_row", side_effect=AssertionError("must not use signed-in identity")):
+                identity45 = client.get("/api/whoami", headers=private_h45).json()
+            c("an existing account cookie cannot replace the private identity",
+              not identity45["owner"] and identity45["pass_id"] == rows45[0]["id"])
+            c("private listeners cannot reach owner controls or save shared data",
+              client.post("/api/backup", headers=private_h45).status_code == 403
+              and client.post("/api/share", headers=private_h45, json={"video_id":"x"}).status_code == 403
+              and client.post("/api/session/here", headers=private_h45, json={"on":0}).status_code == 403)
+            private_room45 = _ss45.find(rows45[0]["id"])
+            c("the private profile has no persistence or learning",
+              not private_room45.profile.permanent and not private_room45.profile.tracking
+              and private_room45.profile.lists is None and not private_room45.profile.home().exists())
+            with _patch.object(_api45.sec, "note_use", side_effect=AssertionError("private stats")), \
+                 _patch.object(_api45.stats, "note", side_effect=AssertionError("private bandwidth")):
+                beat45 = client.post("/api/session/progress", headers=private_h45, json={"pos":12})
+                _api45._note_served(type("R", (), {"state": type("S", (), {"pass_row":rows45[0]})()})(), 500)
+            c("private heartbeats do not record statistics", beat45.status_code == 200)
+            _sh45._visits[creds45[0][6:]]["beat"] -= _sh45.VISIT_GONE + 1
+            private_room45.touch()  # a server-side SSE touch must not extend it
+            _ss45.reap()
+            c("heartbeat expiry removes the room and credential even with an open stream",
+              _ss45.find(rows45[0]["id"]) is None and creds45[0][6:] not in _sh45._visits
+              and client.get("/api/status", headers=private_h45).status_code == 410)
+            c("one listener expiring leaves the other alone", _sh45.player_row(creds45[1]) is not None)
+            _sh45.leave(sid, creds45[1][6:])
+            _sh45._joins.clear()
+            refreshed45 = _sh45.create({"video_id":"SHARE00001", "art":"https://img/new.jpg"}, by="owner")
+            c("sharing again repairs an empty or outdated cover", refreshed45["id"] == sid
+              and _sh45.get(sid)["art"] == "https://img/new.jpg")
+            from PIL import Image as _I45
+            with _patch.object(_sh45, "_cover", lambda row: None):
+                card45 = client.get(f"/s/{sid}/card.jpg")
+            import io as _io45
+            with _I45.open(_io45.BytesIO(card45.content)) as baked45:
+                c("a missing cover still produces a valid thin preview", baked45.size == (1200, 280))
             _sh45.create({"video_id": "SHARE00003", "title": "y"}, by="g-45454545")
             c("deleting an account deletes the songs it shared",
               _sh45.forget_by("g-45454545") == 1 and _sh45.forget_by("g-45454545") == 0)
@@ -4898,6 +5027,14 @@ def _run(verbose: bool = False) -> Result:
             c("Escape goes back too, and space on a toggle doesn't play",
               'e.key === "Escape" && $("sheet").classList.contains("open")' in page48
               and 'if ($("sheet").classList.contains("open")) return;' in page48)
+            c("liquid glass preference survives a WebView profile reset",
+              "glass_enabled" in launch48 and "glass_preference" in launch48
+              and "hydrateGlassPreference" in page48
+              and "set_glass_preference" in page48)
+            c("glass controls have only a minor frost",
+              "backdrop-filter:blur(8px) saturate(1.14)" in page48
+              and "rgba(255,255,255,.16)" in page48
+              and "place-items:center" in page48)
             c("the rarely used ones sit behind a ⋯ menu",
               'id="morebtn"' in page48 and 'id="moremenu"' in page48
               and page48.index('id="download"') > page48.index('id="moremenu"'))
@@ -5138,10 +5275,10 @@ def _run(verbose: bool = False) -> Result:
             # -- playlists: songs that fit, and waiting for Groq
             fake53 = [_T53(video_id=f"F{i:03}", title=f"Fit {i}", artist=f"Band {i % 5}") for i in range(30)]
             with _patch.object(_b53, "anchors_of", lambda w: [{"kind": "artist", "name": "Korn"}]), \
-                    _patch.object(_b53, "_groq_songs", lambda w, n: [(t.artist, t.title) for t in fake53]), \
+                    _patch.object(_b53, "_groq_songs", lambda w, n, context="": [(t.artist, t.title) for t in fake53]), \
                     _patch.object(_b53, "_found", lambda a, t: next(x for x in fake53 if x.title == t)), \
                     _patch.object(_llm53, "available", lambda: True), \
-                    _patch.object(_b53, "_lane_for_artist", lambda n, k, taste: []):
+                    _patch.object(_b53, "_lane_for_artist", lambda n, k, taste, **kwargs: []):
                 fit53 = _b53.build("korn", songs=20, strict=False)
             c("\"songs that fit\" is Groq's picks, checked against the catalogue",
               len(fit53) == 20 and fit53[0].video_id == "F000")
@@ -5177,23 +5314,131 @@ def _run(verbose: bool = False) -> Result:
             # -- 54. every screen size gets a real layout -----------------------
             c = _Checker("layouts")
             page54 = (Path(__file__).parent / "web" / "templates" / "player.html").read_text("utf-8")
-            c("between 900 and 1500 it's the three-zone player minus the lyrics column",
-              "grid-template-columns:var(--deck) minmax(0,760px);" in page54
+            c("between 900 and 1500 it's the two-column player minus the lyrics column",
+              "grid-template-columns:minmax(240px,var(--cover)) minmax(340px,var(--panelw));" in page54
+              and "--cover:clamp(240px,calc(100dvh - 310px),440px);" in page54
               and "body:not(.mini) .art-wrap{grid-area:3/1;" in page54)
-            c("past 1800 there are four: player, words, queue and the song's drawer",
-              "@media (min-width:1800px) and (min-height:620px){" in page54
-              and "grid-template-columns:var(--deck) minmax(0,1fr) var(--side) var(--drawer)}" in page54
-              and 'const DRAWER_AT = window.matchMedia("(min-width:1800px) and (min-height:620px)");' in page54)
+            c("the columns are capped and centred, so a wide window keeps its balance",
+              "justify-content:center;" in page54
+              and "minmax(260px,.9fr)" not in page54
+              and "minmax(380px,.9fr)" not in page54
+              and "--cover:min(100%,clamp(190px" not in page54)
+            c("resting keeps the cover's place, so a starting song moves nothing",
+              "body:not(.mini):not(.hastrack):not(.hasqueue) .art-wrap{display:flex}" in page54
+              and "body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{grid-column:2;" in page54
+              and "covermode .stage{grid-template-columns:minmax(0,1fr)" not in page54)
+            c("resting and playing share every grid row, so the cover can't slide up or down",
+              "body:not(.mini):not(.hastrack):not(.hasqueue) .meta{display:block;visibility:hidden}" in page54
+              and "min-height:60px;margin:16px 0 0;text-align:left" in page54
+              and "padding-bottom:28px" not in page54)
+            c("the transport never squeezes the volume before the padding gives",
+              "grid-template-columns:minmax(120px,1fr) minmax(240px,1fr) auto;" in page54
+              and "body:not(.mini) .transport .vol{flex:0 0 auto;max-width:150px;" in page54
+              and "body:not(.mini) .transport .vol{max-width:90px}" not in page54)
+            c("wide screens keep three columns and use a fixed bottom transport",
+              "grid-template-columns:minmax(300px,440px) minmax(360px,1fr) minmax(320px,420px)" in page54
+              and "position:fixed;inset:auto 0 0;z-index:30;display:grid;" in page54
+              and "Words timed to this recording" not in page54
+              and "DRAWER_AT" not in page54 and "--drawer:" not in page54)
             c("a phone on its side gets side-by-side panels, not zero-height ones",
               "@media (orientation:landscape) and (max-height:519px) and (min-width:560px){" in page54
               and "body:not(.mini) .panel{grid-column:2;grid-row:3/-1;" in page54)
-            c("type answers to the room: the title and the words scale",
-              "body:not(.mini) .title{font-size:clamp(21px,.9vw + 11px,40px)}" in page54
+            c("type stays steady at any room size: fixed title, container-scaled words",
+              "body:not(.mini) .title{font-size:28px;line-height:1.2}" in page54
               and "#panel-lyrics{container-type:inline-size}" in page54)
             c("the words keep time: colour on the beat, the swell for as long as it's held",
               'w.style.animationName = "wordfill, wordswell, wordrelease";' in page54
               and "@keyframes wordswell {" in page54 and "@keyframes wordsing" not in page54)
             say("layouts", c)
+
+            # -- 55. the page's own script must actually parse --------------
+            # The dead-player bug: all 1121 checks passed while a duplicated
+            # top-level `let` (let returnToMini, twice) made the browser refuse
+            # to parse the page's whole script — search, play, queue, all of it
+            # dead on arrival. None of these checks ever ran or even read the
+            # page's JavaScript, so that gap is closed here: the template is
+            # rendered with the server's own Jinja environment (what ships is
+            # what parses), and the script is handed to a real parser. Node is
+            # the parser when it is installed — `node --check` on a plain file
+            # is exactly the semantics of an inline classic <script> — and
+            # without it the duplicate-declaration scan below still catches the
+            # bug class that actually shipped.
+            c = _Checker("page javascript")
+            import pathlib as _pl55
+            import shutil as _sh55
+            import subprocess as _sp55
+            import tempfile as _tf55
+            from .web import api as _page_mod
+            # An empty context is fine for parsing — except the one variable
+            # the template hands to tojson, which must exist at all.
+            rendered55 = _page_mod.templates.env.get_template("player.html").render(
+                api_read_only=[])
+            scripts55 = re.findall(r"<script\b[^>]*>(.*?)</script>",
+                                  rendered55, re.S | re.I)
+            body55 = max(scripts55, key=len) if scripts55 else ""
+            c("the player page still ships its main script", len(body55) > 50000,
+              f"script length {len(body55)}")
+            node55 = _sh55.which("node")
+            if node55:
+                with _tf55.TemporaryDirectory(prefix="mrs-jsparse-") as d55:
+                    js55 = _pl55.Path(d55) / "page.js"
+                    js55.write_text(body55, encoding="utf-8")
+                    proc55 = _sp55.run([node55, "--check", str(js55)],
+                                      capture_output=True, text=True, timeout=60)
+                    err55 = (proc55.stderr or proc55.stdout).strip()
+                    # The last line of a failed run is Node's own version
+                    # banner; the useful part is the *Error line, e.g.
+                    # "SyntaxError: Identifier 'returnToMini' has already
+                    # been declared".
+                    line55 = next((ln55.strip() for ln55 in reversed(
+                        err55.splitlines()) if "Error" in ln55), "")
+                    c("the page's JavaScript parses in a real engine",
+                      proc55.returncode == 0, line55 or (err55 or ""))
+            else:
+                # No parser available: at least the bug class that shipped.
+                # A top-level name declared twice is a SyntaxError in every
+                # browser. Top level means column zero in this one-block
+                # script; declaration lists (let a, b) count every name.
+                def _decls55(src: str) -> dict:
+                    counts: dict = {}
+                    for m55 in re.finditer(r"^(let|const)\b", src, re.M):
+                        i55, depth55 = m55.end(), 0
+                        end55 = None
+                        while i55 < len(src):
+                            ch55 = src[i55]
+                            if ch55 in "([{":
+                                depth55 += 1
+                            elif ch55 in ")]}":
+                                depth55 -= 1
+                            elif ch55 == ";" and depth55 == 0:
+                                end55 = i55
+                                break
+                            i55 += 1
+                        stmt55 = src[m55.end():end55]
+                        parts55, cur55, depth55 = [], [], 0
+                        for ch55 in stmt55:
+                            if ch55 in "([{":
+                                depth55 += 1
+                            elif ch55 in ")]}":
+                                depth55 -= 1
+                            if ch55 == "," and depth55 == 0:
+                                parts55.append("".join(cur55))
+                                cur55 = []
+                            else:
+                                cur55.append(ch55)
+                        parts55.append("".join(cur55))
+                        for p55 in parts55:
+                            n55 = re.match(r"\s*([A-Za-z_$][\w$]*)", p55)
+                            if n55:
+                                name55 = n55.group(1)
+                                counts[name55] = counts.get(name55, 0) + 1
+                    return counts
+
+                counts55 = _decls55(body55)
+                dup55 = sorted(n55 for n55, k55 in counts55.items() if k55 > 1)
+                c("no top-level name is declared twice (the dead-player bug)",
+                  not dup55, ", ".join(dup55))
+            say("page javascript", c)
 
             # -- 22. focused regressions for the issue register ------------
             c = _Checker("issue regressions")
@@ -5243,12 +5488,12 @@ def _run(verbose: bool = False) -> Result:
                       client.get("/api/smartplaylists/play?kind=recent",
                                  headers=owner_h).status_code == 405)
                     queued = []
-                    with _patch.object(_player.queue, "enqueue",
-                                       side_effect=lambda ts, imported=False:
+                    with _patch.object(_player.queue, "play_now",
+                                       side_effect=lambda ts, **kwargs:
                                        queued.extend(ts)):
                         r = client.post("/api/smartplaylists/play",
                                         json={"kind": "recent"}, headers=owner_h)
-                    c("adding a smart list uses the shared queue, not a new resolver",
+                    c("a smart list starts actual ordered playback",
                       r.status_code == 200 and r.json().get("added") == 2
                       and {t.video_id for t in queued} == {"smart-a", "smart-b"},
                       r.text[:160])

@@ -19,6 +19,9 @@ python-multipart>=0.0.9
 # operations. There is a slow fallback, so this is performance, not
 # correctness -- but the build bundles it and it should be the default.
 numpy>=1.26
+# Measure lyric words against the downloaded recording in the background.
+lyric-align==0.4.1
+faster-whisper>=1.2,<2
 # The Windows media overlay and the keyboard's media keys, run by the app so
 # they can let go while a phone is the speaker. Without these mpv keeps its own.
 winrt-runtime>=3.0; sys_platform == 'win32'

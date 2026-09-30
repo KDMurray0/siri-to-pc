@@ -12,16 +12,15 @@ import random
 import json
 import threading
 import time
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass
 
 from ..config import config
 from ..events import Ev, bus
-from ..logging_setup import get, spawn
+from ..logging_setup import get, spawn, private_listen
 from ..models import Activity, Candidate, Track
 from . import radio, spectrum
 from .downloader import downloader, lanes
-from .sink import MpvSink
 from ..resolve import catalog as catalog_cache
 from .taste import taste as _default_taste
 
@@ -240,6 +239,18 @@ class WorkItem:
     # superseded: pasting a forty-track playlist and then asking for one song
     # while it matched shouldn't throw the other thirty-nine away.
     imported: bool = False
+    requested: bool = True
+    era: int | None = None
+    ready_path: str = ""
+
+
+def spread_lanes(lanes):
+    """Evenly distribute whole lanes, preserving every lane's relative order."""
+    ranked = [((i + .5) / len(lane), group, item)
+              for group, lane in enumerate(lanes) if lane
+              for i, item in enumerate(lane)]
+    ranked.sort(key=lambda row: (row[0], row[1]))
+    return [item for _, _, item in ranked]
 
 
 class QueueManager:
@@ -273,6 +284,10 @@ class QueueManager:
         self._max_minutes = float(max_minutes or 0)
         self._request_times: deque[float] = deque(maxlen=200)
         self._work: deque[WorkItem] = deque()
+        self._inflight: dict[int, WorkItem] = {}
+        self._blend_plan: list[WorkItem] = []
+        self._blend_baseline: Counter = Counter()
+        self._radio_paths: set[str] = set()
         self._pool: list[Candidate] = []
         self._meta: dict[str, Track] = {}        # file path -> Track
         self._lock = threading.RLock()
@@ -313,12 +328,18 @@ class QueueManager:
     # -- lifecycle -----------------------------------------------------
     def start(self) -> None:
         n = self._worker_count or max(1, int(config.get("download_workers", 2)))
+        def run_private(fn, *args):
+            token = private_listen.set(self.session_id.startswith("v-"))
+            try:
+                fn(*args)
+            finally:
+                private_listen.reset(token)
         for i in range(n):
-            t = threading.Thread(target=self._worker, args=(i,), daemon=True,
+            t = threading.Thread(target=run_private, args=(self._worker, i), daemon=True,
                                  name=f"dl-{i}")
             t.start()
             self._workers.append(t)
-        threading.Thread(target=self._maintain, daemon=True, name="queue").start()
+        threading.Thread(target=run_private, args=(self._maintain,), daemon=True, name="queue").start()
 
     def stop(self) -> None:
         # Stopping a session is stronger than replacing its request. A worker
@@ -389,6 +410,7 @@ class QueueManager:
             # just superseded by the next "play X". Anything a worker is
             # already holding belongs to the old one.
             self._era += 1
+            self._blend_plan.clear()
             self._hold_radio = hold_radio
             self._request_kind = kind
             self._anchors = [a for a in (anchors or []) if a] or [tracks[0]]
@@ -414,14 +436,113 @@ class QueueManager:
             self.enqueue([track])       # no queue-jumping while the party's on
             return
         with self._lock:
-            self._work.appendleft(WorkItem(track, mode="next"))
+            item = WorkItem(track, mode="next")
+            self._work.appendleft(item)
+            # A Next is a new first future item, not a replacement for the
+            # playlist that was already promised to the listener.
+            if self._blend_plan:
+                self._blend_plan.insert(0, item)
         self._wake.set()
 
     def enqueue(self, tracks: list[Track], imported: bool = False) -> None:
         with self._lock:
             for t in tracks:
-                self._work.append(WorkItem(t, mode="append", imported=imported))
+                item = WorkItem(t, mode="append", imported=imported)
+                self._work.append(item)
+                if self._blend_plan:
+                    self._blend_plan.append(item)
         self._wake.set()
+
+    def _blend_remaining(self) -> list[WorkItem]:
+        """The plan minus played entries and failed/cancelled downloads."""
+        rows = self.sink.playlist()
+        pos = self.sink.pos()
+        head = (pos + 1) if pos is not None and pos >= 0 else 0
+        played = Counter(r.get("filename") for r in rows[:head]) - self._blend_baseline
+        ready = Counter(r.get("filename") for r in rows[head:])
+        pending = {id(w) for w in [*self._inflight.values(), *self._work]
+                   if w.era in (None, self._era) or w.imported}
+        out = []
+        for item in self._blend_plan:
+            path = item.ready_path
+            if path and played[path]:
+                played[path] -= 1
+            elif path and ready[path]:
+                ready[path] -= 1
+                out.append(item)
+            elif not path and id(item) in pending:
+                out.append(item)
+        return out
+
+    def mandatory_tracks(self) -> list[Track]:
+        with self._lock:
+            return [w.track for w in self._mandatory_items()]
+
+    def _mandatory_items(self) -> list[WorkItem]:
+        if self._blend_plan:
+            return self._blend_remaining()
+        rows = self.sink.playlist()
+        pos = self.sink.pos()
+        head = (pos + 1) if pos is not None and pos >= 0 else 0
+        ready = [WorkItem(self._meta.get(r.get("filename")) or Track(path=r.get("filename", "")),
+                          ready_path=r.get("filename", ""))
+                 for r in rows[head:] if r.get("filename") not in self._radio_paths]
+        waiting = [w for w in [*self._inflight.values(), *self._work]
+                   if w.requested and (w.era in (None, self._era) or w.imported)
+                   and not w.ready_path]
+        return ready + waiting
+
+    def spread_in(self, tracks: list[Track], anchors: list[Track]) -> None:
+        """Blend an entire selection across ready, downloading and waiting songs.
+
+        No existing work is cancelled and the current entry is never moved.
+        A schedule survives out-of-order downloads, so a cache hit cannot put
+        every new song at the front of a mostly undownloaded playlist.
+        """
+        with self._lock:
+            base = self._mandatory_items()
+            added = [WorkItem(t) for t in tracks if t.video_id or t.url]
+            self._blend_plan = spread_lanes([base, added])
+            rows, pos = self.sink.playlist(), self.sink.pos()
+            head = (pos + 1) if pos is not None and pos >= 0 else 0
+            self._blend_baseline = Counter(r.get("filename") for r in rows[:head])
+            queued = {id(w) for w in self._work} | {id(w) for w in added}
+            fixed = [w for w in self._work if w.mode in ("now", "next")]
+            fixed_ids = {id(w) for w in fixed}
+            self._work = deque(fixed + [w for w in self._blend_plan
+                                       if id(w) in queued and id(w) not in fixed_ids])
+            self._anchors = anchors or self._anchors
+            self._pool.clear()
+            self._hold_radio = True
+            # Preserve a requested album/artist's stop boundary. A mix must
+            # finish its required songs before any existing radio policy resumes.
+            self._apply_blend_order()
+        self._wake.set()
+        self.publish_queue()
+
+    def _apply_blend_order(self) -> None:
+        if not self._blend_plan:
+            return
+        plan = self._blend_remaining()
+        rows, pos = self.sink.playlist(), self.sink.pos()
+        head = (pos + 1) if pos is not None and pos >= 0 else 0
+        live = [r.get("filename") for r in rows[head:]]
+        available = Counter(live)
+        desired = []
+        for item in plan:
+            if item.ready_path and available[item.ready_path]:
+                desired.append(item.ready_path)
+                available[item.ready_path] -= 1
+        for path in live:  # unrelated arrivals stay queued, after required songs
+            if available[path]:
+                desired.append(path)
+                available[path] -= 1
+        for slot, path in enumerate(desired):
+            index = live.index(path, slot)
+            if index != slot:
+                # Only pull a later entry earlier; this matches both mpv and ListSink.
+                self.sink.move(head + index, head + slot)
+                live.insert(slot, live.pop(index))
 
     def cancel(self, user: bool = True) -> dict:
         """Abandon whatever we're fetching and stop chasing it.
@@ -435,6 +556,7 @@ class QueueManager:
         """
         with self._lock:
             keep = [] if user else [w for w in self._work if w.imported]
+            self._blend_plan.clear()
             dropped = len(self._work) - len(keep)
             self._work.clear()
             self._work.extend(keep)
@@ -475,6 +597,7 @@ class QueueManager:
         # in their original order. This has to happen before the early return
         # below, which is exactly the case that hits it.
         with self._lock:
+            self._blend_plan.clear()
             fixed = [w for w in self._work if w.mode != "append"]
             rest = [w for w in self._work if w.mode == "append"]
             if len(rest) > 1:
@@ -540,7 +663,12 @@ class QueueManager:
         """Explicit requests first; otherwise top up from the candidate pool."""
         with self._lock:
             if self._work:
-                return self._work.popleft()
+                if any(w.mode == "now" and w.era == self._era for w in self._inflight.values()):
+                    return None  # replacement must land before later appends
+                item = self._work.popleft()
+                item.era = self._era
+                self._inflight[id(item)] = item
+                return item
         if self._hold_radio:
             return None
         if self._party() and (self.minutes_ahead() > 1.5 or self.ready_ahead() > 0):
@@ -563,7 +691,7 @@ class QueueManager:
         if cand is None:
             return None
         cand.track.reason = cand.reason      # so the queue can say why
-        return WorkItem(cand.track, mode="append")
+        return WorkItem(cand.track, mode="append", requested=False, era=self._era)
 
     def adopt(self, track: Track) -> bool:
         """Play a track this machine already has, without touching the workers.
@@ -689,6 +817,17 @@ class QueueManager:
             return pick
 
     def _process(self, item: WorkItem) -> None:
+        with self._lock:
+            self._inflight[id(item)] = item
+            if item.era is None:
+                item.era = self._era
+        try:
+            self._process_item(item)
+        finally:
+            with self._lock:
+                self._inflight.pop(id(item), None)
+
+    def _process_item(self, item: WorkItem) -> None:
         track = item.track
         if self._stop.is_set():
             return
@@ -698,7 +837,7 @@ class QueueManager:
         # cached track goes from "taken" to "in the playlist" with no pause
         # at all, which is how a track from the search you'd abandoned still
         # turned up in the results of the one you replaced it with.
-        era = self._era
+        era = item.era
         if item.mode in ("now", "next"):
             self._set_activity("finding", f"{track.title}")
 
@@ -747,6 +886,12 @@ class QueueManager:
         # concurrent fetch can still put a name on it.
         remember(path, track)
 
+        with self._lock:
+            self._commit_download(item, path, era)
+
+    def _commit_download(self, item: WorkItem, path: str, era: int) -> None:
+        track = item.track
+
         # The moment of truth. Everything above is harmless — a file on disk
         # and a name in a dictionary — but from here we change what plays, and
         # if the request that wanted this has been replaced, changing it is
@@ -782,11 +927,17 @@ class QueueManager:
                 self.sink.move(count, pos + 1)
         else:
             self.sink.load(path, "append")
-            if self._pref_shuffle():
+            if self._pref_shuffle() and not self._blend_plan:
                 # Shuffle on means the order shouldn't be arrival order. Deal
                 # it in somewhere random rather than always on the end.
                 self._scatter_new(path)
 
+        item.ready_path = path
+        if item.requested:
+            self._radio_paths.discard(path)
+        else:
+            self._radio_paths.add(path)
+        self._apply_blend_order()
         self.publish_queue()
 
     # -- depth / maintenance -------------------------------------------
@@ -883,7 +1034,8 @@ class QueueManager:
                     next_prune = time.monotonic() + _PRUNE_EVERY
                     catalog_cache.save_cache()
                 if self._hold_radio:
-                    if self.ready_ahead() <= 0 and not self._end_after_run:
+                    if (self.ready_ahead() <= 0 and not self._end_after_run
+                            and not self._work and not self._inflight):
                         # the run is done; whatever follows is not an artist
                         # request and shouldn't behave like one
                         self._hold_radio = False
@@ -1169,12 +1321,16 @@ class QueueManager:
         frm, to = int(frm), int(to)
         if frm == to:
             return True
+        with self._lock:
+            self._blend_plan.clear()  # honour a manual running-order edit
         self._undo.append(("move", to, frm))
         self.sink.move(frm, to + 1 if to > frm else to)
         self.publish_queue()
         return True
 
     def remove(self, index: int) -> bool:
+        with self._lock:
+            self._blend_plan.clear()
         snap = self.snapshot()
         if 0 <= index < len(snap):
             self._undo.append(("remove", index, snap[index]))

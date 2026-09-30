@@ -56,9 +56,9 @@ DEFAULTS: dict[str, Any] = {
     # The owner's Google account id, pinned the first time they sign in with
     # it, so a changed address can't lose them the house.
     "owner_sub": "",
-    # An uninvited Google sign-in is held until an owner explicitly admits
-    # it.  Invited sign-ins inherit the scope of the pass that admitted them.
-    "new_account_scope": "phone",
+    # A Google identity alone is not an invitation to control a player.
+    # The owner can grant phone/full access after the account is created.
+    "new_account_scope": "blocked",
     # How the public address is spelled. url_prefix puts this application at a
     # path ("/music") so another can sit beside it on the same address;
     # public_port is the port the *outside* world uses (443 through a router
@@ -84,6 +84,9 @@ DEFAULTS: dict[str, Any] = {
     "announce_duck_db": -12.0,
     "announce_voice_gain_db": 0.0,
     "theme": "mono",
+    # Desktop-only visual preference. Keep it in the application config so a
+    # repaired WebView2 profile cannot silently forget the user's choice.
+    "glass_enabled": False,
     "audio_device": "auto",
     "audio_device_label": "",
     "cast_client": "",         # the one browser acting as the speaker

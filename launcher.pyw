@@ -16,6 +16,13 @@ _HERE = os.path.dirname(sys.executable if FROZEN else os.path.abspath(__file__))
 if not FROZEN:
     sys.path.insert(0, os.path.join(_HERE, "src"))
 
+# Audio alignment loads native C++ libraries. It must run before the GUI,
+# WinRT and playback imports, in a disposable process rather than a thread in
+# the server. An access violation then loses only optional word timing.
+if __name__ == "__main__" and "--lyric-align" in sys.argv:
+    from mrs.resolve.lyric_alignment import run_job
+    raise SystemExit(run_job(sys.argv[-1]))
+
 # Test entry points must precede config, GUI, logging and player imports.
 if __name__ == "__main__" and any(x in sys.argv for x in ("--check", "--selftest")):
     from mrs.testing import isolated
@@ -236,6 +243,9 @@ class Flyout:
         self._pinned = False
         self._moving = False
         self._mini = False
+        # Hydrated again by the page, but this also survives a WebView2
+        # profile reset before the first bridge call arrives.
+        self._glass = bool(config.get("glass_enabled", False))
         self._before_expand = None   # where it was before settings grew it
         self._resize_gen = 0
         self._ever_focused = False   # don't auto-hide before you've used it
@@ -402,6 +412,7 @@ class Flyout:
                 if gen != self._resize_gen:
                     return
                 f = i / steps
+                f = f * f * (3 - 2 * f)
                 w = int(cw + (tw - cw) * f)
                 ht = int(ch + (th - ch) * f)
                 x, y = place(w, ht)
@@ -472,11 +483,28 @@ class Flyout:
 
     def set_mini(self, on) -> bool:
         self._mini = bool(on)
+        self._sync_glass()
         if on:
             self._resize_from_top(Flyout.MINI_W, Flyout.MINI_HOVER_H)
         else:
             self._resize_from_top(Flyout.W, Flyout.H, dur=0.2)
         return bool(on)
+
+    def _sync_glass(self) -> bool:
+        from mrs.core import behind
+        return behind.set_enabled(self._glass and self._mini and self._visible)
+
+    def set_glass(self, on) -> bool:
+        self._glass = bool(on)
+        return self._sync_glass()
+
+    def glass_frame(self):
+        import base64
+        from mrs.core import behind
+        if not self._sync_glass():
+            return None
+        data = behind.frame()
+        return base64.b64encode(data).decode("ascii") if data else None
 
     def set_mini_hover(self, on) -> bool:
         if not self._mini:
@@ -499,6 +527,8 @@ class Flyout:
             pass
 
     def hide(self) -> None:
+        self._visible = False
+        self._sync_glass()
         try:
             self.window.hide()
         except Exception:
@@ -686,6 +716,22 @@ class Bridge:
 
     def set_mini_hover(self, on):
         return flyout.set_mini_hover(on) if flyout else False
+
+    def set_glass(self, on):
+        return flyout.set_glass(on) if flyout else False
+
+    def glass_preference(self):
+        return bool(config.get("glass_enabled", False))
+
+    def set_glass_preference(self, on):
+        value = bool(on)
+        config.set("glass_enabled", value)
+        if flyout:
+            flyout.set_glass(value)
+        return value
+
+    def glass_frame(self):
+        return flyout.glass_frame() if flyout else None
 
     def sign_in(self):
         threading.Thread(target=sign_in_window, daemon=True, name="signin").start()
@@ -1590,6 +1636,8 @@ def main() -> None:
     hidden = "--hidden" in sys.argv
     flyout = Flyout()
     flyout._visible = not hidden
+    from mrs.core import behind
+    behind.use(flyout.hwnd, lambda: flyout._visible and flyout._mini and flyout._glass)
     # First run opens the guide instead of the player. It explains what the
     # three tools are for, what the key is as against a shared link, and which
     # of the optional services are worth having — then hands over. Every step
@@ -1607,7 +1655,10 @@ def main() -> None:
         # off a height the window never had.
         min_size=(Flyout.MINI_W, Flyout.MINI_IDLE_H),
         background_color="#0e0f16", hidden=hidden)
-    webview.start(_after_start)
+    try:
+        webview.start(_after_start)
+    finally:
+        behind.set_enabled(False)
 
     # start() returns when the last window closes, and that used to end the
     # process: player.stop(), os._exit(0), and not a line anywhere saying so.

@@ -58,28 +58,48 @@ $zipped = $LASTEXITCODE
 Pop-Location
 if ($zipped -ne 0) { Write-Host "Couldn't zip the client." -ForegroundColor Red; exit 1 }
 
-$running = Get-CimInstance Win32_Process -Filter "Name='MusicRequestServer.exe'" `
-    -ErrorAction SilentlyContinue | Where-Object {
-        $_.ExecutablePath -and
-        [System.IO.Path]::GetFullPath($_.ExecutablePath) -ieq $exe
+function Get-MusicServerProcess {
+    # Name-based on purpose: a copy launched by the boot-time task runs in
+    # the services session, and its ExecutablePath comes back empty from
+    # here, so a path-only match would miss it entirely.
+    @(Get-CimInstance Win32_Process -Filter "Name='MusicRequestServer.exe'" -ErrorAction SilentlyContinue)
+}
+
+function Stop-MusicServerInstances {
+    # The boot task's copy is owned by the Task Scheduler in session 0
+    # (S4U logon); a plain Stop-Process from a normal user session is
+    # denied, but the scheduler can end its own task, so ask it first.
+    # Copies the user started in their own session still need the plain kill.
+    $taskName = "MusicRequestServer-BeforeSignIn"
+    $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($task -and $task.State -eq "Running") {
+        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     }
+    @(Get-MusicServerProcess) | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+
+# MusicRequestServer.exe is this app's own name, so any live instance is
+# holding files we are about to mirror, where it runs from. A file-share
+# probe cannot find that (a running image still opens for reading; only
+# overwriting it fails, which is exactly what the mirror must do), so the
+# process list is the test.
+$running = @(Get-MusicServerProcess)
 if ($running) {
     Say "Closing the running copy"
-    $running | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-    Start-Sleep -Milliseconds 1500
-    $stillRunning = Get-CimInstance Win32_Process -Filter "Name='MusicRequestServer.exe'" `
-        -ErrorAction SilentlyContinue | Where-Object {
-            $_.ExecutablePath -and
-            [System.IO.Path]::GetFullPath($_.ExecutablePath) -ieq $exe
-        }
-    if ($stillRunning) {
-        Write-Host "The installed copy did not close; refusing to overwrite its files." -ForegroundColor Red
-        exit 1
+    foreach ($attempt in 1, 2) {
+        Stop-MusicServerInstances
+        Start-Sleep -Milliseconds 1500
     }
+}
+if (@(Get-MusicServerProcess)) {
+    Write-Host "The installed copy did not close; refusing to overwrite its files." -ForegroundColor Red
+    exit 1
 }
 
 Say "Installing into dist\MusicRequestServer"
-robocopy "$stage\dist\MusicRequestServer" $dst /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+# /R:3 /W:5: a file that is still locked should fail fast with a clear
+# error, not sit in robocopy's default 100,000 retries for hours.
+robocopy "$stage\dist\MusicRequestServer" $dst /MIR /NFL /NDL /NJH /NJS /NP /R:3 /W:5 | Out-Null
 if ($LASTEXITCODE -ge 8) { Write-Host "Install failed (robocopy $LASTEXITCODE)." -ForegroundColor Red; exit 1 }
 # After the mirror, which would otherwise delete it.
 New-Item -ItemType Directory -Force "$dst\downloads" | Out-Null
@@ -107,12 +127,7 @@ if ($NoRestart) {
 Say "Starting"
 Start-Process $exe
 Start-Sleep -Seconds 6
-$running = Get-CimInstance Win32_Process -Filter "Name='MusicRequestServer.exe'" `
-    -ErrorAction SilentlyContinue | Where-Object {
-        $_.ExecutablePath -and
-        [System.IO.Path]::GetFullPath($_.ExecutablePath) -ieq $exe
-    }
-if ($running) {
+if (@(Get-MusicServerProcess)) {
     Say "Running."
     # Explicit, or the script inherits robocopy's exit code — which is 1 for
     # "copied some files", i.e. every successful install.

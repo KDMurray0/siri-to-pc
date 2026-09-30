@@ -17,6 +17,8 @@ API = "https://lrclib.net/api/get"
 SEARCH = "https://lrclib.net/api/search"
 UA = {"User-Agent": "MusicRequestServer/2.0 (personal music player)"}
 _TIME = re.compile(r"\[(\d+):(\d+(?:\.\d+)?)\]")
+_WORD_TIME = re.compile(r"<(\d+):(\d+(?:\.\d+)?)>")
+_OFFSET = re.compile(r"\[offset:([+-]?\d+)\]", re.I)
 _cache: dict[str, dict] = {}
 _cache_lock = threading.RLock()
 _inflight: dict[str, threading.Event] = {}
@@ -34,14 +36,40 @@ def _fetch(url: str):
 
 
 def _parse_synced(text: str) -> list[dict]:
+    """Keep supplied word timings; ordinary LRC still only times lines."""
     out = []
+    offsets = _OFFSET.findall(text or "")
+    offset = int(offsets[-1]) / 1000 if offsets else 0
     for line in (text or "").splitlines():
         stamps = _TIME.findall(line)
         if not stamps:
             continue
-        words = _TIME.sub("", line).strip()
+        content = _TIME.sub("", line).strip()
+        markers = list(_WORD_TIME.finditer(content))
+        words = _WORD_TIME.sub("", content).strip()
+        timed = []
+        # A prefix before the first word stamp means timing is incomplete.
+        if markers and not content[:markers[0].start()].strip():
+            times = [int(m[1]) * 60 + float(m[2]) - offset for m in markers]
+            if all(b > a for a, b in zip(times, times[1:])):
+                for i, marker in enumerate(markers):
+                    end_at = markers[i + 1].start() if i + 1 < len(markers) else len(content)
+                    bit = content[marker.end():end_at]
+                    if bit.strip():
+                        word = {"t": max(0, times[i]), "text": bit}
+                        if i + 1 < len(times):
+                            word["end"] = max(0, times[i + 1])
+                        timed.append(word)
         for mins, secs in stamps:
-            out.append({"t": int(mins) * 60 + float(secs), "text": words})
+            at = int(mins) * 60 + float(secs) - offset
+            row = {"t": max(0, at), "text": words}
+            if timed:
+                # Repeated line stamps reuse word offsets relative to the first.
+                delta = at - (int(stamps[0][0]) * 60 + float(stamps[0][1]) - offset)
+                row["words"] = [{**w, "t": max(0, w["t"] + delta),
+                                 **({"end": max(0, w["end"] + delta)} if "end" in w else {})}
+                                for w in timed]
+            out.append(row)
     out.sort(key=lambda r: r["t"])
     return out
 

@@ -163,6 +163,8 @@ EXAMPLES = [
         {"kind": "artist", "name": "Korn"}, {"kind": "genre", "name": "glam metal"}])),
     ("play mother by danzig next", dict(kind="song", title="Mother", artist="Danzig", when="next")),
     ("five songs by queen", dict(kind="artist", artist="Queen", count=5)),
+    ("play a few songs from the darker side of alternative rock next", dict(
+        kind="genre", genre="dark alternative rock", count=4, when="next")),
     ("songs like motorhead", dict(kind="similar", artist="Motörhead")),
     ("something chill", dict(kind="genre", genre="chill", shuffle=True)),
     ("shuffle my taylor swift", dict(kind="artist", artist="Taylor Swift", shuffle=True)),
@@ -201,7 +203,7 @@ SYSTEM = (
     "(play motorhead) is the band. Several: join with \" and \" and put the genre "
     "they share in genre.\n"
     "7 genre: genre, mood, decade (\"90s\"), activity. Several: join with \" and \".\n"
-    "8 mix: DIFFERENT kinds together (a band and a genre, a song and a band). "
+    "8 mix: several SPECIFIC songs, or different kinds together (a band and a genre, a song and a band). "
     "items: [{kind: artist|song|album|genre, name, artist}] where name is the "
     "song, album, band or genre; genre = what they share.\n"
     "Every thing named becomes an anchor the radio keeps returning to: never drop "
@@ -210,7 +212,9 @@ SYSTEM = (
     "Coming Undone, artist Korn. variant only for remix/live/acoustic/cover/sped "
     "up/slowed/instrumental. shuffle only for shuffle/random/surprise, or a genre "
     "or mood. when: \"next\" (play X next, after this), \"end\" (add to the queue). "
-    "count: only when a number of songs is asked for.\n"
+    "count: a number of songs, including a few (3-5); when multiple songs are "
+    "requested, give a genre/artist with count or a mix of named songs, not "
+    "one arbitrary track.\n"
     "Examples:\n" + "\n".join(_shot(said, **f) for said, f in EXAMPLES)
 )
 
@@ -380,7 +384,8 @@ _DOWN = ("quiet", "down", "soft", "lower", "less", "decrease", "reduce")
 
 
 def _same_name(a: str, b: str) -> bool:
-    fold = lambda x: re.sub(r"[^a-z0-9]", "", _fold((x or "").lower()))
+    def fold(x: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", _fold((x or "").lower()))
     return bool(fold(a)) and fold(a) == fold(b)
 
 

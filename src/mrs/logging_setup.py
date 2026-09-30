@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import contextvars
 import os
 import sys
 import threading
@@ -12,6 +13,7 @@ import time
 from .paths import data_dir
 
 _LOG = data_dir() / "server.log"
+private_listen = contextvars.ContextVar("private_listen", default=False)
 
 
 class _RedactKey(logging.Filter):
@@ -22,6 +24,8 @@ class _RedactKey(logging.Filter):
         self.key = key
 
     def filter(self, record: logging.LogRecord) -> bool:
+        if private_listen.get():
+            return False
         if self.key:
             if isinstance(record.msg, str) and self.key in record.msg:
                 record.msg = record.msg.replace(self.key, "[REDACTED]")
@@ -247,6 +251,7 @@ def spawn(fn, *args, name: str = "", on_error=None, **kw) -> threading.Thread:
                 except Exception:
                     get("tasks").debug("%s cleanup failed too", label)
 
-    t = threading.Thread(target=run, daemon=True, name=label[:24])
+    context = contextvars.copy_context()
+    t = threading.Thread(target=context.run, args=(run,), daemon=True, name=label[:24])
     t.start()
     return t

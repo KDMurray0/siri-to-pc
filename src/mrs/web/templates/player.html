@@ -73,6 +73,8 @@ body.mini .timeleft{display:none}
 
 .stage{position:relative;z-index:2;padding:22px 22px 12px;flex:1;display:flex;
   flex-direction:column;min-height:0}
+.transport{display:contents}
+.bartrack,.lyrlead{display:none}
 
 /* now playing */
 .art-wrap{display:flex;justify-content:center;margin-top:4px;position:relative;
@@ -106,7 +108,10 @@ body.mini.mini-hover .artnote{width:74px;height:74px}
 .activity{display:none;align-items:center;justify-content:center;gap:7px;
   margin-top:8px;font-size:11.5px;color:var(--accent);font-weight:600;
   letter-spacing:.02em;min-height:16px;line-height:1.25;flex-wrap:wrap;max-width:100%}
-#actlabel{max-width:min(52vw,360px);text-align:center;white-space:normal}
+/* One line, always: a long title must not reflow the stage into a wall of
+   wrapped words. The whole thing stays in the hover text. */
+#actlabel{max-width:min(52vw,360px);min-width:0;text-align:center;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
 body.busy .activity{display:flex}
 .activity .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);
   animation:pulse 1s ease-in-out infinite}
@@ -176,6 +181,14 @@ body.seeking .seekdot{transform:scale(1.3)}
   border-radius:3px}
 .knob{position:absolute;top:50%;width:12px;height:12px;border-radius:50%;
   background:var(--fg);transform:translate(-50%,-50%);pointer-events:none}
+/* The crossfade ramps the level on the server side; easing the bar lets the
+   ramp read as a fade rather than a ladder. While dragging, follow the
+   pointer exactly, the same way the seek bar already does. */
+.sfill,.knob,.minivol i{transition:width .3s cubic-bezier(.33,1,.68,1),
+  left .3s cubic-bezier(.33,1,.68,1),height .3s cubic-bezier(.33,1,.68,1)}
+body.vol-drag .sfill,body.vol-drag .knob,body.vol-drag .minivol i{transition:none}
+@media (prefers-reduced-motion:reduce){
+  .sfill,.knob,.minivol i{transition:none}}
 /* Live radio: there's no next track, no scrubbing, nothing to download and
    nothing to add to a playlist. Fade and collapse them rather than leaving
    dead buttons sitting there. */
@@ -265,6 +278,10 @@ body.guest:not(.keeps) #addimport{display:none}
   color:var(--fg)}
 .pchip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pchip button{border:0;background:none;color:var(--sub);cursor:pointer;font-size:13px;line-height:1;padding:0 4px}
+/* The overflow chip is not a pick: no unpicker, and it says how many are
+   hidden rather than pretending to name them. */
+.pchip.more{max-width:none;background:color-mix(in srgb,var(--sub) 16%,transparent);
+  color:var(--sub);cursor:default;font-weight:700}
 .qbtn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .qbtn.primary:hover{color:var(--accent-ink);filter:brightness(1.08)}
 .qbtn[hidden]{display:none}
@@ -439,24 +456,73 @@ a.btn{text-decoration:none;display:inline-block}
 /* A list the house shares. The tag is on the row, not in the name, so a
    list called "Shared" doesn't look like one. */
 /* Make one for me: what it's of, how many, and off it goes. */
-.plmake{margin:4px 0 12px;padding:12px;border:1px solid var(--line);border-radius:12px;
-  background:color-mix(in srgb,var(--accent) 6%,transparent)}
-.plmake b{display:block;font-size:12.5px;margin-bottom:2px}
-.plmake p{font-size:11px;color:var(--sub);margin:0 0 8px}
-.plmake input{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);
-  border-radius:9px;padding:8px 10px;font:inherit;font-size:12.5px;outline:none;margin-bottom:8px}
-.plmake input:focus{border-color:var(--accent)}
-.plmake .sizes{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
-.plmake .sizes button{font:inherit;font-size:11px;padding:4px 9px;border-radius:999px;cursor:pointer;
-  border:1px solid var(--line);background:none;color:var(--sub)}
-.plmake .sizes button.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
-.plmake .strict{display:flex;gap:0;margin-bottom:8px;border:1px solid var(--line);border-radius:10px;
-  overflow:hidden}
-.plmake .strict button{flex:1;font:inherit;font-size:11.5px;font-weight:600;padding:7px 6px;border:0;
-  background:none;color:var(--sub);cursor:pointer;transition:background .12s,color .12s}
-.plmake .strict button.on{background:var(--accent);color:var(--accent-ink)}
-.plmake .mkstate{font-size:11.5px;color:var(--sub);margin-top:6px;min-height:1em}
-.plmake .mkstate{font-size:11px;color:var(--sub);margin-top:6px}
+.plmake{margin:6px 0 16px;padding:12px;border:1px solid var(--line);border-radius:13px;
+  background:var(--panel)}
+.plmake h3{font-size:16px;font-weight:650;letter-spacing:-.025em;margin:0 0 5px}
+.plmake p{font-size:12px;line-height:1.45;color:var(--sub);margin:0 0 10px}
+.plmake label,.mklabel{display:block;font-size:11px;font-weight:600;color:var(--sub);margin:0 0 7px}
+.plmake textarea,.plmake input,.plmake select{width:100%;background:color-mix(in srgb,var(--bg) 70%,transparent);
+  border:1px solid var(--line);color:var(--fg);border-radius:10px;padding:10px 11px;
+  font:inherit;font-size:12.5px;outline:none}
+.plmake textarea{resize:vertical;min-height:58px;max-height:160px;line-height:1.5;margin-bottom:9px}
+.plmake textarea:focus,.plmake input:focus{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 12%,transparent)}
+.mkfields{display:grid;grid-template-columns:78px minmax(0,1fr);gap:10px;margin-bottom:10px}
+.mkcount,.mktarget{min-width:0}
+.mkcount label,.mktarget label{white-space:nowrap}
+.mkcount input{width:100%;height:37px;text-align:center;font-variant-numeric:tabular-nums;padding:7px}
+.mktarget>button{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  width:100%;height:37px;padding:0 10px;border:1px solid var(--line);border-radius:10px;
+  background:color-mix(in srgb,var(--bg) 70%,transparent);color:var(--fg);
+  font:inherit;font-size:12px;text-align:left;cursor:pointer}
+.mktarget>button:focus-visible,.mktarget>button[aria-expanded=true]{outline:2px solid var(--accent);outline-offset:1px}
+.mktarget>button span:first-child{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.mktarget-menu{position:fixed;z-index:120;max-height:min(244px,55vh);padding:5px;
+  overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:11px;
+  box-shadow:0 16px 36px #0009}
+.mktarget-menu[hidden]{display:none}
+.mktarget-menu input{margin:0 0 5px;height:33px;font-size:12px}
+.mktarget-menu [data-target]{display:block;width:100%;padding:8px 9px;border:0;
+  border-radius:7px;background:none;color:var(--fg);text-align:left;font:inherit;font-size:12px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.mktarget-menu [data-target][hidden]{display:none}
+.mktarget-menu [data-target]:hover,.mktarget-menu [data-target]:focus-visible,
+.mktarget-menu [data-target][aria-selected=true]{background:color-mix(in srgb,var(--accent) 16%,var(--panel));outline:none}
+.plmake .strict{display:flex;gap:3px;padding:3px;margin-bottom:6px;background:color-mix(in srgb,var(--bg) 65%,transparent);
+  border-radius:10px}
+.plmake .strict button{flex:1;min-width:0;font:inherit;font-size:11.5px;font-weight:600;padding:9px 5px;border:0;
+  border-radius:7px;background:none;color:var(--sub);cursor:pointer;transition:background .15s,color .15s}
+.plmake .strict button.on{background:color-mix(in srgb,var(--fg) 14%,var(--bg));color:var(--fg);
+  box-shadow:0 1px 4px #0002}
+.plmake .mkhint{font-size:11px;line-height:1.4;margin:0 0 9px;min-height:0}
+.plmake .mkgo{width:100%;padding:9px;border-radius:9px;font-size:12px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.plmake .mkstate{font-size:11px;line-height:1.5;color:var(--sub);margin-top:10px}
+.plmake .mkstate:empty{display:none}
+.plmake .mkactivity{display:none;min-height:108px;align-items:center;justify-content:center;
+  flex-direction:column;gap:12px;overflow:hidden;text-align:center}
+.plmake.making .mkactivity{display:flex}
+.plmake.making > p,.plmake.making > label,.plmake.making > textarea,
+.plmake.making > .mkfields,.plmake.making > .mklabel,
+.plmake.making > .strict,.plmake.making > .mkhint,.plmake.making > .mkgo{display:none}
+.mkspinner{width:26px;height:26px;border:2px solid color-mix(in srgb,var(--accent) 20%,transparent);
+  border-top-color:var(--accent);border-radius:50%;animation:mkspin .75s linear infinite}
+@keyframes mkspin{to{transform:rotate(360deg)}}
+.mkticker{width:100%;overflow:hidden;white-space:nowrap;mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent)}
+.mkticker span{display:inline-block;color:var(--fg);font-size:12px;animation:mkslide 9s linear infinite}
+@keyframes mkslide{from{transform:translateX(90%)}to{transform:translateX(-100%)}}
+@media (prefers-reduced-motion:reduce){.mkspinner,.mkticker span{animation:none}}
+.pltools{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 3px 10px}
+.pltools b{font-size:12px;font-weight:650}.pltools .btn{font-size:11px}
+.plimportlabel{display:block;font-size:11px;color:var(--sub);margin:4px 3px 7px}
+.plactions{display:flex;flex-wrap:wrap;gap:6px;padding:8px 0 12px}
+.plactions .btn{font-size:11px;padding:6px 9px}
+.plrow button.pn{background:none;border:0;color:inherit;text-align:left;font-family:inherit;padding:0;cursor:pointer}
+.plnewform{display:flex;gap:7px;margin-bottom:18px}
+.plnewform input,.plrename input{min-width:0;flex:1;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:9px 10px;color:var(--fg);font:inherit;font-size:12px}
+.plnewform[hidden],.plrename[hidden]{display:none}
+.plrename{display:flex;gap:6px;flex-wrap:wrap;padding:0 0 12px}
+.pllink{margin-bottom:12px}.pllink input{width:100%;min-width:0;background:var(--bg);color:var(--sub);border:1px solid var(--line);border-radius:7px;padding:8px;font:inherit;font-size:10px}
+.pllink p{font-size:11px;color:var(--sub);margin:6px 0}
 .plhead{font-size:10.5px;font-weight:700;letter-spacing:.06em;
   text-transform:uppercase;color:var(--sub);padding:12px 6px 4px}
 .plshare{font-size:9.5px;font-weight:700;letter-spacing:.05em;
@@ -512,16 +578,14 @@ a.btn{text-decoration:none;display:inline-block}
    It used to be a hard stop between two colours sweeping across the letters,
    which is a karaoke machine's idea and looked it. A word simply arriving,
    quickly, is the same information and reads like the rest of the app. The
-   line is armed once, each word with its own delay, and then nothing runs:
-   no timer, no rAF, no work between one line and the next. */
+   line is armed once, each word with its own delay. Boundary checks only
+   re-arm it after a seek, pause or measured clock drift. */
 /* A length, so the sidebar's column can be transitioned closed. An
    unregistered custom property is a string and jumps. */
 @property --side { syntax:'<length>'; inherits:true; initial-value:0px; }
-/* Dim until its moment, then up over a fifth of its own length — quick
-   enough to land with the voice, slow enough not to blink. */
+/* Every word turns white quickly, independently of how long it is held. */
 @keyframes wordfill {
   0%   { color:var(--sub); opacity:.5 }
-  30%  { color:var(--fg);  opacity:1 }
   100% { color:var(--fg);  opacity:1 }
 }
 .lyrics .lrow.active .w.now{transition:none}
@@ -533,30 +597,37 @@ a.btn{text-decoration:none;display:inline-block}
    runs the whole length of the word, smoothly, so a held note keeps growing
    and glowing until it's let go -- and a quick "the" barely moves. */
 @keyframes wordswell {
-  0%   { transform:none; text-shadow:0 0 0 transparent }
-  100% { transform:translateY(calc(var(--hold) * -4px)) scale(calc(1 + var(--hold) * .16));
-         text-shadow:0 0 calc(4px + var(--hold) * 22px) color-mix(in srgb,var(--fg) calc(16% + var(--hold) * 58%),transparent),
-                     0 0 calc(var(--hold) * 9px) color-mix(in srgb,var(--accent) calc(var(--hold) * 70%),transparent) }
+  0%   { transform:none; text-shadow:0 0 0 transparent,0 0 0 transparent }
+  100% { transform:translateY(calc(var(--hold) * -5px)) scale(calc(1 + var(--hold) * .2));
+         text-shadow:0 0 calc(3px + var(--hold) * 24px) color-mix(in srgb,var(--fg) calc(14% + var(--hold) * 60%),transparent),
+                     0 0 calc(var(--hold) * 10px) color-mix(in srgb,var(--accent) calc(var(--hold) * 75%),transparent) }
 }
 @keyframes wordrelease {
-  from { transform:translateY(calc(var(--hold) * -4px)) scale(calc(1 + var(--hold) * .16));
-         text-shadow:0 0 calc(4px + var(--hold) * 22px) color-mix(in srgb,var(--fg) calc(16% + var(--hold) * 58%),transparent),
-                     0 0 calc(var(--hold) * 9px) color-mix(in srgb,var(--accent) calc(var(--hold) * 70%),transparent) }
-  to   { transform:none; text-shadow:0 0 0 transparent }
+  from { transform:translateY(calc(var(--hold) * -5px)) scale(calc(1 + var(--hold) * .2));
+         text-shadow:0 0 calc(3px + var(--hold) * 24px) color-mix(in srgb,var(--fg) calc(14% + var(--hold) * 60%),transparent),
+                     0 0 calc(var(--hold) * 10px) color-mix(in srgb,var(--accent) calc(var(--hold) * 75%),transparent) }
+  to   { transform:none; text-shadow:0 0 0 transparent,0 0 0 transparent }
 }
 @media (prefers-reduced-motion:reduce){
   .lyrics .lrow .w{transition:color .22s ease,opacity .22s ease}
 }
 /* Stopped means stopped. The animations hold where they are rather than
    running on while the music doesn't. */
-body.paused .lyrics .lrow .w{animation-play-state:paused}
+body.paused .lyrics .lrow .w,body.waiting .lyrics .lrow .w{animation-play-state:paused}
 /* No @property support: the fill can't tween, so don't pretend. The word
    still turns over at the right moment, it just doesn't sweep. */
 
-.lyrics:not(.plain) .lrow{cursor:pointer;border-radius:8px}
-.lyrics:not(.plain) .lrow:hover{color:var(--fg);opacity:.9;
+.lyrics .lrow[data-t]{border-radius:8px}
+.lyrics .lrow[data-t]:hover{color:var(--fg);opacity:.9;
   background:color-mix(in srgb,var(--accent) 10%,transparent)}
 .lyrics.plain .lrow{text-align:left;opacity:.85}
+/* Plain transcriptions are prose in some providers. Keep them readable when
+   no timestamped lines exist instead of giving one paragraph karaoke scale. */
+body:not(.mini) #panel-lyrics.plain .lrow{font-size:clamp(15px,2.8cqi,21px);
+  font-weight:500;line-height:1.55;padding:5px 0;opacity:.82;cursor:default}
+body:not(.mini) #panel-lyrics.prose .lrow{font-size:clamp(16px,3cqi,23px);
+  line-height:1.5;text-align:left;padding:7px 2px}
+body:not(.mini) #panel-lyrics.plain .lrow.stanza{margin-top:18px}
 
 /* Only the desktop layout has a sidebar to fold; on a phone the queue is a
    tab, and a control for hiding a column that doesn't exist is worse than
@@ -665,9 +736,19 @@ select,.keyin{background:var(--panel);border:1px solid var(--line);color:var(--f
 /* ── about this song ────────────────────────────────────────────────
    Reads like a sleeve note, not a data sheet: one paragraph of what
    happened, a few specifics under it, and the numbers last and small. */
-.abt{padding:2px 2px 10px;text-align:left}
-.abt h3{margin:0 0 2px;font-size:16px;font-weight:650;letter-spacing:-.01em}
-.abt .abtsub{color:var(--sub);font-size:12px;margin-bottom:10px}
+.abt{padding:4px 3px 14px;text-align:left;max-width:680px;margin-inline:auto}
+.abthero{display:flex;align-items:center;gap:13px;padding:0 0 18px}
+.abthero img{width:68px;height:68px;object-fit:cover;border-radius:11px;box-shadow:0 6px 18px #0003}
+.abthero>div{min-width:0}.abt .abtkicker{font-size:9px;font-weight:650;letter-spacing:.12em;text-transform:uppercase;color:var(--sub);margin-bottom:5px}
+.abt h3{margin:0 0 4px;font-size:19px;font-weight:650;letter-spacing:-.025em;line-height:1.25;overflow-wrap:anywhere}
+.abt .abtsub{color:var(--sub);font-size:12px;line-height:1.5}
+.abtalbum{padding:13px 0;border-block:1px solid var(--line);margin-bottom:15px}
+.abtalbum span{display:block;font-size:10px;color:var(--sub);margin-bottom:4px}
+.abtalbum b{font-size:13px;font-weight:550;line-height:1.45}
+.abttags{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px}
+.abttags span{font-size:10px;color:var(--sub);border-radius:6px;background:color-mix(in srgb,var(--fg) 6%,transparent);padding:4px 7px}
+.abt h4{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--sub);font-weight:650;margin:21px 0 10px}
+.abt details summary{cursor:pointer;font-size:11px;color:var(--sub);margin:0 0 12px}
 .abt .abtstory{font-size:13.5px;line-height:1.62;margin:0 0 12px;
   color:color-mix(in srgb,var(--fg) 88%,transparent)}
 .abt ul{margin:0 0 12px;padding-left:0;list-style:none}
@@ -675,13 +756,12 @@ select,.keyin{background:var(--panel);border:1px solid var(--line);color:var(--f
   font-size:13px;line-height:1.5}
 .abt li::before{content:"";position:absolute;left:2px;top:8px;width:5px;
   height:5px;border-radius:50%;background:var(--accent);opacity:.75}
-.abt .abtnums{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:10px}
-.abt .abtnum{background:var(--panel);border:1px solid var(--line);
-  border-radius:9px;padding:6px 9px;min-width:70px}
-.abt .abtnum b{display:block;font-size:14px;font-weight:650;line-height:1.2}
-.abt .abtnum span{font-size:10.5px;color:var(--sub);text-transform:uppercase;
-  letter-spacing:.05em}
-.abt .abtsrc{font-size:11px;color:var(--sub)}
+.abt .abtnums{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 14px;
+  padding:16px 0;margin:18px 0 4px;border-top:1px solid var(--line)}
+.abt .abtnum{min-width:0}
+.abt .abtnum b{display:block;font-size:20px;font-weight:600;letter-spacing:-.03em;line-height:1.3}
+.abt .abtnum span{display:block;font-size:10px;color:var(--sub);line-height:1.4;margin-top:3px}
+.abt .abtsrc{font-size:10px;color:var(--sub);margin-top:18px;line-height:1.6}
 .abt .abtsrc a{color:var(--sub);text-decoration:underline;
   text-underline-offset:2px}
 .abt .abtsrc a:hover{color:var(--accent)}
@@ -735,6 +815,7 @@ select,.keyin{background:var(--panel);border:1px solid var(--line);color:var(--f
 .picker-row .cnt{margin-left:auto;font-size:11px;color:var(--sub)}
 .moremenu{padding:6px 0}
 .moremenu .picker-row{gap:12px;font-size:13.5px}
+.moremenu .picker-row[hidden]{display:none}
 .moremenu .picker-row svg{width:18px;height:18px;fill:currentColor;flex:0 0 auto;opacity:.85}
 .moremenu hr{border:0;border-top:1px solid var(--line);margin:5px 0}
 .moremenu .picker-row.danger:hover,.moremenu .picker-row.danger.arm{color:var(--bad)}
@@ -753,6 +834,7 @@ body.live:not(.onsong) .moremenu #download,body.live:not(.onsong) .moremenu #add
   color:var(--fg);border-radius:9px;padding:7px 10px;font-size:12.5px;
   font-family:inherit;outline:none}
 .picker-new input:focus{border-color:var(--accent)}
+.picker-new[hidden]{display:none}
 
 /* toast */
 .toast{position:absolute;left:50%;bottom:18px;transform:translate(-50%,20px);z-index:30;
@@ -760,6 +842,7 @@ body.live:not(.onsong) .moremenu #download,body.live:not(.onsong) .moremenu #add
   padding:9px 16px;border-radius:22px;opacity:0;pointer-events:none;
   transition:opacity .2s,transform .2s;max-width:88%;text-align:center}
 .toast.show{opacity:1;transform:translate(-50%,0)}
+.toast.warn{background:var(--warn);color:#171717}
 body.mini .toast{bottom:auto;top:50%;left:12px;right:12px;max-width:none;transform:translate(0,-40%);
   font-size:11.5px;padding:7px 12px;z-index:40}
 body.mini .toast.show{transform:translate(0,-50%)}
@@ -792,49 +875,99 @@ body.mini .frame::after{display:block;
 body.mini.paused .ambient{opacity:.34}
 
 /* ── liquid glass ─────────────────────────────────────────────────────
-   The bar as a slab of glass over its own cover. Behind it the cover fills
-   the window, sharp enough to be bent, drifting slowly so the bending is
-   seen to happen. The glass refracts it: pulled outward along the rim --
-   strongest at the edge, near-clear in the middle -- with a slow liquid
-   wobble on top, and red, green and blue bent by different amounts so the
-   edge splits the way glass does. The cover's colour is a tint in the glass,
-   strong beside the thumbnail and gone to clear by the far end. */
-.glass,.glassdefs{display:none}
+   The desktop bridge supplies the real pixels behind this window. Album
+   artwork supplies only the left-to-right tint, never the glass backdrop.
+   The SVG mixes a frosted centre with a clearer, refracted rim. Without the
+   bridge/capture, keep an honest neutral material instead of fake scenery. */
+.glass,.glassdefs,.glass-backdrop{display:none}
 .glassdefs{position:absolute;width:0;height:0}
 body.mini.glassy .glassdefs{display:block}
-body.mini.glassy .ambient{inset:-35% -10%;width:auto;height:auto;opacity:.95;
-  filter:blur(2px) saturate(1.4) brightness(.85);animation:glassdrift 28s ease-in-out infinite alternate}
-body.mini.glassy .ambient img{border-radius:0;object-fit:cover}
-@keyframes glassdrift{0%{transform:scale(1.2) translate(-5%,-7%)}100%{transform:scale(1.35) translate(6%,7%)}}
-body.mini.glassy.paused .ambient{animation-play-state:paused;opacity:.7}
-body.mini.glassy .frame::after{display:none}
-body.mini.glassy .glass{display:block;position:absolute;inset:3px;z-index:1;border-radius:18px;
+body.mini.glassy .ambient,body.mini.glassy .frame::after{display:none}
+body.mini.glassy .frame{background:#252932}
+body.mini.glassy .glass-backdrop{display:block;position:absolute;inset:0;opacity:0;
+  width:100%;height:100%;object-fit:fill;z-index:0;pointer-events:none;
+  filter:url(#liquid) saturate(1.08) brightness(.96);transition:opacity .3s ease}
+body.mini.glassy.glass-live .glass-backdrop{opacity:1}
+body.mini.glassy .glass{display:block;position:absolute;inset:0;z-index:1;border-radius:8px;
   pointer-events:none;overflow:hidden;
-  -webkit-backdrop-filter:url(#liquid) saturate(1.45) brightness(.78);
-  backdrop-filter:url(#liquid) saturate(1.45) brightness(.78);
-  box-shadow:inset 1.5px 1.5px 0 rgba(255,255,255,.5),inset -1px -1px 0 rgba(255,255,255,.12),
-    inset 0 0 22px rgba(255,255,255,.07),0 10px 28px rgba(0,0,0,.4)}
+  background:rgba(12,16,24,.12);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.24),inset 0 -1px 0 rgba(255,255,255,.06)}
+body.mini.glassy:not(.hasart) .glass,body.mini.glassy:not(.hastrack) .glass{
+  background:transparent;box-shadow:none}
 body.mini.glassy .glass i{position:absolute;inset:0}
-body.mini.glassy .glass .tint{mix-blend-mode:color;
-  background:linear-gradient(to right,var(--accent) 0%,color-mix(in srgb,var(--accent) 55%,transparent) 30%,
-    transparent 72%)}
-body.mini.glassy .glass .veil{
-  background:linear-gradient(to right,color-mix(in srgb,var(--accent) 20%,transparent) 0%,transparent 55%),
-    rgba(0,0,0,.14)}
-body.mini.glassy .glass .spec{
-  background:radial-gradient(130% 110% at 0% 0%,rgba(255,255,255,.3),transparent 38%),
-    linear-gradient(to bottom,rgba(255,255,255,.14),transparent 40%)}
-body.mini.glassy .title,body.mini.glassy .artist{text-shadow:0 1px 8px rgba(0,0,0,.55)}
-body.mini.glassy .art{box-shadow:0 8px 22px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.18)}
-@media (prefers-reduced-motion:reduce){ body.mini.glassy .ambient{animation:none} }
-body.mini .stage{display:grid;grid-template-columns:auto 1fr;
+body.mini.glassy.hasart.hastrack .glass .tint{
+  background:linear-gradient(to right,color-mix(in srgb,var(--glasstint,transparent) 88%,transparent) 0%,
+    color-mix(in srgb,var(--glasstint,transparent) 66%,transparent) 30%,
+    color-mix(in srgb,var(--glasstint,transparent) 32%,transparent) 65%,
+    color-mix(in srgb,var(--glasstint,transparent) 7%,transparent) 100%)}
+body.mini.glassy .glass .sheen{background:
+  radial-gradient(ellipse at 12% 0%,rgba(255,255,255,.2),transparent 58%),
+  linear-gradient(to bottom,rgba(255,255,255,.13),transparent 32%,transparent 78%,rgba(255,255,255,.05))}
+body.mini.glassy:not(.hasart) .glass .sheen,
+body.mini.glassy:not(.hastrack) .glass .sheen{display:none}
+body.mini.glassy .title{color:#fff;text-shadow:0 1px 5px rgba(0,0,0,.65)}
+body.mini.glassy .artist{color:rgba(255,255,255,.9);text-shadow:0 1px 5px rgba(0,0,0,.65)}
+body.mini.glassy .upnext{color:rgba(255,255,255,.8);opacity:1;text-shadow:0 1px 4px #000}
+body.mini.glassy.mini-hover .upnext{opacity:0}
+body.mini.glassy .art{box-shadow:0 6px 18px rgba(0,0,0,.38),0 0 0 1px rgba(255,255,255,.16)}
+/* Keep the full player's controls: unboxed icons and one filled play button.
+   Frost belongs to the pane, not a stack of raised tiles over every icon. */
+body.mini.glassy .controls .sep{background:rgba(255,255,255,.25)}
+/* Minor frost on the hit targets: enough separation from the captured desktop
+   without turning each control into a raised opaque tile. */
+body.mini.glassy .controls .ib,body.mini.glassy .winbtn{
+  background:linear-gradient(145deg,rgba(255,255,255,.22),rgba(255,255,255,.11));
+  border:0;box-shadow:none;-webkit-backdrop-filter:blur(8px) saturate(1.14);
+  backdrop-filter:blur(8px) saturate(1.14);padding:0;line-height:0;place-items:center;
+  justify-content:center;align-content:center}
+body.mini.glassy .controls .ib:hover,body.mini.glassy .winbtn:hover{
+  background:linear-gradient(145deg,rgba(255,255,255,.31),rgba(255,255,255,.17))}
+body.mini.glassy .winbtn{display:grid;opacity:1;color:rgba(255,255,255,.9)}
+body.mini.glassy #pin,body.mini.glassy #shrink{display:grid}
+body.mini.glassy .winbtn.on{background:rgba(255,255,255,.36);color:#fff}
+body.mini.glassy .winbtn svg{margin:auto}
+body.mini.glassy .controls .ib svg{display:block;margin:auto;transform:translateZ(0)}
+body.mini.glassy .controls .play{background:rgba(255,255,255,.84);color:#151820;
+  border:0;box-shadow:none}
+body.mini.glassy .controls .play:hover{background:rgba(255,255,255,.96);color:#101217}
+body.mini.glassy.mini-hover .minivol{background:rgba(255,255,255,.2);
+  -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+body.mini.glassy.mini-hover .minivol i{background:#fff}
+@media (prefers-reduced-transparency:reduce),(prefers-contrast:more){
+  body.mini.glassy .glass{background:#20242c}
+  body.mini.glassy .glass-backdrop{display:none}
+  body.mini.glassy .glass .sheen{display:none}
+}
+@media (prefers-reduced-motion:reduce){
+  body.mini.glassy .art,body.mini.glassy .controls,body.mini.glassy .upnext,
+  body.mini.glassy .glass-backdrop{transition:none}
+}
+.stage{transition:opacity .12s ease,transform .2s ease}
+body.mini-switch .stage{opacity:0;transform:translateY(5px)}
+@media(prefers-reduced-motion:reduce){.stage{transition:none}}
+.private-notice{display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+  z-index:250;padding:14px 20px;border-radius:14px;background:#272932;color:#fff;
+  box-shadow:0 8px 40px #0006;max-width:90vw;text-align:center;font-size:13px}
+.private-notice a{color:#fff;font-weight:700}
+body.private-ended .private-notice{display:block}
+body.private-listen.castblocked #play{animation:castpulse 1.4s ease-in-out infinite}
+body.mini .stage{display:grid;grid-template-columns:auto minmax(0,1fr);
   grid-template-areas:"art meta" "art ctl";align-items:center;align-content:center;
   column-gap:12px;row-gap:0;padding:11px 14px 11px 12px}
+body.mini:not(.hastrack):not(.hasqueue) .stage{display:flex;align-items:center;
+  padding:7px 12px;min-height:0}
+body.mini:not(.hastrack):not(.hasqueue) .art-wrap,
+body.mini:not(.hastrack):not(.hasqueue) .controls,
+body.mini:not(.hastrack):not(.hasqueue) .upnext{display:none}
+body.mini:not(.hastrack):not(.hasqueue) .meta{padding-right:64px}
 /* Only the text has to dodge the window buttons, and only because it sits at
    the same height as them. Putting that clearance on the whole grid squeezed
    the controls too, leaving a dead strip under the buttons that nothing used. */
 body.mini .meta{padding-right:64px}
 body.mini .art-wrap{grid-area:art;margin:0;justify-content:flex-start;align-self:center}
+/* A collapsed full-player panel must never hide the mini thumbnail. Keep
+   the full-size preference so returning restores the layout they chose. */
+body.mini.expand .art-wrap{max-height:none;opacity:1;transform:none;pointer-events:auto}
 body.mini .art{width:58px;height:58px;border-radius:12px;box-shadow:0 6px 16px rgba(0,0,0,.5)}
 body.mini .meta{grid-area:meta;margin:0;text-align:left;min-height:0;min-width:0;
   align-self:center}
@@ -880,6 +1013,8 @@ body.mini .controls .sep{display:block;width:1px;height:16px;flex:0 0 auto;
   background:var(--line);margin:0 3px}
 body.mini .controls .ib.small{width:26px;height:26px;border-radius:8px}
 body.mini .controls .ib.small svg{width:14px;height:14px}
+body.mini .controls .picker-row{padding:0;gap:0;min-width:0}
+body.mini .controls .picker-row .lab{display:none}
 
 /* the level meter sits on the artwork in mini mode */
 .miniwave{display:none}
@@ -1056,6 +1191,16 @@ body.guest.casting:not(.keeps) .navtab[data-panel="recent"]{display:none}
   width:100%;padding:9px 0}
 .btn.danger:hover{background:#d24c39;border-color:#d24c39}
 .btn.danger.arm{background:#8e2c1e;border-color:#8e2c1e}
+/* Reporting an issue: one note on the owner's machine, nothing else leaves it */
+.reportsec{margin-top:18px;padding-top:8px;border-top:1px solid var(--line)}
+.reportsec .btn.danger{width:auto;padding:8px 14px}
+.reportbox{margin-top:4px}
+.reportbox[hidden]{display:none}
+.reportin{width:100%;min-height:96px;resize:vertical;background:var(--panel);
+  border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:8px 10px;
+  font:inherit;font-size:12px;margin:6px 0}
+.reportin:focus{outline:2px solid var(--accent);outline-offset:1px}
+.reportact{display:flex;gap:8px;margin-top:2px}
 .profrow{padding:9px 0;border-bottom:1px solid var(--line)}
 .profrow:last-child{border-bottom:0}
 .favs{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
@@ -1092,446 +1237,200 @@ body.switching .seg-b{cursor:progress}
 body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out infinite}
 @keyframes castpulse{0%,100%{opacity:1}50%{opacity:.35}}
 
-/* ── desktop ───────────────────────────────────────────────────────────
-   The phone layout stretched across a monitor is mostly empty gradient,
-   so given real width it becomes a different shape rather than a bigger
-   one. The queue stops being a tab you switch to and becomes a column on
-   the right you can watch while you use the rest of it. The cover gets
-   the room it's worth looking at. And the search box goes to the top,
-   where a big screen expects to find it, instead of sitting down by the
-   tabs where a thumb expects to find it.
+/* Desktop: artwork and content above a compact, fixed playback bar.
+   CSS pixels keep queue density stable across viewport sizes; browser/OS
+   scaling supplies the appropriate physical size on high-DPI displays. */
+.empty-stage{display:none}
+.empty-stage h2{font-size:20px;font-weight:700;color:var(--fg);letter-spacing:-.02em}
+.empty-stage p{font-size:13px;line-height:1.5}
+body:not(.mini):not(.hastrack):not(.hasqueue) .art-wrap,
+body:not(.mini):not(.hastrack):not(.hasqueue) .meta,
+body:not(.mini):not(.hastrack):not(.hasqueue) .transport{display:none}
+body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
+  flex-direction:column;justify-content:center;gap:8px;min-height:116px;
+  color:var(--sub);text-align:center}
 
-   Same markup, same script — only where things sit. Everything is placed
-   explicitly, because auto-placement across two columns puts things in
-   whatever cell falls free. Never in mini: that one is a fixed-width bar
-   by definition, and it owns .stage's grid already. */
 @media (min-width:900px) and (min-height:520px){
-  /* The same player as the three-zone layout, minus its middle column:
-     the record and its controls down the left, the queue card on the right.
-     Lyrics are a tab in the card until there's room to give them a column. */
   body:not(.mini) .stage{
-    display:grid;
-    --side:clamp(300px,20vw,520px);
-    --edge:clamp(26px,2.6vw,48px);
-    --gap2:clamp(18px,1.8vw,30px);
-    --deck:clamp(220px,calc(100vh - 470px),min(500px,42vw));
-    grid-template-columns:var(--deck) minmax(0,760px);
-    justify-content:center;
-    grid-template-rows:auto minmax(0,1fr) auto auto auto auto auto minmax(0,1fr);
-    column-gap:var(--gap2);
-    padding:46px var(--edge) 24px}
-
-  body:not(.mini) .search  {grid-area:1/1;margin-top:0;margin-bottom:clamp(14px,2vh,26px)}
-  body:not(.mini) .art-wrap{grid-area:3/1;margin-top:0;max-height:none;
-    align-items:start;min-height:0}
-  body:not(.mini) .meta    {grid-area:4/1;margin-top:18px;min-height:0;text-align:left}
-  body:not(.mini) .prog    {grid-area:5/1;margin-top:14px}
-  body:not(.mini) .controls{grid-area:6/1;margin-top:14px;gap:10px;justify-content:space-between}
-  body:not(.mini) .row2    {grid-area:7/1}
-  body:not(.mini) .nav     {grid-area:1/2;align-self:end}
-  body:not(.mini) .panel   {grid-column:2;grid-row:2/-1;margin-top:0;min-height:0}
-
-  /* the cover fills its column: a portrait of the record, not the view */
-  body:not(.mini) .art,
-  body:not(.mini) .artnote{width:100%;height:auto;max-height:none;aspect-ratio:1}
-  body:not(.mini) .art{border-radius:22px}
-  /* On 16:9 the left column runs to about 1400px, and a title, a seek bar
-     and five buttons stretched across all of it is mostly gap. The cover is
-     square so it can only ever answer the height; the rest sits in a column
-     of a readable width, centred under it, which is what stops the space
-     either side reading as something missing. */
-  /* The search box is deliberately not in this list. It runs the width of
-     the column and stays that way — it's the thing you aim at first and it
-     was fine as it was. */
-  body:not(.mini) .meta,
-  body:not(.mini) .prog,
-  body:not(.mini) .controls,
-  body:not(.mini) .row2{max-width:none;margin-left:0;margin-right:0;width:100%}
-  /* Type that answers to the room it has, not one size for every screen. */
-  body:not(.mini) .title{font-size:clamp(21px,.9vw + 11px,36px)}
-  body:not(.mini) .artist{font-size:clamp(13.5px,.35vw + 9px,19px);margin-top:5px}
-  body:not(.mini) .search input{font-size:clamp(14px,.3vw + 10px,17px)}
-  body:not(.mini) .q .qn{font-size:clamp(12.5px,.3vw + 8px,16px)}
-  body:not(.mini) .q .qa{font-size:clamp(11px,.2vw + 8px,13.5px)}
-  body:not(.mini) .q .qi{width:clamp(34px,1.6vw + 12px,48px);height:clamp(34px,1.6vw + 12px,48px)}
-  body:not(.mini) .navtab{font-size:clamp(11px,.25vw + 7.5px,13.5px)}
-  body:not(.mini) .ambient{height:64%;opacity:.26}
-
-  body:not(.mini) .controls .ib{width:34px;height:34px}
-  body:not(.mini) .controls .ib svg{width:19px;height:19px}
-  body:not(.mini) .controls .play{width:48px;height:48px;border-radius:16px}
-  body:not(.mini) .controls .play svg{width:22px;height:22px}
-
-  /* liking, saving, playlists and volume become one strip along the
-     bottom rather than a second row of the transport */
-  body:not(.mini) .row2{margin-top:18px;padding-top:14px;gap:12px;
-    border-top:1px solid var(--line)}
-  body:not(.mini) .vol{flex:1 1 auto;margin-left:8px}
-
-  /* the field is at the top now, so its results belong below it and not
-     hanging above the ceiling. Opening upward, the dropdown cleared the
-     Play next / Add to queue row; opening downward it lands straight on
-     top of it, so it steps over the row whenever the row is there. */
-  body:not(.mini) .results{top:calc(100% + 6px);bottom:auto;
-    max-height:min(420px,52vh)}
+    --edge:32px;--gap2:28px;
+    /* Capped, fixed-size columns centred as a group: artwork and panel keep
+       the same place and the same size at every width, so nothing slides
+       around as the window changes and a cover never balloons into the
+       empty air of a wide screen. */
+    --cover:clamp(240px,calc(100dvh - 310px),440px);
+    --panelw:clamp(340px,calc(100dvh - 400px),480px);
+    display:grid;grid-template-columns:minmax(240px,var(--cover)) minmax(340px,var(--panelw));
+    grid-template-rows:auto minmax(0,1fr) auto auto minmax(0,1fr);
+    column-gap:var(--gap2);justify-content:center;
+    padding:28px var(--edge) 100px;
+    width:100%;max-width:none;margin:0}
+  body:not(.mini) .search{grid-area:1/1/2/3;justify-self:center;margin:0 auto 20px;
+    width:min(100%,680px)}
+  body:not(.mini) .search input{font-size:14px}
+  body:not(.mini) .art-wrap{grid-area:3/1;justify-self:center;justify-content:center;
+    align-items:start;width:100%;min-height:0;max-height:none;margin:0;
+    opacity:1;transform:none;pointer-events:auto}
+  body:not(.mini) .art,body:not(.mini) .artnote{width:100%;height:auto;
+    max-height:none;aspect-ratio:1;border-radius:16px}
+  /* min-height 60px = title + artist at the desktop sizes: the row keeps
+     one height in resting and playing, so the resting rule below may hide
+     the box without moving anything. */
+  body:not(.mini) .meta{grid-area:4/1;justify-self:center;width:100%;
+    min-height:60px;margin:16px 0 0;text-align:left}
+  body:not(.mini) .title{font-size:28px;line-height:1.2}
+  body:not(.mini) .artist{font-size:15px;margin-top:5px}
+  body:not(.mini) .nav{grid-area:1/2;align-self:end;margin:0;overflow:hidden;
+    padding:9px 10px 8px;background:color-mix(in srgb,var(--panel) 88%,transparent);
+    border:1px solid var(--line);border-radius:12px 12px 0 0}
+  body:not(.mini) .navtab{font-size:11px}
+  body:not(.mini) .navtab.on::after{bottom:-9px}
+  body:not(.mini) .panel{grid-column:2;grid-row:2/6;min-height:0;margin:0;
+    padding:8px;background:color-mix(in srgb,var(--panel) 88%,transparent);
+    border:1px solid var(--line);border-top:0;border-radius:0 0 12px 12px}
+  body:not(.mini) .q{gap:12px;padding:6px 8px;margin:5px 0;min-height:44px}
+  body:not(.mini) .q .qi{width:30px;height:30px;border-radius:5px}
+  body:not(.mini) .q .qn{font-size:13px;line-height:1.35;-webkit-line-clamp:1}
+  body:not(.mini) .q .qa{font-size:11px;line-height:1.4;margin-top:2px}
+  body:not(.mini) .results{top:calc(100% + 6px);bottom:auto;max-height:min(420px,52vh)}
   body:not(.mini) .search:has(#qactions.show) .results{top:calc(100% + 8px + var(--qa-h,42px))}
-
-  /* Lyrics get the room the desktop has without turning into a poster, and
-     stay in the app's own face — a serif in here reads as a different
-     program's window. */
-  body:not(.mini) .lyrics .lrow{font-size:clamp(16px,4.2cqi,32px);
-    line-height:1.62;padding:6px 8px}
-  /* The fade belongs to the panel, not the rows. Dimming individual lines
-     steps: a line at 30% sits next to one at 30% and the list just stops at
-     the edge. A mask on the scroller is the real thing — text that thins
-     out as it leaves, and it moves with the scroll instead of with the
-     line numbering. */
-  body:not(.mini) #panel-lyrics{
-    -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 7%,
-      #000 93%,transparent 100%);
-    mask-image:linear-gradient(to bottom,transparent 0,#000 7%,
-      #000 93%,transparent 100%)}
-
-  /* One card, outlined once: the nav's bottom border does double duty as
-     the divider, so the two elements don't draw a seam where they meet. */
-  body:not(.mini) .nav{margin-top:0;padding:11px 13px 9px;
-    background:color-mix(in srgb,var(--panel) 88%,transparent);
-    border:1px solid var(--line);border-radius:14px 14px 0 0}
-  body:not(.mini) .navtab.on::after{bottom:-10px}
-  body:not(.mini) .panel{padding:8px 11px 12px;
-    background:color-mix(in srgb,var(--panel) 88%,transparent);
-    border:1px solid var(--line);border-top:0;border-radius:0 0 14px 14px}
-
-  /* Tapping the open tab collapses the cover to give the list room. Here
-     the list already has a column of its own and the cover isn't in its
-     way, so the gesture has nothing to buy — and hiding the artwork on
-     the roomiest layout would be a strange way to spend the space. */
-  body:not(.mini).expand .art-wrap{max-height:none;opacity:1;transform:none;
-    margin-top:0}
-  body:not(.mini).expand .row2{max-height:none;opacity:1;pointer-events:auto;
-    margin-top:18px}
-  body:not(.mini).expand .meta{margin-top:22px;min-height:58px}
-  body:not(.mini).expand .prog{margin-top:16px}
-
-  /* Popovers stop being full-width sheets: at this size that's a 1300px
-     menu holding four rows. The output picker is placed against the
-     speaker icon by script; these give it something to be placed in. */
-  body:not(.mini) .picker{width:340px;right:auto;bottom:86px;left:30px}
-  body:not(.mini) .devpick{width:320px;bottom:auto;left:auto}
-  body:not(.mini) .picker-list{max-height:280px}
-  /* Settings become a dialog rather than a full-screen takeover. Capping
-     the content at 720px and leaving it against the top of a 2560px black
-     field read as a page that had failed to load the rest of itself; the
-     answer is to stop pretending the sheet is the whole window. The huge
-     spread shadow is the backdrop — it wants no element of its own. */
-  body:not(.mini) .sheet{
-    left:50%;right:auto;top:50%;bottom:auto;
-    translate:-50% -50%;
-    width:min(880px,92vw);height:min(780px,86vh);
-    border:1px solid var(--line);border-radius:18px;overflow:hidden;
-    box-shadow:0 30px 90px rgba(0,0,0,.55),0 0 0 100vmax rgba(0,0,0,.5)}
-  body:not(.mini) .sheet-head,
-  body:not(.mini) .sheet-body{width:100%;max-width:none}
-
-  /* ── the queue, out of the way ──────────────────────────────────────
-     Sometimes you want the record and not the list. Collapsing sets the
-     sidebar's width to nothing and takes the tabs and the panel out of
-     the grid, so everything else simply gets wider — the cover included,
-     since on an ultrawide it is sized from what's left over. */
-  body:not(.mini) .sidetoggle{
-    position:absolute;top:50%;translate:0 -50%;z-index:6;
-    /* Pinned to the right wall; script pushes it left to meet the sidebar.
-       Both CSS attempts at this were wrong in the same way — a calc() over
-       a custom property that changes when the sidebar collapses does not
-       re-resolve while a transition on that property is in flight, so the
-       button stayed where the sidebar used to be. Measuring the sidebar's
-       actual edge can't drift from it, whatever the grid decided. */
-    right:0;
-    width:20px;height:56px;padding:0;display:grid;place-items:center;
-    background:color-mix(in srgb,var(--panel) 88%,transparent);
-    border:1px solid var(--line);border-right:0;
-    border-radius:8px 0 0 8px;color:var(--sub);cursor:pointer;
-    font-size:15px;line-height:1;font-family:inherit;
-    /* No transition on the transform. The sidebar itself appears and
-       disappears without animating, so a button sliding to meet it is
-       chasing something that has already gone — and an in-flight
-       transition overrides the cascade, which is what kept putting it
-       back where the sidebar used to be. */
-    transition:color .15s,background .15s}
-  body:not(.mini) .sidetoggle:hover{color:var(--accent);
-    background:color-mix(in srgb,var(--accent) 14%,var(--panel))}
-  body:not(.mini) .sidetoggle span{display:block;
-    transition:transform .22s cubic-bezier(.4,0,.2,1)}
-
-  /* The column closes rather than the panel vanishing. --side is registered
-     as a length (below the theme block), so it can be transitioned — the
-     grid track shrinks with it and everything else widens into the space in
-     one movement. display:none can't be animated, which is why the first
-     attempt at this just blinked.
-     The right-hand padding goes with it, or collapsing would leave the gap
-     that used to be between the columns sitting there as a dead strip. */
-  body:not(.mini) .stage{
-    transition:--side .26s cubic-bezier(.4,0,.2,1),
-               padding-right .26s cubic-bezier(.4,0,.2,1)}
-  body:not(.mini) .nav{overflow:hidden}
-  body:not(.mini).sidehid .stage{--side:0px;padding-right:0}
-  body:not(.mini).sidehid .nav,
-  body:not(.mini).sidehid .panel{opacity:0;pointer-events:none}
-  /* Queue folded away: the player column stands alone, centred and a size
-     up, rather than hard against the left wall of an empty window. */
-  body:not(.mini).sidehid .stage{grid-template-columns:minmax(0,1fr) 0px;justify-content:normal}
-  body:not(.mini).sidehid .search,
-  body:not(.mini).sidehid .art-wrap,
-  body:not(.mini).sidehid .meta,
-  body:not(.mini).sidehid .prog,
-  body:not(.mini).sidehid .controls,
-  body:not(.mini).sidehid .row2{width:min(100%,clamp(260px,calc(100vh - 420px),620px));
-    justify-self:center}
-  body:not(.mini).sidehid .sidetoggle{border-radius:8px 0 0 8px}
-  /* The panels were carrying more inner padding than a list of rows needs,
-     which pushed the scrollbar in off the edge of the column. */
-  body:not(.mini) .nav{padding:9px 10px 8px}
-  body:not(.mini) .panel{padding:6px 6px 8px}
-
-  /* ── the wash, kept behind the record ─────────────────────────────
-     The blurred cover is 25% wider than the window on each side, which
-     was right when the cover *was* the view. With it down to a square in
-     a column it became a 3400px smear of one album across everything,
-     and on a black and white theme that reads as a grey gradient nobody
-     asked for. Keep it as a glow behind the record it came from.
-
-     The scrim goes with it: a full-width fade to the background exists to
-     keep controls legible under a bright cover, and there is no longer a
-     bright cover anywhere near them. */
-  /* The record, very softly, behind the whole thing. Blurred hard enough
-     that it reads as a colour the room is lit by rather than a picture of
-     anything — which is the difference between a background and the smear
-     it was. The scrim underneath it goes: it exists to keep controls
-     legible below a bright cover, and there is no bright cover near them. */
-  body:not(.mini) .ambient{
-    inset:0;width:100%;height:100%;
-    filter:blur(110px) saturate(1.5);opacity:.3;transform:scale(1.25)}
+  body:not(.mini) .ambient{inset:0;width:100%;height:100%;filter:blur(110px) saturate(1.5);
+    opacity:.24;transform:scale(1.15)}
   body:not(.mini) .ambient img{border-radius:0;object-fit:cover}
   body:not(.mini) .frame::after{display:none}
-  /* and a floor under it, so the words never sit on the brightest part */
   body:not(.mini) .stage::before{content:"";position:absolute;inset:0;z-index:-1;
-    pointer-events:none;
-    background:radial-gradient(120% 90% at 18% 30%,transparent 0,var(--bg) 78%)}
+    pointer-events:none;background:linear-gradient(110deg,transparent,var(--bg) 85%)}
+  body:not(.mini) .picker{width:340px;right:auto;bottom:88px;left:24px}
+  body:not(.mini) .devpick{width:320px;bottom:auto;left:auto}
+  body:not(.mini) .picker-list{max-height:280px}
+  body:not(.mini) .sheet{left:50%;right:auto;top:50%;bottom:auto;translate:-50% -50%;
+    width:min(880px,92vw);height:min(780px,86vh);border:1px solid var(--line);
+    border-radius:18px;overflow:hidden;box-shadow:0 30px 90px #0008,0 0 0 100vmax #0008}
+  body:not(.mini) .sheet-head,body:not(.mini) .sheet-body{width:100%;max-width:none}
+  /* Pinned to the window's right edge. The stage is a grid, and an
+     absolutely-positioned grid item resolves right:0 against its own grid
+     cell, not the stage's edge — the tab used to float mid-panel because
+     of that. fixed takes it out of the grid's containing-block rules. */
+  body:not(.mini) .sidetoggle{position:fixed;top:50%;translate:0 -50%;z-index:6;
+    right:0;width:20px;height:48px;display:grid;place-items:center;padding:0;
+    border:1px solid var(--line);border-right:0;border-radius:8px 0 0 8px;
+    background:var(--panel);color:var(--sub);font-size:15px;line-height:1;font-family:inherit;cursor:pointer}
+  body:not(.mini) .sidetoggle:hover{color:var(--fg)}
+  body:not(.mini).sidehid .stage{grid-template-columns:minmax(240px,var(--cover)) 0px}
+  body:not(.mini).sidehid .nav,body:not(.mini).sidehid .panel{visibility:hidden;pointer-events:none}
   body:not(.mini).sidehid .sidetoggle span{transform:rotate(180deg)}
+
+  body:not(.mini) .transport{position:fixed;inset:auto 0 0;z-index:30;display:grid;
+    /* The right-hand cluster is auto-sized, never squeezed: when space runs
+       out the track text and the padding give it up first. */
+    grid-template-columns:minmax(120px,1fr) minmax(240px,1fr) auto;
+    grid-template-rows:36px 22px;align-items:center;column-gap:16px;
+    width:100%;height:76px;padding:7px 20px 10px;border:0;
+    border-top:1px solid var(--line);border-radius:0;background:var(--bg);
+    box-shadow:0 -5px 22px #0002}
+  body:not(.mini) .bartrack{display:flex;grid-column:1;grid-row:1/3;min-width:0}
+  body:not(.mini) .bartracktext{display:flex;flex-direction:column;min-width:0;gap:3px}
+  body:not(.mini) .bartracktext b,body:not(.mini) .bartracktext span{
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  body:not(.mini) .bartracktext b{font-size:13px;font-weight:600}
+  body:not(.mini) .bartracktext span{font-size:11px;color:var(--sub)}
+  body:not(.mini) .transport .controls{grid-area:1/2;width:100%;max-width:none;
+    margin:0;gap:18px;align-self:center;justify-content:center}
+  body:not(.mini) .transport .controls .ib{width:30px;height:30px}
+  body:not(.mini) .transport .controls .ib svg{width:17px;height:17px}
+  body:not(.mini) .transport .controls .play{width:34px;height:34px;border-radius:11px}
+  body:not(.mini) .transport .prog{grid-area:2/2;display:grid;
+    grid-template-columns:38px minmax(0,1fr) 38px;align-items:center;gap:8px;
+    width:100%;max-width:none;margin:0}
+  body:not(.mini) .transport .bar{grid-area:1/2}
+  body:not(.mini) .transport .times{display:contents;font-size:10px}
+  body:not(.mini) .transport .times span:first-child{grid-area:1/1;text-align:right}
+  body:not(.mini) .transport .times span:last-child{grid-area:1/3;text-align:left}
+  body:not(.mini) .transport .row2{grid-area:1/3/3/4;display:flex;
+    align-self:center;justify-self:end;justify-content:flex-end;width:100%;max-width:none;
+    max-height:none;opacity:1;pointer-events:auto;margin:0;padding:0;gap:6px;border:0}
+  body:not(.mini) .transport .row2 .ib{width:30px;height:30px}
+  body:not(.mini) .transport .row2 .ib svg{width:18px;height:18px}
+  body:not(.mini) .transport .vol{flex:0 0 auto;max-width:150px;margin-left:2px}
+  body:not(.mini) .transport .upnext{display:none}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .transport{display:none}
+  /* Resting view: the very same two columns as playback. The cover's slot
+     holds the placeholder card, the panel's slot holds the invitation, so
+     starting a song moves nothing — no cover dropping in from the side.
+     The transport bar is hidden at rest, but the stage keeps its usual
+     bottom padding (no shorter idle padding), so the free space the two
+     1fr rows split above and below the cover is identical in both states. */
+  body:not(.mini):not(.hastrack):not(.hasqueue) .art-wrap{display:flex}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .art{
+    border:1px solid color-mix(in srgb,var(--fg) 8%,transparent)}
+  /* The title/artist row keeps its height at rest — hidden, not
+     collapsed. Letting it vanish changed the free space those 1fr rows
+     split, and the cover slid with it. */
+  body:not(.mini):not(.hastrack):not(.hasqueue) .meta{display:block;visibility:hidden}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .nav,
+  body:not(.mini):not(.hastrack):not(.hasqueue) .panel,
+  body:not(.mini):not(.hastrack):not(.hasqueue) .lyrswitch,
+  body:not(.mini):not(.hastrack):not(.hasqueue) .sidetoggle{display:none!important}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{grid-column:2;
+    grid-row:2/6;justify-self:stretch;align-self:center;max-width:none;
+    text-align:left;padding:0 10px 0 0}
 }
-
-/* ── three zones ───────────────────────────────────────────────────────
-   Past about 1500px there is room to stop making the lyrics wait their
-   turn behind a tab. The record and its controls go down the left, the
-   words take the middle for as long as the song lasts, and the queue
-   keeps the right — where it can still be folded away.
-
-   The cover is the width of its column rather than a share of the height:
-   in a column of its own it is a portrait of the record, not the whole
-   view, and the transport reads better under it than beside it. */
+@media (min-width:900px) and (max-width:1100px) and (min-height:520px){
+  body:not(.mini) .stage{--edge:20px;--gap2:20px}
+  /* Here only the padding and the gap give up. The volume cluster keeps
+     its full size: it is auto-sized, and there is room for it. */
+  body:not(.mini) .transport{column-gap:12px;padding-inline:14px}
+}
 @media (min-width:1500px) and (min-height:520px){
-  body:not(.mini) .stage{
-    --side:clamp(300px,19vw,460px);
-    /* The player column is a square cover plus about 350px of chrome, so
-       it has to answer to the height as well as the width. Sized on width
-       alone it was stuck at 430px on a monitor with 900px of room going
-       spare underneath it — a postage stamp with an empty column beside
-       it, which is what "doesn't work on other monitors" looked like. */
-    /* The height, and only the height. A square cover with a fixed stack of
-       controls under it is a column of a known height, so that is the one
-       thing it should answer to — with a vw term in here as well, dragging
-       the window wider moved everything in the column up and down, which on
-       something laid out this rigidly reads as a fault rather than a
-       response. The width is handled by not entering this layout until
-       there is room for it; see the breakpoint. */
-    --deck:clamp(220px,calc(100vh - 470px),500px);
-    grid-template-columns:var(--deck) minmax(0,1fr) var(--side);
-    justify-content:normal;
-    /* Slack above the player as well as below it, so the whole left column
-       sits in the middle of its own height. Pinned to the top it left a
-       growing hole underneath every time the cover came down a size. */
-    grid-template-rows:auto minmax(0,1fr) auto auto auto auto auto
-                       minmax(0,1fr);
-    /* One number for the wall and for the gap between columns, so the space
-       to the left of the cover and the space to the right of it are the
-       same space. They were 30 and 122 — the lyrics carried a fat left
-       padding of their own on top of the column gap. */
-    --edge:clamp(34px,3.4vw,76px);
-    /* The queue doesn't need the same air as the walls. It's a bordered
-       card with its own inner padding, so the wide margin left the words
-       and their scrollbar stranded a long way short of it. The cover keeps
-       the full margin, since it has no edge of its own. */
-    --gap2:clamp(14px,1.3vw,26px);
-    padding:46px var(--edge) 24px;
-    column-gap:var(--gap2)}
-
-  /* Room under the search box. It was sitting straight on top of the cover
-     and the first line of the lyrics, which made the whole top edge read as
-     one crowded band. */
-  body:not(.mini) .search  {grid-area:1/1/2/3;margin-top:0;
-    margin-bottom:clamp(16px,2vh,30px)}
-  body:not(.mini) .art-wrap{grid-area:3/1;margin-top:0;align-items:start}
-  body:not(.mini) .meta    {grid-area:4/1;margin-top:18px;min-height:0;
-    text-align:left}
-  body:not(.mini) .prog    {grid-area:5/1;margin-top:14px}
-  body:not(.mini) .controls{grid-area:6/1;margin-top:14px;gap:10px;
-    justify-content:space-between}
-  body:not(.mini) .row2    {grid-area:7/1;margin-top:14px;padding-top:12px}
-  body:not(.mini) .nav     {grid-area:1/3;align-self:end}
-  body:not(.mini) .panel   {grid-column:3;grid-row:2/-1;margin-top:0;
-    min-height:0}
-
-  /* the cover fills its column and stops being the whole picture */
-  body:not(.mini) .art,
-  body:not(.mini) .artnote{width:100%;height:auto;max-height:none;
-    aspect-ratio:1}
-  body:not(.mini) .art{border-radius:20px}
-  body:not(.mini) .title{font-size:clamp(21px,.9vw + 11px,40px)}
-  body:not(.mini) .artist{font-size:clamp(13.5px,.4vw + 8.5px,20px)}
-  /* they're a column now, so they stop pretending to be centred */
-  body:not(.mini) .meta,
-  body:not(.mini) .prog,
-  body:not(.mini) .controls,
-  body:not(.mini) .row2{max-width:none;margin-left:0;margin-right:0}
-  body:not(.mini) .controls .ib{width:34px;height:34px}
-  body:not(.mini) .controls .ib svg{width:19px;height:19px}
-  body:not(.mini) .controls .play{width:48px;height:48px;border-radius:16px}
-  body:not(.mini) .controls .play svg{width:22px;height:22px}
-  body:not(.mini) .vol{flex:1 1 auto;margin-left:8px}
-
-  /* ── the words, given the middle ──────────────────────────────────
-     Not a tab any more: the panel is placed in the centre column and
-     shown whatever the sidebar happens to be on, so the sidebar's Lyrics
-     tab has nothing left to do and goes. */
-  body:not(.mini) #panel-lyrics{
-    display:block;grid-column:2;grid-row:2/-1;margin-top:0;min-height:0;
-    background:none;border:0;border-radius:0;
-    /* Half a panel of empty space top and bottom, so the first line and the
-       last one can both reach the middle. Without it the scroll clamps at
-       zero and the opening verse sits at the top of the column until the
-       song has run far enough to push it down.
-       Nothing on the left: the column gap is already the space between the
-       cover and the words, and a padding on top of it made that gap four
-       times the one on the other side of the cover. */
-    /* Nothing either side. The column gap is the space on the left, and on
-       the right the scrollbar should sit on the column's edge rather than
-       be held off it by a padding of its own. */
-    /* Makes up the difference between the narrow column gap and the wide
-       margin, so the space either side of the cover stays equal. */
-    margin-left:calc(var(--edge) - var(--gap2));
-    padding-block:42vh;padding-inline:0;
-    align-self:stretch;scroll-behavior:smooth}
-  body:not(.mini) .navtab[data-panel="lyrics"]{display:none}
-  /* The rows are the panel's own children — .lyrics is a class on
-     #panel-lyrics, not a wrapper inside it. */
-  body:not(.mini) #panel-lyrics.lyrics{text-align:left}
-  /* Room to breathe. Tight leading and negative tracking are for headlines
-     you scan; these are read one line at a time against a clock, and the
-     gap between them is what makes it obvious which one you're on. */
-  /* The small player's lyrics with more room, not a different design. The
-     centre column had become a poster: 26px at weight 600, with the line
-     you're on picked out by a gradient sweeping across each word. Same
-     size relationship as the sidebar version, same weight, same way of
-     saying which line is which. The room is the only thing that changes. */
-  body:not(.mini) #panel-lyrics .lrow{font-size:clamp(18px,4.7cqi,40px);
-    line-height:1.55;padding:6px 0;font-weight:600;letter-spacing:0}
+  body:not(.mini) .stage{--gap2:36px;
+    /* Wide window: the words get the room. Artwork and queue keep their
+       fixed sizes; the lyric column takes whatever width is left. */
+    grid-template-columns:minmax(300px,440px) minmax(360px,1fr) minmax(320px,420px)}
+  body:not(.mini) .search{grid-area:1/1/2/4;width:min(100%,720px)}
+  body:not(.mini) .nav{grid-area:1/3}
+  body:not(.mini) .panel{grid-column:3}
+  body:not(.mini) #panel-lyrics,body:not(.mini) #panel-about{grid-column:2;grid-row:2/6;
+    visibility:visible;pointer-events:auto;min-height:0;background:none;border:0;border-radius:0;
+    margin:0;padding-inline:24px;align-self:stretch}
+  body:not(.mini) #panel-lyrics{display:block;padding-block:0 40vh;text-align:left;
+    -webkit-mask-image:linear-gradient(to bottom,transparent,#000 9%,#000 88%,transparent);
+    mask-image:linear-gradient(to bottom,transparent,#000 9%,#000 88%,transparent)}
+  body:not(.mini) #panel-lyrics .lyrlead{display:block;height:32vh}
+  body:not(.mini) #panel-lyrics .lrow{font-size:32px;line-height:1.65;padding:6px 4px;
+    max-width:1000px;margin-inline:auto;font-weight:600}
   body:not(.mini) #panel-lyrics .lrow.active{font-weight:800}
-  /* The panel already carries the vertical room, so the message shouldn't
-     add another half-screen on top of it — and at 12px it read as a fault
-     rather than an answer in a column that size. */
-  body:not(.mini) #panel-lyrics .muted{padding:0;font-size:15px;
-    text-align:center;opacity:.5}
-
-  /* Sits at the top of the middle column, over the fade where the words
-     are already thinning out, so it costs the lyrics no room. */
-  body:not(.mini) .lyrswitch{
-    display:inline-flex;grid-column:2;grid-row:2;align-self:start;
-    justify-self:center;margin-left:calc(var(--edge) - var(--gap2));
-    gap:2px;padding:3px;border-radius:999px;z-index:3;
-    background:color-mix(in srgb,var(--panel) 92%,transparent);
-    border:1px solid var(--line);
-    -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
-  /* The gear-row ⓘ is for the layouts that have no switch. */
-  body:not(.mini) #openAbout{display:none}
-
-  /* ── the song's story, in the same middle ─────────────────────────
-     The ⓘ button swaps what the centre column is for. Same placement,
-     same margins: the column doesn't move, only what's written in it. */
-  body:not(.mini) #panel-about{
-    display:none;grid-column:2;grid-row:2/-1;margin-top:0;min-height:0;
-    background:none;border:0;border-radius:0;
-    margin-left:calc(var(--edge) - var(--gap2));
-    padding-block:clamp(16px,6vh,64px);padding-inline:0;
-    align-self:stretch;overflow-y:auto}
+  body:not(.mini) #panel-lyrics>.muted{margin-top:30vh;font-size:14px}
+  body:not(.mini) #panel-about{display:none;padding-block:54px 20px;overflow-y:auto}
+  body:not(.mini) #panel-about .abt{max-width:800px;margin-inline:auto}
   body:not(.mini).about #panel-about{display:block}
   body:not(.mini).about #panel-lyrics{display:none}
-  body:not(.mini).about .navtab#openAbout{color:var(--accent)}
-  /* Room to read in a column this size. */
-  body:not(.mini) #panel-about .abt h3{font-size:clamp(17px,1.35vw,24px)}
-  body:not(.mini) #panel-about .abt .abtstory{font-size:clamp(14px,1.05vw,18px);
-    line-height:1.7}
-  body:not(.mini) #panel-about .abt li{font-size:clamp(13px,.95vw,16px);
-    line-height:1.6}
-
-  /* Folding the queue leaves two zones, and the words take the room. */
-  body:not(.mini).sidehid .stage{--side:0px;padding-right:0}
-  body:not(.mini).sidehid:not(.about) #panel-lyrics{display:block;opacity:1}
-  body:not(.mini).sidehid.about #panel-about{display:block;opacity:1}
-  body:not(.mini).sidehid .meta,
-  body:not(.mini).sidehid .prog,
-  body:not(.mini).sidehid .controls,
-  body:not(.mini).sidehid .row2{max-width:none}
+  body:not(.mini) .lyrswitch{display:inline-flex;grid-area:2/2;align-self:start;
+    justify-self:center;gap:2px;padding:3px;border-radius:999px;z-index:3;
+    background:var(--panel);border:1px solid var(--line)}
+  body:not(.mini) .navtab[data-panel="lyrics"],body:not(.mini) #openAbout{display:none}
+  body:not(.mini).sidehid .stage{grid-template-columns:minmax(300px,440px) minmax(360px,1fr) 0px}
 }
-
-/* A laptop is a desktop with about 640px of browser in it. Everything above
-   still applies; the padding and the gaps just stop being generous, because
-   they're spent out of the cover's height and nothing else's. */
-@media (min-width:900px) and (min-height:520px) and (max-height:760px){
-  body:not(.mini) .stage{padding:34px 30px 16px}
+/* Resting view: the old covermode collapse is gone on purpose. Rest keeps
+   the very same two columns as playback (the :not(.hastrack):not(.hasqueue)
+   rules in the block above), so the cover never changes place when a song
+   starts, and a paused song with a queue keeps its queue instead of the
+   panel vanishing. */
+/* Rest at 1500px and up: no lyrics to show, so the group folds back to the
+   same two columns as the rest of the range rather than a dead middle. */
+@media (min-width:1500px) and (min-height:520px){
+  body:not(.mini):not(.hastrack):not(.hasqueue) .stage{
+    grid-template-columns:minmax(300px,440px) minmax(340px,480px)}
+}
+@media (min-width:900px) and (min-height:520px) and (max-height:680px){
+  body:not(.mini) .stage{padding-top:18px}
   body:not(.mini) .title{font-size:22px}
-  body:not(.mini) .meta{margin-top:12px;min-height:46px}
-  body:not(.mini) .prog{margin-top:10px}
-  body:not(.mini) .controls{margin-top:10px;gap:15px}
-  body:not(.mini) .row2,
-  body:not(.mini).expand .row2{margin-top:10px;padding-top:10px}
+  body:not(.mini) .meta{margin-top:12px}
+  body:not(.mini) .search{margin-bottom:12px}
 }
-
-/* ── four zones ────────────────────────────────────────────────────────
-   Past 1800px: the player, the words, the queue, and a drawer for the song
-   and the band -- where it came from, who made it -- that used to take turns
-   with the lyrics. Now nobody waits. */
-@media (min-width:1800px) and (min-height:620px){
-  body:not(.mini) .stage{
-    --drawer:clamp(300px,16vw,440px);
-    --side:clamp(300px,17vw,440px);
-    grid-template-columns:var(--deck) minmax(0,1fr) var(--side) var(--drawer)}
-  body:not(.mini).sidehid .stage{grid-template-columns:var(--deck) minmax(0,1fr) 0px var(--drawer)}
-  body:not(.mini) #panel-lyrics,
-  body:not(.mini).about #panel-lyrics{display:block}
-  body:not(.mini) #panel-about,
-  body:not(.mini).about #panel-about{
-    display:block;grid-column:4;grid-row:2/-1;margin:0;min-height:0;overflow-y:auto;
-    padding:14px 16px 18px;align-self:stretch;
-    background:color-mix(in srgb,var(--panel) 88%,transparent);
-    border:1px solid var(--line);border-radius:14px}
-  body:not(.mini) .drawerhead{display:block;grid-column:4;grid-row:1;align-self:end;
-    font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
-    color:var(--sub);padding:0 4px 10px}
-  body:not(.mini) .lyrswitch,
-  body:not(.mini) #openAbout{display:none}
-  body:not(.mini) .navtab[data-panel="about"]{display:none}
-}
-.drawerhead{display:none}
-
-/* ── phone on its side ────────────────────────────────────────────────
-   390px of height. Stacked, the tabs took all of it and every panel was
-   left at zero. Side by side instead: the player on the left, the search,
-   tabs and whichever panel on the right with the height they need. */
+/* Short landscape windows retain their two-column compact arrangement. */
 @media (orientation:landscape) and (max-height:519px) and (min-width:560px){
-  body:not(.mini) .stage{display:grid;
-    grid-template-columns:minmax(230px,42%) minmax(0,1fr);
-    grid-template-rows:auto auto auto auto auto minmax(0,1fr);
-    column-gap:18px;padding:12px 16px 10px;height:100%}
+  body:not(.mini) .stage{display:grid;grid-template-columns:minmax(230px,42%) minmax(0,1fr);
+    grid-template-rows:auto auto auto auto auto minmax(0,1fr);column-gap:18px;
+    padding:12px 16px 10px;height:100%}
   body:not(.mini) .art-wrap{grid-area:1/1;margin:0;max-height:none;justify-content:center}
   body:not(.mini) .art,body:not(.mini) .artnote{width:min(96px,22vh);height:auto;aspect-ratio:1}
   body:not(.mini) .meta{grid-area:2/1;margin-top:6px;min-height:0}
@@ -1562,23 +1461,15 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
     <svg viewBox="0 0 24 24"><path d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z"/></svg>
   </button>
   <div class="ambient" id="ambient"></div>
-  <div class="glass" id="glass" aria-hidden="true"><i class="tint"></i><i class="veil"></i><i class="spec"></i></div>
+  <img class="glass-backdrop" id="glassback" alt="" aria-hidden="true">
+  <div class="glass" id="glass" aria-hidden="true"><i class="tint"></i><i class="sheen"></i></div>
   <svg class="glassdefs" aria-hidden="true" focusable="false">
     <filter id="liquid" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
-      <feTurbulence type="fractalNoise" baseFrequency="0.011 0.018" numOctaves="2" seed="7" result="noise">
-        <animate attributeName="baseFrequency" dur="20s" repeatCount="indefinite"
-                 values="0.011 0.018;0.018 0.010;0.011 0.018"/>
-      </feTurbulence>
       <feImage id="glassrim" href="" x="0" y="0" width="100%" height="100%" preserveAspectRatio="none" result="rim"/>
-      <feComposite in="noise" in2="rim" operator="arithmetic" k1="0" k2="0.34" k3="1" k4="-0.17" result="map"/>
-      <feDisplacementMap in="SourceGraphic" in2="map" scale="50" xChannelSelector="R" yChannelSelector="G" result="dr"/>
-      <feDisplacementMap in="SourceGraphic" in2="map" scale="44" xChannelSelector="R" yChannelSelector="G" result="dg"/>
-      <feDisplacementMap in="SourceGraphic" in2="map" scale="38" xChannelSelector="R" yChannelSelector="G" result="db"/>
-      <feColorMatrix in="dr" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="r"/>
-      <feColorMatrix in="dg" type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" result="g"/>
-      <feColorMatrix in="db" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" result="b"/>
-      <feComposite in="r" in2="g" operator="arithmetic" k2="1" k3="1" result="rg"/>
-      <feComposite in="rg" in2="b" operator="arithmetic" k2="1" k3="1"/>
+      <!-- The middle stays optically clear. Only the rounded edge displaces
+           the live desktop pixels, which is the tell that this is glass. -->
+      <feDisplacementMap in="SourceGraphic" in2="rim" scale="3.5"
+                         xChannelSelector="R" yChannelSelector="G"/>
     </filter>
   </svg>
   <div class="minivol" id="minivol"><i id="minivfill"></i></div>
@@ -1601,6 +1492,10 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
       </div>
     </div>
 
+    <div class="transport">
+    <div class="bartrack" aria-label="Now playing">
+      <div class="bartracktext"><b id="bartitle">Nothing playing</b><span id="barartist"></span></div>
+    </div>
     <div class="prog">
       <div class="bar"><div class="fill" id="fill"></div>
         <div class="seekdot" id="seekdot"></div></div>
@@ -1630,6 +1525,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         </div>
       </div>
     </div>
+    </div>
 
     <div class="search">
       <div class="field">
@@ -1651,6 +1547,9 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         <button class="qbtn" id="addimport">Import as playlist</button>
       </div>
     </div>
+
+    <div class="empty-stage" aria-live="polite"><h2>Choose something to play</h2>
+      <p>Search for a song, artist, album or mood to get started.</p></div>
 
     <div class="nav">
       <button class="navtab on" data-panel="queue" title="Tap again to expand">Queue</button>
@@ -1678,7 +1577,6 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
     </div>
     <div class="panel open" id="panel-queue"></div>
     <div class="panel" id="panel-lyrics"></div>
-    <div class="drawerhead" aria-hidden="true">About this song</div>
     <div class="panel" id="panel-about"></div>
     <div class="panel" id="panel-recent"></div>
     <div class="panel" id="panel-lists"></div>
@@ -1687,6 +1585,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   <div class="picker moremenu" id="moremenu" role="menu" aria-label="More">
     <div class="picker-row" id="download" role="menuitem"><svg viewBox="0 0 24 24"><path d="M11 3h2v7h2.5l-3.5 4-3.5-4H11zM5 18h14v2H5z"/></svg><span class="lab">Save to Music</span></div>
     <div class="picker-row" id="addlist" role="menuitem"><svg viewBox="0 0 24 24"><path d="M3 6h12v2H3zm0 5h12v2H3zm0 5h8v2H3zm15-9h2v4h4v2h-4v4h-2v-4h-4v-2h4z"/></svg><span class="lab">Add to a playlist</span></div>
+    <div class="picker-row" id="removefrom" role="menuitem" hidden><svg viewBox="0 0 24 24"><path d="M3 6h16v2H3zm0 5h16v2H3zm0 5h11v2H3zm13-2h7v2h-7z"/></svg><span class="lab">Remove from a playlist…</span></div>
     <hr>
     <!-- Never again: this recording, or this act at all. A skip is a nudge
          the scoring weighs up; these two are answers. -->
@@ -1742,7 +1641,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   <audio id="castsay" preload="auto" playsinline></audio>
 
   <div class="picker" id="picker">
-    <div class="picker-head">Add to playlist</div>
+    <div class="picker-head" id="pickerhead">Add to playlist</div>
     <div class="picker-list" id="pickerlist"></div>
     <div class="picker-new">
       <input id="newlist" placeholder="New playlist name" autocomplete="off">
@@ -1864,7 +1763,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         <div class="srow guestok"><span class="slabel">Theme</span><div class="swatches" id="swatches"></div></div>
         <div class="srow"><span class="slabel">Visualiser<em>The bars across the artwork</em></span>
           <div class="toggle" id="viz"></div></div>
-        <div class="srow guestok"><span class="slabel">Liquid glass mini player<em>The mini player as a slab of glass over its cover: bent at the edges, tinted by the album</em></span>
+        <div class="srow guestok"><span class="slabel">Liquid glass mini player<em>Off by default. Turn it on for a clear desktop view with a subtle edge bend and album tint. While active, the mini player is omitted from screenshots.</em></span>
           <div class="toggle" id="glasson"></div></div>
       </section>
 
@@ -2100,6 +1999,20 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
         <div class="owneronly" id="auditlist"></div>
       </section>
 
+      <section class="reportsec">
+        <div class="seclbl">Help</div>
+        <div class="srow"><span class="slabel">Something's wrong<em>It's saved as a note on this computer — nothing else leaves the device</em></span>
+          <button class="btn danger" id="reportopen">Report an issue</button></div>
+        <div class="reportbox" id="reportbox" hidden>
+          <input class="keyin" id="reportdoing" maxlength="300" placeholder="What were you doing? (optional)" style="width:100%">
+          <textarea class="reportin" id="reportmsg" maxlength="8000" placeholder="What happened, and what did you expect?"></textarea>
+          <div class="reportact">
+            <button class="btn danger" id="reportsend">Send the note</button>
+            <button class="btn" id="reportcancel">Cancel</button>
+          </div>
+        </div>
+      </section>
+
     </div>
     </div>
   </div>
@@ -2125,6 +2038,11 @@ const SIGNED_IN_NAME = "{{ signed_in_name }}";
 const SIGNED_IN_PIC = "{{ signed_in_pic }}";
 const CLIENT_AVAILABLE = "{{ client_available }}" === "1";
 const SCOPE = "{{ scope }}";
+const PRIVATE_SHARE = {{ private_share|default('')|tojson }};
+let privateEnded = false;
+if (PRIVATE_SHARE) {
+  document.body.classList.add("private-listen");
+}
 const _announceDuck = Number("{{ announce_duck_db }}");
 let ANNOUNCE_DUCK_DB = Number.isFinite(_announceDuck)
   ? Math.max(-60, Math.min(0, _announceDuck)) : -12;
@@ -2239,93 +2157,41 @@ let state = { volume: 70, position: 0, duration: 0, trackKey: "", playing: false
 /* The queue folds away on the desktop layout. Remembered, because it's a
    preference about how you like looking at it rather than a thing you'd
    want to say again every time you open the page. */
-/* Put the tab on the sidebar's left edge, measured rather than derived.
-   Asked of the sidebar itself so it cannot end up describing a column that
-   is a different width from the one on screen. */
-let lastOff = null;
-function placeToggle() {
-  const b = $("sidetoggle"), st = document.querySelector(".stage");
-  if (!b || !st) return;
-  // Always written, never cleared. Removing the inline style to mean "on
-  // the wall" left whatever was there before if the clear didn't land.
-  //
-  // The grid reports its columns in resolved pixels, so the sidebar's width
-  // comes from the layout that actually happened rather than from a clamp()
-  // re-evaluated by hand. Measuring the sidebar element instead looked
-  // simpler and wasn't: it can be display:none, and it moves.
-  let off = 0;
-  if (!document.body.classList.contains("sidehid")) {
-    const cs = getComputedStyle(st);
-    const cols = cs.gridTemplateColumns.trim().split(/\s+/);
-    const side = parseFloat(cols[cols.length - 1]);
-    if (side > 0) off = side + (parseFloat(cs.paddingRight) || 0);
-  }
-  off = Math.round(off);
-  if (off === lastOff) return;          // nothing to write, and usually so
-  lastOff = off;
-  b.style.right = off + "px";
-}
-/* Watched rather than guessed at. A ResizeObserver on the stage fires after
-   layout, which is the only moment the grid's columns are actually known —
-   chasing it with rAF after a resize event put the button against the
-   column widths from before the resize about half the time. */
-/* Now, next frame, and once more a beat after that. placeToggle itself is
-   exact — every time it was wrong it had been asked before the grid had
-   re-resolved its columns, and was reading the widths from the layout
-   before the one on screen. Three calls on an event this rare is cheaper
-   than being subtly wrong half the time. */
-let placeSoon = 0, placeLater = 0;
-function placeToggleSoon() {
-  placeToggle();
-  cancelAnimationFrame(placeSoon);
-  placeSoon = requestAnimationFrame(placeToggle);
-  clearTimeout(placeLater);
-  placeLater = setTimeout(placeToggle, 120);
-}
-
-/* Ride the column closed. The sidebar takes a quarter of a second to go, and
-   a tab that jumps to the end of that on the first frame has visibly left
-   before the thing it is attached to. Bounded, and over as soon as it is. */
-function placeToggleFor(ms) {
-  const until = performance.now() + ms;
-  const step = () => {
-    placeToggle();
-    if (performance.now() < until) requestAnimationFrame(step);
-  };
-  requestAnimationFrame(step);
-}
-(function watchStage() {
-  const st = document.querySelector(".stage"), nav = document.querySelector(".nav");
-  if (!st) return;
-  if (window.ResizeObserver) {
-    // The sidebar as well as the stage. Folding it away doesn't change the
-    // stage's own box at all — only the columns inside it — so watching the
-    // stage alone missed every open and close.
-    const ro = new ResizeObserver(placeToggleSoon);
-    ro.observe(st);
-    if (nav) ro.observe(nav);
-  }
-  // Belt and braces: the observer is the reliable one, but a plain resize
-  // costs nothing to listen for and covers anything it doesn't see.
-  addEventListener("resize", placeToggleSoon);
-})();
+/* The tab is pinned to the window's right edge by CSS (position:fixed) and
+   needs no measuring. It used to ride the sidebar's left edge, computed
+   from the grid's column widths — right for the old full-width layout, but
+   the desktop columns are capped and centred now, so the same math landed
+   the tab inside the panel. The edge is the edge at every width. */
 
 function setSide(hidden, remember) {
   document.body.classList.toggle("sidehid", !!hidden);
   const b = $("sidetoggle");
   if (b) {
-    b.title = hidden ? "Show the queue" : "Hide the queue";
+    b.title = hidden || document.body.classList.contains("covermode") ? "Show the queue" : "Hide the queue";
     b.setAttribute("aria-label", b.title);
   }
-  // After the class, and for as long as the column takes to close.
-  placeToggleFor(320);
   if (remember !== false) {
     try { localStorage.setItem("sidehid", hidden ? "1" : "0"); } catch (e) {}
   }
 }
 try { setSide(localStorage.getItem("sidehid") === "1", false); } catch (e) {}
-$("sidetoggle").onclick = () =>
-  setSide(!document.body.classList.contains("sidehid"));
+// A resting view is temporary. Opening the queue dismisses it until the
+// next playback state change, without losing the saved sidebar preference.
+let restingState = null, restingDismissed = false;
+function updateRestingView() {
+  const resting = !state.playing;
+  if (resting !== restingState) restingDismissed = false;
+  restingState = resting;
+  document.body.classList.toggle("covermode", resting && !restingDismissed);
+  setSide(document.body.classList.contains("sidehid"), false);
+}
+$("sidetoggle").onclick = () => {
+  if (document.body.classList.contains("covermode")) {
+    restingDismissed = true;
+    document.body.classList.remove("covermode");
+    setSide(false, false);
+  } else setSide(!document.body.classList.contains("sidehid"));
+};
 
 /* Is the desktop layout on? Asked of the stylesheet rather than tracked in
    a variable, so there is exactly one definition of the breakpoint and the
@@ -2337,18 +2203,29 @@ function isWide() {
 }
 
 /* ── liquid glass (the mini player) ────────────────────────────────── */
-function glassOn() { try { return localStorage.getItem("glass") !== "0"; } catch (e) { return true; } }
-/* The rim, as a displacement map: how far and which way each pixel of the
-   glass reads from, pulled out along the edge's normal and squared in the
-   distance from the middle -- near-clear in the centre, bending hard at the
-   rim. The same arithmetic as a lens: a rounded rectangle's distance field. */
+let glassPreference = null;
+function glassOn() {
+  if (glassPreference !== null) return glassPreference;
+  try { return localStorage.getItem("glass") === "1"; } catch (e) { return false; }
+}
+async function hydrateGlassPreference() {
+  const b = window.pywebview && window.pywebview.api;
+  if (!b || !b.glass_preference) return;
+  try {
+    glassPreference = !!(await b.glass_preference());
+    try { localStorage.setItem("glass", glassPreference ? "1" : "0"); } catch (e) {}
+    paintGlass();
+  } catch (e) {}
+}
+/* R/G bend pixels inward along the rounded rim; B blends that clearer rim
+   into the frosted centre. The map is rebuilt only when the pane resizes. */
 function glassRim() {
   const el = $("glass"), w = el.clientWidth, h = el.clientHeight;
   if (!w || !h || el._size === w + "x" + h) return;
   el._size = w + "x" + h;
   const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
   const g = cv.getContext("2d"), img = g.createImageData(w, h), d = img.data;
-  const r = Math.min(18, h / 2), band = Math.min(26, h / 2.1);
+  const r = Math.min(8, h / 2), band = Math.min(10, h / 3);
   const sdf = (x, y) => {
     const qx = Math.abs(x - w / 2) - (w / 2 - r), qy = Math.abs(y - h / 2) - (h / 2 - r);
     return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - r;
@@ -2360,7 +2237,10 @@ function glassRim() {
       const n = Math.hypot(nx, ny) || 1; nx /= n; ny /= n;
       const t = Math.max(0, Math.min(1, (s + band) / band)), off = t * t;
       const i = (y * w + x) * 4;
-      d[i] = 128 + nx * off * 127; d[i + 1] = 128 + ny * off * 127; d[i + 2] = 128; d[i + 3] = 255;
+      // Minus: pull from further in. Pulling from outside the pane is what
+      // mirrored and clipped the edge -- there's nothing out there to pull.
+      d[i] = 128 - nx * off * 127; d[i + 1] = 128 - ny * off * 127;
+      d[i + 2] = Math.round(off * 255); d[i + 3] = 255;
     }
   }
   g.putImageData(img, 0, 0);
@@ -2371,16 +2251,72 @@ function paintGlass() {
   document.body.classList.toggle("glassy", on);
   $("glasson").classList.toggle("on", glassOn());
   if (on) glassRimSoon();
+  syncGlassCapture();
 }
-// Built as soon as the glass has a size -- the class that gives it one lands
-// a frame or two after mini does, and an empty map means no bending at all.
-function glassRimSoon(tries = 12) {
-  const el = $("glass");
-  if (el.clientWidth && el.clientHeight) { glassRim(); return; }
-  if (tries > 0) setTimeout(() => glassRimSoon(tries - 1), 120);
+let glassRimFrame = 0, glassTimer = 0, glassFrame = 0, glassEpoch = 0, glassRunning = false;
+let glassBridgeWork = Promise.resolve();
+const solidGlass = matchMedia("(prefers-reduced-transparency: reduce), (prefers-contrast: more)");
+function glassRimSoon() {
+  if (glassRimFrame) return;
+  glassRimFrame = requestAnimationFrame(() => { glassRimFrame = 0; glassRim(); });
+}
+function clearGlassBackdrop() {
+  document.body.classList.remove("glass-live");
+  $("glassback").removeAttribute("src");
+}
+function syncGlassCapture() {
+  const b = window.pywebview && window.pywebview.api;
+  const want = !!(b && b.glass_frame && b.set_glass && glassOn() &&
+    document.body.classList.contains("mini") && !document.hidden && !solidGlass.matches);
+  if (want === glassRunning) return;
+  glassRunning = want;
+  const epoch = ++glassEpoch;
+  clearTimeout(glassTimer);
+  cancelAnimationFrame(glassFrame);
+  clearGlassBackdrop();
+  // Native bridge calls run on worker threads. Finish an old stop before
+  // starting again, or a resize can leave the material permanently blank.
+  glassBridgeWork = glassBridgeWork.catch(() => {}).then(async () => {
+    if (epoch !== glassEpoch || !b || !b.set_glass) return;
+    await b.set_glass(want);
+    if (epoch === glassEpoch && want) glassTick(epoch);
+  }).catch(() => { if (epoch === glassEpoch) { glassRunning = false; clearGlassBackdrop(); } });
+}
+async function glassTick(epoch) {
+  if (epoch !== glassEpoch || !glassRunning) return;
+  let delay = 0;
+  // Do not leave a frozen desktop patch visible if a native request stalls.
+  const stale = setTimeout(() => { if (epoch === glassEpoch) clearGlassBackdrop(); }, 1500);
+  try {
+    const data = await window.pywebview.api.glass_frame();
+    if (epoch !== glassEpoch || !glassRunning) return;
+    if (data) {
+      const img = new Image(); img.src = "data:image/jpeg;base64," + data;
+      await img.decode();
+      if (epoch !== glassEpoch || !glassRunning) return;
+      $("glassback").src = img.src;
+      document.body.classList.add("glass-live");
+    } else { clearGlassBackdrop(); delay = 400; }
+  } catch (e) {
+    if (epoch === glassEpoch) clearGlassBackdrop();
+    delay = 600;
+  } finally {
+    clearTimeout(stale);
+    if (epoch === glassEpoch && glassRunning) {
+      // Ask for the next desktop capture on the next display frame, whatever
+      // the monitor's refresh rate is. One capture/decode at a time bounds
+      // work naturally; a 144 Hz monitor is no longer capped at 60 Hz.
+      if (delay) glassTimer = setTimeout(() => glassTick(epoch), delay);
+      else glassFrame = requestAnimationFrame(() => glassTick(epoch));
+    }
+  }
 }
 $("glasson").onclick = () => {
-  try { localStorage.setItem("glass", glassOn() ? "0" : "1"); } catch (e) {}
+  const value = !glassOn();
+  glassPreference = value;
+  try { localStorage.setItem("glass", value ? "1" : "0"); } catch (e) {}
+  const b = window.pywebview && window.pywebview.api;
+  if (b && b.set_glass_preference) Promise.resolve(b.set_glass_preference(value)).catch(() => {});
   paintGlass();
 };
 // Mini comes and goes from several places; follow the class, not each of them.
@@ -2388,9 +2324,17 @@ new MutationObserver(() => {
   const want = glassOn() && document.body.classList.contains("mini");
   if (want !== document.body.classList.contains("glassy")) paintGlass();
 }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
-window.addEventListener("resize", () => {
-  if (document.body.classList.contains("glassy")) { $("glass")._size = ""; glassRim(); }
+new ResizeObserver(glassRimSoon).observe($("glass"));
+window.addEventListener("resize", glassRimSoon);
+window.addEventListener("pywebviewready", () => { hydrateGlassPreference(); syncGlassCapture(); });
+document.addEventListener("visibilitychange", syncGlassCapture);
+solidGlass.addEventListener("change", syncGlassCapture);
+window.addEventListener("pagehide", () => {
+  glassRunning = false; ++glassEpoch; clearTimeout(glassTimer); cancelAnimationFrame(glassFrame); clearGlassBackdrop();
+  const b = window.pywebview && window.pywebview.api;
+  if (b && b.set_glass) glassBridgeWork = glassBridgeWork.catch(() => {}).then(() => b.set_glass(false));
 });
+window.addEventListener("pageshow", syncGlassCapture);
 paintGlass();
 
 /* ── sharing a song ──────────────────────────────────────────────────
@@ -2398,17 +2342,28 @@ paintGlass();
    session of their own -- and turns into a playable card in Discord. */
 const detailText = d => typeof d === "string" ? d
   : Array.isArray(d) ? ((d[0] && d[0].msg) || "") : "";
+let pickerEpoch = 0, returnToMini = false;
+function closeOtherPickers(keep) {
+  pickerEpoch++;
+  if (keep !== "picker") returnToMini = false;
+  for (const id of ["sharepick", "devpicker", "picker", "moremenu"])
+    if (id !== keep) $(id).classList.remove("show");
+  if (keep !== "moremenu") $("morebtn").setAttribute("aria-expanded", "false");
+}
 let shareFor = null;
 $("sharebtn").onclick = async e => {
   e.stopPropagation();
   const box = $("sharepick");
   if (box.classList.contains("show")) { box.classList.remove("show"); return; }
+  closeOtherPickers("sharepick");
+  const epoch = pickerEpoch;
   const t = (lastStatus && lastStatus.track) || {};
   if (!t.video_id) { toast("Nothing playing to share"); return; }
   const title = t.title || t.name || "";
   const r = await apiTry("/api/share?video_id=" + encodeURIComponent(t.video_id) +
     "&title=" + encodeURIComponent(title) + "&artist=" + encodeURIComponent(t.artist || "") +
     "&art=" + encodeURIComponent(t.art || "") + "&duration=" + Math.round(t.duration || 0));
+  if (epoch !== pickerEpoch) return;
   if (!r.ok) { toast(detailText(r.body && r.body.detail) || "Couldn't share that"); return; }
   shareFor = Object.assign({ title, artist: t.artist || "" }, r.body);
   $("sharewhat").textContent = title + (t.artist ? " · " + t.artist : "");
@@ -2423,6 +2378,7 @@ $("shareclose").onclick = e => { e.stopPropagation(); $("sharepick").classList.r
 $("sharecopy").onclick = async () => {
   if (!shareFor) return;
   toast(await copyText(shareFor.url) ? "Link copied" : "Couldn't copy that");
+  $("sharepick").classList.remove("show");
 };
 $("sharenative").onclick = () => {
   if (!shareFor || !navigator.share) return;
@@ -2533,16 +2489,53 @@ let lastArt = "", artRetries = 0, artRetryFor = "";
 const BLANK_PIXEL = "data:image/gif;base64," +
   "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
+/* The station list is free text: some rows literally carry the string
+   "null" where an image link should be, and a truthiness check renders
+   that as <img src="null"> — a 404 and a broken glyph. Only a real link
+   is an image. */
+function artUrl(u) {
+  const s = String(u == null ? "" : u).trim();
+  const low = s.toLowerCase();
+  if (!s || low === "null" || low === "undefined" || low === "none") return "";
+  return s;
+}
+
 function artBlank() {
   const img = $("art"), amb = $("ambient");
   img.src = BLANK_PIXEL;
   img.classList.add("placeholder");
   amb.innerHTML = "";
   artAccent = null; applyAccent();
+  document.body.classList.remove("hasart");
+  document.body.style.removeProperty("--glasstint");
+}
+/* Dominant colour by population, not the single brightest logo pixel.
+   Neutral covers keep their neutral tint; explicit UI themes stay separate. */
+function glassTint(img) {
+  try {
+    const c = document.createElement("canvas"); c.width = c.height = 32;
+    const x = c.getContext("2d"); x.drawImage(img, 0, 0, 32, 32);
+    const d = x.getImageData(0, 0, 32, 32).data, bins = new Map();
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] < 128) continue;
+      const r = d[i], g = d[i + 1], b = d[i + 2];
+      const key = (r >> 5) * 64 + (g >> 5) * 8 + (b >> 5);
+      const bin = bins.get(key) || { n: 0, r: 0, g: 0, b: 0, score: 0 };
+      const hi = Math.max(r,g,b), lo = Math.min(r,g,b);
+      bin.n++; bin.r += r; bin.g += g; bin.b += b;
+      bin.score += (.18 + (hi - lo) / 255) * (hi < 32 ? .3 : 1);
+      bins.set(key, bin);
+    }
+    const best = [...bins.values()].sort((a,b) => b.score - a.score)[0];
+    return best ? `rgb(${Math.round(best.r/best.n)},${Math.round(best.g/best.n)},${Math.round(best.b/best.n)})` : null;
+  } catch (e) { return null; }
 }
 function setArt(url) {
+  url = artUrl(url);   // "null" and friends are not pictures
   if (url === lastArt) return;
   lastArt = url;
+  artAccent = null; applyAccent();
+  document.body.style.removeProperty("--glasstint");
   if (url !== artRetryFor) { artRetries = 0; artRetryFor = ""; }
   if (!url) { artBlank(); return; }
 
@@ -2556,6 +2549,7 @@ function setArt(url) {
     const img = $("art"), amb = $("ambient");
     img.src = url; img.classList.remove("placeholder");
     amb.innerHTML = "";
+    document.body.classList.add("hasart");
     const wash = new Image();
     wash.alt = "";
     wash.onerror = () => wash.remove();   // no glyph in the blur layer either
@@ -2564,7 +2558,13 @@ function setArt(url) {
     // Separate load for the colour: it needs CORS and plenty of hosts don't
     // send it, and a canvas that won't read shouldn't cost us the cover.
     const tint = new Image(); tint.crossOrigin = "anonymous";
-    tint.onload = () => { artAccent = extractAccent(tint); applyAccent(); };
+    tint.onload = () => {
+      if (lastArt !== url) return;
+      artAccent = extractAccent(tint); applyAccent();
+      const colour = glassTint(tint);
+      if (colour) document.body.style.setProperty("--glasstint", colour);
+      else document.body.style.removeProperty("--glasstint");
+    };
     tint.src = url;
   };
   probe.onerror = () => {
@@ -2573,7 +2573,7 @@ function setArt(url) {
     lastArt = null;      // so a later status with the same url tries again
     if (artRetries < 2) {
       artRetries++; artRetryFor = url;
-      setTimeout(() => setArt(url), 1200);
+      setTimeout(() => { if (lastArt === null && artRetryFor === url) setArt(url); }, 1200);
     }
   };
   probe.src = url;
@@ -2637,13 +2637,14 @@ const volFromX = e => { const r = $("volslider").getBoundingClientRect();
   return Math.round((e.clientX - r.left) / r.width * volCeil()); };
 const volFromY = e => { const r = $("minivol").getBoundingClientRect();
   return Math.round((1 - (e.clientY - r.top) / r.height) * volCeil()); };
-$("volslider").addEventListener("mousedown", e => { volDrag = true; setVol(volFromX(e)); sendVol(); });
-$("minivol").addEventListener("mousedown", e => { e.stopPropagation(); e.preventDefault(); vvolDrag = true; setVol(volFromY(e)); sendVol(); });
+$("volslider").addEventListener("mousedown", e => { volDrag = true; document.body.classList.add("vol-drag"); setVol(volFromX(e)); sendVol(); });
+$("minivol").addEventListener("mousedown", e => { e.stopPropagation(); e.preventDefault(); vvolDrag = true; document.body.classList.add("vol-drag"); setVol(volFromY(e)); sendVol(); });
 window.addEventListener("mousemove", e => {
   if (volDrag) { setVol(volFromX(e)); sendVol(); }
   if (vvolDrag) { setVol(volFromY(e)); sendVol(); }
 });
 window.addEventListener("mouseup", () => {
+  document.body.classList.remove("vol-drag");
   if (volDrag || vvolDrag) pushVolume(state.volume);
   volDrag = vvolDrag = false;
 });
@@ -2710,11 +2711,17 @@ function closeMore() {
 $("morebtn").onclick = e => {
   e.stopPropagation();
   if (moremenu.classList.contains("show")) { closeMore(); return; }
+  closeOtherPickers("moremenu");
+  $("removefrom").hidden = true;
   const b = $("morebtn").getBoundingClientRect();
   moremenu.style.bottom = (window.innerHeight - b.top + 8) + "px";
   if (isWide()) moremenu.style.left = Math.max(12, Math.min(window.innerWidth - 272, b.left - 24)) + "px";
   moremenu.classList.add("show");
   $("morebtn").setAttribute("aria-expanded", "true");
+  api("/api/playlist/contains").then(r => {
+    if (moremenu.classList.contains("show"))
+      $("removefrom").hidden = !((r && r.playlists) || []).length;
+  });
 };
 document.addEventListener("click", e => {
   if (moremenu.classList.contains("show") && !moremenu.contains(e.target) &&
@@ -2751,10 +2758,10 @@ function seekTo(secs) {
     if (state.duration) paintSeek(secs / state.duration, secs);
     lastLine = -1;                 // the words are somewhere else now
     syncLyrics(0);
-    api("/api/session/progress?pos=" + Math.round(secs));
+    api("/api/session/progress?pos=" + secs.toFixed(3));
     return;
   }
-  api("/api/seek?pos=" + Math.round(secs));
+  api("/api/seek?pos=" + secs.toFixed(3));
 }
 
 let seekDrag = false;
@@ -2797,10 +2804,11 @@ bar.addEventListener("pointercancel", () => {
 
 /* ── toast ─────────────────────────────────────────────────────────── */
 let toastT;
-function toast(msg) {
+function toast(msg, kind = "") {
   if (!msg) return;
   const el = $("toast");
   el.classList.remove("action");
+  el.classList.toggle("warn", kind === "warn");
   el.replaceChildren(document.createTextNode(msg));
   el.classList.add("show");
   clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove("show"), 2600);
@@ -2884,9 +2892,17 @@ const pickOf = row => ({ key: pickKey(row), kind: row.dataset.act, video_id: row
 function paintPicks() {
   document.querySelectorAll("#results .rres").forEach(r =>
     r.classList.toggle("sel", PICKABLE.has(r.dataset.act) && picks.some(p => p.key === pickKey(r))));
-  $("pickchips").innerHTML = picks.map((p, i) =>
-    `<span class="pchip"><span>${esc(p.kind === "song" ? p.title : p.name)}</span>` +
-    `<button type="button" data-i="${i}" aria-label="Unpick">×</button></span>`).join("");
+  /* Six is the most the row can show before the results start to suffer;
+     everything beyond that is still picked, and still plays. */
+  const CHIP_MAX = 6;
+  const shown = picks.slice(0, CHIP_MAX), rest = picks.slice(CHIP_MAX);
+  const chipName = p => esc(p.kind === "song" ? p.title : p.name);
+  $("pickchips").innerHTML = shown.map((p, i) =>
+    `<span class="pchip" title="${chipName(p)}"><span>${chipName(p)}</span>` +
+    `<button type="button" data-i="${i}" aria-label="Unpick">×</button></span>`).join("") +
+    (rest.length
+     ? `<span class="pchip more" title="${esc(rest.map(p => p.kind === "song" ? p.title : p.name).join(" · "))}">+${rest.length} more</span>`
+     : "");
   $("pickchips").hidden = !picks.length;
   // Together is for bands, albums and playlists: mixing them in with what's on.
   $("picktogether").hidden = !picks.some(p => p.kind !== "song");
@@ -2967,8 +2983,8 @@ async function showResults(v) {
   if (!r) { hideResults(); return; }
 
   const esc2 = s => esc(s || "");
-  const art = u => u ? `<img class="qi" src="${u}" onerror="qiFail(this)">`
-                     : `<div class="qi"></div>`;
+  const art = u => artUrl(u) ? `<img class="qi" src="${u}" onerror="qiFail(this)">`
+                             : `<div class="qi"></div>`;
 
   // One list. An artist or album row only earns its place if the thing you
   // typed really is that artist or album — otherwise it's a header and a row
@@ -3023,7 +3039,7 @@ async function showResults(v) {
 
   (r.stations || []).forEach((t, i) => push(0.86 - i * 0.001,
     `<div class="rres" data-act="station" data-u="${esc2(t.url)}" ` +
-    `data-t="${esc2(t.title)}" data-img="${esc2(t.art)}">${art(t.art)}` +
+    `data-t="${esc2(t.title)}" data-img="${esc2(artUrl(t.art))}">${art(t.art)}` +
     `<div class="rt"><div class="rn">${esc2(t.title)}</div>` +
     `<div class="ra">Live${t.artist ? " · " + esc2(t.artist) : ""}</div></div>` +
     label("radio") + `</div>`));
@@ -3181,13 +3197,10 @@ document.querySelectorAll(".navtab[data-panel]").forEach(tab => tab.onclick = ()
    Where the words live decides what the ⓘ button does. In the wide
    layout the story takes the middle column the lyrics were using; in
    the sidebar layouts it is a panel like any other. */
-const DRAWER_AT = window.matchMedia("(min-width:1800px) and (min-height:620px)");
 function aboutOpen() {
-  if (DRAWER_AT.matches && !document.body.classList.contains("mini")) return true;
   return lyricsPinned() ? document.body.classList.contains("about")
                         : activePanel === "about";
 }
-DRAWER_AT.addEventListener("change", () => { if (aboutOpen()) loadAbout(true); });
 function showAbout(on) {
   document.body.classList.toggle("about", !!on);
   document.querySelectorAll("#lyrswitch button").forEach(
@@ -3232,8 +3245,9 @@ async function loadAbout(force) {
   }
   const r = await api("/api/about");
   const a = r && r.about;
-  if (!a || (state.title || "") + "|" + (state.artist || "") !== aboutFor) return;
+  if (!a || (state.title || "") + "|" + (state.artist || "") !== who || aboutFor !== who) return;
   if (!a.ready) {
+    renderAbout({...a, pending:true});
     // The lookup runs on the server; ask again while it finishes rather
     // than holding the request open for the length of two web calls.
     aboutTries++;
@@ -3241,7 +3255,7 @@ async function loadAbout(force) {
       clearTimeout(aboutTimer);
       aboutTimer = setTimeout(() => loadAbout(), 1500);
     } else if (aboutTries >= 8) {
-      box.innerHTML = '<div class="muted">Nothing written about this one.</div>';
+      renderAbout(a);
     }
     return;
   }
@@ -3262,26 +3276,29 @@ function big(n) {
   return String(n);
 }
 function renderAbout(a) {
-  const sub = [a.album || "",
-               (a.tags || []).slice(0, 3).join(" · ")].filter(Boolean);
   const nums = [];
   if (a.listeners) nums.push([big(a.listeners), "listeners"]);
   if (a.playcount) nums.push([big(a.playcount), "scrobbles"]);
   if (a.heard && a.heard.artist_plays)
-    nums.push([a.heard.artist_plays, "your plays of them"]);
+    nums.push([a.heard.artist_plays, "artist plays by you"]);
   if (a.heard && a.heard.last) nums.push([ago(a.heard.last), "you last heard it"]);
   if (a.heard && a.heard.liked) nums.push(["♥", "liked"]);
-  if (a.since) nums.push([a.since, "band since"]);
+  if (a.since) nums.push([a.since, "artist active since"]);
 
   let html = '<div class="abt">';
-  html += `<h3>${esc(a.title)}</h3>`;
-  html += `<div class="abtsub">${esc(a.artist)}${sub.length ? " — " + esc(sub.join(" · ")) : ""}</div>`;
-  if (a.facts && a.facts.length) {
-    html += "<ul>" + a.facts.map(f => `<li>${esc(f)}</li>`).join("") + "</ul>";
-  }
-  if (a.story) html += `<p class="abtstory">${esc(a.story)}</p>`;
-  if (!a.story && !(a.facts || []).length) {
-    html += '<p class="abtstory">Nothing written about this one yet.</p>';
+  html += '<div class="abthero">' + (lastArt ? `<img src="${esc(lastArt)}" alt="" onerror="this.hidden=true">` : "") +
+    `<div><div class="abtkicker">Now playing</div><h3>${esc(a.title || state.title)}</h3>` +
+    `<div class="abtsub">${esc(a.artist || state.artist)}</div></div></div>`;
+  if (a.album) html += `<div class="abtalbum"><span>From the album</span><b>${esc(a.album)}</b></div>`;
+  if ((a.tags || []).length) html += '<div class="abttags">' +
+    a.tags.slice(0, 5).map(t => `<span>${esc(t)}</span>`).join("") + '</div>';
+  if (a.story) html += `<h4>The story</h4><p class="abtstory">${esc(a.story)}</p>`;
+  if ((a.facts || []).length) {
+    const facts = '<ul>' + a.facts.map(f => `<li>${esc(f)}</li>`).join('') + '</ul>';
+    html += a.story ? '<details><summary>A few details</summary>' + facts + '</details>' : facts;
+  } else if (!a.story) {
+    html += `<p class="abtsub">${a.pending ? "Finding the story behind this song…" :
+      "No story for this recording yet. Keep listening; its record details will appear here when available."}</p>`;
   }
   if (nums.length) {
     html += '<div class="abtnums">' + nums.map(
@@ -3358,7 +3375,7 @@ async function loadHealth() {
 }
 
 function qRow(t) {
-  const art = t.art ? `<img class="qi" src="${t.art}" onerror="qiFail(this)">` : `<div class="qi"></div>`;
+  const art = artUrl(t.art) ? `<img class="qi" src="${esc(t.art)}" onerror="qiFail(this)">` : `<div class="qi"></div>`;
   const eq = t.current ? `<span class="nowdot"></span>` : "";
   const w = WHY[t.reason] || null;
   const why = w ? `<span class="why" title="${w[0]}">${w[1]}</span>` : "";
@@ -3426,6 +3443,7 @@ function renderQueue(rows) {
   // ever showed them.
   if (rows && !Array.isArray(rows)) rows = rows.rows || [];
   lastQ = rows || [];
+  document.body.classList.toggle("hasqueue", lastQ.length > 0);
   showUpNext();
   // a download finishing mid-drag would otherwise rebuild the list out from
   // under the row you're holding
@@ -3479,57 +3497,108 @@ $("panel-queue").addEventListener("click", e => {
 });
 
 /* ── lyrics ────────────────────────────────────────────────────────── */
-let lyricData = null, lyricKey = "", lastLine = -1, lastLit = -1;
+let lyricData = null, lyricKey = "", lastLine = -1;
 /* The rows, held rather than looked up. syncLyrics runs four times a
    second and litWords with it, and both were walking the panel for the
    same forty elements every time. Rebuilt only when the lyrics are. */
-let lyricRows = [];
+let lyricRows = [], lyricStarts = [], lyricGeneration = 0;
 
 /* Each word its own element, so the line can be lit a word at a time.
    Spaces are kept as text between them — joining on a single space would
    quietly reformat anybody's careful spacing, and " (Wake me up)" is not
    the same line as "(Wake me up)". */
-function words(text) {
+function words(text, timed) {
+  if (timed && timed.length) return timed.map(w => {
+    const bits = w.text.match(/^(\s*)(.*?)(\s*)$/s);
+    return esc(bits[1]) + `<i class="w">${esc(bits[2])}</i>` + esc(bits[3]);
+  }).join("");
   return (text || "").split(/(\s+)/).map(bit =>
     /^\s*$/.test(bit) ? esc(bit) : `<i class="w">${esc(bit)}</i>`).join("");
 }
+function plainLyricLines(text) {
+  const out = [];
+  for (const source of (text || "").split(/\r?\n/)) {
+    const line = source.trim();
+    if (!line) { if (out.length && out[out.length - 1] !== "") out.push(""); continue; }
+    if (line.length <= 55) { out.push(line); continue; }
+    // Providers sometimes return an entire verse as one prose paragraph.
+    // Break at sentence ends first, then at a readable phrase length.
+    const phrases = line.split(/(?<=[.!?;])\s+/);
+    for (const phrase of phrases) {
+      let chunk = "", count = 0;
+      for (const word of phrase.split(/\s+/)) {
+        if (chunk && (chunk.length + word.length > 52 || count >= 8)) {
+          out.push(chunk); chunk = ""; count = 0;
+        }
+        chunk += (chunk ? " " : "") + word; count++;
+        if (count >= 4 && /[,;:]$/.test(word)) { out.push(chunk); chunk = ""; count = 0; }
+      }
+      if (chunk) out.push(chunk);
+    }
+  }
+  return out;
+}
 async function loadLyrics(force) {
   if (!force && state.trackKey === lyricKey) return;
+  const generation = ++lyricGeneration;
   lyricKey = state.trackKey; lyricData = null; lastLine = -1;
+  lyricStarts = [];
   const box = $("panel-lyrics");
-  box.classList.remove("plain");
+  box.classList.remove("plain", "prose");
   box.innerHTML = '<div class="muted">Looking for lyrics…</div>';
   lyricRows = [];
   // Skip twice quickly and the first answer can land after the second
   // track started: the old song's words, timed against the new one.
   const want = state.trackKey;
   const r = await api("/api/lyrics");
-  if (state.trackKey !== want || lyricKey !== want) return;
+  if (generation !== lyricGeneration || state.trackKey !== want || lyricKey !== want) return;
   const L = r && r.lyrics;
   if (!L) { box.innerHTML = '<div class="muted">No lyrics for this one.</div>';
             lyricRows = []; return; }
   lyricData = L; box.classList.add("lyrics");
+  box.classList.toggle("prose", !!(L.plain && L.synced && L.synced.length));
   if (L.synced && L.synced.length) {
     box.classList.remove("plain");
+    let previousStart = 0;
+    lyricStarts = L.synced.map((ln, i) => {
+      const measured = ln.words && ln.words[0] && ln.words[0].t;
+      const start = Number.isFinite(measured) ? measured : ln.t;
+      if (!Number.isFinite(start)) return null;
+      return previousStart = Math.max(previousStart, start);
+    });
     // A line with no words is a gap in the singing, not a lyric. It still
     // has to be there — it carries the timing of the line after it — but at
     // full size a bare ♪ between two verses reads as something broken.
-    box.innerHTML = L.synced.map(ln => {
-      const w = words(ln.text);
-      return `<div class="lrow${w ? "" : " inst"}" data-t="${ln.t}">` +
+    box.innerHTML = '<div class="lyrlead" aria-hidden="true"></div>' +
+      L.synced.map((ln, i) => {
+      const w = words(ln.text, ln.words);
+      return `<div class="lrow${w ? "" : " inst"}${w && !(ln.words && ln.words.length) ? " line-only" : ""}" ${Number.isFinite(lyricStarts[i]) ? `data-t="${lyricStarts[i]}"` : ""}>` +
              `${w || "♪"}</div>`;
     }).join("");
   } else {
     box.classList.add("plain");
-    box.innerHTML = (L.plain||"").split("\n").map(l => `<div class="lrow">${esc(l)||"&nbsp;"}</div>`).join("");
+    box.innerHTML = '<div class="lyrlead" aria-hidden="true"></div>' +
+      plainLyricLines(L.plain).map(l => `<div class="lrow${l ? "" : " stanza"}">${esc(l)||"&nbsp;"}</div>`).join("");
   }
   lyricRows = [...box.querySelectorAll('.lrow')];
   box.scrollTop = 0;
   // Put it where the song actually is rather than at the top — opening at
   // line one halfway through a track means the words you're hearing are
   // somewhere off the bottom of the panel.
-  lastLine = -1; lastLit = -1;
+  lastLine = -1;
   syncLyrics(state.position);
+  if (L.word_sync === "aligning") pollLyricAlignment(want, generation);
+}
+async function pollLyricAlignment(want, generation) {
+  for (let tries = 0; tries < 45; tries++) {
+    await new Promise(done => setTimeout(done, 4000));
+    if (state.trackKey !== want || generation !== lyricGeneration) return;
+    const r = await api("/api/lyrics");
+    if (state.trackKey !== want || generation !== lyricGeneration) return;
+    const mode = r && r.lyrics && r.lyrics.word_sync;
+    if (mode === "measured") { await loadLyrics(true); return; }
+    if (mode === "lines") return;
+  }
 }
 /* On a wide screen the words have a column of their own and are on all the
    time, so everything that used to wait for the Lyrics tab to be open has to
@@ -3537,57 +3606,72 @@ async function loadLyrics(force) {
 const PINNED_AT = window.matchMedia("(min-width:1500px) and (min-height:520px)");
 const lyricsPinned = () =>
   PINNED_AT.matches && !document.body.classList.contains("mini");
+PINNED_AT.addEventListener("change", () => { if (lyricsPinned()) loadLyrics(); });
 
-/* Roughly how long a word takes to sing.
-   Splitting a line's time equally between its words gives "I" and
-   "extraordinary" the same slice, which is exactly where the old fill
-   looked wrong. Syllables are a much better proxy for duration than either
-   word count or letter count: vowel groups, with a silent final e dropped,
-   and never less than one. */
 const STILL = window.matchMedia("(prefers-reduced-motion: reduce)");
-function syllables(word) {
-  const w = (word || "").toLowerCase().replace(/[^a-z]/g, "");
-  if (!w) return 0.4;                       // punctuation on its own
-  if (w.length <= 3) return 1;
-  const groups = w.replace(/e$/, "").match(/[aeiouy]+/g);
-  return Math.max(1, groups ? groups.length : 1);
+STILL.addEventListener("change", () => { lastLine = -1; syncLyrics(0); });
+function wordTimings(s, idx, row) {
+  if (row._timings) return row._timings;
+  const line = s[idx], ws = row._words || (row._words = [...row.querySelectorAll(".w")]);
+  if (!line.words || line.words.length !== ws.length) return null;
+  const nextLine = lyricStarts.slice(idx + 1).find(t => Number.isFinite(t));
+  const next = nextLine ?? (state.duration > 0 ? state.duration : Infinity);
+  const timings = line.words.map((w, i) => {
+    const from = w.t;
+    const end = w.end ?? Math.min(line.words[i + 1]?.t ?? Infinity, from + .3);
+    if (!Number.isFinite(from) || from < 0 || !Number.isFinite(end) || end <= from) return null;
+    const to = next > from ? Math.min(next, end) : end;
+    return {from, to};
+  });
+  if (timings.some(t => !t)) return null;
+  return row._timings = timings;
 }
 
-/* Where each word of a line starts, as a fraction of the line. Worked out
-   once per line and kept on the element — this is asked for every frame. */
-/* Sung English runs about a third of a second a syllable, plus a beat
-   between words. Used to work out how long a line *ought* to take, which
-   is a different question from how long it is until the next one. */
-const SEC_PER_SYLLABLE = 0.3, SEC_PER_WORD = 0.08;
+function wordEmphasis(duration) {
+  // Every word stirs a little; a held note swells all the way.
+  return Math.pow(Math.max(.06, Math.min(1, (duration - .15) / 1.8)), .85);
+}
 
-function wordStarts(row) {
-  if (row._starts) return row._starts;
-  const ws = [...row.querySelectorAll(".w")];
-  // A flat amount per word on top of the syllables, for the gap between
-  // one word and the next. Without it a line of monosyllables races and a
-  // long word crawls.
+/* No measured words for this line (plain LRC, or Whisper missed it): share
+   the line out by syllables at a singable speed. Slack before the next line
+   goes to the last word, since that's the one people hold. Every line
+   sweeps; measured lines are just more exact. */
+function syllables(word) {
+  const w = word.toLowerCase().replace(/[^a-z]/g, "");
+  if (!w) return 1;
+  if (w.length <= 3) return 1;
+  const groups = w.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, "")
+                  .replace(/^y/, "").match(/[aeiouy]{1,2}/g);
+  return Math.max(1, groups ? groups.length : 1);
+}
+const SEC_PER_SYLLABLE = 0.27, SEC_PER_WORD = 0.07, HOLD_MAX = 3.2;
+function guessTimings(idx, row) {
+  if (row._guess) return row._guess;
+  const ws = row._words || (row._words = [...row.querySelectorAll(".w")]);
+  const start = lyricStarts[idx];
+  if (!Number.isFinite(start) || !ws.length) return null;
+  const nextLine = lyricStarts.slice(idx + 1).find(t => Number.isFinite(t));
+  const end = nextLine ?? start + 5;
+  const gap = Math.max(0.4, end - start);
   const syl = ws.map(w => syllables(w.textContent));
   const weight = syl.map(n => n + 0.55);
   const total = weight.reduce((a, b) => a + b, 0) || 1;
+  const natural = syl.reduce((a, b) => a + b, 0) * SEC_PER_SYLLABLE + ws.length * SEC_PER_WORD;
+  const span = Math.max(0.35, Math.min(gap * .92, natural));
   let run = 0;
-  const starts = weight.map(x => {
-    const from = run / total;
+  const out = weight.map(x => {
+    const from = start + run / total * span;
     run += x;
-    return { from, to: run / total };
+    return {from, to: start + run / total * span};
   });
-  starts.natural = syl.reduce((a, b) => a + b, 0) * SEC_PER_SYLLABLE +
-                   ws.length * SEC_PER_WORD;
-  row._starts = starts;
-  return starts;
+  // Leftover time: the last word rings into it, leaving a breath before the next line.
+  const slack = gap - span - 0.35;
+  if (slack > 0.3) out[out.length - 1].to += Math.min(HOLD_MAX, slack * .7);
+  return row._guess = out;
 }
 
-/* Light the current line as it's sung: whole words behind the voice, and
-   the word being sung filling across itself.
-   What this can't be: lrclib timestamps *lines*, not words, so nothing here
-   knows when any particular word was sung. This shares the line's time out
-   by syllable count, which tracks sung English closely enough to feel right
-   and is still honestly wrong on a held note. A reading aid, not a
-   transcript. */
+/* Measured or supplied word stamps when there are any; the syllable guess
+   otherwise. */
 function litWords(box, s, idx, pos) {
   const rows = lyricRows;
   const row = rows[idx];
@@ -3613,20 +3697,13 @@ function litWords(box, s, idx, pos) {
       for (let i = idx + 1; i <= lastLine; i++) settle(rows[i], false);
     }
   }
-  const ws = row.querySelectorAll(".w");
+  const ws = row._words || (row._words = [...row.querySelectorAll(".w")]);
   if (!ws.length) return;
-  const start = s[idx].t;
-  const end = idx + 1 < s.length ? s[idx + 1].t : start + 4;
-  const gap = Math.max(0.4, end - start);
-  const starts = wordStarts(row);
-  // The gap to the next line is not how long the words take. Given Up holds
-  // one scream for the better part of twenty seconds; stretching two words
-  // across that crawled through them while he was plainly already done.
-  // So: sing the line at a speed a person could sing it, and if there is
-  // time left over, leave it lit and wait. The other way round — more words
-  // than there is room for — the gap wins and it simply goes faster.
-  const span = Math.max(0.35, Math.min(gap, starts.natural));
-  const through = Math.max(0, Math.min(1, (pos - start) / span));
+  const timings = wordTimings(s, idx, row) || guessTimings(idx, row);
+  if (!timings) {
+    ws.forEach(w => { w.className = "w lit"; w.style.animation = ""; });
+    return;
+  }
 
   // Arm the whole line in one go and then leave it alone. Each word gets an
   // animation with its own delay — negative for one already under way,
@@ -3638,15 +3715,21 @@ function litWords(box, s, idx, pos) {
   // Re-armed when the clock disagrees with where the animations think they
   // are by more than a moment: a seek, a resume, a track that started late.
   const wall = performance.now();
+  const paused = document.body.classList.contains("paused") || document.body.classList.contains("waiting");
   const drifted = row._armAt === undefined ||
-    Math.abs((pos - row._armAt) - (wall - row._armWall) / 1000) > 0.35;
+    row._armPaused !== paused ||
+    Math.abs((pos - row._armAt) - (paused ? 0 : (wall - row._armWall) / 1000)) > 0.25;
   if (idx === lastLine && !drifted) return;
-  row._armAt = pos; row._armWall = wall;
+  row._armAt = pos; row._armWall = wall; row._armPaused = paused;
 
   ws.forEach((w, i) => {
-    const from = start + starts[i].from * span;
-    const to = start + starts[i].to * span;
-    if (pos >= to) {                      // already sung
+    const {from, to} = timings[i];
+    const dur = Math.max(0.08, to - from);
+    const hold = wordEmphasis(dur);
+    const release = .35 + hold * .55;
+    const fill = Math.min(.25, dur * .3);
+    w.style.animation = "";
+    if (pos >= to + release) {            // already sung and settled
       w.className = "w lit";
       w.style.animation = "";
     } else {
@@ -3655,10 +3738,9 @@ function litWords(box, s, idx, pos) {
       // animation-play-state:running, and inline beats the stylesheet — so
       // the shorthand quietly made body.paused unable to stop anything.
       w.className = "w now";
-      const dur = Math.max(0.08, to - from);
       if (STILL.matches) {
         w.style.animationName = "wordfill";
-        w.style.animationDuration = dur.toFixed(3) + "s";
+        w.style.animationDuration = fill.toFixed(3) + "s";
         w.style.animationTimingFunction = "linear";
         w.style.animationDelay = (from - pos).toFixed(3) + "s";
         w.style.animationFillMode = "both";
@@ -3669,16 +3751,17 @@ function litWords(box, s, idx, pos) {
         // Colour on the beat (linear, as it always was); the swell and glow
         // build for as long as the word is held; the release takes longer
         // after a long note than a short one.
-        const hold = Math.pow(Math.max(0.04, Math.min(1, (dur - 0.22) / 1.1)), 0.9);
         w.style.setProperty("--hold", hold.toFixed(3));
         w.style.animationName = "wordfill, wordswell, wordrelease";
-        w.style.animationDuration = dur.toFixed(3) + "s, " + dur.toFixed(3) + "s, " +
-                                    (0.45 + hold * 0.55).toFixed(2) + "s";
-        w.style.animationTimingFunction = "linear, cubic-bezier(.35,0,.25,1), cubic-bezier(.25,.7,.2,1)";
+        w.style.animationDuration = fill.toFixed(3) + "s, " + dur.toFixed(3) + "s, " + release.toFixed(2) + "s";
+        w.style.animationTimingFunction = "linear, cubic-bezier(.3,0,.3,1), cubic-bezier(.25,.7,.2,1)";
         w.style.animationDelay = (from - pos).toFixed(3) + "s, " + (from - pos).toFixed(3) + "s, " +
                                  (to - pos).toFixed(3) + "s";
         w.style.animationFillMode = "both, both, forwards";
       }
+      // A changed negative delay alone does not restart an existing CSS
+      // animation. Reset its clock when seeking or correcting media drift.
+      w.getAnimations().forEach(animation => { animation.currentTime = 0; });
     }
   });
 }
@@ -3690,10 +3773,18 @@ function syncLyrics(pos) {
   // element's own rather than the server's echo of it.
   pos = livePos();
   const s = lyricData.synced;
-  let idx = 0;
-  for (let i = 0; i < s.length; i++) { if (s[i].t <= pos + 0.25) idx = i; else break; }
+  let idx = -1;
+  for (let i = 0; i < s.length; i++) {
+    if (!Number.isFinite(lyricStarts[i])) continue;
+    if (lyricStarts[i] <= pos) idx = i; else break;
+  }
   const box = $("panel-lyrics");
-  litWords(box, s, idx, pos);
+  if (idx < 0 && (lastLine >= 0 || lyricRows.some(r => r.classList.contains("active")))) lyricRows.forEach(r => {
+    r._armAt = undefined;
+    r.classList.remove("active", "n1", "n2", "n3");
+    r.querySelectorAll(".w").forEach(w => { w.className = "w"; w.style.animation = ""; });
+  });
+  if (idx >= 0) litWords(box, s, idx, pos);
   if (idx === lastLine) return;
   lastLine = idx;
   const rows = lyricRows;
@@ -3708,7 +3799,7 @@ function syncLyrics(pos) {
   if (rows[idx]) {
     const top = box.scrollTop + rows[idx].getBoundingClientRect().top -
       box.getBoundingClientRect().top - box.clientHeight/2 + rows[idx].offsetHeight/2;
-    box.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    box.scrollTo({ top: Math.max(0, top), behavior: STILL.matches ? "instant" : "smooth" });
   }
 }
 // A finger that moved was scrolling, not choosing. A momentum scroll that
@@ -3728,7 +3819,7 @@ $("panel-lyrics").addEventListener("click", e => {
   if (scrolled) return;
   const row = e.target.closest(".lrow[data-t]"); if (!row) return;
   const t = parseFloat(row.dataset.t);
-  if (!isNaN(t)) { seekTo(Math.max(0, t - 0.3)); lastLine = -1; }
+  if (!isNaN(t)) { seekTo(Math.max(0, t)); lastLine = -1; }
 });
 
 /* ── recent + lists ────────────────────────────────────────────────── */
@@ -3755,7 +3846,7 @@ function drawRecent(r) {
   html += '<div class="seclbl">Recently played</div>';
   html += (r.history && r.history.length)
     ? r.history.map(t => {
-        const art = t.art ? `<img class="qi" src="${t.art}" onerror="qiFail(this)">` : `<div class="qi"></div>`;
+        const art = artUrl(t.art) ? `<img class="qi" src="${esc(t.art)}" onerror="qiFail(this)">` : `<div class="qi"></div>`;
         return `<div class="rrow" data-v="${t.video_id}" data-t="${esc(t.title)}" data-ar="${esc(t.artist||"")}">${art}<div class="qt"><div class="qn">${esc(t.title)}</div><div class="qa">${esc(t.artist||"")}</div></div>` +
           `<button class="pickx rowx" data-fv="${esc(t.video_id)}" title="Forget this">✕</button></div>`;
       }).join("")
@@ -3806,7 +3897,7 @@ let importing = "", importFound = 0, importTotal = 0;
 // Shared lists live in the owner's library, so a guest can have one of
 // their own by the same name. The id has to say which is which.
 const plSlug = (n, shared) =>
-  (shared ? "sh-" : "pl-") + (n || "").replace(/[^a-zA-Z0-9]/g, "_");
+  (shared ? "sh-" : "pl-") + [...(n || "")].map(c=>c.codePointAt(0).toString(16)).join("-");
 
 function listRow(p, shared, owner) {
   const n = p.name || "";
@@ -3817,50 +3908,77 @@ function listRow(p, shared, owner) {
   const sh = shared ? "1" : "";
   const tag = (owner && p.shared) ? '<span class="plshare">shared</span>' : "";
   return `<div class="plrow${busy ? " busy" : ""}">` +
-    `<span class="pn" data-open="${esc(n)}" data-sh="${sh}">${esc(n)}${tag}<em>${esc(sub)}</em></span>` +
+    `<button class="pn" data-open="${esc(n)}" data-sh="${sh}" aria-expanded="false">${esc(n)}${tag}<em>${esc(sub)}</em></button>` +
     (busy ? '<span class="plspin" aria-label="Importing"></span>'
           : `<button class="qc" data-play="${esc(n)}" data-sh="${sh}" title="Play">▶</button>` +
-            (owner
-              ? `<button class="qc${p.shared ? " on danger" : ""}" data-share="${esc(n)}" ` +
-                `data-on="${p.shared ? 0 : 1}" title="${p.shared ? "Stop sharing" : "Let everyone add to this"}">⇄</button>`
-              : "") +
-            (shared ? "" : `<button class="qc danger" data-del="${esc(n)}" title="Delete">✕</button>`)) +
+            `<button class="qc" data-open="${esc(n)}" data-sh="${sh}" title="Playlist options" aria-label="Options for ${esc(n)}">⋯</button>`) +
     `</div>` +
     `<div class="pltracks" id="${plSlug(n, shared)}"></div>`;
 }
 
+const listDraft = {what:"", songs:"50", strict:"0", target:"", suggestion:""};
+function reconcileListTarget(rows) {
+  if (listDraft.target && !rows.some(p => p.name === listDraft.target)) listDraft.target = "";
+}
+function renameListTarget(oldName, newName) {
+  if (listDraft.target === oldName) listDraft.target = newName;
+}
+let listLoad = 0, listMaking = false, listMakeStatus = "";
+document.addEventListener("pointerdown", e => {
+  const menu = $("mktargetmenu"), button = $("mktarget");
+  if (menu && button && !menu.hidden && !menu.contains(e.target) && !button.contains(e.target)) {
+    menu.hidden = true; button.setAttribute("aria-expanded", "false");
+  }
+});
 async function loadLists() {
+  const loading = ++listLoad;
   const box = $("panel-lists");
   box.innerHTML = '<div class="muted">Loading…</div>';
   const [r, smart] = await Promise.all([
     api("/api/playlists"), api("/api/smartplaylists")
   ]);
+  if (loading !== listLoad) return;
   // /api/playlists returns a *list* of {name, count}. Object.keys() on an
   // array hands back "0", "1", "2" — which is where the mystery playlist
   // called 0 came from, and why the real names never showed up.
   const rows = (r && r.playlists) || [];
   const house = (r && r.shared) || [];      // the owner's, opened to everyone
+  if (r && Array.isArray(r.playlists)) reconcileListTarget(rows);
   const owner = !!(ME && ME.owner);
-  let html = `<div class="plmake"><b>Make one for me</b>` +
-    `<p>Bands, albums, genres, or all three. Their best-known songs, weighed against what you play.</p>` +
-    `<input id="mkwhat" placeholder="nu metal and glam metal, or Korn, Deftones and Mötley Crüe" autocomplete="off" spellcheck="false">` +
-    `<div class="sizes" id="mksizes">` + [25, 50, 100, 250, 500].map(n =>
-      `<button type="button" data-n="${n}"${n === 50 ? ' class="on"' : ""}>${n} songs</button>`).join("") + `</div>` +
+  let html = `<div class="plmake${listMaking ? " making" : ""}"><h3>Make a playlist</h3>` +
+    `<p>Start with a few artists, albums or a sound you love.</p>` +
+    `<label for="mkwhat">What are you in the mood for?</label>` +
+    `<textarea id="mkwhat" rows="2" placeholder="${esc(listDraft.suggestion || "Describe the sound you want…")}" spellcheck="false">${esc(listDraft.what)}</textarea>` +
+    `<div class="mkfields"><div class="mkcount"><label for="mksongs">Songs</label>` +
+    `<input id="mksongs" type="number" inputmode="numeric" min="1" max="1000" step="1" value="${esc(listDraft.songs)}" required></div>` +
+    `<div class="mktarget"><label for="mktarget">Save to</label>` +
+    `<button id="mktarget" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="mktargetmenu"><span id="mktargettext">${esc(listDraft.target || "New playlist")}</span><span aria-hidden="true">⌄</span></button>` +
+    `<div class="mktarget-menu" id="mktargetmenu" role="listbox" aria-label="Playlist destination" hidden>` +
+    `<input id="mktargetsearch" type="search" aria-label="Find a playlist" placeholder="Find a playlist">` +
+    `<div id="mktargetoptions"><button type="button" role="option" data-target="" aria-selected="${!listDraft.target}">New playlist</button>` +
+      rows.map(p => `<button type="button" role="option" data-target="${esc(p.name)}" aria-selected="${listDraft.target === p.name}" title="${esc(p.name)}">${esc(p.name)}</button>`).join("") + `</div></div></div></div>` +
+    `<span class="mklabel">Find the right mix</span>` +
     `<div class="strict" id="mkstrict" role="radiogroup" aria-label="How strict">` +
-      `<button type="button" data-strict="1" class="on" role="radio" aria-checked="true">Only these</button>` +
-      `<button type="button" data-strict="0" role="radio" aria-checked="false">Songs that fit</button></div>` +
-    `<button class="btn primary" id="mkgo">Make it</button><div class="mkstate" id="mkstate"></div></div>` +
-    `<div class="srow" style="border:0"><button class="btn primary" id="plnew">Save current song to a list</button></div>` +
-    `<div class="plimport"><input id="plspot" placeholder="Paste a Spotify or Apple Music link" autocomplete="off" spellcheck="false">` +
-    `<button class="btn" id="plspotgo">Add</button></div>`;
+      [ ["1", "Stay close"], ["0", "Explore similar"] ].map(([v, label]) =>
+        `<button type="button" data-strict="${v}" class="${listDraft.strict === v ? "on" : ""}" role="radio" aria-checked="${listDraft.strict === v}">${label}</button>`).join("") + `</div>` +
+    `<p class="mkhint" id="mkhint"></p>` +
+    `<button class="btn primary mkgo" id="mkgo" ${listMaking ? "disabled" : ""}>${listMaking ? "Making your playlist…" : listDraft.target ? "Add to playlist" : "Create playlist"}</button>` +
+    `<div class="mkactivity"><span class="mkspinner" aria-hidden="true"></span><b id="mkprogress">Finding songs…</b><div class="mkticker"><span id="mkticker">Building your mix</span></div></div>` +
+    `<div class="mkstate" id="mkstate" role="status">${esc(listMakeStatus)}</div></div>` +
+    `<div class="pltools"><b>Your library</b><button class="btn" id="plnew">New playlist</button></div>` +
+    `<form class="plnewform" id="plnewform" hidden><input id="plname" aria-label="Playlist name" placeholder="Playlist name" maxlength="120" required><button class="btn" type="submit">Create</button></form>` +
+    `<label class="plimportlabel" for="plspot">Import a playlist</label>` +
+    `<div class="plimport"><input id="plspot" placeholder="Shared playlist, Spotify or Apple Music link" autocomplete="off" spellcheck="false">` +
+    `<button class="btn" id="plspotgo">Import</button></div>`;
   const dynamic = (smart && smart.playlists) || [];
   if (dynamic.length) {
     html += '<div class="plhead">Made from your listening</div>' +
       dynamic.map(p => {
         const count = Number(p.count) || 0;
-        return `<div class="plrow"><span class="pn">${esc(p.name)}` +
-          `<em>${count} songs · updates automatically</em></span>` +
-          `<button class="qc" ${count ? "" : "disabled"} data-smart-play="${esc(p.kind)}" title="Add to queue">＋</button></div>`;
+        return `<div class="plrow"><button class="pn" data-smart-open="${esc(p.kind)}" aria-expanded="false">${esc(p.name)}` +
+          `<em>${count} songs · updates automatically</em></button>` +
+          `<button class="qc" ${count ? "" : "disabled"} data-smart-play="${esc(p.kind)}" title="Play playlist">▶</button></div>` +
+          `<div class="pltracks" id="smart-${esc(p.kind)}"></div>`;
       }).join("");
   }
   html += rows.length
@@ -3873,58 +3991,178 @@ async function loadLists() {
       house.map(p => listRow(p, true, owner)).join("");
   }
   box.innerHTML = html;
-  $("mksizes").onclick = e => {
-    const b = e.target.closest("button[data-n]"); if (!b) return;
-    $("mksizes").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+  if (!listDraft.suggestion) api("/api/playlists/suggest").then(got => {
+    if (got && got.suggestion) {
+      listDraft.suggestion = got.suggestion;
+      if ($("mkwhat") && !$("mkwhat").value) $("mkwhat").placeholder = got.suggestion;
+    }
+  });
+  $("mkwhat").oninput = e => { listDraft.what = e.target.value; };
+  $("mkwhat").onkeydown = e => {
+    if (e.key === "Tab" && !e.shiftKey && !e.currentTarget.value.trim() && listDraft.suggestion) {
+      e.preventDefault(); e.currentTarget.value = listDraft.suggestion;
+      listDraft.what = listDraft.suggestion;
+      e.currentTarget.setSelectionRange(listDraft.what.length, listDraft.what.length);
+    }
   };
+  $("mksongs").oninput = e => { listDraft.songs = e.target.value; };
+  const targetButton = $("mktarget"), targetMenu = $("mktargetmenu");
+  const closeTarget = () => { targetMenu.hidden = true; targetButton.setAttribute("aria-expanded", "false"); };
+  const openTarget = () => {
+    const r = targetButton.getBoundingClientRect();
+    targetMenu.hidden = false;
+    targetMenu.style.width = Math.min(Math.max(r.width, 220), innerWidth - 24) + "px";
+    targetMenu.style.left = Math.max(12, Math.min(r.left, innerWidth - targetMenu.offsetWidth - 12)) + "px";
+    const availableBelow = innerHeight - r.bottom - 12;
+    targetMenu.style.top = availableBelow >= 185 ? (r.bottom + 4) + "px" : "auto";
+    targetMenu.style.bottom = availableBelow >= 185 ? "auto" : (innerHeight - r.top + 4) + "px";
+    targetButton.setAttribute("aria-expanded", "true");
+    $("mktargetsearch").focus();
+  };
+  targetButton.onclick = () => targetMenu.hidden ? openTarget() : closeTarget();
+  targetButton.onkeydown = e => {
+    if (["ArrowDown", "ArrowUp"].includes(e.key)) { e.preventDefault(); openTarget(); }
+  };
+  $("mktargetsearch").oninput = e => {
+    const query = e.target.value.trim().toLocaleLowerCase();
+    targetMenu.querySelectorAll("[data-target]").forEach(b => {
+      b.hidden = !!query && !(b.textContent || "").toLocaleLowerCase().includes(query);
+    });
+  };
+  targetMenu.onclick = e => {
+    const option = e.target.closest("[data-target]"); if (!option) return;
+    listDraft.target = option.dataset.target;
+    $("mktargettext").textContent = listDraft.target || "New playlist";
+    targetMenu.querySelectorAll("[data-target]").forEach(b =>
+      b.setAttribute("aria-selected", String(b === option)));
+    $("mkgo").textContent = listDraft.target ? "Add to playlist" : "Create playlist";
+    closeTarget(); targetButton.focus();
+  };
+  targetMenu.onkeydown = e => {
+    if (e.key === "Escape") { e.preventDefault(); closeTarget(); targetButton.focus(); }
+    if (["ArrowDown", "ArrowUp"].includes(e.key)) {
+      e.preventDefault();
+      const options = [...targetMenu.querySelectorAll("[data-target]:not([hidden])")];
+      const at = options.indexOf(document.activeElement);
+      const next = e.key === "ArrowDown" ? (at + 1) % options.length
+                                          : (at < 0 ? options.length - 1 : (at + options.length - 1) % options.length);
+      if (options.length) options[next].focus();
+    }
+  };
+  const hint = () => { $("mkhint").textContent = listDraft.strict === "1"
+    ? "Stick to the artists, albums and genres you name."
+    : "Bring in related artists and songs with the same feel."; };
+  hint();
   $("mkstrict").onclick = e => {
     const b = e.target.closest("button[data-strict]"); if (!b) return;
+    listDraft.strict = b.dataset.strict; hint();
     $("mkstrict").querySelectorAll("button").forEach(x => {
       x.classList.toggle("on", x === b); x.setAttribute("aria-checked", x === b ? "true" : "false"); });
   };
+  $("mkstrict").onkeydown = e => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+    e.preventDefault();
+    const buttons = [...$("mkstrict").querySelectorAll("button")];
+    const next = e.key === "Home" ? buttons[0] : e.key === "End" ? buttons[1]
+      : buttons.find(b => b !== document.activeElement);
+    if (next) { next.click(); next.focus(); }
+  };
   $("mkgo").onclick = async () => {
+    if (listMaking) return;
     const what = $("mkwhat").value.trim();
     if (what.length < 2) { toast("Say what it should be of"); return; }
-    const n = Number(($("mksizes").querySelector(".on") || {}).dataset?.n || 50);
-    const strict = ($("mkstrict").querySelector(".on") || {}).dataset?.strict || "1";
+    if (!$("mksongs").reportValidity()) return;
+    const n = Number($("mksongs").value);
+    const strict = listDraft.strict;
+    const target = listDraft.target;
+    listMaking = true; listMakeStatus = "Finding songs for your playlist…";
+    listDraft.what = ""; $("mkwhat").value = "";
+    $("mkgo").closest(".plmake").classList.add("making");
     $("mkgo").disabled = true;
+    $("mkgo").textContent = "Making your playlist…";
+    $("mkstate").textContent = listMakeStatus;
     const r = await apiTry("/api/playlists/make?what=" + encodeURIComponent(what) + "&songs=" + n +
-                           "&strict=" + strict);
-    if (!r.ok) { $("mkgo").disabled = false; toast((r.body && r.body.detail) || "Couldn't start that"); return; }
+                           "&strict=" + strict + "&target=" + encodeURIComponent(target));
+    if (!r.ok) { listMaking = false; listMakeStatus = "";
+      listDraft.what = what; if ($("mkwhat")) $("mkwhat").value = what;
+      if ($("mkgo")) $("mkgo").closest(".plmake").classList.remove("making");
+      if ($("mkgo")) { $("mkgo").disabled = false; $("mkgo").textContent = listDraft.target ? "Add to playlist" : "Create playlist"; $("mkstate").textContent = ""; }
+      toast((r.body && r.body.detail) || "Couldn't start that"); return; }
     const job = r.body.job;
     // A big list is a couple of lookups per band, so it's watched until it lands.
     const watch = async () => {
       const j = await api("/api/playlists/job?job=" + encodeURIComponent(job));
-      if (!j || !$("mkstate")) return;
-      $("mkstate").textContent = j.state === "done" ? "Made " + j.name + ": " + j.detail
+      if (!j) { listMaking = false; listMakeStatus = "Couldn't check progress. Reopen Lists to refresh.";
+        if ($("mkgo")) { $("mkgo").disabled = false; $("mkgo").closest(".plmake").classList.remove("making"); $("mkgo").textContent = listDraft.target ? "Add to playlist" : "Create playlist"; $("mkstate").textContent = listMakeStatus; } return; }
+      listMakeStatus = j.state === "done" ? (j.target ? "Added to " : "Made ") + j.name + ": " + j.detail
         : j.state === "failed" ? "Couldn't: " + j.detail : j.detail + "…";
+      if ($("mkstate")) $("mkstate").textContent = listMakeStatus;
+      if ($("mkprogress")) $("mkprogress").textContent = (j.found || 0) + " songs found";
+      if ($("mkticker") && j.previews && j.previews.length)
+        $("mkticker").textContent = j.previews.join("  ·  ");
       // Waiting on Groq is still cooking: keep watching, it starts by itself.
       if (j.state === "building" || j.state === "waiting") {
         setTimeout(watch, j.state === "waiting" ? 4000 : 2000); return; }
-      $("mkgo").disabled = false;
-      if (j.state === "done") { toast("Made " + j.name); setTimeout(loadLists, 600); }
+      listMaking = false;
+      if ($("mkgo")) $("mkgo").closest(".plmake").classList.remove("making");
+      if (j.state === "failed") { listDraft.what = what; if ($("mkwhat")) $("mkwhat").value = what; }
+      if ($("mkgo")) { $("mkgo").disabled = false; $("mkgo").textContent = listDraft.target ? "Add songs to " + listDraft.target : "Create playlist"; }
+      if (j.state === "done") { toast((j.target ? "Added to " : "Made ") + j.name); setTimeout(loadLists, 600); }
     };
     watch();
   };
-  $("plnew").onclick = async () => {
-    const name = prompt("List name:");
-    if (name) { const res = await api("/api/playlist/add?name=" + encodeURIComponent(name)); toast(res && res.message); loadLists(); }
+  $("plnew").onclick = () => {
+    $("plnewform").hidden = !$("plnewform").hidden;
+    if (!$("plnewform").hidden) $("plname").focus();
+  };
+  $("plnewform").onsubmit = async e => {
+    e.preventDefault();
+    const name = $("plname").value.trim(); if (!name) return;
+    const r = await api("/api/playlist/create?name=" + encodeURIComponent(name));
+    toast(r && r.message); if (r && r.ok) loadLists();
   };
   $("plspotgo").onclick = async () => {
     const url = $("plspot").value.trim();
-    if (!url) { toast("Paste a Spotify link first"); return; }
-    const r = await api("/api/spotify/add?url=" + encodeURIComponent(url));
-    toast((r && r.message) || "Couldn't add that");
-    $("plspot").value = "";
-    setTimeout(loadLists, 4000);      // matching takes a moment
+    if (!url) { toast("Paste a playlist link first"); return; }
+    $("plspotgo").disabled = true;
+    const r = await apiTry("/api/spotify/add?url=" + encodeURIComponent(url));
+    const body = r.body || {};
+    toast(body.message || body.detail || "Couldn't import that playlist");
+    if ($("plspotgo")) $("plspotgo").disabled = false;
+    if (r.ok && body.status === "ok") { $("plspot").value = ""; loadLists(); }
   };
 }
+/* Only one list open at a time: opening another folds the previous one, so
+   the panel isn't a scroll of stacked open lists. */
+function collapseLists(keepBox, keepBtn) {
+  document.querySelectorAll("#panel-lists .pltracks").forEach(b => {
+    if (b !== keepBox) b.innerHTML = "";
+  });
+  document.querySelectorAll('#panel-lists [aria-expanded="true"]').forEach(b => {
+    if (b !== keepBtn) b.setAttribute("aria-expanded", "false");
+  });
+}
 $("panel-lists").addEventListener("click", async e => {
+  const smartOpen = e.target.closest("[data-smart-open]");
+  if (smartOpen) {
+    const box = $("smart-" + smartOpen.dataset.smartOpen);
+    if (box.innerHTML) { box.innerHTML = ""; smartOpen.setAttribute("aria-expanded", "false"); return; }
+    collapseLists(box, smartOpen);
+    box.innerHTML = '<div class="muted">Loading…</div>';
+    const r = await api("/api/smartplaylists?kind=" + encodeURIComponent(smartOpen.dataset.smartOpen));
+    const tracks = (r && r.tracks) || [];
+    box.innerHTML = tracks.length ? tracks.map((t,i) =>
+      `<div class="pltrack"><span class="pli">${i+1}</span><span class="plt">${esc(t.title)}<em>${esc(t.artist)}</em></span>` +
+      `<button class="qc" data-smart-play="${esc(smartOpen.dataset.smartOpen)}" data-start="${i}" title="Play from here">▶</button></div>`).join("") :
+      '<div class="muted">No songs in this history list yet.</div>';
+    smartOpen.setAttribute("aria-expanded", "true"); return;
+  }
   const smartPlay = e.target.closest("[data-smart-play]");
   if (smartPlay) {
     const r = await api("/api/smartplaylists/play?kind=" +
-      encodeURIComponent(smartPlay.dataset.smartPlay));
-    toast((r && r.message) || "Couldn't add that smart playlist");
+      encodeURIComponent(smartPlay.dataset.smartPlay) +
+      "&start=" + encodeURIComponent(smartPlay.dataset.start || "0"));
+    toast((r && r.message) || "Couldn't play that smart playlist");
     return;
   }
   const open = e.target.closest("[data-open]");
@@ -3935,12 +4173,26 @@ $("panel-lists").addEventListener("click", async e => {
     const sh = open.dataset.sh ? "&shared=1" : "";
     const box = $(plSlug(name, !!open.dataset.sh));
     if (!box) return;
-    if (box.innerHTML) { box.innerHTML = ""; return; }
+    if (box.innerHTML) { box.innerHTML = ""; open.setAttribute("aria-expanded", "false"); return; }
+    collapseLists(box, open);
+    open.setAttribute("aria-expanded", "true");
     box.innerHTML = '<div class="muted" style="padding:6px 2px">Loading…</div>';
     const r = await api("/api/playlist/tracks?name=" + encodeURIComponent(name) + sh);
     const ts = (r && r.tracks) || [];
     const me = (r && r.me) || "";
-    box.innerHTML = ts.length
+    const mine = !open.dataset.sh;
+    const controls = `<div class="plactions">` +
+      `<button class="btn" data-pladd="${esc(name)}" data-sh="${esc(open.dataset.sh || "")}">Add current song</button>` +
+      (mine ? `<button class="btn" data-rename="${esc(name)}">Rename</button>` +
+        `<button class="btn" data-plai="${esc(name)}">Make more like this</button>` +
+        `<button class="btn" data-pllink="${esc(name)}">Share link</button>` +
+        `<button class="btn" data-plexport="${esc(name)}" data-format="csv">Export CSV</button>` +
+        `<button class="btn" data-plexport="${esc(name)}" data-format="txt">Export TXT</button>` +
+        `<button class="btn" data-pltogether="${esc(name)}">Play together</button>` +
+        `<button class="btn danger" data-del="${esc(name)}">Delete</button>` : "") +
+      (mine && ME.owner ? `<button class="btn" data-share="${esc(name)}" data-on="${r.shared ? 0 : 1}">${r.shared ? "Stop household collaboration" : "Let the household add songs"}</button>` : "") + `</div>` +
+      (mine ? `<form class="plrename" hidden data-old="${esc(name)}"><input aria-label="New playlist name" maxlength="120" value="${esc(name)}" required><button class="btn" type="submit">Save name</button><button class="btn" type="button" data-cancelrename>Cancel</button></form><div class="pllink"></div>` : "");
+    box.innerHTML = controls + (ts.length
       ? ts.map((t, i) => {
           // Only on a shared list, and never "added by you" on your own
           // library — there it would be on every row and say nothing.
@@ -3954,7 +4206,7 @@ $("panel-lists").addEventListener("click", async e => {
           (canRm ? `<button class="qc danger" data-plrm="${esc(name)}" data-sh="${esc(open.dataset.sh || "")}" data-vid="${esc(t.video_id || "")}" title="Remove">✕</button>` : "") +
           `</div>`;
         }).join("")
-      : '<div class="muted" style="padding:6px 2px">Empty.</div>';
+      : '<div class="muted" style="padding:6px 2px">No songs yet. Add the current song to get started.</div>');
     return;
   }
   const from = e.target.closest("[data-plplay]");
@@ -3982,6 +4234,49 @@ $("panel-lists").addEventListener("click", async e => {
     loadLists();
     return;
   }
+  const rename = e.target.closest("[data-rename]");
+  if (rename) { const form = rename.closest('.pltracks').querySelector('.plrename'); form.hidden=false; form.querySelector('input').focus(); return; }
+  const aiMore = e.target.closest("[data-plai]");
+  if (aiMore) {
+    listDraft.target = aiMore.dataset.plai;
+    $("mktargettext").textContent = listDraft.target;
+    $("mktargetmenu").querySelectorAll("[data-target]").forEach(b =>
+      b.setAttribute("aria-selected", String(b.dataset.target === listDraft.target)));
+    $("mkgo").textContent = "Add songs to " + listDraft.target;
+    $("mkgo").closest(".plmake").scrollIntoView({behavior:"smooth", block:"start"});
+    $("mkwhat").focus(); return;
+  }
+  const exportButton = e.target.closest("[data-plexport]");
+  if (exportButton) {
+    const name = exportButton.dataset.plexport, fmt = exportButton.dataset.format;
+    const path = "/api/playlist/export?name=" + encodeURIComponent(name) + "&format=" + fmt;
+    const r = await fetch(BASE + path, {method:"GET", headers:{"X-Music-Key":KEY}}).catch(() => null);
+    if (!r || !r.ok) { toast("Couldn't export this playlist"); return; }
+    const blob = await r.blob(), url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href=url;
+    a.download = (name.replace(/[\\/:*?"<>|]/g, "_") || "playlist") + "." + fmt;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000); return;
+  }
+  const cancelRename = e.target.closest('[data-cancelrename]');
+  if (cancelRename) { cancelRename.closest('form').hidden=true; return; }
+  const add = e.target.closest('[data-pladd]');
+  if (add) {
+    const r = await api('/api/playlist/add?name=' + encodeURIComponent(add.dataset.pladd) + (add.dataset.sh ? '&shared=1' : ''));
+    toast(r && r.message, r && r.duplicate ? "warn" : ""); if (r && r.ok && !r.duplicate) loadLists(); return;
+  }
+  const together = e.target.closest('[data-pltogether]');
+  if (together) { playPicks('together', [{kind:'playlist',name:together.dataset.pltogether}]); return; }
+  const link = e.target.closest('[data-pllink]');
+  if (link) {
+    link.disabled=true;
+    const r = await apiTry('/api/playlist/link?name=' + encodeURIComponent(link.dataset.pllink));
+    link.disabled=false;
+    if (!r.ok || !r.body.url) { toast(r.body && (r.body.detail || r.body.message) || "Couldn't share this playlist"); return; }
+    const target=link.closest('.pltracks').querySelector('.pllink');
+    target.innerHTML=`<input aria-label="Shared playlist link" readonly value="${esc(r.body.url)}"><p>Anyone with this link can view and import a copy. Expires in 30 days.</p>`;
+    toast(await copyText(r.body.url) ? 'Playlist link copied' : 'Copy the link shown below'); return;
+  }
   if (play) {
     const r = await api("/api/playlist/play?name=" + encodeURIComponent(play.dataset.play) +
                         (play.dataset.sh ? "&shared=1" : ""));
@@ -3990,8 +4285,17 @@ $("panel-lists").addEventListener("click", async e => {
   if (del) {
     if (!armDanger(del, "delete this list")) return;
     const r = await api("/api/playlist/delete?name=" + encodeURIComponent(del.dataset.del));
-    toast(r && r.message); loadLists();
+    toast((r && r.message) || "Couldn't delete that playlist");
+    if (r && r.ok) { renameListTarget(del.dataset.del, ""); loadLists(); }
   }
+});
+
+$("panel-lists").addEventListener("submit", async e => {
+  const form=e.target.closest('.plrename'); if (!form) return;
+  e.preventDefault(); const name=form.querySelector('input').value.trim(); if (!name) return;
+  const r=await api('/api/playlist/rename?name='+encodeURIComponent(form.dataset.old)+'&new_name='+encodeURIComponent(name));
+  toast((r && r.message) || "Couldn't rename that playlist");
+  if (r && r.ok) { renameListTarget(form.dataset.old, r.name || name); loadLists(); }
 });
 
 /* ── settings ──────────────────────────────────────────────────────── */
@@ -4627,8 +4931,9 @@ function hours(seconds) {
   return (h >= 100 ? Math.round(h) : h.toFixed(1)) + " h";
 }
 const NUM = n => (Number(n) || 0).toLocaleString();
-function statTiles(box, d) {
+function statTiles(box, d, extra = []) {
   $(box).innerHTML = [
+    ...extra,
     [NUM(d.requests), "songs asked for"],
     [NUM(d.plays), "tracks played"],
     [hours(d.seconds), "listened"],
@@ -4648,7 +4953,7 @@ async function loadStats() {
   if (!r || !r.house) return;
   const h = r.house;
   statTiles("statsmonth", h.this_month || {});
-  statTiles("statstotal", h.totals || {});
+  statTiles("statstotal", h.totals || {}, [[NUM(r.registered_users), "Registered users"]]);
   $("statssince").textContent = h.first ? "since " + new Date(h.first * 1000)
     .toLocaleDateString(undefined, { month: "long", year: "numeric" }) : "";
   // Months, with the bar showing time listened rather than bytes: hours in
@@ -4966,17 +5271,26 @@ $("eq").onchange = () => setPref("eq", $("eq").value,
 $("source").onchange = () => api("/api/source?value=" + encodeURIComponent($("source").value));
 /* output device picker, hung off the speaker icon */
 const devpicker = $("devpicker");
+function closeDevices() {
+  pickerEpoch++;
+  devpicker.classList.remove("show");
+}
 async function openDevices() {
+  const epoch = pickerEpoch;
+  $("devlist").textContent = "Loading devices…";
+  devpicker.classList.add("show");
   const r = await api("/api/audio/devices");
+  if (epoch !== pickerEpoch || !devpicker.classList.contains("show")) return;
+  if (!r) { $("devlist").textContent = "Couldn't load devices. Close and try again."; return; }
   const rows = (r && r.devices) || [];
   $("devlist").innerHTML = rows.map(d =>
     `<div class="picker-row" data-d="${esc(d.name)}">${esc(d.label)}` +
     `<span class="cnt">${d.active ? "✓" : ""}</span></div>`).join("");
-  devpicker.classList.add("show");
 }
 $("volicon").onclick = e => {
   e.stopPropagation();
-  if (devpicker.classList.contains("show")) { devpicker.classList.remove("show"); return; }
+  if (devpicker.classList.contains("show")) { closeDevices(); return; }
+  closeOtherPickers("devpicker");
   openDevices();
   // sit it directly above the speaker rather than pinned to the top
   const r = $("volicon").getBoundingClientRect();
@@ -4990,11 +5304,11 @@ $("volicon").onclick = e => {
     devpicker.style.left = "";
   }
 };
-$("devclose").onclick = e => { e.stopPropagation(); devpicker.classList.remove("show"); };
+$("devclose").onclick = e => { e.stopPropagation(); closeDevices(); };
 $("devlist").addEventListener("click", async e => {
   const row = e.target.closest(".picker-row[data-d]");
   if (!row) return;
-  devpicker.classList.remove("show");
+  closeDevices();
   const dev = row.dataset.d;
   castOff();                       // choosing a speaker means not playing here
   const r = await api("/api/audio/device?name=" + encodeURIComponent(dev) +
@@ -5088,7 +5402,7 @@ $("segphone").onclick = () => choosePlace(true);
 $("segpc").onclick = () => choosePlace(false);
 document.addEventListener("click", e => {
   if (devpicker.classList.contains("show") && !devpicker.contains(e.target) &&
-      e.target.closest("#volicon") === null) devpicker.classList.remove("show");
+      e.target.closest("#volicon") === null) closeDevices();
 });
 
 /* ── what this visitor is allowed to do ──────────────────────────────── */
@@ -5136,6 +5450,7 @@ async function loadWhoami() {
       "houselists", (((got || {}).shared) || []).length > 0));
   }
   if (!r.owner) castOn();
+  if (PRIVATE_SHARE) $("ph-note").textContent = "Private session · listening history isn't saved";
   return ME;
 }
 
@@ -5503,8 +5818,14 @@ function castPrime() {
 function castPlay(el) {
   const p = el.play();
   if (p && p.catch) p.catch(() => {
+    const first = !cast.blocked;
     cast.blocked = true;
     document.body.classList.add("castblocked");
+    if (PRIVATE_SHARE) {
+      $("play").innerHTML = ICON.play;
+      $("play").title = "Tap play to listen";
+      if (first) toast("Tap play to start your private listen");
+    }
   });
 }
 function castUnblock() {
@@ -5950,6 +6271,23 @@ function reportProgress() {
   const el = castLive();
   api("/api/session/progress?pos=" + Math.round(el.currentTime || 0));
 }
+// Paused private visits still check in. An open event stream is not proof
+// that the browser is alive: only this client heartbeat extends the visit.
+async function privateHeartbeat() {
+  if (!PRIVATE_SHARE || privateEnded) return;
+  const r = await apiFetch("/api/session/progress?pos=" + Math.round(castLive().currentTime || 0)).catch(() => null);
+  if (!r || r.status !== 410) return;
+  privateEnded = true;
+  if (es) { es.close(); es = null; }
+  castEls.forEach(el => { el.pause(); el.removeAttribute("src"); el.load(); });
+  document.body.classList.add("private-ended");
+  const notice = document.createElement("div"); notice.className = "private-notice";
+  notice.setAttribute("role", "status"); notice.append("This private session has ended. ");
+  const link = document.createElement("a"); link.href = BASE + "/s/" + encodeURIComponent(PRIVATE_SHARE);
+  link.textContent = "Start a fresh listen"; notice.append(link); document.body.append(notice);
+}
+setInterval(privateHeartbeat, 15000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) privateHeartbeat(); });
 setInterval(() => {
   if (!cast.on || ME.owner || castLive().paused) return;
   reportProgress();
@@ -6056,43 +6394,64 @@ castEls.forEach(el => el.addEventListener("playing", () => {
 })();
 
 const picker = $("picker");
-async function openPicker() {
-  const r = await api("/api/playlists");
+let pickerMode = "add"; // returnToMini is declared once, up with the share pickers
+async function openPicker(mode = "add") {
+  pickerMode = mode;
+  closeOtherPickers("picker");
+  const epoch = pickerEpoch;
+  const r = await api(mode === "remove" ? "/api/playlist/contains" : "/api/playlists");
+  if (epoch !== pickerEpoch) return;
   const rows = (r && r.playlists) || [];
   // The house's shared lists too, so putting a song in one is the same two
   // taps as putting it in your own. Marked, because it isn't yours.
-  const house = (r && r.shared) || [];
+  const house = mode === "remove" ? [] : (r && r.shared) || [];
   const row = (p, sh) =>
-    `<div class="picker-row" data-n="${esc(p.name)}" data-sh="${sh ? 1 : ""}">${esc(p.name)}` +
+    `<div class="picker-row" data-n="${esc(typeof p === "string" ? p : p.name)}" data-sh="${sh ? 1 : ""}" data-vid="${esc(typeof p === "string" ? "" : (p.video_id || ""))}">${esc(typeof p === "string" ? p : p.name)}` +
     (sh ? '<span class="plshare">shared</span>' : "") +
-    `<span class="cnt">${p.count}</span></div>`;
+    `<span class="cnt">${mode === "remove" ? "Remove" : p.count}</span></div>`;
   const all = rows.map(p => row(p, false)).concat(house.map(p => row(p, true)));
   $("pickerlist").innerHTML = all.length
     ? all.join("")
-    : '<div class="picker-row" style="color:var(--sub);cursor:default">No playlists yet</div>';
+    : `<div class="picker-row" style="color:var(--sub);cursor:default">${mode === "remove" ? "This song isn't in one of your playlists" : "No playlists yet"}</div>`;
+  $("pickerhead").textContent = mode === "remove" ? "Remove from playlist" : "Add to playlist";
+  picker.querySelector(".picker-new").hidden = mode === "remove";
   picker.classList.add("show");
   $("newlist").value = "";
 }
 $("addlist").onclick = async e => {
   e.stopPropagation();
   closeMore();
-  if (mini) { await $("shrink").onclick(); openPicker(); return; }
+  if (mini) { returnToMini = true; await $("shrink").onclick(); openPicker(); return; }
   picker.classList.contains("show") ? picker.classList.remove("show") : openPicker();
 };
+$("removefrom").onclick = async e => {
+  e.stopPropagation(); closeMore();
+  if (mini) { returnToMini = true; await $("shrink").onclick(); }
+  openPicker("remove");
+};
+async function finishPlaylistPicker() {
+  if (returnToMini && !mini) { returnToMini = false; await $("shrink").onclick(); }
+}
 $("pickerlist").addEventListener("click", async e => {
   const row = e.target.closest(".picker-row[data-n]");
   if (!row) return;
   picker.classList.remove("show");
-  const r = await api("/api/playlist/add?name=" + encodeURIComponent(row.dataset.n) +
-                      (row.dataset.sh ? "&shared=1" : ""));
-  toast((r && r.message) || "Added");
+  const path = pickerMode === "remove"
+    ? "/api/playlist/remove?name=" + encodeURIComponent(row.dataset.n) +
+      "&video_id=" + encodeURIComponent(row.dataset.vid || "")
+    : "/api/playlist/add?name=" + encodeURIComponent(row.dataset.n) +
+      (row.dataset.sh ? "&shared=1" : "");
+  const r = await api(path);
+  toast((r && r.message) || "Added", r && r.duplicate ? "warn" : "");
+  await finishPlaylistPicker();
 });
 async function createList() {
   const name = $("newlist").value.trim();
   if (!name) { toast("Give it a name first"); return; }
   picker.classList.remove("show");
   const r = await api("/api/playlist/add?name=" + encodeURIComponent(name));
-  toast((r && r.message) || `Created ${name}`);
+  toast((r && r.message) || `Created ${name}`, r && r.duplicate ? "warn" : "");
+  await finishPlaylistPicker();
 }
 $("newlistgo").onclick = createList;
 $("newlist").addEventListener("keydown", e => { if (e.key === "Enter") createList(); });
@@ -6502,21 +6861,52 @@ async function loadSettings() {
 /* Shared buttons: on the mini toolbar while it's small, back in their own row
    in the full player. Same elements, so handlers and liked state follow. */
 const SHARED = ["like", "download", "addlist"];
+const sharedHomes = new Map(SHARED.map(id => {
+  const el = $(id), home = document.createComment(id + " home");
+  el.before(home);
+  return [id, { home, role: el.getAttribute("role"),
+    tabindex: el.getAttribute("tabindex"), title: el.getAttribute("title") }];
+}));
 function moveControls(toMini) {
   const controls = document.querySelector(".controls");
-  const row2 = document.querySelector(".row2");
   if (toMini) {
     if (!controls.querySelector(".sep")) {
       const sep = document.createElement("span");
       sep.className = "sep";
       controls.appendChild(sep);
     }
-    SHARED.forEach(id => controls.appendChild($(id)));
+    SHARED.forEach(id => {
+      const el = $(id);
+      if (el.classList.contains("picker-row")) {
+        el.classList.add("ib", "small");
+        el.setAttribute("role", "button"); el.tabIndex = 0;
+        el.title = el.textContent.trim();
+        el.setAttribute("aria-label", el.title);
+      }
+      controls.appendChild(el);
+    });
   } else {
     const sep = controls.querySelector(".sep");
     if (sep) sep.remove();
-    SHARED.slice().reverse().forEach(id => row2.insertBefore($(id), row2.firstChild));
+    SHARED.forEach(id => {
+      const el = $(id), saved = sharedHomes.get(id);
+      if (el.classList.contains("picker-row")) {
+        el.classList.remove("ib", "small");
+        for (const attr of ["role", "tabindex", "title"]) {
+          if (saved[attr] == null) el.removeAttribute(attr);
+          else el.setAttribute(attr, saved[attr]);
+        }
+      }
+      saved.home.after(el);
+    });
   }
+}
+for (const id of ["download", "addlist"]) {
+  $(id).addEventListener("keydown", e => {
+    if (document.body.classList.contains("mini") && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault(); e.stopPropagation(); e.currentTarget.click();
+    }
+  });
 }
 
 function showUpNext() {
@@ -6525,18 +6915,27 @@ function showUpNext() {
   $("upnext").textContent = up ? "Up next · " + up.title : "";
 }
 
-let mini = false, liked = false;
-$("shrink").onclick = () => {
+let mini = false, liked = false, miniSwitch = false;
+$("shrink").onclick = async () => {
+  if (miniSwitch) return;
+  miniSwitch = true;
+  document.body.classList.add("mini-switch");
   mini = !mini;
   document.body.classList.toggle("mini", mini);
   document.body.classList.toggle("mini-hover", mini);
   $("shrink").title = mini ? "Back to full size" : "Shrink to mini";
   moveControls(mini);
   showUpNext();
-  const b = bridge(); if (b && b.set_mini) b.set_mini(mini);
+  paintGlass();
+  try {
+    const b = bridge(); if (b && b.set_mini) await b.set_mini(mini);
+  } finally {
+    document.body.classList.remove("mini-switch"); miniSwitch = false;
+    glassRimSoon();
+  }
 };
 function miniHover(on) {
-  if (!mini || document.body.classList.contains("mini-hover") === on) return;
+  if (!mini || miniSwitch || document.body.classList.contains("mini-hover") === on) return;
   document.body.classList.toggle("mini-hover", on);
   const b = bridge(); if (b && b.set_mini_hover) b.set_mini_hover(on);
 }
@@ -6591,7 +6990,7 @@ async function loadEnvelope() {
 
 function envBands() {
   if (!env || !state.playing) return null;
-  const i = Math.floor(state.position * env.fps);
+  const i = Math.floor(livePos() * env.fps);
   const off = i * env.bands;
   if (i < 0 || off + env.bands > env.data.length) return null;
   const out = [];
@@ -6690,19 +7089,17 @@ function livePos() {
       const el = castLive();
       // The element is the truth here, paused or not — asked before
       // state.playing, which is an echo and arrives late.
-      if (el && isFinite(el.currentTime) && el.currentTime > 0) return el.currentTime;
+      if (el && el.readyState >= 1 && isFinite(el.currentTime)) return el.currentTime;
     } catch (e) {}
   }
   if (!state.playing || !posAt) return state.position;
-  // Half a second at the outside. Pressing pause stops mpv immediately but
-  // the status saying so is up to a second behind, and for that second the
-  // words carried on without the music — which is the whole of "it plays on
-  // a bit after a pause". Running on briefly is worth it for smoothness;
-  // running on for a second is just wrong.
-  return state.position + Math.min(0.5, (performance.now() - posAt) / 1000);
+  // Allow the usual one-second status cadence without accumulating drift.
+  // If events stop arriving, freeze instead of inventing ongoing playback.
+  const pos = state.position + Math.min(1.5, Math.max(0, (performance.now() - posAt) / 1000));
+  return state.duration ? Math.min(state.duration, pos) : pos;
 }
-/* No loop. The line is armed when it changes — four times a second at the
-   most, from syncLyrics — and the browser runs the rest.
+/* No loop. Animations are armed when the line or playback clock changes;
+   the browser runs each word's fill and emphasis from that schedule.
 
    Except when the page has been away. The flyout hides itself the moment it
    loses focus, and a hidden page has its timers throttled to about once a
@@ -6762,9 +7159,13 @@ function applyStatus(d) {
   if (!d) return;
   if (d.closed) sessionEnded(d.reason);
   const t = d.track || {};
-  const key = (t.name || "") + "|" + (t.artist || "");
+  document.body.classList.toggle("hastrack", !!(t.video_id || t.name || t.live) &&
+    !d.closed && d.state !== "idle" && d.state !== "stopped");
+  const key = (t.video_id || "") + "|" + (t.name || "") + "|" + (t.artist || "");
   $("title").textContent = t.name || "Nothing playing";
   $("artist").textContent = t.artist || "";
+  $("bartitle").textContent = t.name || "Nothing playing";
+  $("barartist").textContent = t.artist || "";
   setArt(t.art || "");
   state.duration = t.duration || 0;
   // The server doesn't always know how long a track is: anything that came
@@ -6781,13 +7182,14 @@ function applyStatus(d) {
   // every tick, which is what "it keeps restarting" looked like on screen.
   state.position = nowAt(d);
   posAt = performance.now();          // anchor for the between-tick fill
-  state.playing = d.state === "playing";
+  state.playing = d.state === "playing" && !(PRIVATE_SHARE && cast.blocked);
   if (!seekDrag) {
     paintSeek(state.duration ? state.position / state.duration : 0, state.position);
   }
   $("dur").textContent = fmt(state.duration);
   $("play").innerHTML = state.playing ? ICON.pause : ICON.play;
   document.body.classList.toggle("paused", !state.playing);
+  updateRestingView();
 
   if (!volDrag && !vvolDrag && d.volume != null && !cast.on) setVol(Math.round(d.volume));
   $("repeat").classList.toggle("on", d.repeat && d.repeat !== "off");
@@ -6825,7 +7227,8 @@ function applyActivity(a) {
   if (!busy) return;
   const label = { finding: "Finding", downloading: "Downloading", loading: "Loading" }[a.stage] || a.stage;
   const text = a.detail ? `${label} · ${a.detail}` : label;
-  $("actlabel").textContent = text;
+  /* Cap the visible words; the whole title stays in the hover text. */
+  $("actlabel").textContent = text.length > 64 ? text.slice(0, 63).trimEnd() + "…" : text;
   $("actlabel").title = text;
   $("actbar").style.width = Math.round((a.progress || 0) * 100) + "%";
 }
@@ -6846,6 +7249,7 @@ document.addEventListener("visibilitychange", async () => {
   if (d) { lastStatus = d; applyStatus(d); }
 });
 function connect() {
+  if (privateEnded) return;
   if (es) es.close();
   if (!URL_TOKEN && !SIGNED_IN) { refreshToken().then(connect); return; }
   // `here` says which queue this page is watching. Same choice the capsule
@@ -6891,24 +7295,22 @@ function connect() {
   es.onerror = () => { es.close(); setTimeout(connect, 2500); };
 }
 
-/* local clock so the progress bar moves smoothly between events */
+/* Paint from the clock; never advance its anchor by an assumed timer interval.
+   Browser timers arrive late under load and in background tabs. */
 setInterval(() => {
   if (state.playing && !seekDrag && state.duration) {
-    state.position = Math.min(state.duration, state.position + 0.25);
-    posAt = performance.now();          // so the fill can run on between ticks
-    // Self-healing: a resize the observer didn't see leaves the tab against
-    // the wrong column width, and a quarter second is a short time to be
-    // wrong. It reads two computed values and writes nothing unless the
-    // answer has actually changed.
-    placeToggle();
-    paintSeek(state.position / state.duration, state.position);
-    syncLyrics(state.position);
+    const position = livePos();
+    paintSeek(position / state.duration, position);
   }
 }, 250);
+// Only the visible lyric panel gets the faster boundary check. Word motion
+// itself is scheduled once per line and handled by the browser.
+setInterval(() => { if (!document.hidden) syncLyrics(0); }, 50);
 
 /* ── keyboard ──────────────────────────────────────────────────────── */
 document.addEventListener("keydown", e => {
-  if (e.target.tagName === "INPUT") return;
+  if (e.defaultPrevented || e.target.isContentEditable ||
+      e.target.closest("input, textarea, select, button, a, [role=button], [role=menuitem], [role=listbox]")) return;
   if ($("sheet").classList.contains("open")) return;   // space on a toggle isn't play
   const k = e.key.toLowerCase();
   if (k === " ") { e.preventDefault(); $("play").onclick(); }
@@ -6946,6 +7348,30 @@ if (lyricsPinned()) {
   if (activePanel === "lyrics") showPanel("queue");
   loadLyrics(true);
 }
+
+/* ── report an issue ───────────────────────────────────────────────── */
+/* One note on the owner's machine. The server strips what a text file
+   shouldn't carry — control characters, bidirectional tricks — and never
+   uses the words for a file name. Nothing else leaves this device. */
+$("reportopen").onclick = () => {
+  $("reportbox").hidden = false;
+  $("reportmsg").focus();
+};
+$("reportcancel").onclick = () => { $("reportbox").hidden = true; };
+$("reportsend").onclick = async () => {
+  const msg = $("reportmsg").value.trim();
+  if (msg.length < 4) { toast("Give it a sentence — the note needs a little to find you"); return; }
+  $("reportsend").disabled = true;
+  const r = await apiSay("/api/report?message=" + encodeURIComponent(msg) +
+    "&doing=" + encodeURIComponent($("reportdoing").value.trim()));
+  $("reportsend").disabled = false;
+  if (r) {
+    toast(r.message || "Saved — the owner will see it");
+    $("reportmsg").value = "";
+    $("reportdoing").value = "";
+    $("reportbox").hidden = true;
+  }
+};
 </script>
 </body>
 </html>

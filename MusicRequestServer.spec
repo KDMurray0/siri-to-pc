@@ -49,7 +49,8 @@ for _pkg in ('fastapi', 'starlette', 'uvicorn', 'jinja2'):
 # neural announce voice. Pull their data + native DLLs in explicitly.
 # winrt is the Windows media overlay and keys (mrs.core.smtc), imported lazily
 # on its own thread, so nothing points PyInstaller at it.
-for _pkg in ('pythonnet', 'clr_loader', 'edge_tts', 'certifi', 'pyaudiowpatch', 'winrt'):
+for _pkg in ('pythonnet', 'clr_loader', 'edge_tts', 'certifi', 'pyaudiowpatch',
+             'winrt', 'faster_whisper', 'ctranslate2', 'av'):
     try:
         _d, _b, _h = collect_all(_pkg)
         datas += _d

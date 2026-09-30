@@ -5,7 +5,7 @@ import functools
 import inspect
 from typing import get_type_hints
 
-from fastapi import Body, Depends, Request
+from fastapi import Body, Request
 from fastapi.params import Query
 from fastapi.routing import APIRoute
 from starlette.routing import Match
@@ -34,14 +34,14 @@ announce/{aid}.mp3 source smartplaylists smartplaylists/play autoeq/search
 autoeq/profile autoeq/match
 me me/consent me/rename me/export me/forget-taste me/delete
 me/siri me/siri/new me/siri/token me/siri/revoke
-playlists/make playlists/job'''.split())
+playlists/make playlists/job playlists/suggest report'''.split())
 READ_ONLY = set('''ping status health history
 blocks liked playlists settings audio/devices setup/state whoami passes profiles
 boot/status cookies diag output/stats audit policy
 output/stream/{video_id} announce/{aid}.mp3 stream/{video_id} events
 smartplaylists
 autoeq/status stats accounts accounts/check certificate me me/export me/siri
-playlists/job accounts/owner/state'''.split())
+playlists/job playlists/suggest accounts/owner/state'''.split())
 READ_PARAMS = {
     "sessions": {"close"}, "cache": {"prune"}, "blocked": {"forgive", "clear"},
     "ddns": {"hostname", "user", "secret", "provider", "now"},
@@ -59,7 +59,7 @@ def changing(path: str, params, path_params=None) -> bool:
     if key in READ_PARAMS:
         return bool(set(params) & READ_PARAMS[key])
     if key == "playlist/{op}":
-        return (path_params or {}).get("op") != "tracks"
+        return (path_params or {}).get("op") not in {"tracks", "contains", "export"}
     return True
 
 

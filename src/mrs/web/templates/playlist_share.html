@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ playlist.name }} · Shared playlist</title>
+<meta name="twitter:card" content="summary"><meta name="theme-color" content="#2B2D31">
+<meta property="og:title" content="{{ playlist.name }}"><meta property="og:url" content="{{ url }}">
+<meta property="og:description" content="{{ playlist.tracks|length }} songs · Save a copy to your library.">
+{% if playlist.tracks[0].art %}<meta property="og:image" content="{{ playlist.tracks[0].art }}">{% endif %}
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101012;color:#f4f4f6;font:15px/1.5 system-ui,sans-serif}
+main{max-width:760px;padding:64px 24px;margin:auto}header{display:flex;gap:24px;align-items:center;margin-bottom:30px}
+.cover{width:132px;height:132px;border-radius:18px;object-fit:cover;background:#27272d;flex:none;display:grid;place-items:center;font-size:48px}
+.eyebrow{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#a5a5ae}h1{font-size:clamp(26px,5vw,40px);line-height:1.12;letter-spacing:-.04em;margin:9px 0;overflow-wrap:anywhere}
+p{color:#a5a5ae;margin:8px 0}.actions{display:flex;gap:10px;margin:22px 0 12px;flex-wrap:wrap}
+button,a{font:inherit;border:0;border-radius:10px;padding:10px 16px;text-decoration:none;cursor:pointer;background:#28282e;color:#fff}
+button{background:#f0f0f4;color:#151519}button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid #aaa;outline-offset:4px}
+label{display:block;font-size:12px;color:#a5a5ae;margin:10px 0 5px}input{width:100%;padding:11px 12px;border-radius:9px;border:1px solid #35353c;color:#ddd;background:#1c1c21;font:inherit;font-size:12px}
+.hint{font-size:12px;margin-bottom:28px}ol{list-style:none;padding:0;border-top:1px solid #2a2a31}li{display:flex;gap:14px;align-items:center;padding:13px 3px;border-bottom:1px solid #24242b}
+.num{color:#73737f;width:27px;font-size:12px;text-align:right;flex:none}.song{min-width:0;flex:1}.song strong{display:block;font-size:14px;font-weight:550;overflow-wrap:anywhere}.song span{font-size:12px;color:#9696a2}.time{font-size:12px;color:#9696a2;font-variant-numeric:tabular-nums}
+@media(max-width:480px){main{padding:32px 18px}header{gap:16px}.cover{width:90px;height:90px;border-radius:12px}}
+</style></head><body><main>
+<header>{% if playlist.tracks[0].art %}<img class="cover" src="{{ playlist.tracks[0].art }}" alt="" referrerpolicy="no-referrer">{% else %}<div class="cover" aria-hidden="true">♫</div>{% endif %}
+<div><div class="eyebrow">Shared playlist</div><h1>{{ playlist.name }}</h1><p>{{ playlist.tracks|length }} songs</p></div></header>
+<div class="actions"><button id="copy">Copy playlist link</button><a href="{{ base }}/player">Open player</a></div>
+<label for="link">Playlist link</label><input id="link" value="{{ url }}" readonly>
+<p class="hint" id="notice" role="status">Paste this into Lists → Import a playlist to save your own copy. This link lasts 30 days.</p>
+<ol>{% for track in playlist.tracks %}<li><span class="num">{{ loop.index }}</span><div class="song"><strong>{{ track.title }}</strong><span>{{ track.artist }}</span></div>{% if track.duration %}<span class="time">{{ track.duration // 60 }}:{{ '%02d'|format(track.duration % 60) }}</span>{% endif %}</li>{% endfor %}</ol>
+</main><script>
+document.getElementById('copy').onclick=async()=>{
+ const input=document.getElementById('link');let copied=false;
+ try{await navigator.clipboard.writeText(input.value);copied=true}catch(e){input.select();copied=document.execCommand('copy')}
+ document.getElementById('notice').textContent=copied?'Link copied. Paste it into Lists → Import a playlist.':'Select and copy the playlist link above.';
+};
+</script></body></html>
