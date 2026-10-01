@@ -63,6 +63,8 @@ body.still .kinetic img{animation:none}
   font-weight:500;font-size:13.5px;transition:color .15s,background .15s}
 .nav:hover{color:var(--fg)}
 .nav.on{color:var(--fg);background:var(--tint-hi)}
+.nav:disabled{opacity:.35;cursor:default}
+.nav:disabled:hover{color:var(--sub)}
 .hist{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;color:var(--sub)}
 .hist:hover:not(:disabled){color:var(--fg);background:var(--tint)}
 .hist:disabled{opacity:.25;cursor:default}
@@ -555,6 +557,15 @@ function applyStatus(d) {
   state.track = t && (t.name || t.title) ? t : null;
   state.liked = !!(t && t.liked);
   document.body.classList.toggle("noplay", !state.track);
+  // Nothing on, nowhere to go: Now playing is for something playing.
+  const np = document.querySelector('.nav[data-go="nowplaying"]');
+  np.disabled = !state.track;
+  np.title = state.track ? "" : "Play something first";
+  $("queuebtn").disabled = !state.track;
+  if (!state.track && current && current.name === "nowplaying") {
+    clearTimeout(applyStatus.leave);
+    applyStatus.leave = setTimeout(() => { if (!state.track && current && current.name === "nowplaying") go("home"); }, 1500);
+  }
   $("dtitle").textContent = state.track ? (t.name || t.title) : "Nothing playing";
   $("dartist").textContent = state.track ? (t.artist || "") : "Search for something to play";
   const art = state.track && t.art || "";
@@ -694,7 +705,7 @@ $("share").onclick = async e => {
   if (native) native.onclick = () => navigator.share({ title, text: title + (t.artist ? " · " + t.artist : ""), url }).catch(() => {});
 };
 document.addEventListener("click", e => { if (sharePop && !sharePop.contains(e.target)) closeShare(); });
-$("song").onclick = () => go("nowplaying");
+$("song").onclick = () => { if (state.track) go("nowplaying"); };
 $("queuebtn").onclick = () => {
   if (current && current.name === "nowplaying" && nowPane) {
     const f = nowPane.querySelector("iframe");
@@ -1125,6 +1136,7 @@ async function nowPlayingPane() {
 }
 async function go(name, params = {}, how = {}) {
   if (!VIEWS[name] && name !== "nowplaying") name = "home";
+  if (name === "nowplaying" && !state.track) { toast("Play something first"); if (current) return; name = "home"; }
   closeOverlay();
   if (how.history !== false) {
     if (current && current.name === name && JSON.stringify(current.params) === JSON.stringify(params)) return;
@@ -1281,10 +1293,9 @@ async function connect() {
   };
   es.onerror = () => { es.close(); setTimeout(connect, 2500); };
 }
-api("/api/status").then(applyStatus);
 connect();
 loadShelf();
-go(location.hash === "#nowplaying" ? "nowplaying" : "home", {}, { history: false });
+api("/api/status").then(d => { applyStatus(d); go(location.hash === "#nowplaying" && state.track ? "nowplaying" : "home", {}, { history: false }); });
 </script>
 </body>
 </html>

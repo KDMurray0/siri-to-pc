@@ -1350,6 +1350,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
     column-gap:var(--gap2);justify-content:center;
     padding:28px var(--edge) 100px;
     width:100%;max-width:none;margin:0}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .stage{--gap2:clamp(48px,5vw,80px)}
   body:not(.mini) .search{grid-area:1/1/2/3;justify-self:center;margin:0 auto 20px;
     width:min(100%,680px)}
   body:not(.mini) .search input{font-size:14px}
@@ -1519,6 +1520,9 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
     opacity .12s ease,transform .2s ease}
   body:not(.mini):not(.hastrack):not(.hasqueue) .stage{
     grid-template-columns:var(--cover) 0fr var(--panelw)}
+  body:not(.mini).nowords:not(.sidehid):is(.hastrack,.hasqueue) .stage{
+    grid-template-columns:var(--cover) .35fr var(--panelw)}
+  body:not(.mini).nowords:not(.sidehid):is(.hastrack,.hasqueue) #panel-lyrics>.muted{white-space:nowrap;text-align:center}
   body:not(.mini):not(.hastrack):not(.hasqueue) .search{grid-area:1/1/2/4}
   @media (prefers-reduced-motion:reduce){body:not(.mini) .stage{transition:none}}
   body:not(.mini):not(.hastrack):not(.hasqueue) #panel-lyrics,
@@ -3755,6 +3759,7 @@ async function loadLyrics(force) {
   const r = await api("/api/lyrics");
   if (generation !== lyricGeneration || state.trackKey !== want || lyricKey !== want) return;
   const L = r && r.lyrics;
+  document.body.classList.toggle("nowords", !L);
   if (!L) { box.innerHTML = '<div class="muted">No lyrics for this one.</div>';
             lyricRows = []; return; }
   lyricData = L; box.classList.add("lyrics");
