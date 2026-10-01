@@ -77,6 +77,11 @@ body.still .kinetic img{animation:none}
 .menu button{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:9px 11px;border-radius:10px;font-size:13px}
 .menu button:hover{background:var(--tint-hi)}
 .menu .v{font-size:11.5px;color:var(--sub)}
+.switch{width:34px;height:20px;border-radius:999px;background:var(--tint-hi);position:relative;flex:0 0 auto;transition:background .2s}
+.switch::after{content:"";position:absolute;left:3px;top:3px;width:14px;height:14px;border-radius:50%;background:var(--sub);
+  transition:transform .2s var(--ease),background .2s}
+.switch.on{background:var(--fg)}
+.switch.on::after{transform:translateX(14px);background:var(--bg)}
 .menu hr{border:0;border-top:1px solid var(--line);margin:4px 6px}
 @keyframes pop{from{opacity:0;transform:scale(.96) translateY(-4px)}}
 
@@ -108,10 +113,46 @@ body.still .kinetic img{animation:none}
 .view.keep{padding:calc(var(--top) - 8px) 0 var(--deck) 0;overflow:hidden}
 .view iframe{width:100%;height:100%;border:0;background:transparent;display:block}
 h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;line-height:1.15;margin:4px 0 20px}
-.sect{margin:0 0 30px}
-.sect>h3{font-size:17px;font-weight:600;letter-spacing:-.01em;margin:0 0 12px;display:flex;justify-content:space-between;align-items:baseline}
-.sect>h3 button{font-size:12px;color:var(--sub);font-weight:500}
-.sect>h3 button:hover{color:var(--fg)}
+.sect{margin:0 0 44px}
+.sect>header{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;margin:0 0 14px}
+.sect h3{font-size:18px;font-weight:600;letter-spacing:-.01em}
+.sect header p{font-size:12.5px;color:var(--sub);margin-top:2px}
+.sect header button{font-size:12px;color:var(--sub);font-weight:500;white-space:nowrap}
+.sect header button:hover{color:var(--fg)}
+/* a shelf: one row that scrolls, an arrow over a fade at the end */
+.shelfwrap{position:relative}
+.shelfwrap .more{position:absolute;top:0;bottom:44px;width:72px;display:grid;place-items:center;z-index:2;
+  transition:opacity .2s}
+.shelfwrap .more.r{right:-8px;background:linear-gradient(to right,transparent,var(--bg) 78%);justify-items:end;padding-right:6px}
+.shelfwrap .more.l{left:-12px;background:linear-gradient(to left,transparent,var(--bg) 78%);justify-items:start;padding-left:6px}
+.shelfwrap .more span{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:var(--tint-hi);
+  -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+.shelfwrap .more:hover span{background:color-mix(in srgb,var(--fg) 18%,transparent)}
+.shelfwrap .more[hidden]{display:grid!important;opacity:0;pointer-events:none}
+.cards.strip{scrollbar-width:none}
+.cards.strip::-webkit-scrollbar{display:none}
+/* the genre bar: flat, equal pills, like a row of logos */
+.logobar{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(150px,1fr);gap:10px;overflow-x:auto;scrollbar-width:none}
+.logobar button{height:58px;border-radius:12px;background:var(--tint);font-size:13px;font-weight:700;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--sub);white-space:nowrap;padding:0 14px;transition:background .15s,color .15s}
+.logobar button:hover{background:var(--tint-hi);color:var(--fg)}
+/* browse cards: a name, a short rule, explore, and covers fanned at the side */
+.browse{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(300px,360px);gap:12px;overflow-x:auto;scrollbar-width:none;padding-bottom:4px}
+.bcard{position:relative;height:140px;border-radius:14px;padding:16px 18px;background:var(--tint);overflow:hidden;
+  display:flex;flex-direction:column;justify-content:space-between;box-shadow:inset 0 0 0 1px var(--line);transition:background .2s}
+.bcard:hover{background:var(--tint-hi)}
+.bcard b{font-size:17px;font-weight:650;text-transform:capitalize;display:block}
+.bcard b::after{content:"";display:block;width:18px;height:2px;border-radius:1px;background:var(--accent);margin-top:7px}
+.bcard p{font-size:12px;color:var(--sub);max-width:52%;margin-top:8px;line-height:1.35}
+.bcard small{font-size:10.5px;letter-spacing:.12em;font-weight:700;color:var(--sub)}
+.fan{position:absolute;right:16px;top:50%;width:120px;height:104px;translate:0 -50%}
+.fan img{position:absolute;right:0;top:4px;width:84px;height:96px;object-fit:cover;border-radius:8px;
+  box-shadow:0 6px 18px rgba(0,0,0,.45);transition:transform .3s var(--ease)}
+.fan img:nth-child(1){transform:translateX(-36px) rotate(-12deg)}
+.fan img:nth-child(2){transform:translateX(-18px) rotate(-5deg)}
+.fan img:nth-child(3){transform:rotate(3deg)}
+.bcard:hover .fan img:nth-child(1){transform:translateX(-48px) rotate(-16deg)}
+.bcard:hover .fan img:nth-child(2){transform:translateX(-24px) rotate(-7deg)}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
 .cards.strip{grid-auto-flow:column;grid-auto-columns:minmax(160px,180px);grid-template-columns:none;overflow-x:auto;
   padding-bottom:6px;scrollbar-width:thin}
@@ -156,7 +197,7 @@ h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;
   -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);display:grid;place-items:center;padding:28px;
   animation:fade .2s ease}
 @keyframes fade{from{opacity:0}}
-.sheet{position:relative;width:min(1120px,100%);height:min(92vh,100%);border-radius:20px;overflow:hidden;
+.sheet{position:relative;width:min(820px,100%);height:min(94vh,100%);border-radius:20px;overflow:hidden;
   background:var(--panel);box-shadow:0 30px 90px rgba(0,0,0,.55),inset 0 0 0 1px var(--line);
   display:flex;flex-direction:column;animation:rise .32s var(--ease)}
 @keyframes rise{from{opacity:0;transform:translateY(18px) scale(.985)}}
@@ -164,11 +205,11 @@ h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;
   background:color-mix(in srgb,var(--bg) 55%,transparent);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
 .sheet .x:hover{background:var(--tint-hi)}
 .sheet .scroll{overflow-y:auto;flex:1;scrollbar-width:thin}
-.hero{position:relative;padding:120px 30px 22px;display:flex;align-items:flex-end;gap:24px;isolation:isolate}
+.hero{position:relative;padding:96px 24px 18px;display:flex;align-items:flex-end;gap:24px;isolation:isolate}
 .hero .banner{position:absolute;inset:0;z-index:-1;overflow:hidden}
 .hero .banner img{width:100%;height:100%;object-fit:cover;filter:blur(36px) saturate(1.2) brightness(.6);transform:scale(1.25)}
 .hero .banner::after{content:"";position:absolute;inset:0;background:linear-gradient(to bottom,transparent 30%,var(--panel))}
-.hero .pic{width:min(210px,24vw);aspect-ratio:1;border-radius:12px;overflow:hidden;flex:0 0 auto;
+.hero .pic{width:min(176px,30vw);aspect-ratio:1;border-radius:12px;overflow:hidden;flex:0 0 auto;
   box-shadow:0 18px 48px rgba(0,0,0,.5);display:grid;grid-template-columns:1fr 1fr;background:var(--tint-hi);position:relative}
 .hero .pic.one{display:block}
 .hero .pic.face{border-radius:50%}
@@ -177,10 +218,10 @@ h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;
   background:color-mix(in srgb,var(--bg) 70%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);opacity:0;transition:opacity .15s}
 .hero .pic:hover .edit,.hero .pic .edit:focus-visible{opacity:1}
 .hero small{font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--sub);font-weight:600}
-.hero h1{font-size:clamp(28px,4vw,52px);font-weight:700;letter-spacing:-.03em;line-height:1.04;margin:6px 0 8px;
+.hero h1{font-size:clamp(26px,3.4vw,44px);font-weight:700;letter-spacing:-.03em;line-height:1.04;margin:6px 0 8px;
   text-wrap:balance;overflow-wrap:anywhere}
 .hero p{color:var(--sub);font-size:13px}
-.acts{display:flex;gap:8px;align-items:center;padding:4px 30px 14px}
+.acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:4px 24px 18px}
 .pill{height:40px;padding:0 18px;border-radius:999px;display:inline-flex;align-items:center;gap:7px;font-weight:550;
   background:var(--tint-hi);transition:filter .15s,transform .15s var(--ease)}
 .pill.primary{background:var(--accent);color:var(--accent-ink)}
@@ -195,6 +236,13 @@ h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;
 .tab:hover{color:var(--fg)}
 .tab.on{color:var(--fg);border-bottom-color:var(--fg)}
 .pane{padding:18px 20px 30px}
+.sheet .part{padding:6px 24px 26px}
+.sheet .part h4{display:flex;align-items:baseline;gap:8px;font-size:15px;font-weight:600;margin:0 0 12px}
+.sheet .part h4 i{font:500 11px/1 ui-monospace,Consolas,monospace;font-style:normal;color:var(--sub)}
+.faces{display:grid;grid-auto-flow:column;grid-auto-columns:88px;gap:14px;overflow-x:auto;scrollbar-width:none;padding-bottom:4px}
+.faces button{text-align:center;min-width:0}
+.faces .art{border-radius:50%;margin-bottom:6px}
+.faces b{display:block;font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* the settings panel */
 .setpanel{width:min(1180px,100%);height:min(760px,100%);border-radius:20px;overflow:hidden;position:relative;
@@ -280,7 +328,7 @@ body.noplay .play{opacity:.5}
 </div>
 <div class="menu glass" id="memenu" role="menu" hidden>
   <button role="menuitem" id="opensettings">Settings</button>
-  <button role="menuitem" id="kinetic">Moving background <span class="v" id="kineticv">On</span></button>
+  <button role="menuitemcheckbox" id="kinetic" aria-checked="true">Moving background <span class="switch on" id="kineticv"></span></button>
   <hr>
   <button role="menuitem" id="popout" hidden>Open the pop-out player</button>
   <button role="menuitem" id="classic">Open the classic player</button>
@@ -504,6 +552,29 @@ function markNowPlaying() {
   const now = state.track && state.track.video_id;
   document.querySelectorAll(".row[data-vid]").forEach(r => r.classList.toggle("now", !!now && r.dataset.vid === now));
 }
+/* A section: a title, a line under it, then its contents. A shelf is one
+   row that scrolls, with arrows over a fade at either end. */
+const sect = (title, sub, inner, side = "") =>
+  `<section class="sect"><header><div><h3>${esc(title)}</h3>${sub ? `<p>${esc(sub)}</p>` : ""}</div>${side}</header>${inner}</section>`;
+const shelf = (inner, cls = "cards strip") =>
+  `<div class="shelfwrap"><button class="more l" aria-label="Back" hidden><span>&#8249;</span></button>` +
+  `<div class="${cls}">${inner}</div><button class="more r" aria-label="More" hidden><span>&#8250;</span></button></div>`;
+function wireShelves(root) {
+  root.querySelectorAll(".shelfwrap").forEach(w => {
+    const row = w.children[1], l = w.querySelector(".more.l"), r = w.querySelector(".more.r");
+    const paint = () => { l.hidden = row.scrollLeft < 8; r.hidden = row.scrollLeft + row.clientWidth >= row.scrollWidth - 8; };
+    l.onclick = () => row.scrollBy({ left: -row.clientWidth * .85, behavior: "smooth" });
+    r.onclick = () => row.scrollBy({ left: row.clientWidth * .85, behavior: "smooth" });
+    row.addEventListener("scroll", paint, { passive: true });
+    requestAnimationFrame(paint);
+  });
+}
+const part = (n, title, inner) => `<div class="part"><h4><i>[${String(n).padStart(2, "0")}]</i>${esc(title)}</h4>${inner}</div>`;
+const faceRow = people => `<div class="faces">` + people.map((a, i) =>
+  `<button data-artist="${i}"><div class="art one">${img(a.art)}</div><b>${esc(a.name)}</b></button>`).join("") + `</div>`;
+const genreCard = (g, i) => `<button class="bcard" data-genre-open="${i}"><div><b>${esc(g.name)}</b>` +
+  `<p>${esc((g.artists || [g.artist]).filter(Boolean).slice(0, 3).join(", "))}</p></div><small>EXPLORE &#8599;</small>` +
+  `<div class="fan">${(g.arts && g.arts.length ? g.arts : [g.art]).filter(Boolean).slice(0, 3).map(img).join("")}</div></button>`;
 const artistCard = (a, i) => `<button class="card round" data-artist="${i}"><div class="art one">${img(a.art)}</div><b>${esc(a.name)}</b><span>Artist</span></button>`;
 const listCard = (p, i) => `<button class="card" data-list="${i}">${listCover(p)}<b>${esc(p.name)}</b><span>${p.shared ? "Shared · " : ""}${p.count} songs</span><span class="go" data-playnow="${i}">${ICON.play}</span></button>`;
 function wireCards(root, { lists = [], artists = [] } = {}) {
@@ -532,15 +603,6 @@ function openSheet(build) {
   build(scrim.querySelector(".scroll"));
   scrim.querySelector(".x").focus();
 }
-function tabs(root, names, show) {
-  root.insertAdjacentHTML("beforeend", `<div class="tabs" role="tablist">` +
-    names.map((n, i) => `<button class="tab${i ? "" : " on"}" role="tab" data-t="${i}">${esc(n)}</button>`).join("") +
-    `</div><div class="pane"></div>`);
-  const pane = root.querySelector(".pane");
-  root.querySelectorAll(".tab").forEach(b => b.onclick = () => {
-    root.querySelectorAll(".tab").forEach(x => x.classList.toggle("on", x === b)); show(+b.dataset.t, pane); });
-  show(0, pane);
-}
 function openList(p) {
   openSheet(async root => {
     root.innerHTML = `<div class="hero"><div class="banner"></div><div class="skel" style="width:210px"></div></div>`;
@@ -564,7 +626,11 @@ function openList(p) {
     const uncover = root.querySelector('[data-a="uncover"]');
     if (uncover) uncover.onclick = async () => { const u = await api("/api/playlist/uncover?name=" + encodeURIComponent(p.name));
       toast(u && u.message); await loadShelf(); openList({ ...p, cover: 0 }); };
-    tabs(root, ["Songs"], (i, pane) => { pane.innerHTML = songRows(tracks); wireRows(pane, tracks, (t, n) => playList(p.name, p.shared, n)); });
+    root.insertAdjacentHTML("beforeend", part(1, "Songs", songRows(tracks)));
+    wireRows(root, tracks, (t, n) => playList(p.name, p.shared, n));
+    const people = [...new Set(tracks.map(t => (t.artist || "").split(",")[0].trim()).filter(Boolean))].slice(0, 14)
+      .map(name => ({ name, art: (tracks.find(t => (t.artist || "").startsWith(name)) || {}).art || "" }));
+    if (people.length > 1) { root.insertAdjacentHTML("beforeend", part(2, "Who's on it", faceRow(people))); wireCards(root, { artists: people }); }
   });
 }
 function pickCover(p) {
@@ -591,7 +657,8 @@ function openLiked() {
     root.innerHTML = `<div class="hero"><div class="banner">${img((tracks.find(t => t.art) || {}).art)}</div>` +
       `<div class="pic one cov heart" style="width:min(210px,24vw);height:auto;aspect-ratio:1;border-radius:12px">${ICON.heart.replace('class="svg"', 'class="svg" style="width:64px;height:64px"')}</div>` +
       `<div><small>Playlist</small><h1>Liked songs</h1><p>${tracks.length} songs</p></div></div>`;
-    tabs(root, ["Songs"], (i, pane) => { pane.innerHTML = songRows(tracks); wireRows(pane, tracks, t => playSong(t)); });
+    root.insertAdjacentHTML("beforeend", part(1, "Songs", songRows(tracks)));
+    wireRows(root, tracks, t => playSong(t));
   });
 }
 function openArtist(name) {
@@ -603,11 +670,21 @@ function openArtist(name) {
       `<div><small>Artist</small><h1>${esc(r.name)}</h1><p>${r.top.length} popular songs</p></div></div>` +
       `<div class="acts"><button class="pill primary" data-a="play">${ICON.play}Play</button></div>`;
     root.querySelector('[data-a="play"]').onclick = () => playArtist(r.name);
-    tabs(root, ["Popular", "Fans also like"], (i, pane) => {
-      if (i === 0) { pane.innerHTML = songRows(r.top); wireRows(pane, r.top, t => playSong(t)); }
-      else { pane.innerHTML = r.near.length ? `<div class="cards">${r.near.map(artistCard).join("")}</div>` : '<div class="empty">Nobody filed next to them yet.</div>';
-             wireCards(pane, { artists: r.near }); }
-    });
+    root.insertAdjacentHTML("beforeend", part(1, "Popular", songRows(r.top.slice(0, 15))));
+    wireRows(root, r.top, t => playSong(t));
+    if (r.near.length) { root.insertAdjacentHTML("beforeend", part(2, "Fans also like", faceRow(r.near))); wireCards(root, { artists: r.near }); }
+  });
+}
+function openGenre(g) {
+  openSheet(root => {
+    const arts = (g.arts && g.arts.length ? g.arts : [g.art]).filter(Boolean);
+    const people = (g.artists || [g.artist]).filter(Boolean).map((name, i) => ({ name, art: arts[i] || "" }));
+    root.innerHTML = `<div class="hero"><div class="banner">${img(arts[0])}</div><div class="pic">${arts.concat(arts, arts).slice(0, 4).map(img).join("")}</div>` +
+      `<div><small>Genre</small><h1 style="text-transform:capitalize">${esc(g.name)}</h1><p>From what you play</p></div></div>` +
+      `<div class="acts"><button class="pill primary" data-a="play">${ICON.play}Play ${esc(g.name)}</button></div>` +
+      part(1, "Your artists in it", faceRow(people));
+    root.querySelector('[data-a="play"]').onclick = () => playQuery(g.name);
+    wireCards(root, { artists: people });
   });
 }
 function openAlbum(name, artist) {
@@ -620,7 +697,8 @@ function openAlbum(name, artist) {
       `<div><small>Album</small><h1>${esc(name)}</h1><p>${esc(artist || "")}${tracks.length ? " · " + tracks.length + " songs" : ""}${secs ? " · " + Math.round(secs / 60) + " min" : ""}</p></div></div>` +
       `<div class="acts"><button class="pill primary" data-a="play"${tracks.length ? "" : " disabled"}>${ICON.play}Play</button></div>`;
     root.querySelector('[data-a="play"]').onclick = () => playAlbum(name, artist);
-    tabs(root, ["Songs"], (i, pane) => { pane.innerHTML = songRows(tracks); wireRows(pane, tracks, t => playSong(t)); });
+    root.insertAdjacentHTML("beforeend", part(1, "Songs", songRows(tracks)));
+    wireRows(root, tracks, t => playSong(t));
   });
 }
 
@@ -650,23 +728,25 @@ const VIEWS = {
     const h = await api("/api/home");
     if (!h) { pane.innerHTML = `<h1 class="title">${greeting()}</h1><div class="empty">Couldn't reach the player.</div>`; return; }
     let html = `<h1 class="title">${greeting()}</h1>`;
-    if (h.recent.length) html += `<section class="sect"><h3>Jump back in</h3><div class="cards strip">` +
-      h.recent.map((t, i) => `<button class="card" data-recent="${i}"><div class="art one">${img(t.art)}</div><b>${esc(t.title)}</b><span>${esc(t.artist)}</span><span class="go">${ICON.play}</span></button>`).join("") + `</div></section>`;
-    if (h.lists.length) html += `<section class="sect"><h3>Your playlists <button data-go="library">Show all</button></h3><div class="cards strip">` +
-      h.lists.slice(0, 12).map(listCard).join("") + `</div></section>`;
-    if (h.artists.length) html += `<section class="sect"><h3>Your top artists</h3><div class="cards strip">` +
-      h.artists.map(artistCard).join("") + `</div></section>`;
-    if (h.genres.length) html += `<section class="sect"><h3>Genres you play</h3><div class="tiles">` +
-      h.genres.map((g, i) => `<button class="tile" data-genre="${i}">${img(g.art)}${esc(g.name)}</button>`).join("") + `</div></section>`;
-    if (h.charts.length) html += `<section class="sect"><h3>Charting now</h3>` + songRows(h.charts) + `</section>`;
+    if (h.genres.length) html += `<section class="sect"><div class="logobar">` +
+      h.genres.map((g, i) => `<button data-genre="${i}" title="Play ${esc(g.name)}">${esc(g.name)}</button>`).join("") + `</div></section>`;
+    if (h.recent.length) html += sect("Jump back in", "What you played lately", shelf(
+      h.recent.map((t, i) => `<button class="card" data-recent="${i}"><div class="art one">${img(t.art)}</div><b>${esc(t.title)}</b><span>${esc(t.artist)}</span><span class="go">${ICON.play}</span></button>`).join("")));
+    if (h.lists.length) html += sect("Your playlists", "The ones you made and the ones shared with you",
+      shelf(h.lists.slice(0, 16).map(listCard).join("")), `<button data-go="library">Show all</button>`);
+    if (h.artists.length) html += sect("Your top artists", "Who you play most", shelf(h.artists.map(artistCard).join("")));
+    if (h.genres.length) html += sect("Browse by genre", "The sounds your artists share", shelf(h.genres.map(genreCard).join(""), "browse"));
+    if (h.charts.length) html += sect("Charting now", "What the world is playing this week", songRows(h.charts));
     if (!h.recent.length && !h.artists.length && !h.charts.length && !h.lists.length)
       html += `<div class="empty">Play a few songs and this fills up with what you like. Search up top to start.</div>`;
     pane.innerHTML = html;
     pane.querySelectorAll("[data-recent]").forEach(b => b.onclick = () => playSong(h.recent[+b.dataset.recent]));
     pane.querySelectorAll("[data-genre]").forEach(b => b.onclick = () => playQuery(h.genres[+b.dataset.genre].name));
+    pane.querySelectorAll("[data-genre-open]").forEach(b => b.onclick = () => openGenre(h.genres[+b.dataset.genreOpen]));
     pane.querySelectorAll("[data-go]").forEach(b => b.onclick = () => go(b.dataset.go));
     wireCards(pane, { lists: h.lists, artists: h.artists });
     wireRows(pane, h.charts, t => playSong(t));
+    wireShelves(pane);
   },
 
   async search(pane, { q = "" } = {}) {
@@ -677,16 +757,17 @@ const VIEWS = {
     const lists = r.playlists || [], artists = r.artists || [], albums = r.albums || [];
     const songs = (r.library || []).concat(r.results || []);
     let html = `<h1 class="title">${esc(q)}</h1>`;
-    if (songs.length) html += `<section class="sect"><h3>Songs</h3>` + songRows(songs.slice(0, 10)) + `</section>`;
-    if (artists.length) html += `<section class="sect"><h3>Artists</h3><div class="cards strip">${artists.map(artistCard).join("")}</div></section>`;
-    if (albums.length) html += `<section class="sect"><h3>Albums</h3><div class="cards strip">` +
-      albums.map((a, i) => `<button class="card" data-album="${i}"><div class="art one">${img(a.art)}</div><b>${esc(a.name)}</b><span>${esc(a.artist || "Album")}</span></button>`).join("") + `</div></section>`;
-    if (lists.length) html += `<section class="sect"><h3>Your playlists</h3><div class="cards strip">${lists.map(listCard).join("")}</div></section>`;
+    if (songs.length) html += sect("Songs", "", songRows(songs.slice(0, 10)));
+    if (artists.length) html += sect("Artists", "", shelf(artists.map(artistCard).join("")));
+    if (albums.length) html += sect("Albums", "", shelf(
+      albums.map((a, i) => `<button class="card" data-album="${i}"><div class="art one">${img(a.art)}</div><b>${esc(a.name)}</b><span>${esc(a.artist || "Album")}</span></button>`).join("")));
+    if (lists.length) html += sect("Your playlists", "", shelf(lists.map(listCard).join("")));
     if (!lists.length && !songs.length && !artists.length && !albums.length) html += `<div class="empty">Nothing for that. Try fewer words.</div>`;
     pane.innerHTML = html;
     wireRows(pane, songs, t => playSong(t));
     wireCards(pane, { lists, artists });
     pane.querySelectorAll("[data-album]").forEach(b => b.onclick = () => { const a = albums[+b.dataset.album]; openAlbum(a.name, a.artist); });
+    wireShelves(pane);
   },
 
   async library(pane) {
@@ -792,7 +873,10 @@ $("me").innerHTML = PIC ? `<img src="${esc(PIC)}" alt="">` : esc((NAME || "You")
 $("me").onclick = e => { e.stopPropagation(); const m = $("memenu"); m.hidden = !m.hidden; $("me").setAttribute("aria-expanded", String(!m.hidden)); };
 document.addEventListener("click", e => { if (!e.target.closest("#memenu,#me")) $("memenu").hidden = true; });
 $("opensettings").onclick = openSettings;
-function setKinetic(on) { document.body.classList.toggle("still", !on); $("kineticv").textContent = on ? "On" : "Off"; store.set("kinetic", on ? "1" : "0"); }
+function setKinetic(on) {
+  document.body.classList.toggle("still", !on); $("kineticv").classList.toggle("on", on);
+  $("kinetic").setAttribute("aria-checked", String(on)); store.set("kinetic", on ? "1" : "0");
+}
 setKinetic(store.get("kinetic") !== "0");
 $("kinetic").onclick = () => setKinetic(document.body.classList.contains("still"));
 const bridge = () => window.pywebview && window.pywebview.api;

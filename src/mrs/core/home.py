@@ -129,7 +129,7 @@ def _genres(names: list[str], limit: int = 8) -> list[dict]:
     """The genres your top artists share, each pictured by the artist it's most theirs."""
     from .tags import tagstore
     count: Counter = Counter()
-    face: dict[str, str] = {}
+    faces: dict[str, list[str]] = {}
     for name in names:
         tags = tagstore.cached(Track(title="", artist=name)) or {}
         if not tags:
@@ -138,9 +138,13 @@ def _genres(names: list[str], limit: int = 8) -> list[dict]:
             if tag in _NOT_GENRES or len(tag) > 24:
                 continue
             count[tag] += 1
-            face.setdefault(tag, name)
-    return [{"name": tag, "artist": face[tag], "art": picture(face[tag])}
-            for tag, _ in count.most_common(limit)]
+            faces.setdefault(tag, []).append(name)
+    out = []
+    for tag, _ in count.most_common(limit):
+        who = faces[tag][:3]
+        out.append({"name": tag, "artist": who[0], "artists": who,
+                    "art": picture(who[0]), "arts": [a for a in (picture(n) for n in who) if a]})
+    return out
 
 
 def sections(taste, lists) -> dict:
