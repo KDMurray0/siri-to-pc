@@ -23,7 +23,7 @@ cookies/import cookies/grab openfolder library/scan library/paths lastfm alarms
 cast diag audit policy stats accounts accounts/setup accounts/scope accounts/forget accounts/check
 public-address certificate certificate/renew accounts/owner accounts/owner/state
 stream/{video_id}
-autoeq/status autoeq/assign'''.split())
+autoeq/status autoeq/assign embed/ticket'''.split())
 SCOPED = set('''status play play/video/{video_id} play/pick share
 control/{action} session/ended
 session/progress session/here seek queue/{op} cancel radio search play/artist

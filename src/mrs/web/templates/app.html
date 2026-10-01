@@ -155,7 +155,7 @@ h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;
 .bcard:hover .fan img:nth-child(2){transform:translateX(-24px) rotate(-7deg)}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
 .cards.strip{grid-auto-flow:column;grid-auto-columns:minmax(160px,180px);grid-template-columns:none;overflow-x:auto;
-  padding-bottom:6px;scrollbar-width:thin}
+  padding-bottom:6px}
 .card{border-radius:12px;padding:8px;position:relative;min-width:0;transition:background .2s}
 .card:hover{background:var(--tint)}
 .art{aspect-ratio:1;width:100%;border-radius:9px;background:var(--tint-hi);overflow:hidden;margin-bottom:9px;
@@ -421,6 +421,14 @@ async function urlToken() {
   if (GUEST) return (URL_TOKEN = KEY);
   const r = await api("/api/token?hours=12");
   return (URL_TOKEN = (r && r.token) || "");
+}
+
+/* The player, embedded: a guest's own pass, an account's cookie, or for the
+   owner a one-time ticket, so the master key never sits in a URL. */
+async function embedAuth() {
+  if (GUEST) return KEY ? "&token=" + encodeURIComponent(KEY) : "";
+  const r = await api("/api/embed/ticket");
+  return r && r.ticket ? "&ticket=" + encodeURIComponent(r.ticket) : "";
 }
 
 /* ── colour: the player's modes, mono by default ── */
@@ -706,11 +714,11 @@ function openAlbum(name, artist) {
 async function openSettings() {
   closeOverlay();
   $("memenu").hidden = true;
-  const token = await urlToken();
+  const auth = await embedAuth();
   const scrim = document.createElement("div");
   scrim.className = "scrim";
   scrim.innerHTML = `<div class="setpanel" role="dialog" aria-modal="true" aria-label="Settings">` +
-    `<iframe title="Settings" src="${BASE}/player?embed=settings${token ? "&token=" + encodeURIComponent(token) : ""}"></iframe></div>`;
+    `<iframe title="Settings" src="${BASE}/player?embed=settings${auth}"></iframe></div>`;
   scrim.addEventListener("click", e => { if (e.target === scrim) closeOverlay(); });
   document.body.appendChild(scrim);
   overlay = scrim;
@@ -803,8 +811,7 @@ async function nowPlayingPane() {
   if (nowPane) { nowPane.hidden = false; return nowPane; }
   nowPane = document.createElement("section");
   nowPane.className = "view keep";
-  const token = await urlToken();
-  nowPane.innerHTML = `<iframe title="Now playing" src="${BASE}/player?embed=1${token ? "&token=" + encodeURIComponent(token) : ""}"></iframe>`;
+  nowPane.innerHTML = `<iframe title="Now playing" src="${BASE}/player?embed=1${await embedAuth()}"></iframe>`;
   canvas.appendChild(nowPane);
   return nowPane;
 }

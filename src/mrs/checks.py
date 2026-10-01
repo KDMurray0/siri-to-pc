@@ -5710,6 +5710,16 @@ def _run(verbose: bool = False) -> Result:
             served55 = get("/app")
             c("/app serves the full player to the owner",
               served55.status_code == 200 and 'class="cap left glass"' in served55.text, str(served55.status_code))
+            # Embedding for the owner: a one-time ticket instead of the key in a URL.
+            from .config import config as _cfg55
+            t55 = get("/api/embed/ticket").json().get("ticket", "")
+            first55 = client.get("/player?embed=1&ticket=" + t55)
+            again55 = client.get("/player?embed=1&ticket=" + t55)
+            master55 = _cfg55.get("api_key", "")
+            c("a ticket embeds the owner's player once",
+              first55.status_code == 200 and bool(master55) and master55 in first55.text, str(first55.status_code))
+            c("...and is spent after that", master55 not in again55.text)
+            c("...and a link can't mint one", get("/api/embed/ticket", tok=phone).status_code in (401, 403))
             c("the player can sit inside it: Now playing and the settings panel",
               'html.embedded .transport' in rendered55 and 'html.embed-settings .frame>:not(.sheet)' in rendered55
               and "close-settings" in rendered55)

@@ -661,6 +661,34 @@ def api_album(request: Request, name: str = "", artist: str = "", _: bool = Auth
             "art": next((t["art"] for t in tracks if t.get("art")), "")}
 
 
+_EMBED_TICKETS: dict[str, float] = {}
+_EMBED_LOCK = threading.Lock()
+
+
+def _take_embed_ticket(ticket: str) -> bool:
+    """Spend a ticket: true once, within a minute of being made."""
+    if not ticket:
+        return False
+    now = time.time()
+    with _EMBED_LOCK:
+        for t in [t for t, until in _EMBED_TICKETS.items() if until < now]:
+            _EMBED_TICKETS.pop(t, None)
+        until = _EMBED_TICKETS.pop(ticket, 0)
+    return until >= now
+
+
+@app.get("/api/embed/ticket")
+def api_embed_ticket(_: bool = Owner):
+    """A one-time pass for the full player to embed the player as its owner."""
+    import secrets
+    ticket = secrets.token_urlsafe(24)
+    with _EMBED_LOCK:
+        if len(_EMBED_TICKETS) > 200:
+            _EMBED_TICKETS.clear()
+        _EMBED_TICKETS[ticket] = time.time() + 60
+    return {"status": "ok", "ticket": ticket}
+
+
 def _serve_page(request: Request, name: str, key: str, token: str):
     """A page, and the credential it gets to keep.
 
@@ -672,6 +700,12 @@ def _serve_page(request: Request, name: str, key: str, token: str):
     everything; a shared link's token, and it can listen and nothing else.
     """
     ip = _client_ip(request)
+
+    # The full player embedding this page for its owner: a one-time ticket,
+    # good for a minute, stands in for the key so the key never sits in a URL.
+    if _take_embed_ticket(request.query_params.get("ticket", "")):
+        return templates.TemplateResponse(request, name, _page_context(request, owner=True, creds=config.get("api_key", "")),
+                                          headers={"Cache-Control": "no-store"})
 
     # Someone who arrived holding a credential is judged on it, wherever they
     # are. Without this, a guest on a phone-only link who happens to be in the
@@ -717,7 +751,17 @@ def _serve_page(request: Request, name: str, key: str, token: str):
     # to load neutral and ask, which left a window where its own requests went
     # out saying the wrong thing about where they should play — and left the
     # capsule showing whatever the markup happened to say.
-    response = templates.TemplateResponse(request, name, {
+    response = templates.TemplateResponse(
+        request, name, _page_context(request, owner=owner, creds=creds, row=row, signed_in=signed_in))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _page_context(request: Request, *, owner: bool, creds: str, row: dict | None = None,
+                  signed_in: dict | None = None) -> dict:
+    """What a page template is told about who's looking at it."""
+    row = row or {}
+    return {
         "api_key": creds,
         # Which calls are reads, from the same table the server enforces, so
         # the pages can't drift from it.
@@ -734,9 +778,7 @@ def _serve_page(request: Request, name: str, key: str, token: str):
         "sign_in_offered": "1" if (google.configured() and not signed_in
                                    and not owner) else "0",
         "client_available": "1" if _client_build() else "0",
-    })
-    response.headers["Cache-Control"] = "no-store"
-    return response
+    }
 
 
 # ── health + events ───────────────────────────────────────────────────
