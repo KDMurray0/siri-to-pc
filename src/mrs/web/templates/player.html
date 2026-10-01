@@ -24,7 +24,10 @@
 [data-theme="ocean"]  {--bg:#0a121c;--panel:#12202f;--fg:#e9f2fb;--sub:#7f9bb5;--line:#1d3247;--accent:#4aa8ff;}
 
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;overflow:hidden;background:var(--bg);
+/* clip, not just hidden: a hidden box can still be scrolled by focus or
+   scrollIntoView, and on a phone that left the page shoved up under the
+   keyboard with its top out of reach. */
+html,body{height:100%;overflow:hidden;overflow:clip;overscroll-behavior:none;background:var(--bg);
   font-family:-apple-system,"Segoe UI Variable Display","Segoe UI",Roboto,sans-serif;
   color:var(--fg);-webkit-font-smoothing:antialiased;user-select:none}
 ::-webkit-scrollbar{width:8px;height:8px}
@@ -32,8 +35,8 @@ html,body{height:100%;overflow:hidden;background:var(--bg);
 ::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
 ::-webkit-scrollbar-thumb:hover{background:var(--sub)}
 
-.frame{position:relative;height:100%;display:flex;flex-direction:column;
-  overflow:hidden;background:var(--bg)}
+.frame{position:relative;height:100%;height:100dvh;display:flex;flex-direction:column;
+  overflow:hidden;overflow:clip;background:var(--bg)}
 
 /* the blurred album wash — the thing that makes it feel alive */
 .ambient{position:absolute;inset:-25% -25% auto -25%;height:52%;z-index:0;
@@ -107,11 +110,12 @@ body.mini.mini-hover .artnote{width:74px;height:74px}
 /* what the server is doing, when it isn't simply playing */
 .activity{display:none;align-items:center;justify-content:center;gap:7px;
   margin-top:8px;font-size:11.5px;color:var(--accent);font-weight:600;
-  letter-spacing:.02em;min-height:16px;line-height:1.25;flex-wrap:wrap;max-width:100%}
+  letter-spacing:.02em;min-height:16px;line-height:1.25;flex-wrap:nowrap;max-width:100%;min-width:0}
 /* One line, always: a long title must not reflow the stage into a wall of
-   wrapped words. The whole thing stays in the hover text. */
-#actlabel{max-width:min(52vw,360px);min-width:0;text-align:center;white-space:nowrap;
+   wrapped words. The label gives up width; the dot, bar and stop don't. */
+#actlabel{flex:0 1 auto;max-width:360px;min-width:0;text-align:center;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
+.activity .dot,.actbar,.actx{flex:0 0 auto}
 body.busy .activity{display:flex}
 .activity .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);
   animation:pulse 1s ease-in-out infinite}
@@ -176,7 +180,14 @@ body.seeking .seekdot{transform:scale(1.3)}
 .row2{display:flex;align-items:center;gap:10px;margin-top:12px}
 .vol{flex:1;display:flex;align-items:center;gap:8px}
 .slider{flex:1;height:5px;border-radius:3px;background:var(--line);position:relative;
-  cursor:pointer}
+  cursor:pointer;touch-action:none}
+/* Grab it anywhere near it: the strip is 5px, the target isn't. */
+.slider::before{content:"";position:absolute;left:-8px;right:-8px;top:-13px;bottom:-13px}
+.slider:hover .knob,body.vol-drag .knob{transform:translate(-50%,-50%) scale(1.3)}
+/* Icon buttons answer a little outside their drawn edge, so a near miss
+   still counts. Neighbours are further apart than the overhang. */
+.ib,.qc{position:relative}
+.ib::before,.qc::before{content:"";position:absolute;inset:-5px}
 .slider .sfill{position:absolute;left:0;top:0;bottom:0;background:var(--accent);
   border-radius:3px}
 .knob{position:absolute;top:50%;width:12px;height:12px;border-radius:50%;
@@ -267,20 +278,25 @@ body.guest:not(.keeps) #addimport{display:none}
   overflow-y:auto;overflow-x:hidden;display:none}
 .results.show{display:block}
 .rres{display:flex;gap:9px;align-items:center;padding:8px 10px;cursor:pointer}
+.rhead{padding:8px 12px 4px;font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--sub)}
 .rres:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
 /* Picked: a tap picks, a second tap on the only pick plays it. */
 .rres.sel{background:color-mix(in srgb,var(--accent) 22%,transparent);box-shadow:inset 3px 0 0 var(--accent)}
 .rres.sel .rn::after{content:" \2713";color:var(--accent);font-weight:800}
-.pickchips{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+/* One row, whatever is picked: chips shrink and cut their names short, and
+   the count at the end always shows. Wrapping pushed the results about. */
+.pickchips{display:flex;flex-wrap:nowrap;overflow:hidden;gap:5px;margin-top:7px}
 .pickchips[hidden]{display:none}
-.pchip{display:inline-flex;align-items:center;gap:4px;max-width:46%;font-size:11px;font-weight:600;
+.pchip{display:inline-flex;align-items:center;gap:4px;flex:0 1 auto;min-width:46px;max-width:150px;
+  font-size:11px;font-weight:600;
   padding:3px 4px 3px 9px;border-radius:999px;background:color-mix(in srgb,var(--accent) 18%,transparent);
   color:var(--fg)}
-.pchip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pchip button{border:0;background:none;color:var(--sub);cursor:pointer;font-size:13px;line-height:1;padding:0 4px}
+.pchip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.pchip button{border:0;background:none;color:var(--sub);cursor:pointer;font-size:13px;line-height:1;
+  padding:2px 5px;margin:-2px -2px -2px 0;border-radius:999px;flex:0 0 auto}
 /* The overflow chip is not a pick: no unpicker, and it says how many are
    hidden rather than pretending to name them. */
-.pchip.more{max-width:none;background:color-mix(in srgb,var(--sub) 16%,transparent);
+.pchip.more{max-width:none;flex:0 0 auto;background:color-mix(in srgb,var(--sub) 16%,transparent);
   color:var(--sub);cursor:default;font-weight:700}
 .qbtn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .qbtn.primary:hover{color:var(--accent-ink);filter:brightness(1.08)}
@@ -514,8 +530,29 @@ a.btn{text-decoration:none;display:inline-block}
 .pltools{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 3px 10px}
 .pltools b{font-size:12px;font-weight:650}.pltools .btn{font-size:11px}
 .plimportlabel{display:block;font-size:11px;color:var(--sub);margin:4px 3px 7px}
-.plactions{display:flex;flex-wrap:wrap;gap:6px;padding:8px 0 12px}
-.plactions .btn{font-size:11px;padding:6px 9px}
+.plactions{display:flex;align-items:center;gap:6px;padding:8px 0 10px;position:relative}
+.plactions .btn{font-size:11.5px;padding:6px 11px 6px 9px;display:inline-flex;align-items:center;gap:5px;
+  border-radius:999px;white-space:nowrap}
+.plactions .btn svg{width:15px;height:15px;fill:currentColor;flex:0 0 auto}
+.plactions .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.plactions .btn:disabled{opacity:.4;cursor:default}
+.plspacer{flex:1}
+.plmenubtn{width:30px;height:30px;font-size:16px}
+.plmenu{position:absolute;right:0;top:calc(100% - 2px);z-index:20;min-width:210px;padding:6px;
+  display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);
+  border-radius:12px;box-shadow:0 16px 44px #0009;transform-origin:top right;
+  animation:plmenuin .16s cubic-bezier(.2,.8,.2,1)}
+.plmenu[hidden]{display:none}
+.plmenu button{background:none;border:0;color:var(--fg);font:inherit;font-size:12.5px;text-align:left;
+  padding:8px 10px;border-radius:8px;cursor:pointer}
+.plmenu button:hover,.plmenu button:focus-visible{background:color-mix(in srgb,var(--accent) 12%,transparent);outline:0}
+.plmenu button.danger{color:var(--bad)}
+.plmenu button.danger:hover,.plmenu button.danger.arm{background:color-mix(in srgb,var(--bad) 14%,transparent)}
+.plmenu button.danger.arm::after{content:" \2014 press again";position:static;translate:none;
+  background:none;color:inherit;padding:0;box-shadow:none;font-weight:600}
+.plmenu hr{border:0;border-top:1px solid var(--line);margin:4px 2px}
+@keyframes plmenuin{from{opacity:0;transform:scale(.95) translateY(-4px)}}
+@media (prefers-reduced-motion:reduce){.plmenu{animation:none}}
 .plrow button.pn{background:none;border:0;color:inherit;text-align:left;font-family:inherit;padding:0;cursor:pointer}
 .plnewform{display:flex;gap:7px;margin-bottom:18px}
 .plnewform input,.plrename input{min-width:0;flex:1;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:9px 10px;color:var(--fg);font:inherit;font-size:12px}
@@ -1249,6 +1286,16 @@ body:not(.mini):not(.hastrack):not(.hasqueue) .transport{display:none}
 body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
   flex-direction:column;justify-content:center;gap:8px;min-height:116px;
   color:var(--sub);text-align:center}
+/* The mark: the same four bars as the sign-in page, gently moving. */
+.restmark{display:flex;align-items:flex-end;justify-content:center;gap:5px;height:40px;margin:0 auto 6px}
+.restmark b{display:block;width:6px;border-radius:3px;background:var(--accent);
+  transform-origin:bottom;animation:restbar 1.15s ease-in-out infinite}
+.restmark b:nth-child(1){height:17px;animation-delay:-.4s}
+.restmark b:nth-child(2){height:31px;animation-delay:-.9s}
+.restmark b:nth-child(3){height:23px;animation-delay:-.2s}
+.restmark b:nth-child(4){height:40px;animation-delay:-.7s}
+@keyframes restbar{50%{transform:scaleY(.45)}}
+@media (prefers-reduced-motion:reduce){.restmark b{animation:none}}
 
 @media (min-width:900px) and (min-height:520px){
   body:not(.mini) .stage{
@@ -1367,27 +1414,25 @@ body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
   body:not(.mini) .transport .row2 .ib svg{width:18px;height:18px}
   body:not(.mini) .transport .vol{flex:0 0 auto;max-width:150px;margin-left:2px}
   body:not(.mini) .transport .upnext{display:none}
-  body:not(.mini):not(.hastrack):not(.hasqueue) .transport{display:none}
-  /* Resting view: the very same two columns as playback. The cover's slot
-     holds the placeholder card, the panel's slot holds the invitation, so
-     starting a song moves nothing — no cover dropping in from the side.
-     The transport bar is hidden at rest, but the stage keeps its usual
-     bottom padding (no shorter idle padding), so the free space the two
-     1fr rows split above and below the cover is identical in both states. */
-  body:not(.mini):not(.hastrack):not(.hasqueue) .art-wrap{display:flex}
-  body:not(.mini):not(.hastrack):not(.hasqueue) .art{
-    border:1px solid color-mix(in srgb,var(--fg) 8%,transparent)}
-  /* The title/artist row keeps its height at rest — hidden, not
-     collapsed. Letting it vanish changed the free space those 1fr rows
-     split, and the cover slid with it. */
+  /* Resting: the player as normal -- list, tabs, bar -- with the mark and
+     an invitation where the cover and its title go. The cover and title
+     keep their size, unseen, so a starting song moves nothing. */
+  body:not(.mini):not(.hastrack):not(.hasqueue) .art-wrap{display:flex;visibility:hidden}
   body:not(.mini):not(.hastrack):not(.hasqueue) .meta{display:block;visibility:hidden}
-  body:not(.mini):not(.hastrack):not(.hasqueue) .nav,
-  body:not(.mini):not(.hastrack):not(.hasqueue) .panel,
-  body:not(.mini):not(.hastrack):not(.hasqueue) .lyrswitch,
-  body:not(.mini):not(.hastrack):not(.hasqueue) .sidetoggle{display:none!important}
-  body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{grid-column:2;
-    grid-row:2/6;justify-self:stretch;align-self:center;max-width:none;
-    text-align:left;padding:0 10px 0 0}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .transport{display:grid}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .lyrswitch{display:none!important}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{grid-area:3/1/5/2;
+    justify-self:stretch;align-self:stretch;min-height:0;padding:24px;
+    align-items:center;border-radius:16px;
+    border:1px solid color-mix(in srgb,var(--fg) 8%,transparent);
+    background:linear-gradient(145deg,color-mix(in srgb,var(--accent) 10%,var(--panel)),var(--panel))}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage h2{font-size:24px}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .restmark{height:64px;gap:8px;margin-bottom:14px}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .restmark b{width:10px;border-radius:5px}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .restmark b:nth-child(1){height:27px}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .restmark b:nth-child(2){height:50px}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .restmark b:nth-child(3){height:37px}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .restmark b:nth-child(4){height:64px}
 }
 @media (min-width:900px) and (max-width:1100px) and (min-height:520px){
   body:not(.mini) .stage{--edge:20px;--gap2:20px}
@@ -1444,16 +1489,15 @@ body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
   body:not(.mini).sidehid #panel-lyrics{grid-row:2/6;padding:0 24px 40vh}
   body:not(.mini).sidehid #panel-lyrics .lrow{font-size:32px;line-height:1.65}
 }
-/* Resting view: the old covermode collapse is gone on purpose. Rest keeps
-   the very same two columns as playback (the :not(.hastrack):not(.hasqueue)
-   rules in the block above), so the cover never changes place when a song
-   starts, and a paused song with a queue keeps its queue instead of the
-   panel vanishing. */
-/* Rest at 1500px and up: no lyrics to show, so the group folds back to the
-   same two columns as the rest of the range rather than a dead middle. */
+/* Rest at 1500px and up: no words to show, so the middle column goes and the
+   list sits beside the mark; the bar sits under both. */
 @media (min-width:1500px) and (min-height:520px){
   body:not(.mini):not(.hastrack):not(.hasqueue) .stage{
     grid-template-columns:var(--cover) minmax(340px,480px)}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .search{grid-area:1/1/2/3}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .nav{grid-area:3/2}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .panel{grid-column:2}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .transport{grid-area:6/1/7/3}
 }
 @media (min-width:900px) and (min-height:520px) and (max-height:680px){
   body:not(.mini) .stage{padding-top:18px}
@@ -1583,7 +1627,9 @@ body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
       </div>
     </div>
 
-    <div class="empty-stage" aria-live="polite"><h2>Choose something to play</h2>
+    <div class="empty-stage" aria-live="polite">
+      <span class="restmark" aria-hidden="true"><b></b><b></b><b></b><b></b></span>
+      <h2>Choose something to play</h2>
       <p>Search for a song, artist, album or mood to get started.</p></div>
 
     <div class="nav">
@@ -2637,8 +2683,25 @@ function volIcon(v) {
 function volCeil() {
   return (typeof cast !== "undefined" && cast.on) ? 100 : VOL_MAX;
 }
+/* A crossfade arrives as a run of level updates at uneven gaps. Each one
+   eased out and stopped before the next came, so the bar climbed in steps.
+   Inside a run, glide linearly for as long as the last gap was: the pieces
+   join into one movement. A lone change keeps the soft ease. */
+let volAt = 0;
+function volGlide() {
+  const now = performance.now(), gap = (now - volAt) / 1000;
+  volAt = now;
+  const inRun = gap < 1.5;
+  const dur = inRun ? Math.min(1.2, Math.max(.12, gap)).toFixed(2) + "s" : ".3s";
+  const ease = inRun ? "linear" : "cubic-bezier(.33,1,.68,1)";
+  for (const id of ["sfill", "knob", "minivfill"]) {
+    const s = $(id).style;
+    s.transitionDuration = dur; s.transitionTimingFunction = ease;
+  }
+}
 function setVol(v) {
   v = Math.max(0, Math.min(volCeil(), v));
+  if (v !== state.volume && !document.body.classList.contains("vol-drag")) volGlide();
   state.volume = v;
   const pct = v / volCeil() * 100;
   $("sfill").style.width = pct + "%"; $("knob").style.left = pct + "%";
@@ -2649,6 +2712,21 @@ function setVol(v) {
    only control there, so we don't pretend otherwise. */
 const IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
             (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+/* A phone keyboard pushes the page up to show the field, and the browser
+   doesn't always bring it back. When the keyboard goes, so does the shove. */
+function unshove() {
+  if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
+  $("frame").scrollTop = 0;
+  window.scrollTo(0, 0);
+}
+document.addEventListener("focusout", e => {
+  if (e.target.matches && e.target.matches("input,textarea")) setTimeout(unshove, 80);
+});
+if (window.visualViewport) {
+  visualViewport.addEventListener("resize", () => {
+    if (visualViewport.height >= window.innerHeight * 0.9) unshove();
+  });
+}
 
 /* The PC's volume and this phone's are separate things. When the phone is the
    output, the slider moves the phone; mpv keeps whatever it was set to. */
@@ -2674,17 +2752,29 @@ const volFromX = e => { const r = $("volslider").getBoundingClientRect();
   return Math.round((e.clientX - r.left) / r.width * volCeil()); };
 const volFromY = e => { const r = $("minivol").getBoundingClientRect();
   return Math.round((1 - (e.clientY - r.top) / r.height) * volCeil()); };
-$("volslider").addEventListener("mousedown", e => { volDrag = true; document.body.classList.add("vol-drag"); setVol(volFromX(e)); sendVol(); });
-$("minivol").addEventListener("mousedown", e => { e.stopPropagation(); e.preventDefault(); vvolDrag = true; document.body.classList.add("vol-drag"); setVol(volFromY(e)); sendVol(); });
-window.addEventListener("mousemove", e => {
-  if (volDrag) { setVol(volFromX(e)); sendVol(); }
-  if (vvolDrag) { setVol(volFromY(e)); sendVol(); }
-});
-window.addEventListener("mouseup", () => {
-  document.body.classList.remove("vol-drag");
-  if (volDrag || vvolDrag) pushVolume(state.volume);
-  volDrag = vvolDrag = false;
-});
+// Pointer events with capture: a finger works too, and the drag survives
+// leaving the strip, which it always does.
+for (const [id, vertical] of [["volslider", false], ["minivol", true]]) {
+  const el = $(id);
+  el.addEventListener("pointerdown", e => {
+    e.stopPropagation(); e.preventDefault();
+    if (vertical) vvolDrag = true; else volDrag = true;
+    document.body.classList.add("vol-drag");
+    try { el.setPointerCapture(e.pointerId); } catch (err) {}
+    setVol(vertical ? volFromY(e) : volFromX(e)); sendVol();
+  });
+  el.addEventListener("pointermove", e => {
+    if (vertical ? vvolDrag : volDrag) { setVol(vertical ? volFromY(e) : volFromX(e)); sendVol(); }
+  });
+  const end = () => {
+    if (!(volDrag || vvolDrag)) return;
+    document.body.classList.remove("vol-drag");
+    pushVolume(state.volume);
+    volDrag = vvolDrag = false;
+  };
+  el.addEventListener("pointerup", end);
+  el.addEventListener("pointercancel", end);
+}
 let wheelT;
 function wheelVol(e) {
   e.preventDefault();
@@ -2900,9 +2990,26 @@ $("q").addEventListener("input", () => {
   qaHeight();
   document.body.classList.toggle("pastedlink", isLink(v));
   clearTimeout(searchT);
-  if (v.length < 2) { hideResults(); return; }
+  if (v.length < 2) { if (!v) showMyLists(); else hideResults(); return; }
   searchT = setTimeout(() => showResults(v), 320);
 });
+/* Click into an empty search and your playlists are right there, sidebar or
+   no sidebar. */
+let myLists = [], myListsAt = 0;
+async function showMyLists() {
+  if (Date.now() - myListsAt > 30000) {
+    const r = await api("/api/playlists");
+    myLists = ((r && r.playlists) || []).concat(((r && r.shared) || []).map(p => ({...p, shared: true})));
+    myListsAt = Date.now();
+  }
+  if ($("q").value.trim() || document.activeElement !== $("q") || !myLists.length) return;
+  $("results").innerHTML = `<div class="rhead">Your playlists</div>` + myLists.slice(0, 8).map(p =>
+    `<div class="rres" data-act="playlist" data-n="${esc(p.name)}"${p.shared ? ' data-sh="1"' : ""}>` +
+    `<div class="qi pl"></div><div class="rt"><div class="rn">${esc(p.name)}</div>` +
+    `<div class="ra">${p.count} song${p.count === 1 ? "" : "s"}${p.shared ? " · shared" : ""}</div></div></div>`).join("");
+  $("results").classList.add("show");
+}
+$("q").addEventListener("focus", () => { if (!$("q").value.trim()) showMyLists(); });
 $("q").addEventListener("keydown", e => {
   if (e.key === "Enter") {
     // What's picked wins over what's typed: that's what they chose.
@@ -3043,9 +3150,9 @@ async function showResults(v) {
   const label = t => `<span class="tag">${t}</span>`;
 
   (r.playlists || []).forEach(p => push(0.95,
-    `<div class="rres" data-act="playlist" data-n="${esc2(p.name)}"><div class="qi pl"></div>` +
+    `<div class="rres" data-act="playlist" data-n="${esc2(p.name)}"${p.shared ? ' data-sh="1"' : ""}><div class="qi pl"></div>` +
     `<div class="rt"><div class="rn">${esc2(p.name)}</div>` +
-    `<div class="ra">${p.count} track${p.count === 1 ? "" : "s"}` +
+    `<div class="ra">${p.shared ? "Shared · " : ""}${p.count} track${p.count === 1 ? "" : "s"}` +
     `${p.downloaded ? " · " + p.downloaded + " offline" : ""}</div></div>` +
     label("playlist") + `</div>`));
 
@@ -3135,7 +3242,8 @@ $("results").addEventListener("mousedown", async e => {
                   "&name=" + encodeURIComponent(row.dataset.t) +
                   "&art=" + encodeURIComponent(row.dataset.img || ""));
   } else if (act === "playlist") {
-    r = await api("/api/playlist/play?name=" + encodeURIComponent(row.dataset.n));
+    r = await api("/api/playlist/play?name=" + encodeURIComponent(row.dataset.n) +
+                  (row.dataset.sh ? "&shared=1" : ""));
   } else if (act === "artist") {
     r = await apiSay("/api/play/artist?name=" + encodeURIComponent(row.dataset.n), true);
   } else if (act === "album") {
@@ -3968,6 +4076,7 @@ document.addEventListener("pointerdown", e => {
   }
 });
 async function loadLists() {
+  myListsAt = 0;                 // the search's copy is stale now
   const loading = ++listLoad;
   const box = $("panel-lists");
   box.innerHTML = '<div class="muted">Loading…</div>';
@@ -4179,14 +4288,46 @@ function collapseLists(keepBox, keepBtn) {
     if (b !== keepBtn) b.setAttribute("aria-expanded", "false");
   });
 }
+function closePlMenus(except) {
+  document.querySelectorAll("#panel-lists .plmenu").forEach(m => {
+    if (m === except) return;
+    m.hidden = true;
+    const b = m.previousElementSibling;
+    if (b) b.setAttribute("aria-expanded", "false");
+  });
+}
+document.addEventListener("click", e => {
+  if (!e.target.closest("#panel-lists .plactions")) closePlMenus();
+});
 $("panel-lists").addEventListener("click", async e => {
+  const menuBtn = e.target.closest("[data-plmenu]");
+  if (menuBtn) {
+    const menu = menuBtn.nextElementSibling, show = menu.hidden;
+    closePlMenus(menu);
+    menu.hidden = !show;
+    menuBtn.setAttribute("aria-expanded", String(show));
+    if (show) { const first = menu.querySelector("button"); if (first) first.focus({preventScroll: true}); }
+    return;
+  }
+  // A choice closes the menu; Delete stays open for its second press.
+  const chosen = e.target.closest(".plmenu button");
+  if (chosen && !chosen.matches("[data-del]")) closePlMenus();
+  const shuffle = e.target.closest("[data-plshuffle]");
+  if (shuffle) {
+    const r = await api("/api/playlist/play?name=" + encodeURIComponent(shuffle.dataset.plshuffle) +
+                        "&shuffle=1" + (shuffle.dataset.sh ? "&shared=1" : ""));
+    toast(r && r.message);
+    return;
+  }
   const smartOpen = e.target.closest("[data-smart-open]");
   if (smartOpen) {
     const box = $("smart-" + smartOpen.dataset.smartOpen);
     if (box.innerHTML) { box.innerHTML = ""; smartOpen.setAttribute("aria-expanded", "false"); return; }
     collapseLists(box, smartOpen);
     box.innerHTML = '<div class="muted">Loading…</div>';
+    smartOpen.setAttribute("aria-expanded", "true");
     const r = await api("/api/smartplaylists?kind=" + encodeURIComponent(smartOpen.dataset.smartOpen));
+    if (smartOpen.getAttribute("aria-expanded") !== "true") { box.innerHTML = ""; return; }
     const tracks = (r && r.tracks) || [];
     box.innerHTML = tracks.length ? tracks.map((t,i) =>
       `<div class="pltrack"><span class="pli">${i+1}</span><span class="plt">${esc(t.title)}<em>${esc(t.artist)}</em></span>` +
@@ -4215,19 +4356,35 @@ $("panel-lists").addEventListener("click", async e => {
     open.setAttribute("aria-expanded", "true");
     box.innerHTML = '<div class="muted" style="padding:6px 2px">Loading…</div>';
     const r = await api("/api/playlist/tracks?name=" + encodeURIComponent(name) + sh);
+    // Another list was opened while this one loaded: it stays shut.
+    if (open.getAttribute("aria-expanded") !== "true") { box.innerHTML = ""; return; }
     const ts = (r && r.tracks) || [];
     const me = (r && r.me) || "";
     const mine = !open.dataset.sh;
+    // Three things you do all the time, in a row; everything else behind ⋯.
+    const n = esc(name), shv = esc(open.dataset.sh || "");
     const controls = `<div class="plactions">` +
-      `<button class="btn" data-pladd="${esc(name)}" data-sh="${esc(open.dataset.sh || "")}">Add current song</button>` +
-      (mine ? `<button class="btn" data-rename="${esc(name)}">Rename</button>` +
-        `<button class="btn" data-plai="${esc(name)}">Make more like this</button>` +
-        `<button class="btn" data-pllink="${esc(name)}">Share link</button>` +
-        `<button class="btn" data-plexport="${esc(name)}" data-format="csv">Export CSV</button>` +
-        `<button class="btn" data-plexport="${esc(name)}" data-format="txt">Export TXT</button>` +
-        `<button class="btn" data-pltogether="${esc(name)}">Play together</button>` +
-        `<button class="btn danger" data-del="${esc(name)}">Delete</button>` : "") +
-      (mine && ME.owner ? `<button class="btn" data-share="${esc(name)}" data-on="${r.shared ? 0 : 1}">${r.shared ? "Stop household collaboration" : "Let the household add songs"}</button>` : "") + `</div>` +
+      `<button class="btn plgo primary" data-play="${n}" data-sh="${shv}"${ts.length ? "" : " disabled"}>` +
+        `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>Play</button>` +
+      `<button class="btn plgo" data-plshuffle="${n}" data-sh="${shv}"${ts.length > 1 ? "" : " disabled"}>` +
+        `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.6 9.2 5.4 4 4 5.4l5.2 5.2 1.4-1.4zM14.5 4l2 2L4 18.6 5.4 20 18 7.5l2 2V4h-5.5zm.3 9.4-1.4 1.4 3.1 3.1-2 2.1H20v-5.5l-2 2-3.2-3.1z"/></svg>Shuffle</button>` +
+      `<button class="btn plgo" data-pladd="${n}" data-sh="${shv}" title="Add the song that's playing">` +
+        `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>Add current</button>` +
+      (mine ? `<span class="plspacer"></span>` +
+        `<button class="qc plmenubtn" data-plmenu aria-haspopup="menu" aria-expanded="false" title="More for this playlist">⋯</button>` +
+        `<div class="plmenu" role="menu" hidden>` +
+          `<button role="menuitem" data-rename="${n}">Rename</button>` +
+          `<button role="menuitem" data-plai="${n}">Add more like this…</button>` +
+          `<button role="menuitem" data-plchange="${n}">Change it with AI…</button>` +
+          `<button role="menuitem" data-pltogether="${n}">Mix into what's playing</button>` +
+          `<hr>` +
+          `<button role="menuitem" data-pllink="${n}">Copy a share link</button>` +
+          `<button role="menuitem" data-plexport="${n}" data-format="csv">Export as CSV</button>` +
+          `<button role="menuitem" data-plexport="${n}" data-format="txt">Export as text</button>` +
+          (ME.owner ? `<button role="menuitem" data-share="${n}" data-on="${r.shared ? 0 : 1}">${r.shared ? "Stop household adding" : "Let the household add songs"}</button>` : "") +
+          `<hr>` +
+          `<button role="menuitem" class="danger" data-del="${n}">Delete playlist</button>` +
+        `</div>` : "") + `</div>` +
       (mine ? `<form class="plrename" hidden data-old="${esc(name)}"><input aria-label="New playlist name" maxlength="120" value="${esc(name)}" required><button class="btn" type="submit">Save name</button><button class="btn" type="button" data-cancelrename>Cancel</button></form><div class="pllink"></div>` : "");
     box.innerHTML = controls + (ts.length
       ? ts.map((t, i) => {

@@ -1458,11 +1458,14 @@ def api_search(request: Request, q: str, limit: int = 12, _: bool = Auth):
     # Started before anything else, so its two seconds overlap the rest
     # instead of being added to them.
     elsewhere = _elsewhere_start(q)
+    mine = _lists_for(request)
+    lists = [{"kind": "playlist", **p} for p in (mine.summary() if mine else [])
+             if _list_matches(q, p["name"])]
+    lists += [{"kind": "playlist", "shared": True, **p} for p in playlists.summary()
+              if p.get("shared") and mine is not playlists and _list_matches(q, p["name"])]
     body = {
         "status": "ok",
-        "playlists": [{"kind": "playlist", **p}
-                      for p in (_lists_for(request).summary() if _lists_for(request) else [])
-                      if q.lower() in p["name"].lower()],
+        "playlists": lists,
         "library": [t.to_dict() for t in library.search(q, limit=4)],
         "artists": catalog.search_artists(q, limit=2),
         "albums": catalog.search_albums(q, limit=2),
@@ -1471,6 +1474,21 @@ def api_search(request: Request, q: str, limit: int = 12, _: bool = Auth):
     }
     body["soundcloud"] = _elsewhere_collect(elsewhere)
     return body
+
+
+def _list_matches(q: str, name: str) -> bool:
+    """Every word typed starts a word of the name: "nu metal" finds "Nu-Metal",
+    "rock alt" finds "Alt-Rock"."""
+    def words(text: str) -> list[str]:
+        return re.findall(r"[a-z0-9]+", _fold_text(text))
+    have = words(name)
+    want = words(q)
+    return bool(want) and all(any(h.startswith(w) for h in have) for w in want)
+
+
+def _fold_text(text: str) -> str:
+    from ..models import _fold
+    return _fold((text or "").lower())
 
 
 @app.get("/api/play/artist")

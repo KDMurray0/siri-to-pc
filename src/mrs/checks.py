@@ -5337,9 +5337,13 @@ def _run(verbose: bool = False) -> Result:
               and "minmax(380px,.9fr)" not in page54
               and "--cover:min(100%,clamp(190px" not in page54)
             c("resting keeps the cover's place, so a starting song moves nothing",
-              "body:not(.mini):not(.hastrack):not(.hasqueue) .art-wrap{display:flex}" in page54
-              and "body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{grid-column:2;" in page54
+              "body:not(.mini):not(.hastrack):not(.hasqueue) .art-wrap{display:flex;visibility:hidden}" in page54
+              and "body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{grid-area:3/1/5/2;" in page54
               and "covermode .stage{grid-template-columns:minmax(0,1fr)" not in page54)
+            c("resting is the player as normal: the list, its tabs and the bar stay, with the mark",
+              ".lyrswitch{display:none!important}" in page54
+              and "not(.hasqueue) .panel,\n" not in page54
+              and '<span class="restmark" aria-hidden="true">' in page54)
             c("resting and playing share every grid row, so the cover can't slide up or down",
               "body:not(.mini):not(.hastrack):not(.hasqueue) .meta{display:block;visibility:hidden}" in page54
               and "min-height:60px;margin:16px 0 0;text-align:left" in page54
@@ -5497,6 +5501,27 @@ def _run(verbose: bool = False) -> Result:
               f"{pos_r[0]/400:.1f} {pos_r[1]/400:.1f}")
             c("everything still gets played: a shuffle is a reordering",
               sorted(_q56.smart_order(songs56, liked, _q56.SMART_LIST)) == songs56)
+
+            # A note for the owner: written, scrubbed, never naming its own file.
+            from .paths import data_dir as _dd56
+            from .web import api as _api56
+            _api56._report_rate.clear()
+            before56 = set((_dd56() / "reports").glob("*.txt")) if (_dd56() / "reports").exists() else set()
+            r56 = get("/api/report?message=" + quote("The queue froze‮\x07 ../../evil")
+                      + "&doing=" + quote("skipping"), tok=phone)
+            new56 = sorted(set((_dd56() / "reports").glob("*.txt")) - before56)
+            body56 = new56[0].read_text("utf-8") if new56 else ""
+            c("a guest's report is saved as a note on this machine",
+              r56.status_code == 200 and len(new56) == 1, f"{r56.status_code} {new56}")
+            c("...with the tricks taken out and the words intact",
+              "The queue froze ../../evil" in body56 and "‮" not in body56 and "\x07" not in body56)
+            c("...and the words never pick the file name",
+              bool(new56) and new56[0].parent.name == "reports"
+              and new56[0].name.startswith("report-") and "evil" not in new56[0].name)
+            codes56 = [get("/api/report?message=again%20and%20again", tok=phone).status_code for _ in range(5)]
+            c("a few an hour, then it says no", codes56[:4] == [200] * 4 and codes56[4] == 429, str(codes56))
+            for f in set((_dd56() / "reports").glob("*.txt")) - before56:
+                f.unlink()
             say("whole lists", c)
 
             # -- 55. the page's own script must actually parse --------------
