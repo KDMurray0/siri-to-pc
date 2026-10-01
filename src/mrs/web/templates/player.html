@@ -563,6 +563,13 @@ a.btn{text-decoration:none;display:inline-block}
 .plnewform input,.plrename input{min-width:0;flex:1;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:9px 10px;color:var(--fg);font:inherit;font-size:12px}
 .plnewform[hidden],.plrename[hidden]{display:none}
 .plrename{display:flex;gap:6px;flex-wrap:wrap;padding:0 0 12px}
+.plchange{display:flex;gap:6px;flex-wrap:wrap;padding:0 0 12px}
+.plchange[hidden]{display:none}
+.plchange input{min-width:0;flex:1 1 220px;background:var(--bg);border:1px solid var(--line);border-radius:9px;
+  padding:9px 10px;color:var(--fg);font:inherit;font-size:12px}
+.plchange input:focus{border-color:var(--accent);outline:0}
+.plchangestate{flex-basis:100%;font-size:11px;color:var(--sub);min-height:0}
+.plchangestate:empty{display:none}
 .pllink{margin-bottom:12px}.pllink input{width:100%;min-width:0;background:var(--bg);color:var(--sub);border:1px solid var(--line);border-radius:7px;padding:8px;font:inherit;font-size:10px}
 .pllink p{font-size:11px;color:var(--sub);margin:6px 0}
 .plhead{font-size:10.5px;font-weight:700;letter-spacing:.06em;
@@ -4345,7 +4352,8 @@ $("panel-lists").addEventListener("click", async e => {
         `<div class="plmenu" role="menu" hidden>` +
           `<button role="menuitem" data-rename="${n}">Rename</button>` +
           `<button role="menuitem" data-plai="${n}">Add more like this…</button>` +
-          `<button role="menuitem" data-plchange="${n}" hidden>Change it with AI…</button>` +
+          `<button role="menuitem" data-plchange="${n}">Change it with AI…</button>` +
+          (r.can_undo ? `<button role="menuitem" data-plundo="${n}">Undo the last AI change</button>` : "") +
           `<button role="menuitem" data-pltogether="${n}">Mix into what's playing</button>` +
           `<hr>` +
           `<button role="menuitem" data-pllink="${n}">Copy a share link</button>` +
@@ -4355,6 +4363,9 @@ $("panel-lists").addEventListener("click", async e => {
           `<hr>` +
           `<button role="menuitem" class="danger" data-del="${n}">Delete playlist</button>` +
         `</div>` : "") + `</div>` +
+      (mine ? `<form class="plchange" hidden data-name="${n}"><input aria-label="How should this playlist change?" maxlength="1000" required ` +
+        `placeholder="How should it change? More energetic, no more Vampire Weekend or anything like them…">` +
+        `<button class="btn primary" type="submit">Change it</button><div class="plchangestate" role="status"></div></form>` : "") +
       (mine ? `<form class="plrename" hidden data-old="${esc(name)}"><input aria-label="New playlist name" maxlength="120" value="${esc(name)}" required><button class="btn" type="submit">Save name</button><button class="btn" type="button" data-cancelrename>Cancel</button></form><div class="pllink"></div>` : "");
     box.innerHTML = controls + (ts.length
       ? ts.map((t, i) => {
@@ -4397,6 +4408,16 @@ $("panel-lists").addEventListener("click", async e => {
     toast(r && r.message);
     loadLists();
     return;
+  }
+  const undoIt = e.target.closest("[data-plundo]");
+  if (undoIt) {
+    const u = await api("/api/playlists/undo?name=" + encodeURIComponent(undoIt.dataset.plundo));
+    toast((u && u.message) || "Couldn't undo that"); loadLists(); return;
+  }
+  const changeIt = e.target.closest("[data-plchange]");
+  if (changeIt) {
+    const form = changeIt.closest(".pltracks").querySelector(".plchange");
+    form.hidden = false; form.querySelector("input").focus(); return;
   }
   const rename = e.target.closest("[data-rename]");
   if (rename) { const form = rename.closest('.pltracks').querySelector('.plrename'); form.hidden=false; form.querySelector('input').focus(); return; }
@@ -4454,7 +4475,38 @@ $("panel-lists").addEventListener("click", async e => {
   }
 });
 
+/* Change a list with AI: ask, watch it work, and an Undo for when it's wrong. */
+async function changeList(form) {
+  const name = form.dataset.name, what = form.querySelector("input").value.trim();
+  const say = t => { form.querySelector(".plchangestate").textContent = t; };
+  if (what.length < 2) return;
+  form.querySelector("button").disabled = true;
+  say("Reading what you want…");
+  const r = await apiTry("/api/playlists/change?name=" + encodeURIComponent(name) + "&what=" + encodeURIComponent(what));
+  if (!r.ok) { form.querySelector("button").disabled = false;
+    say((r.body && r.body.detail) || "Couldn't start that"); return; }
+  const job = r.body.job;
+  const watch = async () => {
+    const j = await api("/api/playlists/job?job=" + encodeURIComponent(job));
+    if (!j) { form.querySelector("button").disabled = false; say("Couldn't check on it — reopen Lists"); return; }
+    if (j.state === "building" || j.state === "waiting") {
+      say(j.detail + "…"); setTimeout(watch, j.state === "waiting" ? 4000 : 1500); return; }
+    form.querySelector("button").disabled = false;
+    if (j.state === "failed") { say("Couldn't: " + j.detail); return; }
+    say("");
+    form.hidden = true; form.querySelector("input").value = "";
+    if (j.undo) toastUndo(j.detail, async () => {
+      const u = await api("/api/playlists/undo?name=" + encodeURIComponent(name));
+      toast((u && u.message) || "Couldn't undo that"); loadLists();
+    });
+    else toast(j.detail);
+    loadLists();
+  };
+  watch();
+}
 $("panel-lists").addEventListener("submit", async e => {
+  const changing = e.target.closest(".plchange");
+  if (changing) { e.preventDefault(); changeList(changing); return; }
   const form=e.target.closest('.plrename'); if (!form) return;
   e.preventDefault(); const name=form.querySelector('input').value.trim(); if (!name) return;
   const r=await api('/api/playlist/rename?name='+encodeURIComponent(form.dataset.old)+'&new_name='+encodeURIComponent(name));

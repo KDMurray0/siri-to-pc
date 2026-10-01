@@ -5509,6 +5509,52 @@ def _run(verbose: bool = False) -> Result:
             c("a run of one band is broken up, everything else left where it was",
               [t.artist for t in _b56._unclump([four[0][0], four[0][1], four[1][0]])] == ["A", "B", "A"])
 
+            # Changing a list with AI: what goes, what comes in, and undo.
+            import tempfile as _tf56
+            from .core.playlists import Playlists as _PL56
+            from .core.kin import kin as _kin56
+            with _tf56.TemporaryDirectory() as d56:
+                lists56 = _PL56(home=Path(d56))
+                lists56.create("mine")
+                start56 = [_T56(video_id=f"v{i}", title=f"Song {i}", artist=a, path=f"C:/x/{i}.m4a")
+                           for i, a in enumerate(["Vampire Weekend", "Slayer", "MGMT", "Slayer",
+                                                  "Vampire Weekend", "Exodus"])]
+                lists56.add_many("mine", start56)
+                before56 = [dict(r) for r, _ in lists56.rows("mine")]
+                plan56 = _cur56.Change(drop_artists=["Vampire Weekend"], drop_rule="indie pop",
+                                       add=2, brief=_cur56.Brief(note="thrash"), summary="Heavier now")
+                new56 = {"Kreator|Pleasure to Kill": _T56(video_id="k1", title="Pleasure to Kill", artist="Kreator"),
+                         "Testament|Over the Wall": _T56(video_id="t1", title="Over the Wall", artist="Testament")}
+                with _patch.object(_cur56, "change", lambda what, tracks: plan56), \
+                        _patch.object(_cur56, "matching", lambda rule, tracks: {
+                            i for i, t in enumerate(tracks) if t.artist == "MGMT"}), \
+                        _patch.object(_cur56, "songs", lambda brief, n, have=None: [
+                            ("Kreator", "Pleasure to Kill"), ("Testament", "Over the Wall")]), \
+                        _patch.object(_b56, "_found", lambda a, t: new56.get(f"{a}|{t}")), \
+                        _patch.object(_b56, "_alike", lambda a, b: 0.0), \
+                        _patch.object(_kin56, "prime", lambda t: []):
+                    got56c = _b56.change("mine", "heavier, no vampire weekend or anything like them",
+                                         store=lists56)
+                after56 = [t for _, t in lists56.rows("mine")]
+                c("an AI change drops the artists named and the songs its rule describes",
+                  got56c["dropped"] == 3 and not any(t.artist in ("Vampire Weekend", "MGMT") for t in after56),
+                  str([t.artist for t in after56]))
+                c("...adds the new songs spread through, not piled on the end",
+                  got56c["added"] == 2 and {"k1", "t1"} <= {t.video_id for t in after56}
+                  and after56[-1].video_id not in ("k1", "t1") or len(after56) < 4,
+                  str([t.video_id for t in after56]))
+                c("...keeps what the kept rows carried, like an offline copy's path",
+                  any(t.path == "C:/x/1.m4a" for t in after56))
+                c("...and Undo puts back exactly what was there",
+                  lists56.can_undo("mine") and lists56.undo_rewrite("mine")["ok"]
+                  and [dict(r) for r, _ in lists56.rows("mine")] == before56
+                  and not lists56.can_undo("mine"))
+            import inspect as _in56
+            from .web import api as _api56
+            src56 = _in56.getsource(_api56.api_playlists_change)
+            c("the change route only ever edits the caller's own lists",
+              "_lists_for(request)" in src56 and "shared" not in src56.split('"""')[2])
+
             # Smart shuffle: what you skip drifts back, what you love comes forward;
             # the radio leans the same way, only less.
             from .core import queue as _q56

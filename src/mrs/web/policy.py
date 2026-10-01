@@ -34,7 +34,7 @@ announce/{aid}.mp3 source smartplaylists smartplaylists/play autoeq/search
 autoeq/profile autoeq/match
 me me/consent me/rename me/export me/forget-taste me/delete
 me/siri me/siri/new me/siri/token me/siri/revoke
-playlists/make playlists/job playlists/suggest report'''.split())
+playlists/make playlists/job playlists/suggest playlists/change playlists/undo report'''.split())
 READ_ONLY = set('''ping status health history
 blocks liked playlists settings audio/devices setup/state whoami passes profiles
 boot/status cookies diag output/stats audit policy

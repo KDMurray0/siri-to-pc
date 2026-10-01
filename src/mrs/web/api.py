@@ -1905,6 +1905,42 @@ def api_playlists_make(request: Request, what: str = "", songs: int = 0, minutes
     return {"status": "ok", "job": job, "message": f"Making it: {what}"}
 
 
+@app.get("/api/playlists/change")
+def api_playlists_change(request: Request, name: str = "", what: str = "", _: bool = Auth):
+    """Change one of the caller's own lists with AI: "more energetic", "no more
+    Vampire Weekend or anything like them". Never the owner's through a shared
+    link -- only the caller's own store."""
+    from ..core import builder
+    store = _lists_for(request)
+    if store is None:
+        raise HTTPException(409, "Playlists need an account or the owner's player")
+    what = (what or "").strip()
+    if not 2 <= len(what) <= 1000:
+        raise HTTPException(400, "Say how it should change, in under 1,000 characters")
+    if name not in store.names():
+        raise HTTPException(404, "Choose one of your playlists")
+    room = _session_for(request)
+    _guard_rate(room, request)
+    queue = room.queue if room else player.queue
+    try:
+        job = builder.start_change(name, what, store=store, taste=getattr(queue, "taste", None))
+    except builder.BuildBusy as exc:
+        raise HTTPException(429, str(exc)) from None
+    return {"status": "ok", "job": job, "message": f"Changing {name}"}
+
+
+@app.get("/api/playlists/undo")
+def api_playlists_undo(request: Request, name: str = "", _: bool = Auth):
+    """Put a list back the way it was before the last AI change."""
+    store = _lists_for(request)
+    if store is None:
+        raise HTTPException(409, "Playlists need an account or the owner's player")
+    if name not in store.names():
+        raise HTTPException(404, "Choose one of your playlists")
+    got = store.undo_rewrite(name)
+    return {"status": "ok" if got.get("ok") else "error", **got}
+
+
 @app.get("/api/playlists/job")
 def api_playlists_job(request: Request, job: str = "", _: bool = Auth):
     from ..core import builder
@@ -2283,7 +2319,8 @@ def api_playlist(request: Request, op: str, name: str = "",
             row["added_by"] = by.get(t.video_id, "")
             rows.append(row)
         return {"status": "ok", "tracks": rows,
-                "shared": mine.is_shared(name), "me": who}
+                "shared": mine.is_shared(name), "me": who,
+                "can_undo": (not shared) and mine.can_undo(name)}
     raise HTTPException(404, "unknown playlist operation")
 
 

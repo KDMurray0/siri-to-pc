@@ -155,7 +155,11 @@ class Playlists:
         if not isinstance(rows, list):
             log.warning("playlist %r has a non-list tracks.json", name)
             return []
-        out: list[Track] = []
+        return [track for _, track in self._parsed(name, rows)]
+
+    def _parsed(self, name: str, rows: list) -> list[tuple[dict, Track]]:
+        """Each well-formed row beside its Track; malformed rows left out."""
+        out: list[tuple[dict, Track]] = []
         for index, row in enumerate(rows):
             if not isinstance(row, dict):
                 log.warning("skipping malformed row %d in playlist %r",
@@ -179,11 +183,52 @@ class Playlists:
                 clean["duration"] = int(duration)
                 if not (clean.get("video_id") or clean.get("url")):
                     raise ValueError("row has no playable id or url")
-                out.append(Track.from_dict(clean))
+                out.append((row, Track.from_dict(clean)))
             except Exception as exc:
                 log.warning("skipping malformed row %d in playlist %r: %s",
                             index, name, exc)
         return out
+
+    def rows(self, name: str) -> list[tuple[dict, Track]]:
+        """The list as stored, each row beside its Track. Rewriting from the
+        rows keeps whatever a Track doesn't carry."""
+        try:
+            raw = json.loads((self._folder_path(name) / "tracks.json").read_text("utf-8-sig"))
+        except Exception:
+            return []
+        return self._parsed(name, raw) if isinstance(raw, list) else []
+
+    # -- whole-list rewrites (the AI's changes), with one step of undo ---
+    UNDO_FILE = "tracks.before-ai.json"
+
+    def rewrite(self, name: str, rows: list[dict]) -> dict:
+        """Replace a list's rows, keeping what was there to undo to. On disk,
+        so the undo survives a restart."""
+        with self._lock:
+            if name in self._downloading or name in self._importing:
+                return {"ok": False, "message": "Wait for this playlist to finish importing or downloading"}
+            folder = self._folder_path(name)
+            index = folder / "tracks.json"
+            if not index.is_file():
+                return {"ok": False, "message": f"There's no list called {name}"}
+            write_atomic(folder / self.UNDO_FILE, index.read_text("utf-8-sig"))
+            write_atomic(index, json.dumps(rows, indent=1))
+        self._save_event()
+        return {"ok": True, "count": len(rows)}
+
+    def can_undo(self, name: str) -> bool:
+        return (self._folder_path(name) / self.UNDO_FILE).is_file()
+
+    def undo_rewrite(self, name: str) -> dict:
+        with self._lock:
+            folder = self._folder_path(name)
+            saved = folder / self.UNDO_FILE
+            if not saved.is_file() or not (folder / "tracks.json").is_file():
+                return {"ok": False, "message": "Nothing to undo"}
+            write_atomic(folder / "tracks.json", saved.read_text("utf-8-sig"))
+            saved.unlink(missing_ok=True)
+        self._save_event()
+        return {"ok": True, "message": f"Put {name} back as it was"}
 
     def summary(self) -> list[dict]:
         out = []

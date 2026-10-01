@@ -202,16 +202,23 @@ def _blend(main: list[Track], extra: list[Track]) -> list[Track]:
     return _deal([_spread(main, extra)])
 
 
-def _unclump(tracks: list[Track]) -> list[Track]:
+def _unclump(items: list, artist=lambda t: t.primary_artist()) -> list:
     """No artist twice in a row, moving as little as it can."""
-    out = list(tracks)
+    out = list(items)
     for i in range(1, len(out)):
-        prev = out[i - 1].primary_artist()
-        if prev and out[i].primary_artist() == prev:
-            k = next((k for k in range(i + 1, len(out)) if out[k].primary_artist() != prev), None)
+        prev = artist(out[i - 1])
+        if prev and artist(out[i]) == prev:
+            k = next((k for k in range(i + 1, len(out)) if artist(out[k]) != prev), None)
             if k is not None:
                 out.insert(i, out.pop(k))
     return out
+
+
+def _loose(t: Track) -> str:
+    """A song's key with "The" and punctuation gone: "The Toxic Waltz" is
+    "Toxic Waltz"."""
+    artist, _, title = t.key().partition("|")
+    return artist + "|" + re.sub(r"[^a-z0-9]", "", re.sub(r"^the\s+", "", title))
 
 
 def _weave(lanes: list[list[Track]], seed: str = "") -> list[Track]:
@@ -235,11 +242,11 @@ def _deal(lanes: list[list[Track]]) -> list[Track]:
     out, seen, keys = [], set(), set()
     for row in zip_longest(*lanes):
         for t in row:
-            if t is None or t.video_id in seen or (t.key() and t.key() in keys):
+            if t is None or t.video_id in seen or (t.key() and _loose(t) in keys):
                 continue
             seen.add(t.video_id)
             if t.key():
-                keys.add(t.key())
+                keys.add(_loose(t))
             out.append(t)
     return out
 
@@ -826,6 +833,131 @@ def start(what: str, *, songs: int = 0, minutes: int = 0, name: str = "",
         with _lock:
             _jobs[job].update(state="failed", detail="Could not start the playlist builder")
         raise BuildBusy("Could not start the playlist builder. Try again later.") from None
+    return job
+
+
+def _alike(a: str, b: str) -> float:
+    """How alike two bands' Last.fm tags are, 0 to 1; 0 when either is unknown."""
+    ta = {k: v for k, v in _tags(Track(title="", artist=a), artist=True).items() if k not in _JUNK_TAGS}
+    tb = {k: v for k, v in _tags(Track(title="", artist=b), artist=True).items() if k not in _JUNK_TAGS}
+    if not ta or not tb:
+        return 0.0
+    dot = sum(ta[k] * tb.get(k, 0) for k in ta)
+    norm = math.sqrt(sum(v * v for v in ta.values())) * math.sqrt(sum(v * v for v in tb.values()))
+    return dot / norm if norm else 0.0
+
+
+def change(name: str, what: str, *, store, taste=None, progress=None) -> dict:
+    """Change a list the way they asked: "more energetic", "no more Vampire
+    Weekend or anything like them". The planner says what goes and what
+    should come in; the worker judges the rows and finds the new songs; the
+    list is rewritten once, with the old one kept to undo to."""
+    from concurrent.futures import ThreadPoolExecutor
+    from ..resolve import ranking
+    pairs = store.rows(name)
+    if not pairs:
+        raise RuntimeError("That playlist is empty")
+    tracks = [t for _, t in pairs]
+    if progress:
+        progress("Reading what you want changed")
+    plan = curator.change(what, tracks)
+    gone_bands = list(plan.drop_artists)
+    if re.search(r"\b(like|similar|sound(s|ing)? like)\b", what, re.I):
+        # "...or anything like them": the bands filed next to the ones named.
+        # Deezer's neighbours first; then anyone in the list whose Last.fm
+        # tags read like theirs (Death Cab isn't Vampire Weekend's neighbour
+        # on Deezer, but the tags know).
+        from .kin import kin
+        named = [a for a in plan.drop_artists if curator.named_in(a, what)]
+        for band in named:
+            gone_bands += kin.prime(Track(title="", artist=band))[:25]
+        here = list(dict.fromkeys((t.artist or "").split(",")[0].strip() for t in tracks))
+        gone_bands += [b for b in here if any(_alike(b, n) >= .6 for n in named)]
+    drop = {i for i, t in enumerate(tracks)
+            if any(ranking.artist_matches(t, a) for a in gone_bands)}
+    if plan.drop_rule:
+        left = [i for i in range(len(tracks)) if i not in drop]
+        if progress:
+            progress(f"Checking {len(left)} songs: {plan.drop_rule}")
+        drop |= {left[k] for k in curator.matching(plan.drop_rule, [tracks[i] for i in left])}
+    kept = [p for i, p in enumerate(pairs) if i not in drop]
+    added: list[Track] = []
+    if plan.add:
+        if progress:
+            progress(f"Finding {plan.add} songs to add", [])
+        asks = curator.songs(plan.brief, round(plan.add * 1.3),
+                             have=[(t.artist, t.title) for _, t in kept[:40]])
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            found = [t for t in pool.map(lambda at: _found(*at), asks) if t]
+        have = {_loose(t) for _, t in kept}
+        added = [t for t in _deal([found]) if _loose(t) not in have
+                 and not (taste is not None and taste.is_blocked(t))][:plan.add]
+        if progress and added:
+            progress(f"Found {len(added)} songs", added)
+    if not drop and not added:
+        return {"dropped": 0, "added": 0, "summary": "Nothing needed changing"}
+    mixed = _unclump(_spread(kept, [(t.to_dict(), t) for t in added]),
+                     artist=lambda pair: pair[1].primary_artist())
+    rows = [r for r, _ in mixed]
+    saved = store.rewrite(name, rows)
+    if not saved.get("ok"):
+        raise RuntimeError(saved.get("message") or "Couldn't save the change")
+    gone = [tracks[i] for i in sorted(drop)]
+    return {"dropped": len(drop), "added": len(added), "summary": plan.summary,
+            "gone": [f"{t.title} · {t.artist}" for t in gone[:8]]}
+
+
+def start_change(name: str, what: str, *, store, taste=None, job_id: str = "") -> str:
+    """change(), in the background. Returns a job id, watched like a build."""
+    import secrets
+    owner = _store_key(store)
+    job = job_id or secrets.token_hex(16)
+    with _lock:
+        now = time.time()
+        if job_id:
+            prior = _jobs.get(job_id)
+            if not prior or prior.get("_owner") != owner or prior.get("state") != "waiting":
+                raise BuildBusy("That change can no longer be resumed.")
+        else:
+            _admit_build(owner, now)
+        _jobs[job] = {"what": what, "state": "building", "detail": "Reading what you want changed",
+                      "at": now, "name": name, "target": name, "kind": "change", "_owner": owner,
+                      "count": 0, "found": 0, "previews": []}
+
+    def note(detail: str, tracks: list[Track] | None = None) -> None:
+        with _lock:
+            _jobs[job]["detail"] = detail
+            if tracks:
+                _jobs[job]["found"] += len(tracks)
+                _jobs[job]["previews"] = [t.title for t in tracks[-6:] if t.title]
+
+    def work() -> None:
+        try:
+            got = change(name, what, store=store, taste=taste, progress=note)
+            bits = []
+            if got["dropped"]:
+                bits.append(f"took out {got['dropped']}")
+            if got["added"]:
+                bits.append(f"added {got['added']}")
+            detail = (got.get("summary") or "Changed it") + (f" ({' and '.join(bits)})" if bits else "")
+            with _lock:
+                _jobs[job].update(state="done", count=got["added"], dropped=got["dropped"],
+                                  gone=got.get("gone", []), undo=bool(bits), detail=detail)
+            log.info("changed %r for %r: -%d +%d", name, what, got["dropped"], got["added"])
+        except curator.Busy as busy:
+            with _lock:
+                _jobs[job].update(state="waiting", ready_at=time.time() + busy.wait,
+                                  detail=f"Groq is busy -- starting in about {busy.wait:.0f}s")
+            timer = threading.Timer(busy.wait, lambda: start_change(
+                name, what, store=store, taste=taste, job_id=job))
+            timer.daemon = True
+            timer.start()
+        except Exception as exc:
+            with _lock:
+                _jobs[job].update(state="failed", detail=str(exc)[:160])
+            log.warning("playlist change failed for %r: %s", name, exc)
+
+    threading.Thread(target=work, daemon=True, name="playlist-change").start()
     return job
 
 
