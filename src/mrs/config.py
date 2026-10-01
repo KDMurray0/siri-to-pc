@@ -84,6 +84,8 @@ DEFAULTS: dict[str, Any] = {
     "announce_duck_db": -12.0,
     "announce_voice_gain_db": 0.0,
     "theme": "mono",
+    # How strongly a colour mode tints the page, 0-100. Mono ignores it.
+    "theme_intensity": 100,
     # Desktop-only visual preference. Keep it in the application config so a
     # repaired WebView2 profile cannot silently forget the user's choice.
     "glass_enabled": False,

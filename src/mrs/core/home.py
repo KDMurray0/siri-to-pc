@@ -126,18 +126,21 @@ def _recent(taste, limit: int = 12) -> list[dict]:
 
 
 def _genres(names: list[str], limit: int = 8) -> list[dict]:
-    """The genres your top artists share, each pictured by the artist it's most theirs."""
+    """The genres your top artists share, most played first, each pictured by
+    the artist it's most theirs. `names` is in play order, so an artist near
+    the top counts for more than one near the bottom."""
     from .tags import tagstore
     count: Counter = Counter()
     faces: dict[str, list[str]] = {}
-    for name in names:
+    for rank, name in enumerate(names):
+        weight = len(names) - rank
         tags = tagstore.cached(Track(title="", artist=name)) or {}
         if not tags:
             tagstore.get(Track(title="", artist=name))     # ask, for next time
         for tag, _ in sorted(tags.items(), key=lambda kv: -kv[1])[:5]:
             if tag in _NOT_GENRES or len(tag) > 24:
                 continue
-            count[tag] += 1
+            count[tag] += weight
             faces.setdefault(tag, []).append(name)
     out = []
     known = {n.casefold() for n in names}

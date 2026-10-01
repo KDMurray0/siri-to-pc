@@ -1142,6 +1142,98 @@ def _clear_standdown() -> None:
         pass
 
 
+def _desktop_marker():
+    from mrs.paths import data_dir
+    return data_dir() / "desktop.pid"
+
+
+def _pid_is_ours(pid: int) -> bool:
+    """Alive, and running our exe. A reused pid belongs to somebody else."""
+    if not pid or pid == os.getpid():
+        return False
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = ctypes.c_void_p
+        k32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+        h = k32.OpenProcess(0x1000, False, pid)        # QUERY_LIMITED_INFORMATION
+        if not h:
+            return ctypes.get_last_error() == 5        # denied: it's there
+        try:
+            code = ctypes.c_uint32()
+            k32.GetExitCodeProcess(ctypes.c_void_p(h), ctypes.byref(code))
+            if code.value != 259:                      # STILL_ACTIVE
+                return False
+            buf = ctypes.create_unicode_buffer(1024)
+            size = ctypes.c_uint32(len(buf))
+            if k32.QueryFullProcessImageNameW(ctypes.c_void_p(h), 0, buf, ctypes.byref(size)):
+                return (os.path.basename(buf.value).lower()
+                        == os.path.basename(sys.executable).lower())
+            return True
+        finally:
+            k32.CloseHandle(ctypes.c_void_p(h))
+    except Exception:
+        return False
+
+
+def _desktop_copy_running() -> bool:
+    try:
+        pid = int(_desktop_marker().read_text(encoding="utf-8").strip())
+    except Exception:
+        return False
+    return _pid_is_ours(pid)
+
+
+def _boot_task_running() -> bool:
+    try:
+        out = subprocess.run(["schtasks", "/Query", "/TN", "MusicRequestServer-BeforeSignIn",
+                              "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=10,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+    except Exception:
+        return False
+    return '"Running"' in (out or "")
+
+
+def _wait_out_headless() -> None:
+    """Boot and sign-in land seconds apart, so the headless copy can still be
+    loading -- port not bound yet -- when this one looks. Both then served,
+    one on the wrong port, and the one in session 0 can't reach the speakers
+    or the media overlay. Claim the machine first, then wait for it to go."""
+    if _desktop_copy_running():
+        return          # a second double-click: the mutex sends this one home
+    try:
+        _desktop_marker().write_text(str(os.getpid()), encoding="utf-8")
+    except Exception as exc:
+        log.debug("couldn't write the desktop marker: %s", exc)
+        return
+
+    def headless_about() -> bool:
+        try:
+            pid = int(_headless_marker().read_text(encoding="utf-8").strip())
+        except Exception:
+            pid = 0
+        return _pid_is_ours(pid) or _boot_task_running()
+
+    if not headless_about():
+        return
+    mark("the copy from before sign-in is still about — waiting for it to go")
+    for _ in range(20):
+        time.sleep(1.0)
+        if not headless_about():
+            mark("it went")
+            return
+    mark("it didn't go — ending the boot task")
+    try:
+        subprocess.run(["schtasks", "/End", "/TN", "MusicRequestServer-BeforeSignIn"],
+                       capture_output=True, timeout=20,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception as exc:
+        log.debug("couldn't end the boot task: %s", exc)
+    for _ in range(10):
+        time.sleep(0.5)
+        if not headless_about():
+            return
+
+
 def _stand_down_headless() -> bool:
     """Stop a copy that's been serving since before anyone signed in.
 
@@ -1345,6 +1437,9 @@ def _run_headless() -> None:
     if _singleton() is None:
         mark("headless: something else already holds the mutex — stopping")
         sys.exit(0)
+    if _desktop_copy_running():
+        mark("headless: somebody's signed in and their copy is up — stopping")
+        sys.exit(0)
     try:
         _headless_marker().write_text(str(os.getpid()), encoding="utf-8")
     except Exception as exc:
@@ -1389,16 +1484,16 @@ def _run_headless() -> None:
     missed = 0
     try:
         while thread.is_alive():
-            if _standdown_flag().exists():
+            if _standdown_flag().exists() or _desktop_copy_running():
                 mark("headless: asked to stand down — shutting down cleanly")
                 break
             missed = 0 if srv._is_ours(port) else missed + 1
-            if missed >= 5:
+            if missed >= 20:
                 mark("headless: stopped answering for a minute — letting go")
                 log.error("headless: holding the port and serving nothing; "
                           "exiting so something else can")
                 break
-            thread.join(timeout=12.0)
+            thread.join(timeout=3.0)
     finally:
         try:
             _headless_marker().unlink()
@@ -1512,6 +1607,7 @@ def main() -> None:
 
     mark("starting")
     _trace("main() reached")
+    _wait_out_headless()
     # The port, before the mutex, because the mutex cannot see across a
     # session boundary and this is exactly where one is.
     #

@@ -5326,9 +5326,9 @@ def _run(verbose: bool = False) -> Result:
               and "--panelw:clamp(300px,26vw,370px);" in page54
               and "--cover:clamp(240px,min(calc(100dvh - 290px)" in page54
               and "body:not(.mini) .art-wrap{grid-area:3/1;" in page54)
-            c("the list's box lines up with the cover and never runs under the search",
-              "body:not(.mini) .nav{grid-area:3/2;align-self:start;" in page54
-              and "body:not(.mini) .panel{grid-column:2;grid-row:3/5;" in page54
+            c("the list's box is one height for a window and never runs under the search",
+              "body:not(.mini) .nav{grid-area:2/2;align-self:start;" in page54
+              and "body:not(.mini) .panel{grid-column:2;grid-row:2/6;" in page54
               and "body:not(.mini) .nav{grid-area:1/" not in page54)
             c("fold the queue away and the words take its place",
               "body:not(.mini).sidehid #panel-lyrics{display:block;" in page54
@@ -5349,12 +5349,12 @@ def _run(verbose: bool = False) -> Result:
               and "grid-template-columns:var(--cover) 1fr var(--panelw);" in page54
               and "transition:grid-template-columns .7s" in page54)
             c("resting and playing share every grid row, so the cover can't slide up or down",
-              "min-height:60px;margin:16px 0 0;text-align:left" in page54
+              "min-height:86px;margin:16px 0 0;text-align:left" in page54
               and "padding-bottom:28px" not in page54)
             c("the bar keeps play on the centre line; padding gives first, the volume last",
               "grid-template-columns:minmax(150px,1fr) minmax(220px,600px) minmax(max-content,1fr);" in page54
               and "padding:7px 20px 10px" in page54
-              and "body:not(.mini) .transport .vol{flex:0 0 auto;max-width:150px;" in page54
+              and "body:not(.mini) .transport .vol{flex:0 0 auto;width:150px;max-width:150px;" in page54
               and "body:not(.mini) .transport .vol{max-width:90px}" not in page54)
             c("wide screens: a Spotify-style bar whose middle sits under the words",
               "grid-template-columns:var(--cover) 1fr var(--panelw);" in page54

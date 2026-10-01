@@ -905,11 +905,12 @@ body.live:not(.onsong) .moremenu #download,body.live:not(.onsong) .moremenu #add
 .picker-new[hidden]{display:none}
 
 /* toast */
-.toast{position:absolute;left:50%;bottom:18px;transform:translate(-50%,20px);z-index:30;
-  background:var(--accent);color:var(--accent-ink);font-size:12.5px;font-weight:600;
-  padding:9px 16px;border-radius:22px;opacity:0;pointer-events:none;
-  transition:opacity .2s,transform .2s;max-width:88%;text-align:center}
-.toast.show{opacity:1;transform:translate(-50%,0)}
+.toast{position:fixed;left:16px;top:16px;transform:translateY(-14px) scale(.97);transform-origin:top left;z-index:60;
+  background:var(--accent);color:var(--accent-ink);font-size:12.5px;font-weight:600;line-height:1.35;
+  padding:10px 16px;border-radius:14px;opacity:0;pointer-events:none;box-shadow:0 10px 30px rgba(0,0,0,.35);
+  transition:opacity .22s ease,transform .3s cubic-bezier(.2,.8,.2,1);
+  width:max-content;max-width:min(440px,calc(100vw - 32px));text-align:left}
+.toast.show{opacity:1;transform:none}
 .toast.warn{background:var(--warn);color:#171717}
 body.mini .toast{bottom:auto;top:50%;left:12px;right:12px;max-width:none;transform:translate(0,-40%);
   font-size:11.5px;padding:7px 12px;z-index:40}
@@ -1100,15 +1101,22 @@ body.paused .miniwave{opacity:.25}
 body.noviz .miniwave{display:none}
 /* Nothing playing: no row of flat bars across the empty cover. */
 body:not(.hastrack) .miniwave{visibility:hidden}
-/* Wide: one curve of thin bars right across the bottom of the cover. */
-body:not(.mini).viz-wide .miniwave{width:auto;left:12px;right:12px;transform:none;
-  gap:3px;padding:0 4px 12px;height:52px}
-body:not(.mini).viz-wide .miniwave i{flex:1;width:auto;border-radius:2px}
+/* On the big player the bars are pinned to the cover's own box by
+   placeViz(), so they sit inside it at every size. */
+body:not(.mini) .miniwave.placed{transform:none;left:auto;width:auto}
+/* Wide: a mirrored curve of thin bars across the foot of the cover, bass in
+   the middle, fading up into the art. */
+body:not(.mini).viz-wide .miniwave{gap:3px;padding:0 14px 14px;
+  background:linear-gradient(to top,rgba(0,0,0,.45),transparent);border-radius:0 0 16px 16px}
+body:not(.mini).viz-wide .miniwave i{flex:1;width:auto;border-radius:3px;min-width:2px}
 /* Ring and pulse don't use the bars on the big player; the mini keeps them. */
 body:not(.mini).viz-ring .miniwave,body:not(.mini).viz-pulse .miniwave{display:none}
-.vizring{display:none;position:absolute;pointer-events:none;z-index:2}
+/* The ring is a filled glow behind the cover, so the cover sits on it. */
+.art{position:relative;z-index:1}
+.vizring{display:none;position:absolute;pointer-events:none;z-index:0}
 body:not(.mini).viz-ring:not(.noviz) .vizring{display:block}
-body.viz-ring:not(.mini):not(.expand) .art-wrap{overflow:visible}
+body.viz-ring:not(.mini):not(.expand) .art-wrap,
+body.viz-pulse:not(.mini):not(.expand) .art-wrap{overflow:visible}
 @media (prefers-reduced-motion:reduce){body.viz-pulse .art{scale:none!important}}
 /* The phone's own volume buttons own this. It used to be dimmed and left on
    screen, which is worse than either option: a slider you can see, can drag
@@ -1354,18 +1362,18 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
      one height in resting and playing, so the resting rule below may hide
      the box without moving anything. */
   body:not(.mini) .meta{grid-area:4/1;justify-self:center;width:100%;
-    min-height:60px;margin:16px 0 0;text-align:left}
+    min-height:86px;margin:16px 0 0;text-align:left}
   body:not(.mini) .title{font-size:28px;line-height:1.2}
   body:not(.mini) .artist{font-size:15px;margin-top:5px}
   /* The list's box starts level with the top of the cover and ends level
      with the artist line: one block, centred as one, never under the search. */
-  body:not(.mini) .nav{grid-area:3/2;align-self:start;z-index:2;margin:0;overflow:hidden;
+  body:not(.mini) .nav{grid-area:2/2;align-self:start;z-index:2;margin:0;overflow:hidden;
     height:var(--navh);box-sizing:border-box;
     padding:9px 10px 8px;background:color-mix(in srgb,var(--panel) 88%,transparent);
     border:1px solid var(--line);border-radius:12px 12px 0 0}
   body:not(.mini) .navtab{font-size:11px}
   body:not(.mini) .navtab.on::after{bottom:-9px}
-  body:not(.mini) .panel{grid-column:2;grid-row:3/5;min-height:0;margin:var(--navh) 0 0;
+  body:not(.mini) .panel{grid-column:2;grid-row:2/6;min-height:0;margin:var(--navh) 0 0;
     padding:8px;background:color-mix(in srgb,var(--panel) 88%,transparent);
     border:1px solid var(--line);border-top:0;border-radius:0 0 12px 12px}
   body:not(.mini) .q{gap:12px;padding:6px 8px;margin:5px 0;min-height:44px}
@@ -1391,8 +1399,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
      absolutely-positioned grid item resolves right:0 against its own grid
      cell, not the stage's edge — the tab used to float mid-panel because
      of that. fixed takes it out of the grid's containing-block rules. */
-  body:not(.mini) .sidetoggle{position:fixed;top:50%;translate:0 -50%;z-index:6;
-    right:0;width:20px;height:48px;display:grid;place-items:center;padding:0;
+  body:not(.mini) .sidetoggle{position:relative;grid-area:2/2/6/3;align-self:center;justify-self:start;
+    margin-left:-21px;z-index:6;width:20px;height:48px;display:grid;place-items:center;padding:0;
     border:1px solid var(--line);border-right:0;border-radius:8px 0 0 8px;
     background:var(--panel);color:var(--sub);font-size:15px;line-height:1;font-family:inherit;cursor:pointer}
   body:not(.mini) .sidetoggle:hover{color:var(--fg)}
@@ -1445,7 +1453,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
     max-height:none;opacity:1;pointer-events:auto;margin:0;padding:0;gap:6px;border:0}
   body:not(.mini) .transport .row2 .ib{width:30px;height:30px}
   body:not(.mini) .transport .row2 .ib svg{width:18px;height:18px}
-  body:not(.mini) .transport .vol{flex:0 0 auto;max-width:150px;margin-left:2px}
+  body:not(.mini) .transport .vol{flex:0 0 auto;width:150px;max-width:150px;margin-left:2px}
+  body:not(.mini) .transport .vol .slider{min-width:96px}
   body:not(.mini) .transport .upnext{display:none}
   /* Resting: the player as normal, with an empty cover. No words to switch to. */
   body:not(.mini):not(.hastrack):not(.hasqueue) .lyrswitch{display:none!important}
@@ -1469,8 +1478,9 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   body:not(.mini) .search{grid-area:1/2;width:min(100%,720px)}
   body:not(.mini) #panel-lyrics{scrollbar-width:none}
   body:not(.mini) #panel-lyrics::-webkit-scrollbar{display:none}
-  body:not(.mini) .nav{grid-area:3/3}
+  body:not(.mini) .nav{grid-area:2/3}
   body:not(.mini) .panel{grid-column:3}
+  body:not(.mini) .sidetoggle{grid-column:3}
   /* The bar's three columns are the stage's: the song sits under the cover,
      the controls and progress under the words, the volume under the queue. */
   body:not(.mini):is(.hastrack,.hasqueue) .transport{
@@ -1851,6 +1861,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 
       <section class="spane" data-s="look">
         <div class="srow guestok"><span class="slabel">Theme</span><div class="swatches" id="swatches"></div></div>
+        <div class="srow guestok" id="introw" hidden><label class="slabel" for="themeint">Colour intensity<em>How strongly the colour tints the page</em></label>
+          <span style="display:flex;align-items:center;gap:8px"><input class="keyin" id="themeint" type="range" min="0" max="100" step="1" style="width:150px"><output id="themeintv">100%</output></span></div>
         <div class="srow"><span class="slabel">Visualiser<em>Bars on the cover, a ring round it, or the cover itself moving</em></span>
           <div class="chips" id="viz"></div></div>
         <div class="srow guestok"><span class="slabel">Liquid glass mini player<em>Off by default. Turn it on for a clear desktop view with a subtle edge bend and album tint. While active, the mini player is omitted from screenshots.</em></span>
@@ -2260,13 +2272,10 @@ function setSide(hidden, remember) {
     b.title = hidden || document.body.classList.contains("covermode") ? "Show the queue" : "Hide the queue";
     b.setAttribute("aria-label", b.title);
   }
-  if (remember !== false) {
-    try { localStorage.setItem("sidehid", hidden ? "1" : "0"); } catch (e) {}
-  }
   // The words fill the queue's place; they need loading and placing.
   setTimeout(() => { if (lyricsPinned()) { lastLine = -1; loadLyrics(); syncLyrics(state.position); } }, 0);
 }
-try { setSide(localStorage.getItem("sidehid") === "1", false); } catch (e) {}
+try { localStorage.removeItem("sidehid"); } catch (e) {}
 // A resting view is temporary. Opening the queue dismisses it until the
 // next playback state change, without losing the saved sidebar preference.
 let restingState = null, restingDismissed = false;
@@ -2515,6 +2524,30 @@ document.querySelectorAll(".topdrag,.drag").forEach(el => {
 });
 
 /* ── theme + accent from artwork ───────────────────────────────────── */
+/* Colour intensity: how much of a colour mode's tint the page takes, mixed
+   with mono. The accent keeps its full colour; the surfaces fade toward grey. */
+const MONO_TOKENS = {bg: "#0c0c0d", panel: "#161617", sub: "#8a8a8f", line: "#242426"};
+const THEME_TOKENS = {
+  default: {bg: "#0e0f16", panel: "#171826", sub: "#9aa0b8", line: "#252739"},
+  ember: {bg: "#140d0b", panel: "#221512", sub: "#b58c7d", line: "#33201a"},
+  forest: {bg: "#0a1310", panel: "#12211b", sub: "#7fa595", line: "#1d3329"},
+  grape: {bg: "#110c1a", panel: "#1d1430", sub: "#9a8bc0", line: "#2c2145"},
+  rose: {bg: "#150b10", panel: "#25141d", sub: "#c088a0", line: "#3a1f2c"},
+  ocean: {bg: "#0a121c", panel: "#12202f", sub: "#7f9bb5", line: "#1d3247"},
+};
+function mixTheme(theme, percent) {
+  const style = document.documentElement.style, t = THEME_TOKENS[theme];
+  for (const k of ["bg", "panel", "sub", "line"]) {
+    if (!t || percent >= 100) style.removeProperty("--" + k);
+    else style.setProperty("--" + k, `color-mix(in srgb, ${t[k]} ${percent}%, ${MONO_TOKENS[k]})`);
+  }
+}
+let themeIntensity = 100;
+function applyIntensity() {
+  mixTheme(curTheme, curTheme === "mono" ? 100 : themeIntensity);
+  $("introw").hidden = curTheme === "mono";
+  $("themeint").value = themeIntensity; $("themeintv").textContent = themeIntensity + "%";
+}
 const THEMES = ["default","ocean","forest","grape","rose","ember","mono"];
 const THEME_ACCENT = {default:"#6d8bff",ocean:"#4aa8ff",forest:"#3fd48a",grape:"#b98cff",rose:"#ff5d8f",ember:"#ff7a4d",mono:"#e6e6ea"};
 let curTheme = "default", artAccent = null;
@@ -2527,6 +2560,7 @@ function setTheme(t, persist) {
         () => api("/api/theme?value=" + encodeURIComponent(t)));
   document.querySelectorAll(".sw").forEach(s => s.classList.toggle("sel", s.dataset.t === t));
   applyAccent();
+  applyIntensity();
 }
 function buildSwatches() {
   const box = $("swatches");
@@ -2628,7 +2662,7 @@ function hiRes(url) {
   return /googleusercontent\.com\//.test(url) ? url.replace(/=w\d+-h\d+/, "=w1200-h1200") : url;
 }
 function setArt(url) {
-  url = hiRes(artUrl(url));   // "null" and friends are not pictures
+  url = artUrl(url);   // "null" and friends are not pictures
   if (url === lastArt) return;
   lastArt = url;
   artAccent = null; applyAccent();
@@ -2645,6 +2679,15 @@ function setArt(url) {
     if (lastArt !== url) return;          // the track moved on while we waited
     const img = $("art"), amb = $("ambient");
     img.src = url; img.classList.remove("placeholder");
+    // The usual size first, because it's quick (often cached); the sharp one
+    // replaces it once it has arrived.
+    const sharp = hiRes(url);
+    if (sharp !== url) {
+      const big = new Image();
+      big.onload = () => { if (lastArt === url) img.src = sharp; };
+      big.src = sharp;
+    }
+    placeViz();
     amb.innerHTML = "";
     document.body.classList.add("hasart");
     const wash = new Image();
@@ -4582,6 +4625,15 @@ function closeSettings() {
     if (b && b.set_expanded) Promise.resolve(b.set_expanded(false)).catch(() => {});
   }
 }
+document.addEventListener("pointerdown", e => {
+  const sheet = $("sheet");
+  if (!sheet.classList.contains("open") || settingsNarrow() ||
+      document.documentElement.classList.contains("embed-settings")) return;
+  const r = sheet.getBoundingClientRect(), slack = 28;
+  if (e.clientX > r.left - slack && e.clientX < r.right + slack &&
+      e.clientY > r.top - slack && e.clientY < r.bottom + slack) return;
+  closeSettings();
+});
 /* One way out, top left, always there: back to the list of sections when
    inside one on a narrow screen, otherwise back to the player. */
 $("setback").onclick = () => {
@@ -5459,6 +5511,12 @@ async function loadBlocked() {
     ? rows.map(b => `${b.ip} (${Math.round(b.minutes_left / 60)}h left)`).join(", ")
     : "nobody";
 }
+let intensityT;
+$("themeint").addEventListener("input", () => {
+  themeIntensity = +$("themeint").value; applyIntensity();
+  clearTimeout(intensityT);
+  intensityT = setTimeout(() => setPref("theme_intensity", themeIntensity), 250);
+});
 buildChips("viz", [{label:"Off",val:"off"},{label:"Bars",val:"bars"},{label:"Wide",val:"wide"},
                    {label:"Ring",val:"ring"},{label:"Pulse",val:"pulse"}], v => setVizStyle(v, true));
 
@@ -7053,6 +7111,7 @@ async function loadSettings() {
   }
   $("libmonitor").value = String(monitorMinutes);
   setVizStyle(s.show_visualiser === false ? "off" : (s.visualiser_style || "bars"), false);
+  if (s.theme_intensity != null) { themeIntensity = +s.theme_intensity; applyIntensity(); }
   $("normalize").classList.toggle("on", !!s.normalize);
   $("announce").classList.toggle("on", s.announce !== false);
   checkBoot();
@@ -7261,7 +7320,7 @@ function envBands() {
 /* Which visualiser: bars, wide, ring or pulse -- or off. The wide bars and
    the ring are the big player's; the mini keeps its seven bars whatever. */
 let vizStyle = "bars";
-const WIDE_BARS = 28;
+const WIDE_BARS = 36;
 function setVizStyle(style, save) {
   const off = style === "off";
   vizStyle = off ? vizStyle : (["bars", "wide", "ring", "pulse"].includes(style) ? style : "bars");
@@ -7270,6 +7329,7 @@ function setVizStyle(style, save) {
     document.body.classList.toggle("viz-" + s, !off && vizStyle === s);
   markChips("viz", off ? "off" : vizStyle);
   buildMeters();
+  placeViz();
   if (save) {
     api("/api/setting?key=show_visualiser&value=" + (off ? 0 : 1));
     if (!off) api("/api/setting?key=visualiser_style&value=" + vizStyle);
@@ -7320,18 +7380,12 @@ function bandAt(x) {
   return a + (b - a) * (1 - Math.cos(t * Math.PI)) / 2;
 }
 
-/* The ring: a wave traced round the cover's rounded edge, moving with the
-   music, in the colour opposite the cover's on the wheel -- white when the
-   cover has no colour to speak of. Drawn only while it's the chosen style. */
+/* The ring: a filled glow behind the cover, its edge a wave moving with the
+   music. The theme's colour; white in mono and on the default. */
 function ringColour() {
-  const m = /rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(artAccent || "");
-  if (!m) return "rgba(255,255,255,.9)";
-  const [r, g, b] = m.slice(1).map(n => +n / 255);
-  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
-  if (d < .12) return "rgba(255,255,255,.9)";
-  let h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
-  h = (h * 60 + 180 + 360) % 360;
-  return `hsl(${h.toFixed(0)},80%,68%)`;
+  if (curTheme !== "default" && curTheme !== "mono")
+    return getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#ffffff";
+  return "#ffffff";
 }
 let ringBox = null;
 function paintRing(level, t) {
@@ -7368,20 +7422,38 @@ function paintRing(level, t) {
   }
   x.closePath();
   const colour = ringColour();
-  x.strokeStyle = colour; x.lineWidth = 2.5; x.lineJoin = "round";
-  x.shadowColor = colour; x.shadowBlur = 14;
-  x.globalAlpha = Math.min(1, .35 + level * 1.4);
-  x.stroke();
+  x.fillStyle = colour; x.shadowColor = colour; x.shadowBlur = 22;
+  x.globalAlpha = Math.min(.95, .45 + level * 1.2);
+  x.fill();
 }
 
-/* Pulse: the cover itself breathes with the low end. */
+/* Pulse: the cover itself breathes with the low end, and nothing clips it. */
 function paintPulse(bass) {
   const art = $("art");
   if (!art) return;
   const on = vizStyle === "pulse" && !document.body.classList.contains("noviz") && bass > 0.002;
-  const want = on ? (1 + bass * 0.05).toFixed(4) : "";
+  const want = on ? (1 + bass * 0.07).toFixed(4) : "";
   if (art.style.scale !== want) art.style.scale = want;
 }
+
+/* Pin the bars to the cover's own box: the cover's wrapper is often bigger
+   than the cover, and the bars ended up under it rather than on it. */
+function placeViz() {
+  const box = $("miniwave"), art = $("art");
+  if (!box || !art) return;
+  if (document.body.classList.contains("mini") || !art.offsetWidth) {
+    box.classList.remove("placed"); box.style.left = box.style.top = box.style.width = box.style.height = "";
+    return;
+  }
+  const tall = vizStyle === "wide" ? Math.round(art.offsetHeight * .3) : 34;
+  box.classList.add("placed");
+  box.style.left = art.offsetLeft + "px";
+  box.style.width = art.offsetWidth + "px";
+  box.style.top = (art.offsetTop + art.offsetHeight - tall) + "px";
+  box.style.height = tall + "px";
+}
+if (window.ResizeObserver) new ResizeObserver(placeViz).observe($("art"));
+window.addEventListener("resize", placeViz);
 
 function paintMeter() {
   requestAnimationFrame(paintMeter);
@@ -7428,13 +7500,14 @@ function paintMeter() {
       bar.style.opacity = o;
     }
   }
-  // The wide bars: one curve across the cover, every frame.
+  // The wide bars: mirrored, the bass in the middle and the highs out at the edges.
   for (const box of boxes) {
     const n = box.children.length;
     if (n === BARS || !n) continue;
+    const mid = (n - 1) / 2;
     for (let j = 0; j < n; j++) {
-      const v = bandAt(j / (n - 1)) * (.85 + .15 * Math.sin(j * 1.7));
-      box.children[j].style.height = (Math.max(0.05, v) * 100).toFixed(1) + "%";
+      const v = bandAt(Math.abs(j - mid) / mid) * (.9 + .1 * Math.sin(j * 1.3 + performance.now() / 400));
+      box.children[j].style.height = (Math.max(0.04, v) * 100).toFixed(1) + "%";
     }
   }
 }

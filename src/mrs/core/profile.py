@@ -46,6 +46,7 @@ GUEST_SETTINGS: dict[str, object] = {
     # is a stranger's mastering every third track, and flat because an EQ
     # curve is a room's problem and this isn't our room.
     "theme": "mono",
+    "theme_intensity": 100,
     "eq": "flat",
     "normalize": True,
     "crossfade": 3,
@@ -66,7 +67,7 @@ GUEST_SETTINGS: dict[str, object] = {
 
 # Types, so a query string can't put a string where a float belongs.
 _TYPES: dict[str, type] = {
-    "theme": str, "eq": str, "normalize": bool, "crossfade": int,
+    "theme": str, "theme_intensity": int, "eq": str, "normalize": bool, "crossfade": int,
     "announce": bool, "shuffle": bool, "repeat": str,
     "artist_cohesion": float, "anchor_pull": float, "artist_run_limit": int,
     "queue_minutes": int, "source": str, "sleep_minutes": int,
@@ -74,7 +75,7 @@ _TYPES: dict[str, type] = {
 
 # Values that would be silly or expensive, clamped rather than refused.
 _LIMITS: dict[str, tuple[float, float]] = {
-    "crossfade": (0, 12), "artist_cohesion": (0.0, 2.0),
+    "crossfade": (0, 12), "theme_intensity": (0, 100), "artist_cohesion": (0.0, 2.0),
     "anchor_pull": (0.0, 1.0), "artist_run_limit": (1, 10),
     "queue_minutes": (3, 60), "sleep_minutes": (0, 480),
 }

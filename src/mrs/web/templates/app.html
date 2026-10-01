@@ -145,9 +145,16 @@ h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;
 .cards.strip::-webkit-scrollbar{display:none}
 /* the genre bar: flat, equal pills, like a row of logos */
 .logobar{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(150px,1fr);gap:10px;overflow-x:auto;scrollbar-width:none}
-.logobar button{height:58px;border-radius:12px;background:var(--tint);font-size:13px;font-weight:700;letter-spacing:.12em;
-  text-transform:uppercase;color:var(--sub);white-space:nowrap;padding:0 14px;transition:background .15s,color .15s}
-.logobar button:hover{background:var(--tint-hi);color:var(--fg)}
+.gpill{position:relative;display:flex}
+.gpill .gopen{flex:1;height:58px;border-radius:12px;background:var(--tint);font-size:13px;font-weight:700;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--sub);white-space:nowrap;padding:0 14px;transition:background .15s,color .15s,padding .15s}
+.gpill:hover .gopen{background:var(--tint-hi);color:var(--fg);padding-right:46px}
+.gpill .gplay{position:absolute;right:12px;top:50%;translate:0 -50%;width:30px;height:30px;border-radius:50%;
+  background:var(--fg);color:var(--bg);display:grid;place-items:center;opacity:0;scale:.8;transition:opacity .15s,scale .15s}
+.gpill .gplay .svg{width:15px;height:15px}
+.gpill:hover .gplay,.gpill .gplay:focus-visible{opacity:1;scale:1}
+/* a scroller clips anything drawn outside it, so the ring goes inside */
+.logobar button:focus-visible,.browse>button:focus-visible,.cards.strip>*:focus-visible{outline-offset:-3px}
 /* browse cards: a name, a short rule, explore, and covers fanned at the side */
 .browse{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(300px,360px);gap:12px;overflow-x:auto;scrollbar-width:none;padding-bottom:4px}
 .bcard{position:relative;height:140px;border-radius:14px;padding:16px 18px;background:var(--tint);overflow:hidden;
@@ -298,9 +305,10 @@ h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;
 .vol .bar{width:104px}
 body.noplay .play{opacity:.5}
 
-.toast{position:fixed;left:50%;bottom:calc(var(--deck) + 16px);translate:-50% 8px;opacity:0;z-index:60;padding:10px 16px;
-  border-radius:12px;font-size:13px;pointer-events:none;transition:opacity .2s,translate .2s var(--ease)}
-.toast.show{opacity:1;translate:-50% 0}
+.toast{position:fixed;left:16px;top:calc(var(--top) - 4px);translate:0 -12px;opacity:0;z-index:60;padding:10px 16px;
+  border-radius:12px;font-size:13px;line-height:1.35;pointer-events:none;width:max-content;max-width:min(440px,calc(100vw - 32px));
+  transition:opacity .2s,translate .3s var(--ease)}
+.toast.show{opacity:1;translate:0 0}
 
 @media (max-width:1060px){
   :root{--ledger:72px}
@@ -454,11 +462,31 @@ async function embedAuth() {
 }
 
 /* ── colour: the player's modes, mono by default ── */
-function setTheme(t) {
+/* Colour intensity: how much of a colour mode's tint the page takes, mixed
+   with mono. The accent keeps its full colour; the surfaces fade toward grey. */
+const MONO_TOKENS = {bg: "#0c0c0d", panel: "#161617", sub: "#8a8a8f", line: "#242426"};
+const THEME_TOKENS = {
+  default: {bg: "#0e0f16", panel: "#171826", sub: "#9aa0b8", line: "#252739"},
+  ember: {bg: "#140d0b", panel: "#221512", sub: "#b58c7d", line: "#33201a"},
+  forest: {bg: "#0a1310", panel: "#12211b", sub: "#7fa595", line: "#1d3329"},
+  grape: {bg: "#110c1a", panel: "#1d1430", sub: "#9a8bc0", line: "#2c2145"},
+  rose: {bg: "#150b10", panel: "#25141d", sub: "#c088a0", line: "#3a1f2c"},
+  ocean: {bg: "#0a121c", panel: "#12202f", sub: "#7f9bb5", line: "#1d3247"},
+};
+function mixTheme(theme, percent) {
+  const style = document.documentElement.style, t = THEME_TOKENS[theme];
+  for (const k of ["bg", "panel", "sub", "line"]) {
+    if (!t || percent >= 100) style.removeProperty("--" + k);
+    else style.setProperty("--" + k, `color-mix(in srgb, ${t[k]} ${percent}%, ${MONO_TOKENS[k]})`);
+  }
+}
+function setTheme(t, intensity = 100) {
   const known = ["ember", "forest", "grape", "rose", "ocean"];
   document.documentElement.setAttribute("data-theme", known.includes(t) ? t : "");
+  mixTheme(known.includes(t) ? t : "", known.includes(t) ? intensity : 100);
 }
-api("/api/settings").then(s => { if (s) setTheme(s.theme); });
+const applySettings = s => { if (s) setTheme(s.theme, s.theme_intensity ?? 100); };
+api("/api/settings").then(applySettings);
 
 /* ── what's playing ── */
 const state = { track: null, playing: false, position: 0, duration: 0, at: performance.now(), volume: 70,
@@ -522,6 +550,16 @@ let volSent = 0;
 dragBar($("vol"), f => { volDrag = true; state.volume = Math.round(f * 100); paintVol();
     if (performance.now() - volSent > 110) { volSent = performance.now(); api("/api/control/volume?value=" + state.volume); } },
   f => { volDrag = false; state.volume = Math.round(f * 100); api("/api/control/volume?value=" + state.volume); });
+// The wheel turns it, over the icon or the bar. Held as a drag so the poll doesn't snap it back.
+let wheelT;
+document.querySelector(".deck .vol").addEventListener("wheel", e => {
+  e.preventDefault();
+  volDrag = true;
+  state.volume = Math.max(0, Math.min(100, state.volume + (e.deltaY < 0 ? 4 : -4)));
+  paintVol();
+  clearTimeout(wheelT);
+  wheelT = setTimeout(async () => { await api("/api/control/volume?value=" + state.volume); volDrag = false; }, 120);
+}, { passive: false });
 $("mute").onclick = () => api("/api/control/mute");
 $("pp").onclick = () => api("/api/control/" + (state.playing ? "pause" : "resume"));
 $("next").onclick = () => api("/api/control/next");
@@ -602,6 +640,18 @@ function wireShelves(root) {
 const part = (n, title, inner) => `<div class="part"><h4><i>[${String(n).padStart(2, "0")}]</i>${esc(title)}</h4>${inner}</div>`;
 const faceRow = people => `<div class="faces">` + people.map((a, i) =>
   `<button data-artist="${i}"><div class="art one">${img(a.art)}</div><b>${esc(a.name)}</b></button>`).join("") + `</div>`;
+/* Most played in the middle, the rest fanning out either side. */
+function centreOut(items) {
+  const out = [];
+  items.forEach((x, i) => i % 2 ? out.push(x) : out.unshift(x));
+  return out;
+}
+/* A row in that order starts scrolled to its middle. */
+function centreRows(root) {
+  root.querySelectorAll(".logobar,.browse").forEach(row => requestAnimationFrame(() => {
+    row.scrollLeft = Math.max(0, (row.scrollWidth - row.clientWidth) / 2);
+  }));
+}
 const genreCard = (g, i) => {
   const fresh = (g.explore || []).map(a => a.name);
   const line = fresh.length ? fresh.slice(0, 2).join(", ") + ` and more, if you like ${(g.artists || [g.artist])[0]}`
@@ -632,7 +682,7 @@ function openSheet(build) {
   const scrim = document.createElement("div");
   scrim.className = "scrim";
   scrim.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><button class="x" aria-label="Close">${ICON.close}</button><div class="scroll"></div></div>`;
-  scrim.addEventListener("click", e => { if (e.target === scrim || e.target.closest(".x")) closeOverlay(); });
+  closeOnOutside(scrim, ".sheet");
   document.body.appendChild(scrim);
   overlay = scrim;
   build(scrim.querySelector(".scroll"));
@@ -766,15 +816,26 @@ async function openSettings() {
   scrim.className = "scrim";
   scrim.innerHTML = `<div class="setpanel" role="dialog" aria-modal="true" aria-label="Settings">` +
     `<iframe title="Settings" src="${BASE}/player?embed=settings${auth}"></iframe></div>`;
-  scrim.addEventListener("click", e => { if (e.target === scrim) closeOverlay(); });
+  closeOnOutside(scrim, ".setpanel");
   document.body.appendChild(scrim);
   overlay = scrim;
 }
 window.addEventListener("message", e => {
   if (e.origin === location.origin && e.data && e.data.type === "close-settings") {
-    closeOverlay(); api("/api/settings").then(s => { if (s) setTheme(s.theme); });
+    closeOverlay(); api("/api/settings").then(applySettings);
   }
 });
+
+function closeOnOutside(scrim, panelSel) {
+  scrim.addEventListener("click", e => {
+    if (e.target.closest(".x")) { closeOverlay(); return; }
+    if (e.target !== scrim) return;
+    const r = scrim.querySelector(panelSel).getBoundingClientRect(), slack = 26;
+    if (e.clientX > r.left - slack && e.clientX < r.right + slack &&
+        e.clientY > r.top - slack && e.clientY < r.bottom + slack) return;
+    closeOverlay();
+  });
+}
 
 /* ── the views ── */
 const VIEWS = {
@@ -783,8 +844,10 @@ const VIEWS = {
     const h = await api("/api/home");
     if (!h) { pane.innerHTML = `<h1 class="title">${greeting()}</h1><div class="empty">Couldn't reach the player.</div>`; return; }
     let html = `<h1 class="title">${greeting()}</h1>`;
-    if (h.genres.length) html += `<section class="sect"><div class="logobar">` +
-      h.genres.map((g, i) => `<button data-genre="${i}" title="Play ${esc(g.name)}">${esc(g.name)}</button>`).join("") + `</div></section>`;
+    h.genres = centreOut(h.genres);
+    if (h.genres.length) html += sect("Your sound", "Open a genre to explore it, or play it straight away",
+      `<div class="logobar">` + h.genres.map((g, i) => `<div class="gpill"><button class="gopen" data-genre-open="${i}">${esc(g.name)}</button>` +
+        `<button class="gplay" data-genre="${i}" title="Play ${esc(g.name)}" aria-label="Play ${esc(g.name)}">${ICON.play}</button></div>`).join("") + `</div>`);
     if (h.recent.length) html += sect("Jump back in", "What you played lately", shelf(
       h.recent.map((t, i) => `<button class="card" data-recent="${i}"><div class="art one">${img(t.art)}</div><b>${esc(t.title)}</b><span>${esc(t.artist)}</span><span class="go">${ICON.play}</span></button>`).join("")));
     if (h.lists.length) html += sect("Your playlists", "The ones you made and the ones shared with you",
@@ -803,6 +866,7 @@ const VIEWS = {
     wireCards(pane, { lists: h.lists, artists: h.artists });
     wireRows(pane, h.charts, t => playSong(t));
     wireShelves(pane);
+    centreRows(pane);
   },
 
   async search(pane, { q = "" } = {}) {
