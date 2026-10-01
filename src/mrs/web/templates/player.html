@@ -7164,7 +7164,11 @@ window.addEventListener("message", e => {
   if (e.origin === location.origin && e.data && e.data.type === "open-settings") $("openSettings").click();
 });
 if (document.documentElement.classList.contains("embed-settings"))
-  setTimeout(() => $("openSettings").click(), 0);
+  setTimeout(() => {
+    $("openSettings").click();
+    // Opened before the panel had a size: start on Playback rather than nothing.
+    requestAnimationFrame(() => { const t = document.querySelector('.stab[data-s="sound"]'); if (t) t.click(); });
+  }, 0);
 $("shrink").onclick = async () => {
   if (miniSwitch) return;
   miniSwitch = true;
