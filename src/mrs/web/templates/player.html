@@ -36,7 +36,7 @@ html.embedded,html.embed-settings{color-scheme:dark}
 html.embedded,html.embedded body,html.embedded .frame,
 html.embed-settings,html.embed-settings body,html.embed-settings .frame{background:transparent!important}
 html.embedded .ambient,html.embedded .transport,html.embedded .search,html.embedded .winbtn,
-html.embedded .timeleft,html.embedded .sidetoggle,html.embedded .glass-backdrop{display:none!important}
+html.embedded .timeleft,html.embedded .glass-backdrop{display:none!important}
 html.embedded body:not(.mini) .stage{padding-top:18px!important;padding-bottom:24px!important}
 html.embedded body:not(.mini) .stage::before{display:none}
 html.embed-settings .frame>:not(.sheet){display:none!important}
@@ -7226,7 +7226,10 @@ function showUpNext() {
 
 let mini = false, liked = false, miniSwitch = false;
 window.addEventListener("message", e => {
-  if (e.origin === location.origin && e.data && e.data.type === "open-settings") $("openSettings").click();
+  if (e.origin !== location.origin || !e.data) return;
+  if (e.data.type === "open-settings") $("openSettings").click();
+  // The full player's queue button, pressed while this is already showing.
+  if (e.data.type === "toggle-queue") $("sidetoggle").click();
 });
 if (document.documentElement.classList.contains("embed-settings"))
   setTimeout(() => {

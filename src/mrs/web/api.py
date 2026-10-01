@@ -4223,6 +4223,15 @@ def download_client(request: Request):
                         headers={"Cache-Control": "no-store"})
 
 
+@app.get("/api/companion")
+def api_companion(request: Request, _: bool = Auth):
+    """The companion app's download, and the address to send to somebody else."""
+    places = _client_addresses()
+    return {"status": "ok", "available": _client_build() is not None,
+            "here": _pfx.base_of(request) + "/download/client",
+            "link": (places[0] + "/download/client") if places else ""}
+
+
 def _begin_signin(request: Request, next_path: str, mode: str, signup: dict | None):
     if not google.configured():
         raise HTTPException(503, "Signing in with Google isn't set up here")

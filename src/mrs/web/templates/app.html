@@ -32,6 +32,10 @@ button{background:none;border:0;cursor:pointer;text-align:inherit}
 button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 img{display:block}
 .svg{width:19px;height:19px;fill:currentColor;flex:0 0 auto}
+/* One scrollbar everywhere: a thin pill that only shows itself on the way past. */
+*{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--fg) 18%,transparent) transparent}
+*:hover{scrollbar-color:color-mix(in srgb,var(--fg) 30%,transparent) transparent}
+.canvas.sliding .view{scrollbar-color:transparent transparent}
 
 /* the kinetic canvas: the cover, blurred to colour, drifting */
 .kinetic{position:fixed;inset:-12%;z-index:0;pointer-events:none;overflow:hidden}
@@ -96,6 +100,8 @@ body.still .kinetic img{animation:none}
 .lrow{display:flex;align-items:center;gap:11px;width:100%;padding:6px 8px;border-radius:10px;transition:background .15s}
 .lrow:hover{background:var(--tint)}
 .lrow.on{background:var(--tint-hi)}
+.lrow.fresh{animation:arrive .5s var(--ease)}
+@keyframes arrive{from{opacity:0;transform:translateX(-10px)}}
 .lrow div{min-width:0}
 .lrow b{display:block;font-weight:500;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .lrow span{display:block;font-size:11.5px;color:var(--sub)}
@@ -118,7 +124,7 @@ body.focus .edge{display:block}
 
 /* the canvas and its filmstrip */
 .canvas{position:fixed;top:0;bottom:0;right:0;left:calc(var(--ledger) + 22px);z-index:5;overflow:hidden}
-.view{position:absolute;inset:0;overflow-y:auto;padding:calc(var(--top) + 8px) 30px calc(var(--deck) + 30px) 12px;scrollbar-width:thin;
+.view{position:absolute;inset:0;overflow-y:auto;padding:calc(var(--top) + 8px) 30px calc(var(--deck) + 30px) 12px;scrollbar-gutter:stable;
   /* the edges fade, so nothing sharp sits behind the capsules or the deck */
   -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 calc(var(--top) - 4px),#000 calc(100% - var(--deck) - 4px),transparent 100%);
   mask-image:linear-gradient(to bottom,transparent 0,#000 calc(var(--top) - 4px),#000 calc(100% - var(--deck) - 4px),transparent 100%)}
@@ -141,6 +147,8 @@ h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;
   -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
 .shelfwrap .more:hover span{background:color-mix(in srgb,var(--fg) 18%,transparent)}
 .shelfwrap .more[hidden]{display:grid!important;opacity:0;pointer-events:none}
+.shelfwrap:has(> .logobar) .more{bottom:0}
+.shelfwrap:has(> .browse) .more{bottom:4px}
 .cards.strip{scrollbar-width:none}
 .cards.strip::-webkit-scrollbar{display:none}
 /* the genre bar: flat, equal pills, like a row of logos */
@@ -241,6 +249,14 @@ h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;
   text-wrap:balance;overflow-wrap:anywhere}
 .hero p{color:var(--sub);font-size:13px}
 .acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:4px 24px 18px}
+.infind{margin-left:auto;position:relative;display:flex;align-items:center}
+.infind .svg{position:absolute;left:11px;width:16px;height:16px;color:var(--sub);pointer-events:none}
+.infind input{width:40px;height:40px;border-radius:999px;border:0;background:var(--tint);padding:0 0 0 36px;outline:0;
+  transition:width .25s var(--ease),background .15s;cursor:pointer}
+.infind input:focus,.infind input:not(:placeholder-shown){width:min(240px,40vw);cursor:text;background:var(--tint-hi);padding-right:12px}
+.infind input::placeholder{color:transparent}
+.infind input:focus::placeholder{color:var(--sub)}
+.row.nomatch{display:none}
 .pill{height:40px;padding:0 18px;border-radius:999px;display:inline-flex;align-items:center;gap:7px;font-weight:550;
   background:var(--tint-hi);transition:filter .15s,transform .15s var(--ease)}
 .pill.primary{background:var(--accent);color:var(--accent-ink)}
@@ -305,6 +321,19 @@ h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;
 .vol .bar{width:104px}
 body.noplay .play{opacity:.5}
 
+/* sharing a song: a card over the button, not a toast with a URL in it */
+.sharepop{position:fixed;z-index:45;width:min(340px,calc(100vw - 24px));padding:14px;border-radius:18px;
+  animation:pop .16s var(--ease);transform-origin:bottom right}
+.sharepop .who{display:flex;gap:12px;align-items:center;margin-bottom:12px;min-width:0}
+.sharepop .who .thumb{width:46px;height:46px;flex:0 0 auto}
+.sharepop .who .thumb::after{display:none}
+.sharepop .who div{min-width:0}
+.sharepop .who b{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sharepop .who span{display:block;font-size:12px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sharepop .link{font-size:12px;color:var(--sub);background:var(--tint);border-radius:10px;padding:9px 11px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;user-select:all;margin-bottom:12px}
+.sharepop .acts{padding:0;gap:8px}
+.sharepop .pill{height:36px;padding:0 14px;font-size:13px}
 .toast{position:fixed;left:16px;top:calc(var(--top) - 4px);translate:0 -12px;opacity:0;z-index:60;padding:10px 16px;
   border-radius:12px;font-size:13px;line-height:1.35;pointer-events:none;width:max-content;max-width:min(440px,calc(100vw - 32px));
   transition:opacity .2s,translate .3s var(--ease)}
@@ -351,6 +380,7 @@ body.noplay .play{opacity:.5}
 <div class="menu glass" id="memenu" role="menu" hidden>
   <button role="menuitem" id="opensettings">Settings</button>
   <button role="menuitemcheckbox" id="kinetic" aria-checked="true">Moving background <span class="switch on" id="kineticv"></span></button>
+  <button role="menuitem" id="companion">Companion app <span class="v">Windows</span></button>
   <hr>
   <button role="menuitem" id="popout" hidden>Open the pop-out player</button>
 </div>
@@ -411,10 +441,12 @@ const ICON = {
 };
 
 /* ── talking to the server: writes go as POST with a JSON body, like the player ── */
+/* The server's own list says what's a read. Search isn't one -- it remembers
+   what was searched -- and asking for it by GET got a 405 every time. */
+const LIST_READS = ["/api/playlist/tracks", "/api/playlist/contains", "/api/playlist/export", "/api/playlist/art"];
 function apiMethod(url) {
   const p = url.pathname;
-  if (API_READ_ONLY.has(p) || ["/api/playlist/tracks", "/api/search", "/api/home", "/api/artist", "/api/album"].includes(p)) return "GET";
-  return "POST";
+  return API_READ_ONLY.has(p) || LIST_READS.includes(p) ? "GET" : "POST";
 }
 async function apiTry(path) {
   const url = new URL(path, location.href);
@@ -567,17 +599,56 @@ $("prev").onclick = () => api("/api/control/previous");
 $("shuffle").onclick = () => api("/api/control/shuffle");
 $("repeat").onclick = () => api("/api/control/repeat");
 $("like").onclick = () => api("/api/control/like");
-$("share").onclick = async () => {
+/* Copy, even where the clipboard API says no: the desktop window, an
+   unfocused page, plain http on the LAN. */
+async function copyText(text) {
+  try { if (navigator.clipboard && window.isSecureContext && document.hasFocus()) { await navigator.clipboard.writeText(text); return true; } }
+  catch (e) {}
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.setAttribute("readonly", ""); ta.style.cssText = "position:fixed;top:-1000px;opacity:0";
+    document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand("copy"); ta.remove(); return ok;
+  } catch (e) { return false; }
+}
+/* A song's link: anyone who opens it hears it, and Discord plays it in the chat. */
+let sharePop = null;
+function closeShare() { if (sharePop) { sharePop.remove(); sharePop = null; } }
+$("share").onclick = async e => {
+  e.stopPropagation();
+  if (sharePop) { closeShare(); return; }
   const t = state.track; if (!t || !t.video_id) { toast("Play something first"); return; }
-  const r = await apiTry("/api/share?video_id=" + encodeURIComponent(t.video_id) + "&title=" + encodeURIComponent(t.name || t.title || "") +
+  const title = t.name || t.title || "";
+  const r = await apiTry("/api/share?video_id=" + encodeURIComponent(t.video_id) + "&title=" + encodeURIComponent(title) +
     "&artist=" + encodeURIComponent(t.artist || "") + "&art=" + encodeURIComponent(t.art || "") + "&duration=" + Math.round(t.duration || 0));
-  if (!r.ok || !r.body.url) { toast("Couldn't make a link for that"); return; }
-  try { await navigator.clipboard.writeText(r.body.url); toast("Link copied"); } catch (e) { toast(r.body.url); }
+  if (!r.ok || !r.body.url) { toast((r.body && typeof r.body.detail === "string" && r.body.detail) || "Couldn't make a link for that"); return; }
+  const url = r.body.url;
+  closeShare();
+  sharePop = document.createElement("div");
+  sharePop.className = "sharepop glass";
+  sharePop.setAttribute("role", "dialog"); sharePop.setAttribute("aria-label", "Share this song");
+  sharePop.innerHTML = `<div class="who"><div class="thumb">${img(t.art)}</div><div><b>${esc(title)}</b><span>${esc(t.artist || "")}</span></div></div>` +
+    `<div class="link" title="${esc(url)}">${esc(url)}</div>` +
+    `<div class="acts"><button class="pill primary" data-a="copy">Copy link</button>` +
+    (navigator.share ? `<button class="pill" data-a="native">Share…</button>` : "") + `</div>`;
+  document.body.appendChild(sharePop);
+  const b = $("share").getBoundingClientRect();
+  sharePop.style.bottom = (innerHeight - b.top + 10) + "px";
+  sharePop.style.right = Math.max(12, innerWidth - b.right - 8) + "px";
+  sharePop.querySelector('[data-a="copy"]').onclick = async () => { toast(await copyText(url) ? "Link copied" : "Couldn't copy — select the link instead"); closeShare(); };
+  const native = sharePop.querySelector('[data-a="native"]');
+  if (native) native.onclick = () => navigator.share({ title, text: title + (t.artist ? " · " + t.artist : ""), url }).catch(() => {});
 };
+document.addEventListener("click", e => { if (sharePop && !sharePop.contains(e.target)) closeShare(); });
 $("song").onclick = () => go("nowplaying");
-$("queuebtn").onclick = () => go("nowplaying");
+$("queuebtn").onclick = () => {
+  if (current && current.name === "nowplaying" && nowPane) {
+    const f = nowPane.querySelector("iframe");
+    if (f && f.contentWindow) f.contentWindow.postMessage({ type: "toggle-queue" }, location.origin);
+  } else go("nowplaying");
+};
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") { closeOverlay(); return; }
+  if (e.key === "Escape") { closeShare(); closeOverlay(); return; }
   if (e.target.closest("input,textarea") || e.ctrlKey || e.metaKey) return;
   if (e.code === "Space") { e.preventDefault(); $("pp").click(); }
 });
@@ -637,6 +708,22 @@ function wireShelves(root) {
     requestAnimationFrame(paint);
   });
 }
+/* A search box for the songs in a sheet: it narrows the rows as you type. */
+const FIND = `<label class="infind" title="Find in here"><svg class="svg" viewBox="0 0 24 24"><path d="M15.5 14h-.8l-.3-.3a6.5 6.5 0 1 0-.7.7l.3.3v.8l5 5 1.5-1.5zm-6 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/></svg>` +
+  `<input type="search" placeholder="Find in here" aria-label="Find in here"></label>`;
+function wireFind(root, tracks) {
+  const box = root.querySelector(".infind input");
+  if (!box) return;
+  box.addEventListener("input", () => {
+    const words = box.value.toLowerCase().split(/\s+/).filter(Boolean);
+    root.querySelectorAll(".row[data-i]").forEach(r => {
+      const t = tracks[+r.dataset.i] || {};
+      const hay = `${t.title || t.name || ""} ${t.artist || ""} ${t.album || ""}`.toLowerCase();
+      r.classList.toggle("nomatch", !words.every(w => hay.includes(w)));
+    });
+  });
+  box.addEventListener("keydown", e => { if (e.key === "Escape" && box.value) { e.stopPropagation(); box.value = ""; box.dispatchEvent(new Event("input")); } });
+}
 const part = (n, title, inner) => `<div class="part"><h4><i>[${String(n).padStart(2, "0")}]</i>${esc(title)}</h4>${inner}</div>`;
 const faceRow = people => `<div class="faces">` + people.map((a, i) =>
   `<button data-artist="${i}"><div class="art one">${img(a.art)}</div><b>${esc(a.name)}</b></button>`).join("") + `</div>`;
@@ -660,6 +747,13 @@ const genreCard = (g, i) => {
   return `<button class="bcard" data-genre-open="${i}"><div><b>${esc(g.name)}</b><p>${esc(line)}</p></div>` +
     `<small>EXPLORE &#8599;</small><div class="fan">${fan.filter(Boolean).slice(0, 3).map(img).join("")}</div></button>`;
 };
+const albumCard = (a, i) => `<button class="card" data-album="${i}"><div class="art one">${img(a.art)}</div><b>${esc(a.name)}</b><span>${esc(a.artist || "Album")}</span><span class="go" data-playnow="${i}">${ICON.play}</span></button>`;
+function wireAlbums(root, albums) {
+  root.querySelectorAll("[data-album]").forEach(b => b.onclick = e => {
+    const a = albums[+b.dataset.album];
+    if (e.target.closest("[data-playnow]")) playAlbum(a.name, a.artist); else openAlbum(a.name, a.artist);
+  });
+}
 const artistCard = (a, i) => `<button class="card round" data-artist="${i}"><div class="art one">${img(a.art)}</div><b>${esc(a.name)}</b><span>Artist</span></button>`;
 const listCard = (p, i) => `<button class="card" data-list="${i}">${listCover(p)}<b>${esc(p.name)}</b><span>${p.shared ? "Shared · " : ""}${p.count} songs</span><span class="go" data-playnow="${i}">${ICON.play}</span></button>`;
 function wireCards(root, { lists = [], artists = [] } = {}) {
@@ -675,7 +769,10 @@ let overlay = null;
 function closeOverlay() {
   if (!overlay) return;
   const o = overlay; overlay = null;
+  // Removed on a timer too: a window that isn't drawing never finishes the fade.
+  o.style.pointerEvents = "none";
   o.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160 }).onfinish = () => o.remove();
+  setTimeout(() => o.remove(), 220);
 }
 function openSheet(build) {
   closeOverlay();
@@ -685,12 +782,20 @@ function openSheet(build) {
   closeOnOutside(scrim, ".sheet");
   document.body.appendChild(scrim);
   overlay = scrim;
-  build(scrim.querySelector(".scroll"));
+  const root = scrim.querySelector(".scroll");
+  build(root, false);
+  scrim.rebuild = async () => {
+    const y = root.scrollTop, q = (root.querySelector(".infind input") || {}).value || "";
+    await build(root, true);
+    root.scrollTop = y;
+    const box = root.querySelector(".infind input");
+    if (box && q) { box.value = q; box.dispatchEvent(new Event("input")); }
+  };
   scrim.querySelector(".x").focus();
 }
 function openList(p) {
-  openSheet(async root => {
-    root.innerHTML = `<div class="hero"><div class="banner"></div><div class="skel" style="width:210px"></div></div>`;
+  openSheet(async (root, quiet) => {
+    if (!quiet) root.innerHTML = `<div class="hero"><div class="banner"></div><div class="skel" style="width:210px"></div></div>`;
     const r = await api("/api/playlist/tracks?name=" + encodeURIComponent(p.name) + (p.shared ? "&shared=1" : ""));
     const tracks = (r && r.tracks) || [];
     const secs = tracks.reduce((a, t) => a + (t.duration || 0), 0);
@@ -707,7 +812,7 @@ function openList(p) {
         `<button role="menuitem" data-a="reorder">Shuffle the order</button>` +
         `<button role="menuitem" data-a="cover">Change cover</button>` +
         (p.cover ? `<button role="menuitem" data-a="uncover">Use the first four songs</button>` : "") +
-        `</div></span>`) + `</div>`;
+        `</div></span>`) + (tracks.length > 6 ? FIND : "") + `</div>`;
     root.querySelector('[data-a="play"]').onclick = () => playList(p.name, p.shared);
     root.querySelector('[data-a="shuffle"]').onclick = () => playList(p.name, p.shared, 0, true);
     const more = root.querySelector('[data-a="more"]');
@@ -730,6 +835,7 @@ function openList(p) {
       toast(u && u.message); await loadShelf(); openList({ ...p, cover: 0 }); };
     root.insertAdjacentHTML("beforeend", part(1, "Songs", songRows(tracks)));
     wireRows(root, tracks, (t, n) => playList(p.name, p.shared, n));
+    wireFind(root, tracks);
     const people = [...new Set(tracks.map(t => (t.artist || "").split(",")[0].trim()).filter(Boolean))].slice(0, 14)
       .map(name => ({ name, art: (tracks.find(t => (t.artist || "").startsWith(name)) || {}).art || "" }));
     if (people.length > 1) { root.insertAdjacentHTML("beforeend", part(2, "Who's on it", faceRow(people))); wireCards(root, { artists: people }); }
@@ -758,9 +864,11 @@ function openLiked() {
     const tracks = ((r && r.liked) || []).slice().reverse();
     root.innerHTML = `<div class="hero"><div class="banner">${img((tracks.find(t => t.art) || {}).art)}</div>` +
       `<div class="pic one cov heart" style="width:min(210px,24vw);height:auto;aspect-ratio:1;border-radius:12px">${ICON.heart.replace('class="svg"', 'class="svg" style="width:64px;height:64px"')}</div>` +
-      `<div><small>Playlist</small><h1>Liked songs</h1><p>${tracks.length} songs</p></div></div>`;
+      `<div><small>Playlist</small><h1>Liked songs</h1><p>${tracks.length} songs</p></div></div>` +
+      (tracks.length > 6 ? `<div class="acts">${FIND}</div>` : "");
     root.insertAdjacentHTML("beforeend", part(1, "Songs", songRows(tracks)));
     wireRows(root, tracks, t => playSong(t));
+    wireFind(root, tracks);
   });
 }
 function openArtist(name) {
@@ -800,10 +908,12 @@ function openAlbum(name, artist) {
     const secs = tracks.reduce((a, t) => a + (t.duration || 0), 0);
     root.innerHTML = `<div class="hero"><div class="banner">${img(r && r.art)}</div><div class="pic one">${img(r && r.art)}</div>` +
       `<div><small>Album</small><h1>${esc(name)}</h1><p>${esc(artist || "")}${tracks.length ? " · " + tracks.length + " songs" : ""}${secs ? " · " + Math.round(secs / 60) + " min" : ""}</p></div></div>` +
-      `<div class="acts"><button class="pill primary" data-a="play"${tracks.length ? "" : " disabled"}>${ICON.play}Play</button></div>`;
+      `<div class="acts"><button class="pill primary" data-a="play"${tracks.length ? "" : " disabled"}>${ICON.play}Play</button>` +
+      (tracks.length > 6 ? FIND : "") + `</div>`;
     root.querySelector('[data-a="play"]').onclick = () => playAlbum(name, artist);
     root.insertAdjacentHTML("beforeend", part(1, "Songs", songRows(tracks)));
     wireRows(root, tracks, t => playSong(t));
+    wireFind(root, tracks);
   });
 }
 
@@ -839,21 +949,22 @@ function closeOnOutside(scrim, panelSel) {
 
 /* ── the views ── */
 const VIEWS = {
-  async home(pane) {
-    pane.innerHTML = `<h1 class="title">${greeting()}</h1><div class="skel"></div>`;
+  async home(pane, { quiet = false } = {}) {
+    if (!quiet) pane.innerHTML = `<h1 class="title">${greeting()}</h1><div class="skel"></div>`;
     const h = await api("/api/home");
     if (!h) { pane.innerHTML = `<h1 class="title">${greeting()}</h1><div class="empty">Couldn't reach the player.</div>`; return; }
     let html = `<h1 class="title">${greeting()}</h1>`;
     h.genres = centreOut(h.genres);
     if (h.genres.length) html += sect("Your sound", "Open a genre to explore it, or play it straight away",
-      `<div class="logobar">` + h.genres.map((g, i) => `<div class="gpill"><button class="gopen" data-genre-open="${i}">${esc(g.name)}</button>` +
-        `<button class="gplay" data-genre="${i}" title="Play ${esc(g.name)}" aria-label="Play ${esc(g.name)}">${ICON.play}</button></div>`).join("") + `</div>`);
+      shelf(h.genres.map((g, i) => `<div class="gpill"><button class="gopen" data-genre-open="${i}">${esc(g.name)}</button>` +
+        `<button class="gplay" data-genre="${i}" title="Play ${esc(g.name)}" aria-label="Play ${esc(g.name)}">${ICON.play}</button></div>`).join(""), "logobar"));
     if (h.recent.length) html += sect("Jump back in", "What you played lately", shelf(
       h.recent.map((t, i) => `<button class="card" data-recent="${i}"><div class="art one">${img(t.art)}</div><b>${esc(t.title)}</b><span>${esc(t.artist)}</span><span class="go">${ICON.play}</span></button>`).join("")));
     if (h.lists.length) html += sect("Your playlists", "The ones you made and the ones shared with you",
       shelf(h.lists.slice(0, 16).map(listCard).join("")), `<button data-go="library">Show all</button>`);
     if (h.artists.length) html += sect("Your top artists", "Who you play most", shelf(h.artists.slice(0, 24).map(artistCard).join("")),
       h.artists.length > 8 ? `<button data-go="artists">View all</button>` : "");
+    if ((h.albums || []).length) html += sect("Your top albums", "The records you keep coming back to", shelf(h.albums.map(albumCard).join("")));
     if (h.genres.length) html += sect("Browse by genre", "The sounds your artists share", shelf(h.genres.map(genreCard).join(""), "browse"));
     if (h.charts.length) html += sect("Charting now", "What the world is playing this week", songRows(h.charts));
     if (!h.recent.length && !h.artists.length && !h.charts.length && !h.lists.length)
@@ -864,9 +975,10 @@ const VIEWS = {
     pane.querySelectorAll("[data-genre-open]").forEach(b => b.onclick = () => openGenre(h.genres[+b.dataset.genreOpen]));
     pane.querySelectorAll("[data-go]").forEach(b => b.onclick = () => go(b.dataset.go));
     wireCards(pane, { lists: h.lists, artists: h.artists });
+    wireAlbums(pane, h.albums || []);
     wireRows(pane, h.charts, t => playSong(t));
     wireShelves(pane);
-    centreRows(pane);
+    if (!quiet) centreRows(pane);
   },
 
   async search(pane, { q = "" } = {}) {
@@ -879,14 +991,13 @@ const VIEWS = {
     let html = `<h1 class="title">${esc(q)}</h1>`;
     if (songs.length) html += sect("Songs", "", songRows(songs.slice(0, 10)));
     if (artists.length) html += sect("Artists", "", shelf(artists.map(artistCard).join("")));
-    if (albums.length) html += sect("Albums", "", shelf(
-      albums.map((a, i) => `<button class="card" data-album="${i}"><div class="art one">${img(a.art)}</div><b>${esc(a.name)}</b><span>${esc(a.artist || "Album")}</span></button>`).join("")));
+    if (albums.length) html += sect("Albums", "", shelf(albums.map(albumCard).join("")));
     if (lists.length) html += sect("Your playlists", "", shelf(lists.map(listCard).join("")));
     if (!lists.length && !songs.length && !artists.length && !albums.length) html += `<div class="empty">Nothing for that. Try fewer words.</div>`;
     pane.innerHTML = html;
     wireRows(pane, songs, t => playSong(t));
     wireCards(pane, { lists, artists });
-    pane.querySelectorAll("[data-album]").forEach(b => b.onclick = () => { const a = albums[+b.dataset.album]; openAlbum(a.name, a.artist); });
+    wireAlbums(pane, albums);
     wireShelves(pane);
   },
 
@@ -899,8 +1010,8 @@ const VIEWS = {
     wireCards(pane, { artists });
   },
 
-  async library(pane) {
-    pane.innerHTML = `<h1 class="title">Your library</h1><div class="skel"></div>`;
+  async library(pane, { quiet = false } = {}) {
+    if (!quiet) pane.innerHTML = `<h1 class="title">Your library</h1><div class="skel"></div>`;
     const lists = await loadShelf();
     pane.innerHTML = `<h1 class="title">Your library</h1><div class="cards">` +
       `<button class="card" data-liked><div class="art one cov heart" style="width:100%;height:auto;aspect-ratio:1;border-radius:9px">${ICON.heart.replace('class="svg"', 'class="svg" style="width:44px;height:44px"')}</div><b>Liked songs</b><span>Everything you've hearted</span></button>` +
@@ -922,6 +1033,8 @@ const STILL = matchMedia("(prefers-reduced-motion: reduce)");
 function finishOut(pane) { if (pane === nowPane) pane.hidden = true; else pane.remove(); }
 function slide(inPane, outPane, dir) {
   if (STILL.matches) { if (outPane) finishOut(outPane); return; }
+  canvas.classList.add("sliding");
+  clearTimeout(slide.t); slide.t = setTimeout(() => canvas.classList.remove("sliding"), 380);
   inPane.animate([{ transform: `translateX(${dir * 8}%)`, opacity: 0 }, { transform: "none", opacity: 1 }],
                  { duration: 340, easing: "cubic-bezier(.2,.8,.2,1)" });
   if (outPane) outPane.animate([{ transform: "none", opacity: 1 }, { transform: `translateX(${-dir * 6}%)`, opacity: 0 }],
@@ -959,8 +1072,19 @@ async function go(name, params = {}, how = {}) {
   $("back").disabled = !stack.length; $("fwd").disabled = !ahead.length;
   if (name !== "nowplaying") await VIEWS[name](pane, params);
 }
-$("edge").addEventListener("mouseenter", () => document.body.classList.add("peek"));
-document.querySelector(".ledger").addEventListener("mouseleave", () => document.body.classList.remove("peek"));
+/* Now playing: the library comes out while the mouse is at the left edge or
+   on it, and goes the moment the mouse is anywhere else -- including into the
+   player's frame, or out of the window, which the page never hears about. */
+const LEDGER = document.querySelector(".ledger");
+let peekT;
+const unpeek = () => { clearTimeout(peekT); document.body.classList.remove("peek"); };
+const unpeekSoon = () => { clearTimeout(peekT); peekT = setTimeout(unpeek, 220); };
+$("edge").addEventListener("mouseenter", () => { clearTimeout(peekT); document.body.classList.add("peek"); });
+$("edge").addEventListener("mouseleave", e => { if (!LEDGER.contains(e.relatedTarget)) unpeekSoon(); });
+LEDGER.addEventListener("mouseenter", () => clearTimeout(peekT));
+LEDGER.addEventListener("mouseleave", e => { if (e.relatedTarget !== $("edge")) unpeekSoon(); });
+document.addEventListener("mouseout", e => { if (!e.relatedTarget) unpeek(); });
+window.addEventListener("blur", unpeek);
 $("back").onclick = () => { if (!stack.length) return; ahead.push(current); const e = stack.pop(); go(e.name, e.params, { history: false, dir: -1 }); };
 $("fwd").onclick = () => { if (!ahead.length) return; stack.push(current); const e = ahead.pop(); go(e.name, e.params, { history: false, dir: 1 }); };
 document.querySelectorAll(".nav").forEach(b => b.onclick = () => go(b.dataset.go));
@@ -976,17 +1100,31 @@ $("q").addEventListener("input", () => {
   }, 300);
 });
 $("q").addEventListener("keydown", e => {
-  if (e.key === "Enter" && $("q").value.trim()) { clearTimeout(searchT); playQuery($("q").value.trim()); }
+  const q = $("q").value.trim();
+  if (e.key !== "Enter" || !q) return;
+  clearTimeout(searchT);
+  if (current && current.name === "search" && current.params.q === q) return;
+  if (current && current.name === "search") {
+    current.params = { q };
+    VIEWS.search(canvas.querySelector(".view:not([hidden]):not(.leaving)"), { q });
+  } else go("search", { q });
 });
 
 /* ── the ledger ── */
+let shelfKnown = null;
 async function loadShelf() {
   const r = await api("/api/playlists");
   const lists = ((r && r.playlists) || []).concat(((r && r.shared) || []).map(p => ({ ...p, shared: true })));
   await urlToken();
+  const before = shelfKnown;
+  shelfKnown = new Set(lists.map(p => (p.shared ? "s:" : "m:") + p.name));
   $("shelf").innerHTML =
     `<button class="lrow" data-liked="1" title="Liked songs"><div class="cov heart">${ICON.heart}</div><div><b>Liked songs</b><span>Playlist</span></div></button>` +
     lists.map((p, i) => `<button class="lrow" data-i="${i}" title="${esc(p.name)}">${listCover(p, "cov")}<div><b>${esc(p.name)}</b><span>${p.shared ? "Shared · " : ""}${p.count} songs</span></div></button>`).join("");
+  if (before) $("shelf").querySelectorAll(".lrow[data-i]").forEach(b => {
+    const p = lists[+b.dataset.i];
+    if (!before.has((p.shared ? "s:" : "m:") + p.name)) b.classList.add("fresh");
+  });
   $("shelf").querySelector("[data-liked]").onclick = openLiked;
   $("shelf").querySelectorAll(".lrow[data-i]").forEach(b => b.onclick = () => openList(lists[+b.dataset.i]));
   return lists;
@@ -1005,6 +1143,25 @@ $("me").innerHTML = PIC ? `<img src="${esc(PIC)}" alt="">` : esc((NAME || "You")
 $("me").onclick = e => { e.stopPropagation(); const m = $("memenu"); m.hidden = !m.hidden; $("me").setAttribute("aria-expanded", String(!m.hidden)); };
 document.addEventListener("click", e => { if (!e.target.closest("#memenu,#me")) $("memenu").hidden = true; });
 $("opensettings").onclick = openSettings;
+/* The companion app: a window of its own for somebody else's PC, already
+   pointed at this server. The link is the public one, to send. */
+$("companion").onclick = () => {
+  $("memenu").hidden = true;
+  openSheet(async root => {
+    const r = await api("/api/companion");
+    const link = (r && r.link) || "", inApp = typeof window.pywebview !== "undefined";
+    root.innerHTML = `<div class="hero" style="padding-top:72px"><div class="pic one" style="display:grid;place-items:center;background:var(--tint-hi)">` +
+      `<span class="mark" style="height:54px;gap:9px"><b style="width:11px;height:24px"></b><b style="width:11px;height:44px"></b><b style="width:11px;height:34px"></b><b style="width:11px;height:54px"></b></span></div>` +
+      `<div><small>For Windows</small><h1>The companion app</h1><p>A window of its own that stays signed in, already pointed at this server. Send the link to anyone you want listening.</p></div></div>` +
+      (r && r.available
+        ? `<div class="acts">${inApp ? "" : `<a class="pill primary" href="${esc(BASE + "/download/client")}" download>Download</a>`}` +
+          (link ? `<button class="pill${inApp ? " primary" : ""}" data-a="copy">Copy the link</button>` : "") + `</div>` +
+          (link ? `<div class="part"><h4><i>[01]</i>The link</h4><p style="color:var(--sub);overflow-wrap:anywhere">${esc(link)}</p></div>` : "")
+        : `<div class="pane empty">The companion app hasn't been built on this server yet.</div>`);
+    const copy = root.querySelector('[data-a="copy"]');
+    if (copy) copy.onclick = async () => toast(await copyText(link) ? "Link copied" : "Couldn't copy — select the link instead");
+  });
+};
 function setKinetic(on) {
   document.body.classList.toggle("still", !on); $("kineticv").classList.toggle("on", on);
   $("kinetic").setAttribute("aria-checked", String(on)); store.set("kinetic", on ? "1" : "0");
@@ -1016,6 +1173,25 @@ const offerPopout = () => { if (bridge() && bridge().pop_out) $("popout").hidden
 offerPopout(); window.addEventListener("pywebviewready", offerPopout);
 $("popout").onclick = () => { const b = bridge(); if (b && b.pop_out) b.pop_out(); };
 
+/* A list made, filled, renamed or removed -- here, on a phone, by the AI --
+   and the library, the page underneath and any open sheet catch up without
+   a flash: scroll kept, shelves where they were. */
+let refreshT;
+function refreshSoon() {
+  clearTimeout(refreshT);
+  refreshT = setTimeout(async () => {
+    await loadShelf();
+    const pane = canvas.querySelector(".view:not([hidden]):not(.leaving):not(.keep)");
+    if (pane && current && ["home", "library"].includes(current.name)) {
+      const y = pane.scrollTop, across = [...pane.querySelectorAll(".shelfwrap > :nth-child(2)")].map(r => r.scrollLeft);
+      await VIEWS[current.name](pane, { ...current.params, quiet: true });
+      pane.scrollTop = y;
+      pane.querySelectorAll(".shelfwrap > :nth-child(2)").forEach((r, i) => { if (across[i] != null) r.scrollLeft = across[i]; });
+    }
+    if (overlay && overlay.rebuild) overlay.rebuild();
+  }, 300);
+}
+
 /* ── the event stream ── */
 let es = null;
 async function connect() {
@@ -1026,7 +1202,7 @@ async function connect() {
     let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
     if (msg.type === "status") applyStatus(msg.data);
     else if (msg.type === "toast") toast(typeof msg.data === "string" ? msg.data : (msg.data || {}).text);
-    else if (msg.type === "settings" && msg.data && msg.data.playlists) loadShelf();
+    else if (msg.type === "settings" && msg.data && msg.data.playlists) refreshSoon();
   };
   es.onerror = () => { es.close(); setTimeout(connect, 2500); };
 }

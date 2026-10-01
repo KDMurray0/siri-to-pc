@@ -5707,6 +5707,16 @@ def _run(verbose: bool = False) -> Result:
                     proc55 = _sp55.run([node55, "--check", str(js55)], capture_output=True, text=True, timeout=60)
                     c("the full player's JavaScript parses in a real engine", proc55.returncode == 0,
                       (proc55.stderr or proc55.stdout).strip()[-200:])
+            # Asking for a write by GET is a 405 -- search remembers what was
+            # searched, and forcing it to GET broke every search in the page.
+            from .web import policy as _pol55
+            reads55 = re.search(r"const LIST_READS = \[(.*?)\];", appjs55)
+            listed55 = re.findall(r'"(/api/[^"]+)"', reads55.group(1)) if reads55 else []
+            method55 = appjs55.split("function apiMethod", 1)[-1].split("\n}", 1)[0]
+            c("the full player asks by GET only for what the server serves as a read",
+              bool(listed55) and all(not _pol55.changing("/api/playlist/{op}", {}, {"op": p55.rsplit("/", 1)[-1]})
+                                     for p55 in listed55)
+              and "/api/search" not in method55 and "API_READ_ONLY.has(p)" in method55, str(listed55))
             served55 = get("/app")
             c("/app serves the full player to the owner",
               served55.status_code == 200 and 'class="cap left glass"' in served55.text, str(served55.status_code))

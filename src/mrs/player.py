@@ -1150,8 +1150,10 @@ class PlayerService:
                     # Out of the speaker the music is using, not whatever
                     # Windows calls default — picking a second sound card
                     # moved the songs and left the announcements behind.
+                    # No media session of its own: it was showing in Windows
+                    # as a second player and taking the media keys mid-song.
                     cmd = [shutil.which("mpv") or "mpv", "--no-video",
-                           "--really-quiet",
+                           "--really-quiet", "--media-controls=no",
                            f"--volume={max(0, min(150, original_volume)):g}",
                            f"--volume-gain={original_gain + voice_db:g}"]
                     dev = config.get("audio_device", "auto")

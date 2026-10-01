@@ -57,11 +57,105 @@ def _fetch_picture(artist: str, key: str) -> None:
     try:
         rows = catalog.search_artists(artist, limit=1)
         art = (rows[0].get("art") or "") if rows else ""
+        named = (rows[0].get("name") or "") if rows else ""
     except Exception as exc:
         log.debug("picture for %r: %s", artist, exc)
-        art = ""
+        art = named = ""
     with _lock:
         _pictures[key] = art
+        if named and named.lower() == key:
+            _names[key] = named
+
+
+# Taste keys artists in lower case. How they're written, for showing.
+_names: dict[str, str] = {}
+
+
+def _learn_names(rows) -> None:
+    with _lock:
+        for row in rows:
+            who = (row.get("artist") or "").split(",")[0].strip() if isinstance(row, dict) else ""
+            if who and who != who.lower() and who.lower() not in _names:
+                _names[who.lower()] = who
+
+
+def display(artist: str) -> str:
+    """As the artist writes it, if we've seen it; otherwise each word capitalised."""
+    with _lock:
+        held = _names.get((artist or "").lower())
+    if held:
+        return held
+    if artist != artist.lower():
+        return artist
+    return " ".join(w[:1].upper() + w[1:] for w in artist.split(" "))
+
+
+# Albums by artist, looked up in the background like the pictures.
+_albums_of: dict[str, list[dict]] = {}
+_albums_asked: set[str] = set()
+
+
+def _artist_albums(artist: str) -> list[dict]:
+    key = artist.lower()
+    with _lock:
+        if key in _albums_of:
+            return _albums_of[key]
+        if key in _albums_asked or _offline():
+            return []
+        _albums_asked.add(key)
+    threading.Thread(target=_fetch_albums, args=(artist, key), daemon=True,
+                     name="home-albums").start()
+    return []
+
+
+def _fetch_albums(artist: str, key: str) -> None:
+    from ..resolve import catalog
+    try:
+        rows = [r for r in catalog.search_albums(artist, limit=4)
+                if key in (r.get("artist") or "").lower()]
+    except Exception as exc:
+        log.debug("albums for %r: %s", artist, exc)
+        rows = []
+    with _lock:
+        _albums_of[key] = [{"name": r["name"], "artist": r.get("artist") or display(artist),
+                            "art": r.get("art") or ""} for r in rows[:2]]
+
+
+# YouTube files plenty of uploads under somebody's mixtape. Not an album.
+_NOT_ALBUMS = ("playlist", "fitness", "workout", "greatest hits", "hits of", "best of", "the best",
+               "compilation", "collection", "various", "anthems", "essentials", "now that's", "mix")
+
+
+def _top_albums(taste, top: list[str], limit: int = 16) -> list[dict]:
+    """The albums you play most, from the songs you've played and liked; the
+    rest filled from your top artists' best-known records."""
+    played, liked = [], []
+    if taste is not None:
+        played, liked = list(taste.recent(200)), list(taste.liked())
+    count: Counter = Counter()
+    face: dict[tuple, dict] = {}
+    for row in played + liked + liked:          # a like counts as a second play
+        if not isinstance(row, dict) or not (row.get("album") or "").strip():
+            continue
+        if any(w in row["album"].lower() for w in _NOT_ALBUMS):
+            continue
+        who = (row.get("artist") or "").split(",")[0].strip()
+        k = (row["album"].strip().lower(), who.lower())
+        count[k] += 1
+        if k not in face or (row.get("art") and not face[k]["art"]):
+            face[k] = {"name": row["album"].strip(), "artist": who, "art": row.get("art") or ""}
+    out = [face[k] for k, n in count.most_common(limit) if n >= 2]
+    seen = {(a["name"].lower(), a["artist"].lower()) for a in out}
+    for artist in top:
+        if len(out) >= limit:
+            break
+        for a in _artist_albums(artist):
+            k = (a["name"].lower(), a["artist"].lower())
+            if k not in seen:
+                seen.add(k)
+                out.append(a)
+                break
+    return out[:limit]
 
 
 def charts() -> list[dict]:
@@ -184,10 +278,17 @@ def sections(taste, lists) -> dict:
     top = [r.get("artist", "") for r in (taste.top_artists(40) if taste is not None else [])
            if isinstance(r, dict) and r.get("artist")]
     top = list(dict.fromkeys(top))[:40]
+    if taste is not None:
+        _learn_names(taste.recent(200))
+    genres = _genres(top[:16])
+    for g in genres:
+        g["artists"] = [display(n) for n in g["artists"]]
+        g["artist"] = display(g["artist"])
     return {
         "recent": _recent(taste),
-        "artists": [{"name": n, "art": picture(n)} for n in top],
-        "genres": _genres(top[:16]),
+        "artists": [{"name": display(n), "art": picture(n)} for n in top],
+        "albums": _top_albums(taste, top[:20]),
+        "genres": genres,
         "charts": charts(),
         "lists": lists.summary() if lists is not None else [],
     }

@@ -34,14 +34,14 @@ announce/{aid}.mp3 source smartplaylists smartplaylists/play autoeq/search
 autoeq/profile autoeq/match
 me me/consent me/rename me/export me/forget-taste me/delete
 me/siri me/siri/new me/siri/token me/siri/revoke
-playlists/make playlists/job playlists/suggest playlists/change playlists/undo report home artist album'''.split())
+playlists/make playlists/job playlists/suggest playlists/change playlists/undo report home artist album companion'''.split())
 READ_ONLY = set('''ping status health history
 blocks liked playlists settings audio/devices setup/state whoami passes profiles
 boot/status cookies diag output/stats audit policy
 output/stream/{video_id} announce/{aid}.mp3 stream/{video_id} events
 smartplaylists
 autoeq/status stats accounts accounts/check certificate me me/export me/siri
-playlists/job playlists/suggest accounts/owner/state home artist album'''.split())
+playlists/job playlists/suggest accounts/owner/state home artist album companion'''.split())
 READ_PARAMS = {
     "sessions": {"close"}, "cache": {"prune"}, "blocked": {"forgive", "clear"},
     "ddns": {"hostname", "user", "secret", "provider", "now"},
