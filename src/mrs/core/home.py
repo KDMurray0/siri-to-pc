@@ -140,22 +140,51 @@ def _genres(names: list[str], limit: int = 8) -> list[dict]:
             count[tag] += 1
             faces.setdefault(tag, []).append(name)
     out = []
+    known = {n.casefold() for n in names}
     for tag, _ in count.most_common(limit):
         who = faces[tag][:3]
+        fresh = _explore(tag, faces[tag], known)
         out.append({"name": tag, "artist": who[0], "artists": who,
-                    "art": picture(who[0]), "arts": [a for a in (picture(n) for n in who) if a]})
+                    "art": picture(who[0]), "arts": [a for a in (picture(n) for n in who) if a],
+                    "explore": [{"name": n, "art": picture(n)} for n in fresh],
+                    "explore_arts": [a for a in (picture(n) for n in fresh[:3]) if a]})
+    return out
+
+
+def _explore(tag: str, yours: list[str], known: set[str], limit: int = 10) -> list[str]:
+    """Bands next to the ones you play in this genre, that share it, that you
+    don't already play much: grunge with Nirvana and Pearl Jam brings Alice in
+    Chains and Soundgarden. Only what's already looked up; the rest is asked
+    for, so the next visit has more."""
+    from .kin import kin
+    from .tags import tagstore
+    words = set(tag.split())
+    out: list[str] = []
+    for name in yours[:4]:
+        for near in kin.related(Track(title="", artist=name)):
+            if near.casefold() in known or near in out:
+                continue
+            tags = tagstore.cached(Track(title="", artist=near))
+            if tags is None:
+                tagstore.get(Track(title="", artist=near))       # for next time
+                continue
+            top = [t for t, _ in sorted(tags.items(), key=lambda kv: -kv[1])[:6]]
+            if tag in top or any(words & set(t.split()) for t in top if t not in _NOT_GENRES):
+                out.append(near)
+            if len(out) >= limit:
+                return out
     return out
 
 
 def sections(taste, lists) -> dict:
     """Everything the home page shows, from what's held right now."""
-    top = [r.get("artist", "") for r in (taste.top_artists(12) if taste is not None else [])
+    top = [r.get("artist", "") for r in (taste.top_artists(40) if taste is not None else [])
            if isinstance(r, dict) and r.get("artist")]
-    top = list(dict.fromkeys(top))[:12]
+    top = list(dict.fromkeys(top))[:40]
     return {
         "recent": _recent(taste),
         "artists": [{"name": n, "art": picture(n)} for n in top],
-        "genres": _genres(top),
+        "genres": _genres(top[:16]),
         "charts": charts(),
         "lists": lists.summary() if lists is not None else [],
     }

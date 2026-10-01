@@ -38,6 +38,7 @@ html.embed-settings,html.embed-settings body,html.embed-settings .frame{backgrou
 html.embedded .ambient,html.embedded .transport,html.embedded .search,html.embedded .winbtn,
 html.embedded .timeleft,html.embedded .sidetoggle,html.embedded .glass-backdrop{display:none!important}
 html.embedded body:not(.mini) .stage{padding-top:18px!important;padding-bottom:24px!important}
+html.embedded body:not(.mini) .stage::before{display:none}
 html.embed-settings .frame>:not(.sheet){display:none!important}
 html.embed-settings .sheet,html.embed-settings body:not(.mini) .sheet{inset:0!important;left:0!important;top:0!important;
   translate:none!important;width:100%!important;height:100%!important;border:0!important;border-radius:0!important;
@@ -2621,8 +2622,13 @@ function glassTint(img) {
     return best ? `rgb(${Math.round(best.r/best.n)},${Math.round(best.g/best.n)},${Math.round(best.b/best.n)})` : null;
   } catch (e) { return null; }
 }
+/* YouTube Music hands out 544px covers; a big cover on a sharp screen wants
+   more. Its image server takes the size in the address. */
+function hiRes(url) {
+  return /googleusercontent\.com\//.test(url) ? url.replace(/=w\d+-h\d+/, "=w1200-h1200") : url;
+}
 function setArt(url) {
-  url = artUrl(url);   // "null" and friends are not pictures
+  url = hiRes(artUrl(url));   // "null" and friends are not pictures
   if (url === lastArt) return;
   lastArt = url;
   artAccent = null; applyAccent();

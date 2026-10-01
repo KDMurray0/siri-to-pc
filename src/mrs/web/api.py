@@ -2293,7 +2293,7 @@ def api_playlist(request: Request, op: str, name: str = "",
         # owner's gets the same answer as if it weren't there.
         if not playlists.is_shared(name):
             raise HTTPException(403, "That list isn't shared")
-        if op in ("delete", "download", "share", "create", "rename", "link", "cover", "uncover"):
+        if op in ("delete", "download", "share", "create", "rename", "link", "cover", "uncover", "reorder"):
             raise HTTPException(403, "That's the owner's to do")
         mine = playlists
     elif mine is None:
@@ -2426,6 +2426,16 @@ def api_playlist(request: Request, op: str, name: str = "",
             raise HTTPException(400, "That isn't a picture this can read")
         got = mine.set_cover(name, data)
         return {"status": "ok" if got.get("ok") else "error", **got}
+    if op == "reorder":
+        # A new running order, nothing played; the old one kept to undo to.
+        import random
+        rows = [r for r, _ in mine.rows(name)]
+        if len(rows) < 2:
+            return {"status": "ok", "ok": False, "message": "Nothing to shuffle"}
+        random.shuffle(rows)
+        got = mine.rewrite(name, rows)
+        return {"status": "ok" if got.get("ok") else "error", **got,
+                "message": "Shuffled the order" if got.get("ok") else got.get("message", "")}
     if op == "uncover":
         got = mine.clear_cover(name)
         return {"status": "ok", **got}

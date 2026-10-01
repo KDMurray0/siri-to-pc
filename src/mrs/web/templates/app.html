@@ -12,7 +12,7 @@
 :root{
   --bg:#0c0c0d; --panel:#161617; --fg:#f4f4f5; --sub:#8a8a8f; --line:#242426; --accent:#e6e6ea;
   --accent-ink:#0b0b0c; --tint:rgba(255,255,255,.035); --tint-hi:rgba(255,255,255,.07);
-  --glass:rgba(18,18,20,.34); --glass-edge:rgba(255,255,255,.1);
+  --glass:rgba(22,22,25,.52); --glass-edge:rgba(255,255,255,.1);
   --top:72px; --deck:82px; --ledger:252px;
   --ease:cubic-bezier(.2,.8,.2,1);
   color-scheme:dark;
@@ -36,26 +36,26 @@ img{display:block}
 /* the kinetic canvas: the cover, blurred to colour, drifting */
 .kinetic{position:fixed;inset:-12%;z-index:0;pointer-events:none;overflow:hidden}
 .kinetic img{width:100%;height:100%;object-fit:cover;filter:blur(100px) saturate(1.3);opacity:.32;
-  animation:drift 44s ease-in-out infinite alternate;transition:opacity 1.2s ease}
+  animation:drift 16s ease-in-out infinite alternate;transition:opacity 1.2s ease}
 .kinetic::after{content:"";position:absolute;inset:0;
   background:radial-gradient(ellipse at 50% 35%,transparent 0,color-mix(in srgb,var(--bg) 60%,transparent) 55%,var(--bg) 100%)}
-@keyframes drift{0%{transform:scale(1.15)}50%{transform:scale(1.28) translate(4%,-3%) rotate(4deg)}
-  100%{transform:scale(1.2) translate(-3%,3%) rotate(-3deg)}}
+@keyframes drift{0%{transform:scale(1.15) translate(-4%,2%) rotate(-5deg)}50%{transform:scale(1.35) translate(6%,-5%) rotate(6deg)}
+  100%{transform:scale(1.22) translate(-5%,5%) rotate(-4deg)}}
 body.still .kinetic img{animation:none}
 @media (prefers-reduced-motion:reduce){.kinetic img{animation:none}}
 
 /* liquid glass: clear, blurred, a hairline catching the light */
-.glass{background:var(--glass);-webkit-backdrop-filter:blur(24px) saturate(1.6);backdrop-filter:blur(24px) saturate(1.6);
+.glass{background:var(--glass);-webkit-backdrop-filter:blur(30px) saturate(1.8);backdrop-filter:blur(30px) saturate(1.8);
   box-shadow:inset 0 1px 0 var(--glass-edge),inset 0 0 0 1px rgba(255,255,255,.04),0 8px 30px rgba(0,0,0,.25)}
 
 /* the top: two capsules, no bar */
-.cap{position:fixed;top:14px;z-index:20;height:46px;border-radius:999px;display:flex;align-items:center;gap:2px;padding:0 5px}
+.cap{position:fixed;top:14px;z-index:20;height:46px;border-radius:999px;display:flex;align-items:center;gap:6px;padding:0 6px}
 .cap.left{left:14px}
 .cap.right{right:14px;padding-left:6px}
 .mark{display:flex;align-items:flex-end;gap:3px;height:16px;padding:0 10px 0 9px}
 .mark b{width:3.5px;border-radius:2px;background:var(--fg);opacity:.9}
 .mark b:nth-child(1){height:7px}.mark b:nth-child(2){height:13px}.mark b:nth-child(3){height:10px}.mark b:nth-child(4){height:16px}
-.nav{display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 13px;border-radius:999px;color:var(--sub);
+.nav{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 16px;border-radius:999px;color:var(--sub);
   font-weight:500;font-size:13.5px;transition:color .15s,background .15s}
 .nav:hover{color:var(--fg)}
 .nav.on{color:var(--fg);background:var(--tint-hi)}
@@ -103,13 +103,25 @@ body.still .kinetic img{animation:none}
   display:grid;grid-template-columns:1fr 1fr}
 .cov img{width:100%;height:100%;object-fit:cover}
 .cov.one{display:block}
-.cov.heart{display:grid;place-items:center;background:linear-gradient(135deg,color-mix(in srgb,var(--fg) 30%,var(--bg)),var(--panel));color:var(--fg)}
+.cov.heart{display:grid;grid-template-columns:none;place-items:center;background:linear-gradient(135deg,color-mix(in srgb,var(--fg) 30%,var(--bg)),var(--panel));color:var(--fg)}
 .newlist{display:flex;padding:0 8px 8px}
 .newlist input{flex:1;min-width:0;height:34px;border-radius:9px;border:1px solid var(--line);background:var(--tint);padding:0 10px;outline:0}
 
+/* Now playing gives the library's room to the music; it slides back when
+   the mouse goes to the left edge. */
+.ledger,.canvas{transition:transform .35s var(--ease),opacity .25s ease,left .35s var(--ease)}
+body.focus .ledger{transform:translateX(calc(-100% - 20px));opacity:0}
+body.focus .canvas{left:0}
+body.focus.peek .ledger{transform:none;opacity:1;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.edge{position:fixed;left:0;top:var(--top);bottom:var(--deck);width:14px;z-index:9;display:none}
+body.focus .edge{display:block}
+
 /* the canvas and its filmstrip */
 .canvas{position:fixed;top:0;bottom:0;right:0;left:calc(var(--ledger) + 22px);z-index:5;overflow:hidden}
-.view{position:absolute;inset:0;overflow-y:auto;padding:calc(var(--top) + 8px) 30px calc(var(--deck) + 30px) 12px;scrollbar-width:thin}
+.view{position:absolute;inset:0;overflow-y:auto;padding:calc(var(--top) + 8px) 30px calc(var(--deck) + 30px) 12px;scrollbar-width:thin;
+  /* the edges fade, so nothing sharp sits behind the capsules or the deck */
+  -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 calc(var(--top) - 4px),#000 calc(100% - var(--deck) - 4px),transparent 100%);
+  mask-image:linear-gradient(to bottom,transparent 0,#000 calc(var(--top) - 4px),#000 calc(100% - var(--deck) - 4px),transparent 100%)}
 .view.keep{padding:calc(var(--top) - 8px) 0 var(--deck) 0;overflow:hidden}
 .view iframe{width:100%;height:100%;border:0;background:transparent;display:block}
 h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;line-height:1.15;margin:4px 0 20px}
@@ -153,8 +165,8 @@ h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;
 .fan img:nth-child(3){transform:rotate(3deg)}
 .bcard:hover .fan img:nth-child(1){transform:translateX(-48px) rotate(-16deg)}
 .bcard:hover .fan img:nth-child(2){transform:translateX(-24px) rotate(-7deg)}
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
-.cards.strip{grid-auto-flow:column;grid-auto-columns:minmax(160px,180px);grid-template-columns:none;overflow-x:auto;
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px}
+.cards.strip{grid-auto-flow:column;grid-auto-columns:minmax(200px,224px);grid-template-columns:none;overflow-x:auto;
   padding-bottom:6px}
 .card{border-radius:12px;padding:8px;position:relative;min-width:0;transition:background .2s}
 .card:hover{background:var(--tint)}
@@ -229,6 +241,8 @@ h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;
 .pill:active{transform:scale(.97)}
 .pill:disabled{opacity:.4;cursor:default}
 .round-ib{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;background:var(--tint)}
+.acts .menu{position:absolute;right:auto;top:auto;z-index:5;margin-top:6px}
+.actwrap{position:relative}
 .round-ib:hover{background:var(--tint-hi)}
 .tabs{display:flex;gap:4px;padding:0 26px;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:2;
   background:var(--panel)}
@@ -254,7 +268,7 @@ h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;
   /* the room around the progress goes first; then the progress; never the volume */
   grid-template-columns:minmax(160px,1fr) minmax(220px,620px) minmax(max-content,1fr);
   align-items:center;column-gap:16px;padding:0 20px;border-radius:0}
-.song{display:flex;align-items:center;gap:12px;min-width:0;border-radius:12px;padding:6px;margin-left:-6px}
+.song{display:flex;align-items:center;gap:12px;min-width:0;max-width:100%;justify-self:start;border-radius:12px;padding:6px 12px 6px 6px;margin-left:-6px}
 .song:hover{background:var(--tint)}
 .song .thumb{width:52px;height:52px;border-radius:8px}
 .song .thumb::after{display:none}
@@ -331,9 +345,9 @@ body.noplay .play{opacity:.5}
   <button role="menuitemcheckbox" id="kinetic" aria-checked="true">Moving background <span class="switch on" id="kineticv"></span></button>
   <hr>
   <button role="menuitem" id="popout" hidden>Open the pop-out player</button>
-  <button role="menuitem" id="classic">Open the classic player</button>
 </div>
 
+<div class="edge" id="edge" aria-hidden="true"></div>
 <aside class="ledger glass" aria-label="Your library">
   <h2><span>Your library</span><button id="newbtn" title="New playlist" aria-label="New playlist"><svg class="svg" viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg></button></h2>
   <form class="newlist" id="newlist" hidden><input id="newname" maxlength="120" placeholder="Playlist name" aria-label="Playlist name" required></form>
@@ -414,6 +428,14 @@ function toast(msg) {
   if (!msg) return;
   const t = $("toast"); t.textContent = msg; t.classList.add("show");
   clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 3200);
+}
+function toastUndo(msg, onUndo) {
+  const t = $("toast");
+  t.innerHTML = `${esc(msg)} <button type="button" style="margin-left:10px;font-weight:600;text-decoration:underline">Undo</button>`;
+  t.style.pointerEvents = "auto";
+  t.querySelector("button").onclick = async () => { clearTimeout(toastT); t.classList.remove("show"); await onUndo(); };
+  t.classList.add("show");
+  clearTimeout(toastT); toastT = setTimeout(() => { t.classList.remove("show"); t.style.pointerEvents = ""; }, 6000);
 }
 let URL_TOKEN = "";
 async function urlToken() {
@@ -580,9 +602,14 @@ function wireShelves(root) {
 const part = (n, title, inner) => `<div class="part"><h4><i>[${String(n).padStart(2, "0")}]</i>${esc(title)}</h4>${inner}</div>`;
 const faceRow = people => `<div class="faces">` + people.map((a, i) =>
   `<button data-artist="${i}"><div class="art one">${img(a.art)}</div><b>${esc(a.name)}</b></button>`).join("") + `</div>`;
-const genreCard = (g, i) => `<button class="bcard" data-genre-open="${i}"><div><b>${esc(g.name)}</b>` +
-  `<p>${esc((g.artists || [g.artist]).filter(Boolean).slice(0, 3).join(", "))}</p></div><small>EXPLORE &#8599;</small>` +
-  `<div class="fan">${(g.arts && g.arts.length ? g.arts : [g.art]).filter(Boolean).slice(0, 3).map(img).join("")}</div></button>`;
+const genreCard = (g, i) => {
+  const fresh = (g.explore || []).map(a => a.name);
+  const line = fresh.length ? fresh.slice(0, 2).join(", ") + ` and more, if you like ${(g.artists || [g.artist])[0]}`
+                            : (g.artists || [g.artist]).filter(Boolean).slice(0, 3).join(", ");
+  const fan = (g.explore_arts && g.explore_arts.length ? g.explore_arts : (g.arts && g.arts.length ? g.arts : [g.art]));
+  return `<button class="bcard" data-genre-open="${i}"><div><b>${esc(g.name)}</b><p>${esc(line)}</p></div>` +
+    `<small>EXPLORE &#8599;</small><div class="fan">${fan.filter(Boolean).slice(0, 3).map(img).join("")}</div></button>`;
+};
 const artistCard = (a, i) => `<button class="card round" data-artist="${i}"><div class="art one">${img(a.art)}</div><b>${esc(a.name)}</b><span>Artist</span></button>`;
 const listCard = (p, i) => `<button class="card" data-list="${i}">${listCover(p)}<b>${esc(p.name)}</b><span>${p.shared ? "Shared · " : ""}${p.count} songs</span><span class="go" data-playnow="${i}">${ICON.play}</span></button>`;
 function wireCards(root, { lists = [], artists = [] } = {}) {
@@ -625,10 +652,27 @@ function openList(p) {
       `<p>${tracks.length} songs${secs ? " · about " + Math.round(secs / 60) + " min" : ""}</p></div></div>` +
       `<div class="acts"><button class="pill primary" data-a="play"${tracks.length ? "" : " disabled"}>${ICON.play}Play</button>` +
       `<button class="pill" data-a="shuffle"${tracks.length > 1 ? "" : " disabled"}>${ICON.shuffle}Shuffle</button>` +
-      (p.shared ? "" : `<button class="pill" data-a="cover">Change cover</button>` +
-        (p.cover ? `<button class="pill" data-a="uncover">Use the first four songs</button>` : "")) + `</div>`;
+      (p.shared ? "" : `<span class="actwrap"><button class="round-ib" data-a="more" aria-haspopup="menu" title="More" aria-label="More">&#8943;</button>` +
+        `<div class="menu glass" role="menu" hidden data-m>` +
+        `<button role="menuitem" data-a="reorder">Shuffle the order</button>` +
+        `<button role="menuitem" data-a="cover">Change cover</button>` +
+        (p.cover ? `<button role="menuitem" data-a="uncover">Use the first four songs</button>` : "") +
+        `</div></span>`) + `</div>`;
     root.querySelector('[data-a="play"]').onclick = () => playList(p.name, p.shared);
     root.querySelector('[data-a="shuffle"]').onclick = () => playList(p.name, p.shared, 0, true);
+    const more = root.querySelector('[data-a="more"]');
+    if (more) more.onclick = e => { e.stopPropagation(); const m = root.querySelector("[data-m]"); m.hidden = !m.hidden; };
+    root.addEventListener("click", e => { const m = root.querySelector("[data-m]"); if (m && !e.target.closest(".actwrap")) m.hidden = true; });
+    const reorder = root.querySelector('[data-a="reorder"]');
+    if (reorder) reorder.onclick = async () => {
+      const r = await api("/api/playlist/reorder?name=" + encodeURIComponent(p.name));
+      if (!r || r.ok === false) { toast((r && r.message) || "Couldn't shuffle that"); return; }
+      toastUndo("Shuffled the order", async () => {
+        const u = await api("/api/playlists/undo?name=" + encodeURIComponent(p.name));
+        toast((u && u.message) || "Couldn't undo that"); await loadShelf(); openList(p);
+      });
+      await loadShelf(); openList(p);
+    };
     const cover = root.querySelector('[data-a="cover"]');
     if (cover) cover.onclick = () => pickCover(p);
     const uncover = root.querySelector('[data-a="uncover"]');
@@ -689,10 +733,13 @@ function openGenre(g) {
     const people = (g.artists || [g.artist]).filter(Boolean).map((name, i) => ({ name, art: arts[i] || "" }));
     root.innerHTML = `<div class="hero"><div class="banner">${img(arts[0])}</div><div class="pic">${arts.concat(arts, arts).slice(0, 4).map(img).join("")}</div>` +
       `<div><small>Genre</small><h1 style="text-transform:capitalize">${esc(g.name)}</h1><p>From what you play</p></div></div>` +
-      `<div class="acts"><button class="pill primary" data-a="play">${ICON.play}Play ${esc(g.name)}</button></div>` +
-      part(1, "Your artists in it", faceRow(people));
+      `<div class="acts"><button class="pill primary" data-a="play">${ICON.play}Play ${esc(g.name)}</button></div>`;
     root.querySelector('[data-a="play"]').onclick = () => playQuery(g.name);
-    wireCards(root, { artists: people });
+    const fresh = g.explore || [];
+    if (fresh.length) root.insertAdjacentHTML("beforeend", `<div data-fresh>${part(1, "To explore", faceRow(fresh))}</div>`);
+    root.insertAdjacentHTML("beforeend", `<div data-yours>${part(fresh.length ? 2 : 1, "Yours in it", faceRow(people))}</div>`);
+    if (fresh.length) wireCards(root.querySelector("[data-fresh]"), { artists: fresh });
+    wireCards(root.querySelector("[data-yours]"), { artists: people });
   });
 }
 function openAlbum(name, artist) {
@@ -742,7 +789,8 @@ const VIEWS = {
       h.recent.map((t, i) => `<button class="card" data-recent="${i}"><div class="art one">${img(t.art)}</div><b>${esc(t.title)}</b><span>${esc(t.artist)}</span><span class="go">${ICON.play}</span></button>`).join("")));
     if (h.lists.length) html += sect("Your playlists", "The ones you made and the ones shared with you",
       shelf(h.lists.slice(0, 16).map(listCard).join("")), `<button data-go="library">Show all</button>`);
-    if (h.artists.length) html += sect("Your top artists", "Who you play most", shelf(h.artists.map(artistCard).join("")));
+    if (h.artists.length) html += sect("Your top artists", "Who you play most", shelf(h.artists.slice(0, 24).map(artistCard).join("")),
+      h.artists.length > 8 ? `<button data-go="artists">View all</button>` : "");
     if (h.genres.length) html += sect("Browse by genre", "The sounds your artists share", shelf(h.genres.map(genreCard).join(""), "browse"));
     if (h.charts.length) html += sect("Charting now", "What the world is playing this week", songRows(h.charts));
     if (!h.recent.length && !h.artists.length && !h.charts.length && !h.lists.length)
@@ -776,6 +824,15 @@ const VIEWS = {
     wireCards(pane, { lists, artists });
     pane.querySelectorAll("[data-album]").forEach(b => b.onclick = () => { const a = albums[+b.dataset.album]; openAlbum(a.name, a.artist); });
     wireShelves(pane);
+  },
+
+  async artists(pane) {
+    pane.innerHTML = `<h1 class="title">Your top artists</h1><div class="skel"></div>`;
+    const h = await api("/api/home");
+    const artists = (h && h.artists) || [];
+    pane.innerHTML = `<h1 class="title">Your top artists</h1>` +
+      (artists.length ? `<div class="cards">${artists.map(artistCard).join("")}</div>` : `<div class="empty">Play a few songs first.</div>`);
+    wireCards(pane, { artists });
   },
 
   async library(pane) {
@@ -832,10 +889,14 @@ async function go(name, params = {}, how = {}) {
   pane.classList.remove("leaving");
   slide(pane, old && old !== pane ? old : null, dir);
   current = { name, params };
+  document.body.classList.toggle("focus", name === "nowplaying");
+  document.body.classList.remove("peek");
   document.querySelectorAll(".nav").forEach(b => b.classList.toggle("on", b.dataset.go === name));
   $("back").disabled = !stack.length; $("fwd").disabled = !ahead.length;
   if (name !== "nowplaying") await VIEWS[name](pane, params);
 }
+$("edge").addEventListener("mouseenter", () => document.body.classList.add("peek"));
+document.querySelector(".ledger").addEventListener("mouseleave", () => document.body.classList.remove("peek"));
 $("back").onclick = () => { if (!stack.length) return; ahead.push(current); const e = stack.pop(); go(e.name, e.params, { history: false, dir: -1 }); };
 $("fwd").onclick = () => { if (!ahead.length) return; stack.push(current); const e = ahead.pop(); go(e.name, e.params, { history: false, dir: 1 }); };
 document.querySelectorAll(".nav").forEach(b => b.onclick = () => go(b.dataset.go));
@@ -890,7 +951,6 @@ const bridge = () => window.pywebview && window.pywebview.api;
 const offerPopout = () => { if (bridge() && bridge().pop_out) $("popout").hidden = false; };
 offerPopout(); window.addEventListener("pywebviewready", offerPopout);
 $("popout").onclick = () => { const b = bridge(); if (b && b.pop_out) b.pop_out(); };
-$("classic").onclick = () => { location.href = BASE + "/player"; };
 
 /* ── the event stream ── */
 let es = null;
