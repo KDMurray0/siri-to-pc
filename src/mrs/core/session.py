@@ -276,6 +276,7 @@ class Session:
             # go straight back off.
             "shuffle": bool(self.profile.get("shuffle"))
                        if self.profile is not None else False,
+            "context": self.queue.playing_from(),
             "repeat": "off",
             "crossfade": 0,
             "activity": self.queue.activity.to_dict(),

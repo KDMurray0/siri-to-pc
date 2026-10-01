@@ -753,6 +753,7 @@ class PlayerService:
         return {
             "state": state,
             "shuffle": bool(config.get("shuffle")),
+            "context": self.queue.playing_from(),
             "position": props.get("time-pos") or 0,
             "volume": int(props.get("volume") or config.get("volume", 70)),
             "repeat": config.get("repeat", "off"),
@@ -886,6 +887,8 @@ class PlayerService:
             config.set("shuffle", on)
             if on:
                 self.queue.shuffle_upcoming()
+            else:
+                self.queue.unshuffle()
             return {"message": "Shuffle on" if on else "Shuffle off",
                     "shuffle": on}
         if a == "repeat":
@@ -1064,14 +1067,13 @@ class PlayerService:
         tracks = playlists.tracks(name)
         if not tracks:
             return {"ok": False, "message": f"{name} is empty"}
-        where = ""
+        where, full = "", list(tracks)
         if start:
             start = max(0, min(int(start), len(tracks) - 1))
             if start:
                 where = f" from {tracks[start].title}"
-                tracks = tracks[start:]
-        self.queue.play_now(tracks, shuffle=shuffle, hold_radio=True,
-                            kind="playlist")
+        self.queue.play_now(full, shuffle=shuffle, hold_radio=True, kind="playlist",
+                            lead=start, context={"kind": "playlist", "name": name})
         return {"ok": True, "message": f"Playing {name}{where}"}
 
     # -- announce ------------------------------------------------------

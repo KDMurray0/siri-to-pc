@@ -326,6 +326,10 @@ class QueueManager:
         self._refilling = False
         self._theme = ""                         # genre/vibe asked for, if any
         self._end_after_run = False              # artist/album: stop, don't drift
+        # The list as asked for, before any shuffle, and what it was: so shuffle
+        # off can put it back, and a page can show which list is playing.
+        self._order: list[Track] = []
+        self._context: dict = {}
         self._queue_stamp = None                 # so we only push real changes
         self._activity_mark = None               # last progress we bothered sending
         self._undo: deque[tuple] = deque(maxlen=20)
@@ -405,11 +409,19 @@ class QueueManager:
     def play_now(self, tracks: list[Track], alternates: list[str] | None = None,
                  *, shuffle: bool = False, hold_radio: bool = False,
                  kind: str = "song", theme: str = "",
-                 anchors: list[Track] | None = None) -> None:
-        """Replace what's playing with these tracks."""
+                 anchors: list[Track] | None = None,
+                 context: dict | None = None, lead: int = 0) -> None:
+        """Replace what's playing with these tracks.
+
+        `lead` is the song somebody pressed in the list: it plays first.
+        Shuffled, the rest of the whole list follows in shuffle order;
+        unshuffled, the list carries on from there.
+        """
         tracks = [t for t in tracks if t.video_id or t.url]
         if not tracks:
             return
+        lead = max(0, min(int(lead or 0), len(tracks) - 1))
+        whole = list(tracks)
         if self._party() and self.sink.count():
             # In party mode nobody replaces what's on -- not even by asking
             # for it outright. It goes on the end like everyone else's, and
@@ -420,9 +432,14 @@ class QueueManager:
             self.enqueue(tracks[:1])
             return
         if shuffle or self._pref_shuffle():
-            tracks = smart_order(tracks, self.taste.score, SMART_LIST)
-            tracks = _cached_first(tracks)
+            first = [tracks[lead]] if lead else []
+            rest = tracks[:lead] + tracks[lead + 1:] if lead else tracks
+            tracks = first + _cached_first(smart_order(rest, self.taste.score, SMART_LIST))
+        elif lead:
+            tracks = tracks[lead:]
         with self._lock:
+            self._order = whole if len(whole) > 1 else []
+            self._context = dict(context or {})
             self._work.clear()
             self._pool.clear()
             self._claimed.clear()
@@ -450,6 +467,74 @@ class QueueManager:
                 self._work.append(WorkItem(t, mode="append"))
         self._set_activity("finding", tracks[0].title)
         self._wake.set()
+
+    def playing_from(self) -> dict:
+        """What's playing from: a list, an album, an artist -- while it still is."""
+        with self._lock:
+            ctx, order = dict(self._context), self._order
+        if not ctx:
+            return {}
+        cur = self.current_track()
+        ctx["active"] = bool(cur and (not order or cur.key() in {t.key() for t in order}))
+        return ctx
+
+    def unshuffle(self) -> bool:
+        """Shuffle off on a list: back to the list's own order, carrying on from
+        the song that's playing -- from where the list has it, not where the
+        shuffle dealt it. Songs the shuffle already played come round again in
+        their place; the list's songs before this one are behind you now."""
+        with self._lock:
+            order = list(self._order)
+        cur = self.current_track()
+        if len(order) < 2 or cur is None:
+            return False
+        keys = [t.key() for t in order]
+        if cur.key() not in keys:
+            return False
+        here = keys.index(cur.key())
+        ahead, passed = order[here + 1:], set(keys[:here + 1])
+        with self._lock:
+            rows, pos = self.sink.playlist(), self.sink.pos()
+            head = (pos + 1) if pos is not None and pos >= 0 else 0
+            ready: dict[str, list[tuple[int, str]]] = {}
+            for i, r in enumerate(rows[head:], start=head):
+                t = self._meta.get(r.get("filename"))
+                if t is not None:
+                    ready.setdefault(t.key(), []).append((i, r.get("filename", "")))
+            waiting: dict[str, WorkItem] = {}
+            for w in self._work:
+                if w.mode == "append" and w.track.key() not in waiting:
+                    waiting[w.track.key()] = w
+            plan: list[WorkItem] = []
+            for t in ahead:
+                k = t.key()
+                if ready.get(k):
+                    _, path = ready[k].pop(0)
+                    plan.append(WorkItem(self._meta.get(path) or t, ready_path=path))
+                elif k in waiting:
+                    plan.append(waiting.pop(k))
+                else:
+                    plan.append(WorkItem(Track.from_dict(t.to_dict()), mode="append"))
+            # The list's earlier songs that were still to come: passed now.
+            gone = sorted((i for k, spots in ready.items() if k in passed for i, _ in spots),
+                          reverse=True)
+            dropped = {id(w) for k, w in waiting.items() if k in passed}
+            fixed = [w for w in self._work if w.mode != "append"]
+            planned = {id(w) for w in plan}
+            others = [w for w in self._work if w.mode == "append"
+                      and id(w) not in planned and id(w) not in dropped]
+            self._work = deque(fixed + [w for w in plan if not w.ready_path] + others)
+        for i in gone:
+            self.sink.remove(i)
+        with self._lock:
+            rows, pos = self.sink.playlist(), self.sink.pos()
+            head = (pos + 1) if pos is not None and pos >= 0 else 0
+            self._blend_plan = plan
+            self._blend_baseline = Counter(r.get("filename") for r in rows[:head])
+            self._apply_blend_order()
+        self._wake.set()
+        self.publish_queue(force=True)
+        return True
 
     def play_next(self, track: Track) -> None:
         if self._party():

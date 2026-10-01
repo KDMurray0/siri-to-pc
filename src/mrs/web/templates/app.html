@@ -193,10 +193,11 @@ h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;
 .card span{display:block;font-size:12px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card.round .art{border-radius:50%}
 .card.round{text-align:center}
-.card .go{position:absolute;right:14px;top:calc(100% - 92px);width:40px;height:40px;border-radius:50%;
+.card .art{position:relative}
+.card .go{position:absolute;right:8px;bottom:8px;width:42px;height:42px;border-radius:50%;z-index:1;
   background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;opacity:0;transform:translateY(6px);
-  transition:opacity .2s,transform .2s var(--ease)}
-.card:hover .go,.card:focus-within .go{opacity:1;transform:none}
+  box-shadow:0 6px 18px rgba(0,0,0,.4);transition:opacity .2s,transform .2s var(--ease)}
+.card:hover .go,.card:focus-within .go,.card .go.live{opacity:1;transform:none}
 .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
 .tile{position:relative;height:96px;border-radius:12px;overflow:hidden;padding:12px 14px;font-size:16px;font-weight:600;
   text-transform:capitalize;isolation:isolate;background:var(--tint-hi)}
@@ -257,6 +258,22 @@ h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;
 .infind input::placeholder{color:transparent}
 .infind input:focus::placeholder{color:var(--sub)}
 .row.nomatch{display:none}
+/* a sheet's controls: one big play, then smaller round ones beside it */
+.bigplay{width:56px;height:56px;border-radius:50%;display:grid;place-items:center;background:var(--accent);color:var(--accent-ink);
+  box-shadow:0 8px 24px rgba(0,0,0,.35);transition:transform .15s var(--ease),filter .15s;margin-right:6px}
+.bigplay .svg{width:26px;height:26px}
+.bigplay:hover{transform:scale(1.05);filter:brightness(1.08)}
+.bigplay:active{transform:scale(.96)}
+.bigplay:disabled{opacity:.4;cursor:default;transform:none}
+.round-ib .svg{width:20px;height:20px}
+.round-ib.on{color:var(--accent)}
+/* what's playing: bars that move while it plays, still while it's paused */
+.nowbars{display:inline-flex;align-items:flex-end;gap:2px;height:12px;flex:0 0 auto;margin-left:auto;color:var(--accent)}
+.nowbars i{width:3px;border-radius:1px;background:currentColor;height:40%;animation:bars .9s ease-in-out infinite alternate}
+.nowbars i:nth-child(2){animation-delay:-.3s}.nowbars i:nth-child(3){animation-delay:-.6s}
+body.paused .nowbars i{animation-play-state:paused}
+@keyframes bars{to{height:100%}}
+.lrow.playing b{color:var(--accent)}
 .pill{height:40px;padding:0 18px;border-radius:999px;display:inline-flex;align-items:center;gap:7px;font-weight:550;
   background:var(--tint-hi);transition:filter .15s,transform .15s var(--ease)}
 .pill.primary{background:var(--accent);color:var(--accent-ink)}
@@ -522,7 +539,7 @@ api("/api/settings").then(applySettings);
 
 /* ── what's playing ── */
 const state = { track: null, playing: false, position: 0, duration: 0, at: performance.now(), volume: 70,
-                shuffle: false, repeat: "off", liked: false };
+                shuffle: false, repeat: "off", liked: false, context: {} };
 const livePos = () => state.playing ? Math.min(state.duration || 1e9, state.position + (performance.now() - state.at) / 1000)
                                     : state.position;
 function applyStatus(d) {
@@ -533,6 +550,7 @@ function applyStatus(d) {
   state.duration = +(d.duration || (t && t.duration) || 0);
   if (d.volume != null && !volDrag) state.volume = +d.volume;
   state.shuffle = !!d.shuffle; state.repeat = d.repeat || "off";
+  state.context = d.context || {};
   const was = state.track && state.track.video_id;
   state.track = t && (t.name || t.title) ? t : null;
   state.liked = !!(t && t.liked);
@@ -550,6 +568,42 @@ function applyStatus(d) {
   $("like").classList.toggle("liked", state.liked);
   paintVol();
   if ((state.track && state.track.video_id) !== was) markNowPlaying();
+  document.body.classList.toggle("paused", !state.playing);
+  paintPlayButtons();
+}
+/* Every play button knows what it plays. The one for whatever's on turns
+   into a pause, and pressing it pauses rather than starting it over. */
+const ctxKey = (kind, name, extra = "") => `${kind}|${String(name || "").toLowerCase()}|${String(extra || "").toLowerCase()}`;
+function liveKey() {
+  const c = state.context || {};
+  if (!c.kind || !c.active || !state.track) return "";
+  return ctxKey(c.kind, c.name, c.kind === "playlist" ? (c.shared ? "shared" : "") : c.kind === "album" ? c.artist : "");
+}
+const PAUSE_SVG = `<svg class="svg" viewBox="0 0 24 24">${ICON.pause}</svg>`;
+function paintPlayButtons() {
+  const live = liveKey();
+  document.querySelectorAll("[data-ctx]").forEach(b => {
+    const on = !!live && b.dataset.ctx === live;
+    const showPause = on && state.playing;
+    if (b.dataset.showing !== String(showPause)) {
+      b.dataset.showing = String(showPause);
+      b.innerHTML = (showPause ? PAUSE_SVG : ICON.play) + (b.dataset.label ? `<span>${esc(showPause ? "Pause" : b.dataset.label)}</span>` : "");
+      b.setAttribute("aria-label", showPause ? "Pause" : (b.dataset.label || "Play"));
+    }
+    b.classList.toggle("live", on);
+  });
+  document.querySelectorAll(".lrow[data-ctx-row]").forEach(r => {
+    const on = !!live && r.dataset.ctxRow === live;
+    r.classList.toggle("playing", on);
+    const bars = r.querySelector(".nowbars");
+    if (on && !bars) r.insertAdjacentHTML("beforeend", `<span class="nowbars" aria-label="Playing"><i></i><i></i><i></i></span>`);
+    if (!on && bars) bars.remove();
+  });
+}
+/* Pressed: pause or resume it if it's the one on, otherwise start it. */
+function ctxPress(key, start) {
+  if (key && key === liveKey()) return api("/api/control/" + (state.playing ? "pause" : "resume"));
+  return start();
 }
 function paintSeek(frac, secs) {
   frac = Math.max(0, Math.min(1, frac || 0));
@@ -666,17 +720,20 @@ const playList = (name, shared, start = 0, shuffle = false) => say("/api/playlis
   (shared ? "&shared=1" : "") + (start ? "&start=" + start : "") + (shuffle ? "&shuffle=1" : ""), "Playing " + name);
 const playArtist = name => say("/api/play/artist?name=" + encodeURIComponent(name), "Playing " + name);
 const playAlbum = (name, artist) => say("/api/play/album?name=" + encodeURIComponent(name) + "&artist=" + encodeURIComponent(artist || ""), "Playing " + name);
+const playLiked = (start = 0) => say("/api/smartplaylists/play?kind=liked" + (start ? "&start=" + start : ""), "Playing Liked songs");
 const playQuery = q => say("/api/play?q=" + encodeURIComponent(q), "Playing " + q);
 
 /* ── pieces ── */
 const img = src => src ? `<img src="${esc(src)}" alt="" loading="lazy" onerror="this.remove()">` : "";
 /* A playlist's cover: its own picture if it has one, else the first four songs in a grid. */
-function listCover(p, cls = "art") {
+function listCover(p, cls = "art", extra = "") {
   if (p.cover && URL_TOKEN)
-    return `<div class="${cls} one"><img src="${BASE}/api/playlist/art?name=${encodeURIComponent(p.name)}${p.shared ? "&shared=1" : ""}&key=${encodeURIComponent(URL_TOKEN)}&v=${p.cover}" alt=""></div>`;
+    return `<div class="${cls} one"><img src="${BASE}/api/playlist/art?name=${encodeURIComponent(p.name)}${p.shared ? "&shared=1" : ""}&key=${encodeURIComponent(URL_TOKEN)}&v=${p.cover}" alt="">${extra}</div>`;
   const a = (p.arts || []).filter(Boolean);
-  return a.length >= 4 ? `<div class="${cls}">${a.slice(0, 4).map(img).join("")}</div>` : `<div class="${cls} one">${img(a[0])}</div>`;
+  return a.length >= 4 ? `<div class="${cls}">${a.slice(0, 4).map(img).join("")}${extra}</div>` : `<div class="${cls} one">${img(a[0])}${extra}</div>`;
 }
+const listKey = p => ctxKey("playlist", p.name, p.shared ? "shared" : "");
+const albumKey = (name, artist) => ctxKey("album", name, artist || "");
 function songRows(tracks) {
   if (!tracks.length) return '<div class="empty">Nothing here yet.</div>';
   const now = state.track && state.track.video_id;
@@ -747,19 +804,24 @@ const genreCard = (g, i) => {
   return `<button class="bcard" data-genre-open="${i}"><div><b>${esc(g.name)}</b><p>${esc(line)}</p></div>` +
     `<small>EXPLORE &#8599;</small><div class="fan">${fan.filter(Boolean).slice(0, 3).map(img).join("")}</div></button>`;
 };
-const albumCard = (a, i) => `<button class="card" data-album="${i}"><div class="art one">${img(a.art)}</div><b>${esc(a.name)}</b><span>${esc(a.artist || "Album")}</span><span class="go" data-playnow="${i}">${ICON.play}</span></button>`;
+const albumCard = (a, i) => `<button class="card" data-album="${i}"><div class="art one">${img(a.art)}` +
+  `<span class="go" data-playnow="${i}" data-ctx="${esc(albumKey(a.name, a.artist))}">${ICON.play}</span></div>` +
+  `<b>${esc(a.name)}</b><span>${esc(a.artist || "Album")}</span></button>`;
 function wireAlbums(root, albums) {
   root.querySelectorAll("[data-album]").forEach(b => b.onclick = e => {
     const a = albums[+b.dataset.album];
-    if (e.target.closest("[data-playnow]")) playAlbum(a.name, a.artist); else openAlbum(a.name, a.artist);
+    if (e.target.closest("[data-playnow]")) ctxPress(albumKey(a.name, a.artist), () => playAlbum(a.name, a.artist));
+    else openAlbum(a.name, a.artist);
   });
 }
 const artistCard = (a, i) => `<button class="card round" data-artist="${i}"><div class="art one">${img(a.art)}</div><b>${esc(a.name)}</b><span>Artist</span></button>`;
-const listCard = (p, i) => `<button class="card" data-list="${i}">${listCover(p)}<b>${esc(p.name)}</b><span>${p.shared ? "Shared · " : ""}${p.count} songs</span><span class="go" data-playnow="${i}">${ICON.play}</span></button>`;
+const listCard = (p, i) => `<button class="card" data-list="${i}">` +
+  listCover(p, "art", `<span class="go" data-playnow="${i}" data-ctx="${esc(listKey(p))}">${ICON.play}</span>`) +
+  `<b>${esc(p.name)}</b><span>${p.shared ? "Shared · " : ""}${p.count} songs</span></button>`;
 function wireCards(root, { lists = [], artists = [] } = {}) {
   root.querySelectorAll("[data-list]").forEach(b => b.onclick = e => {
     const p = lists[+b.dataset.list];
-    if (e.target.closest("[data-playnow]")) playList(p.name, p.shared); else openList(p);
+    if (e.target.closest("[data-playnow]")) ctxPress(listKey(p), () => playList(p.name, p.shared)); else openList(p);
   });
   root.querySelectorAll("[data-artist]").forEach(b => b.onclick = () => openArtist(artists[+b.dataset.artist].name));
 }
@@ -805,16 +867,17 @@ function openList(p) {
       `<div class="pic-wrap" style="position:relative">${listCover(fresh, "pic")}</div>` +
       `<div><small>${p.shared ? "Shared playlist" : "Playlist"}</small><h1>${esc(p.name)}</h1>` +
       `<p>${tracks.length} songs${secs ? " · about " + Math.round(secs / 60) + " min" : ""}</p></div></div>` +
-      `<div class="acts"><button class="pill primary" data-a="play"${tracks.length ? "" : " disabled"}>${ICON.play}Play</button>` +
-      `<button class="pill" data-a="shuffle"${tracks.length > 1 ? "" : " disabled"}>${ICON.shuffle}Shuffle</button>` +
+      `<div class="acts"><button class="bigplay" data-a="play" data-ctx="${esc(listKey(p))}" title="Play"${tracks.length ? "" : " disabled"}>${ICON.play}</button>` +
+      `<button class="round-ib" data-a="shuffle" title="Shuffle play" aria-label="Shuffle play"${tracks.length > 1 ? "" : " disabled"}>${ICON.shuffle}</button>` +
       (p.shared ? "" : `<span class="actwrap"><button class="round-ib" data-a="more" aria-haspopup="menu" title="More" aria-label="More">&#8943;</button>` +
         `<div class="menu glass" role="menu" hidden data-m>` +
         `<button role="menuitem" data-a="reorder">Shuffle the order</button>` +
         `<button role="menuitem" data-a="cover">Change cover</button>` +
         (p.cover ? `<button role="menuitem" data-a="uncover">Use the first four songs</button>` : "") +
         `</div></span>`) + (tracks.length > 6 ? FIND : "") + `</div>`;
-    root.querySelector('[data-a="play"]').onclick = () => playList(p.name, p.shared);
+    root.querySelector('[data-a="play"]').onclick = () => ctxPress(listKey(p), () => playList(p.name, p.shared));
     root.querySelector('[data-a="shuffle"]').onclick = () => playList(p.name, p.shared, 0, true);
+    paintPlayButtons();
     const more = root.querySelector('[data-a="more"]');
     if (more) more.onclick = e => { e.stopPropagation(); const m = root.querySelector("[data-m]"); m.hidden = !m.hidden; };
     root.addEventListener("click", e => { const m = root.querySelector("[data-m]"); if (m && !e.target.closest(".actwrap")) m.hidden = true; });
@@ -865,10 +928,16 @@ function openLiked() {
     root.innerHTML = `<div class="hero"><div class="banner">${img((tracks.find(t => t.art) || {}).art)}</div>` +
       `<div class="pic one cov heart" style="width:min(210px,24vw);height:auto;aspect-ratio:1;border-radius:12px">${ICON.heart.replace('class="svg"', 'class="svg" style="width:64px;height:64px"')}</div>` +
       `<div><small>Playlist</small><h1>Liked songs</h1><p>${tracks.length} songs</p></div></div>` +
-      (tracks.length > 6 ? `<div class="acts">${FIND}</div>` : "");
+      `<div class="acts"><button class="bigplay" data-a="play" data-ctx="${esc(ctxKey("smart", "liked"))}" title="Play"${tracks.length ? "" : " disabled"}>${ICON.play}</button>` +
+      `<button class="round-ib" data-a="shuffle" title="Shuffle play" aria-label="Shuffle play"${tracks.length > 1 ? "" : " disabled"}>${ICON.shuffle}</button>` +
+      (tracks.length > 6 ? FIND : "") + `</div>`;
+    root.querySelector('[data-a="play"]').onclick = () => ctxPress(ctxKey("smart", "liked"), () => playLiked());
+    root.querySelector('[data-a="shuffle"]').onclick = async () => { if (!state.shuffle) await api("/api/control/shuffle"); playLiked(); };
     root.insertAdjacentHTML("beforeend", part(1, "Songs", songRows(tracks)));
-    wireRows(root, tracks, t => playSong(t));
+    // Liked plays newest first, so a row is that far into the list.
+    wireRows(root, tracks, (t, n) => playLiked(n));
     wireFind(root, tracks);
+    paintPlayButtons();
   });
 }
 function openArtist(name) {
@@ -878,8 +947,9 @@ function openArtist(name) {
     if (!r) { root.insertAdjacentHTML("beforeend", `<div class="pane empty">Couldn't load ${esc(name)}.</div>`); return; }
     root.innerHTML = `<div class="hero"><div class="banner">${img(r.art)}</div><div class="pic one face">${img(r.art)}</div>` +
       `<div><small>Artist</small><h1>${esc(r.name)}</h1><p>${r.top.length} popular songs</p></div></div>` +
-      `<div class="acts"><button class="pill primary" data-a="play">${ICON.play}Play</button></div>`;
-    root.querySelector('[data-a="play"]').onclick = () => playArtist(r.name);
+      `<div class="acts"><button class="bigplay" data-a="play" data-ctx="${esc(ctxKey("artist", r.name))}" title="Play">${ICON.play}</button></div>`;
+    root.querySelector('[data-a="play"]').onclick = () => ctxPress(ctxKey("artist", r.name), () => playArtist(r.name));
+    paintPlayButtons();
     root.insertAdjacentHTML("beforeend", part(1, "Popular", songRows(r.top.slice(0, 15))));
     wireRows(root, r.top, t => playSong(t));
     if (r.near.length) { root.insertAdjacentHTML("beforeend", part(2, "Fans also like", faceRow(r.near))); wireCards(root, { artists: r.near }); }
@@ -908,9 +978,10 @@ function openAlbum(name, artist) {
     const secs = tracks.reduce((a, t) => a + (t.duration || 0), 0);
     root.innerHTML = `<div class="hero"><div class="banner">${img(r && r.art)}</div><div class="pic one">${img(r && r.art)}</div>` +
       `<div><small>Album</small><h1>${esc(name)}</h1><p>${esc(artist || "")}${tracks.length ? " · " + tracks.length + " songs" : ""}${secs ? " · " + Math.round(secs / 60) + " min" : ""}</p></div></div>` +
-      `<div class="acts"><button class="pill primary" data-a="play"${tracks.length ? "" : " disabled"}>${ICON.play}Play</button>` +
+      `<div class="acts"><button class="bigplay" data-a="play" data-ctx="${esc(albumKey(name, artist))}" title="Play"${tracks.length ? "" : " disabled"}>${ICON.play}</button>` +
       (tracks.length > 6 ? FIND : "") + `</div>`;
-    root.querySelector('[data-a="play"]').onclick = () => playAlbum(name, artist);
+    root.querySelector('[data-a="play"]').onclick = () => ctxPress(albumKey(name, artist), () => playAlbum(name, artist));
+    paintPlayButtons();
     root.insertAdjacentHTML("beforeend", part(1, "Songs", songRows(tracks)));
     wireRows(root, tracks, t => playSong(t));
     wireFind(root, tracks);
@@ -959,7 +1030,7 @@ const VIEWS = {
       shelf(h.genres.map((g, i) => `<div class="gpill"><button class="gopen" data-genre-open="${i}">${esc(g.name)}</button>` +
         `<button class="gplay" data-genre="${i}" title="Play ${esc(g.name)}" aria-label="Play ${esc(g.name)}">${ICON.play}</button></div>`).join(""), "logobar"));
     if (h.recent.length) html += sect("Jump back in", "What you played lately", shelf(
-      h.recent.map((t, i) => `<button class="card" data-recent="${i}"><div class="art one">${img(t.art)}</div><b>${esc(t.title)}</b><span>${esc(t.artist)}</span><span class="go">${ICON.play}</span></button>`).join("")));
+      h.recent.map((t, i) => `<button class="card" data-recent="${i}"><div class="art one">${img(t.art)}<span class="go">${ICON.play}</span></div><b>${esc(t.title)}</b><span>${esc(t.artist)}</span></button>`).join("")));
     if (h.lists.length) html += sect("Your playlists", "The ones you made and the ones shared with you",
       shelf(h.lists.slice(0, 16).map(listCard).join("")), `<button data-go="library">Show all</button>`);
     if (h.artists.length) html += sect("Your top artists", "Who you play most", shelf(h.artists.slice(0, 24).map(artistCard).join("")),
@@ -979,6 +1050,7 @@ const VIEWS = {
     wireRows(pane, h.charts, t => playSong(t));
     wireShelves(pane);
     if (!quiet) centreRows(pane);
+    paintPlayButtons();
   },
 
   async search(pane, { q = "" } = {}) {
@@ -999,6 +1071,7 @@ const VIEWS = {
     wireCards(pane, { lists, artists });
     wireAlbums(pane, albums);
     wireShelves(pane);
+    paintPlayButtons();
   },
 
   async artists(pane) {
@@ -1018,6 +1091,7 @@ const VIEWS = {
       lists.map(listCard).join("") + `</div>`;
     pane.querySelector("[data-liked]").onclick = openLiked;
     wireCards(pane, { lists });
+    paintPlayButtons();
   },
 };
 function greeting() {
@@ -1119,14 +1193,15 @@ async function loadShelf() {
   const before = shelfKnown;
   shelfKnown = new Set(lists.map(p => (p.shared ? "s:" : "m:") + p.name));
   $("shelf").innerHTML =
-    `<button class="lrow" data-liked="1" title="Liked songs"><div class="cov heart">${ICON.heart}</div><div><b>Liked songs</b><span>Playlist</span></div></button>` +
-    lists.map((p, i) => `<button class="lrow" data-i="${i}" title="${esc(p.name)}">${listCover(p, "cov")}<div><b>${esc(p.name)}</b><span>${p.shared ? "Shared · " : ""}${p.count} songs</span></div></button>`).join("");
+    `<button class="lrow" data-liked="1" data-ctx-row="${esc(ctxKey("smart", "liked"))}" title="Liked songs"><div class="cov heart">${ICON.heart}</div><div><b>Liked songs</b><span>Playlist</span></div></button>` +
+    lists.map((p, i) => `<button class="lrow" data-i="${i}" data-ctx-row="${esc(listKey(p))}" title="${esc(p.name)}">${listCover(p, "cov")}<div><b>${esc(p.name)}</b><span>${p.shared ? "Shared · " : ""}${p.count} songs</span></div></button>`).join("");
   if (before) $("shelf").querySelectorAll(".lrow[data-i]").forEach(b => {
     const p = lists[+b.dataset.i];
     if (!before.has((p.shared ? "s:" : "m:") + p.name)) b.classList.add("fresh");
   });
   $("shelf").querySelector("[data-liked]").onclick = openLiked;
   $("shelf").querySelectorAll(".lrow[data-i]").forEach(b => b.onclick = () => openList(lists[+b.dataset.i]));
+  paintPlayButtons();
   return lists;
 }
 $("newbtn").onclick = () => { $("newlist").hidden = !$("newlist").hidden; if (!$("newlist").hidden) $("newname").focus(); };

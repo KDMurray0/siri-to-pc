@@ -111,7 +111,7 @@ body.mini .timeleft{display:none}
   background:linear-gradient(145deg,color-mix(in srgb,var(--accent) 12%,var(--panel)),var(--panel))}
 /* Shown only while the cover is missing. An <img> can't carry a pseudo
    element, so the note is a sibling sitting under it. */
-.artnote{position:absolute;top:50%;left:50%;translate:-50% -50%;
+.artnote{position:absolute;top:50%;left:50%;translate:-50% -50%;z-index:2;
   width:152px;height:152px;display:grid;place-items:center;pointer-events:none;
   opacity:0;transition:opacity .3s ease,width .2s,height .2s}
 .artnote .restmark{width:30%;height:30%;gap:9%;margin:0;align-items:flex-end}

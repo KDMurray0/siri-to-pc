@@ -474,6 +474,52 @@ def _run(verbose: bool = False) -> Result:
             c("...and stops the matching", q.import_era() != before)
             say("imports survive being superseded", c)
 
+            # -- 7d. a list's own order, and shuffle off going back to it --
+            c = _Checker("shuffle off")
+            songs7d = [_Tk(video_id=f"so{i}", title=f"Song {i}", artist="Band") for i in range(10)]
+            q7d = QueueManager(ListSink(), _Ctx(), taste=NeutralTaste(), session_id="unshuffle",
+                               prefs={})
+            q7d.play_now(list(songs7d), shuffle=True, lead=4,
+                         context={"kind": "playlist", "name": "Mine"})
+            dealt7d = [w.track.title for w in q7d._work]
+            c("the song pressed plays first, even shuffled", dealt7d[0] == "Song 4", str(dealt7d))
+            c("...and the whole list comes after it, not just what follows it",
+              sorted(dealt7d) == sorted(t.title for t in songs7d), str(dealt7d))
+            c("the list's own order is kept for later", [t.title for t in q7d._order] == [t.title for t in songs7d])
+            # Six of them downloaded, in the shuffled order; the third is playing.
+            loaded7d = [q7d._work.popleft() for _ in range(6)]
+            for w in loaded7d:
+                path = w.track.video_id + ".webm"
+                q7d.sink.load(path, "append")
+                q7d._meta[path] = w.track
+                w.ready_path = path
+            q7d.sink.jump(2)
+            playing7d = loaded7d[2].track
+            ctx7d = q7d.playing_from()
+            c("it says which list is playing", ctx7d.get("kind") == "playlist" and ctx7d.get("name") == "Mine"
+              and ctx7d.get("active") is True, str(ctx7d))
+            c("shuffle off puts it back", q7d.unshuffle())
+            here7d = [t.title for t in songs7d].index(playing7d.title)
+            want7d = [t.title for t in songs7d[here7d + 1:]]
+            got7d = [t.title for t in q7d.mandatory_tracks()]
+            c("...carrying on from where the playing song sits in the list", got7d == want7d,
+              f"playing {playing7d.title}: {got7d} != {want7d}")
+            passed7d = {t.title for t in songs7d[:here7d]}
+            ahead7d = [q7d._meta[p].title for p in q7d.sink.playlist_paths()[3:]] \
+                if hasattr(q7d.sink, "playlist_paths") else \
+                [q7d._meta[e["filename"]].title for e in q7d.sink.playlist()[3:]]
+            c("...with the list's earlier songs behind it, not still to come",
+              not (set(ahead7d) & passed7d), f"{ahead7d} vs {sorted(passed7d)}")
+            c("the song playing never moved", q7d.current_track() is playing7d)
+            q7e = QueueManager(ListSink(), _Ctx(), taste=NeutralTaste(), session_id="inorder", prefs={})
+            q7e.play_now(list(songs7d), lead=3, context={"kind": "playlist", "name": "Mine"})
+            c("unshuffled, pressing a song plays the list from there",
+              [w.track.title for w in q7e._work] == [f"Song {i}" for i in range(3, 10)],
+              str([w.track.title for w in q7e._work]))
+            q7e.play_now([_Tk(video_id="one", title="Just one", artist="Band")])
+            c("asking for something else forgets the list", q7e.playing_from() == {} and q7e._order == [])
+            say("shuffle off", c)
+
             # -- 8. "inside the house" must mean inside the house ----------
             c = _Checker("home")
             from .web.security import _own_wan, is_home

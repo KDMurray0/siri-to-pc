@@ -1285,6 +1285,8 @@ def api_control(request: Request, action: str, value: int | None = None,
             prof.set("shuffle", on)
         if on:
             q.shuffle_upcoming()
+        else:
+            q.unshuffle()
     elif action == "like":
         # Into their own liked list. There is one now, so the heart works.
         track = room.current()
@@ -1597,7 +1599,7 @@ def api_play_artist(request: Request, name: str, _: bool = Auth):
     if not room:
         _guard_shared(request)
     return handle_request(f"songs by {name}", queue=room.queue if room else None,
-                          lists=_lists_for(request))
+                          lists=_lists_for(request), context={"kind": "artist", "name": name})
 
 
 @app.get("/api/play/album")
@@ -1608,7 +1610,8 @@ def api_play_album(request: Request, name: str, artist: str = "", _: bool = Auth
         _guard_shared(request)
     return handle_request(f"play the {name} album" + (f" by {artist}" if artist else ""),
                           queue=room.queue if room else None,
-                          lists=_lists_for(request))
+                          lists=_lists_for(request),
+                          context={"kind": "album", "name": name, "artist": artist})
 
 
 @app.get("/api/lyrics")
@@ -1877,7 +1880,7 @@ def _smart_rows(store, kind: str, limit: int = 200):
             metadata.setdefault(row["video_id"], row)
 
     if kind == "liked":
-        source = liked
+        source = list(reversed(liked))      # newest first, as it's shown
     elif kind == "recent":
         source = recent
     elif kind == "most_played":
@@ -1963,8 +1966,8 @@ def api_smartplaylist_play(request: Request, kind: str, start: int = 0, _: bool 
     if not room:
         _guard_shared(request)
     queue = room.queue if room else player.queue
-    tracks = tracks[max(0, min(start, len(tracks) - 1)):]
-    queue.play_now(tracks, hold_radio=True, kind="playlist")
+    queue.play_now(tracks, hold_radio=True, kind="playlist", lead=start,
+                   context={"kind": "smart", "name": kind})
     return {"status": "ok", "added": len(tracks),
             "message": f"Playing {_SMART_LABELS[kind]} · {len(tracks)} songs"}
 
@@ -2399,9 +2402,9 @@ def api_playlist(request: Request, op: str, name: str = "",
             tracks = list(mine.tracks(name))
             if not tracks:
                 return {"status": "ok", "ok": False, "message": "That list is empty"}
-            tracks = tracks[max(0, min(start, len(tracks) - 1)):]
-            room.queue.play_now(tracks, shuffle=shuffle, hold_radio=True,
-                                kind="playlist")
+            room.queue.play_now(tracks, shuffle=shuffle, hold_radio=True, kind="playlist",
+                                lead=start, context={"kind": "playlist", "name": name,
+                                                     "shared": bool(shared)})
             return {"status": "ok", "ok": True,
                     "message": f"Playing {name}"}
         return {"status": "ok", **player.playlist_play(name, shuffle, start)}

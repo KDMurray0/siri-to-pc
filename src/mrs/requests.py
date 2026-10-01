@@ -150,7 +150,7 @@ def _play_from_lyric(text: str, *, mode: str, queue, room: str,
 
 def handle_request(text: str, *, mode: str = "play", source: str | None = None,
                    announce: bool = True, cast: bool = False,
-                   queue=None, lists=OWN) -> dict:
+                   queue=None, lists=OWN, context: dict | None = None) -> dict:
     """The one entry point. Never raises.
 
     `queue` is whose queue this lands in — the shared player by default, or a
@@ -311,7 +311,7 @@ def handle_request(text: str, *, mode: str = "play", source: str | None = None,
         else:
             queue.play_now(res.tracks, res.alternates,
                                   anchors=res.anchors, shuffle=shuffle,
-                                  hold_radio=res.hold_radio, kind=plan.kind,
+                                  hold_radio=res.hold_radio, kind=plan.kind, context=context,
                                   theme=(plan.query if plan.kind == "genre"
                                          else getattr(plan, "theme", "")))
 
