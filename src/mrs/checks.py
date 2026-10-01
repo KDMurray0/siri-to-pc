@@ -5555,6 +5555,17 @@ def _run(verbose: bool = False) -> Result:
             c("the change route only ever edits the caller's own lists",
               "_lists_for(request)" in src56 and "shared" not in src56.split('"""')[2])
 
+            # Visualisers: bars, wide, ring, pulse -- and nothing else gets saved.
+            page56 = (Path(__file__).parent / "web" / "templates" / "player.html").read_text("utf-8")
+            c("four visualisers to choose from, and off",
+              all(f'val:"{v}"' in page56 for v in ("off", "bars", "wide", "ring", "pulse"))
+              and 'id="vizring"' in page56 and "function paintRing(" in page56
+              and "function paintPulse(" in page56)
+            ok56 = get("/api/setting?key=visualiser_style&value=ring").status_code
+            bad56 = get("/api/setting?key=visualiser_style&value=lava").status_code
+            get("/api/setting?key=visualiser_style&value=bars")
+            c("the style is saved, and only a real one", ok56 == 200 and bad56 == 400, f"{ok56} {bad56}")
+
             # Smart shuffle: what you skip drifts back, what you love comes forward;
             # the radio leans the same way, only less.
             from .core import queue as _q56

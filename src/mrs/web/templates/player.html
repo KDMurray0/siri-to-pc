@@ -1079,6 +1079,16 @@ body.mini .miniwave i{width:2px;border-radius:1px}
 .miniwave{transition:opacity .3s}
 body.paused .miniwave{opacity:.25}
 body.noviz .miniwave{display:none}
+/* Wide: one curve of thin bars right across the bottom of the cover. */
+body:not(.mini).viz-wide .miniwave{width:auto;left:12px;right:12px;transform:none;
+  gap:3px;padding:0 4px 12px;height:52px}
+body:not(.mini).viz-wide .miniwave i{flex:1;width:auto;border-radius:2px}
+/* Ring and pulse don't use the bars on the big player; the mini keeps them. */
+body:not(.mini).viz-ring .miniwave,body:not(.mini).viz-pulse .miniwave{display:none}
+.vizring{display:none;position:absolute;pointer-events:none;z-index:2}
+body:not(.mini).viz-ring:not(.noviz) .vizring{display:block}
+body.viz-ring:not(.mini):not(.expand) .art-wrap{overflow:visible}
+@media (prefers-reduced-motion:reduce){body.viz-pulse .art{scale:none!important}}
 /* The phone's own volume buttons own this. It used to be dimmed and left on
    screen, which is worse than either option: a slider you can see, can drag
    and which changes nothing. iOS keeps audio element volume read-only, so
@@ -1542,6 +1552,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
       <img class="art placeholder" id="art" alt="" draggable="false">
       <div class="artnote" aria-hidden="true"><span class="restmark"><b></b><b></b><b></b><b></b></span></div>
       <div class="miniwave" id="miniwave" aria-hidden="true"></div>
+      <canvas class="vizring" id="vizring" aria-hidden="true" width="0" height="0"></canvas>
     </div>
     <div class="meta drag">
       <div class="title" id="title">Nothing playing</div>
@@ -1819,8 +1830,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 
       <section class="spane" data-s="look">
         <div class="srow guestok"><span class="slabel">Theme</span><div class="swatches" id="swatches"></div></div>
-        <div class="srow"><span class="slabel">Visualiser<em>The bars across the artwork</em></span>
-          <div class="toggle" id="viz"></div></div>
+        <div class="srow"><span class="slabel">Visualiser<em>Bars on the cover, a ring round it, or the cover itself moving</em></span>
+          <div class="chips" id="viz"></div></div>
         <div class="srow guestok"><span class="slabel">Liquid glass mini player<em>Off by default. Turn it on for a clear desktop view with a subtle edge bend and album tint. While active, the mini player is omitted from screenshots.</em></span>
           <div class="toggle" id="glasson"></div></div>
       </section>
@@ -5419,12 +5430,8 @@ async function loadBlocked() {
     ? rows.map(b => `${b.ip} (${Math.round(b.minutes_left / 60)}h left)`).join(", ")
     : "nobody";
 }
-$("viz").onclick = () => {
-  const on = !$("viz").classList.contains("on");
-  $("viz").classList.toggle("on", on);
-  document.body.classList.toggle("noviz", !on);
-  api("/api/setting?key=show_visualiser&value=" + (on ? 1 : 0));
-};
+buildChips("viz", [{label:"Off",val:"off"},{label:"Bars",val:"bars"},{label:"Wide",val:"wide"},
+                   {label:"Ring",val:"ring"},{label:"Pulse",val:"pulse"}], v => setVizStyle(v, true));
 
 $("normalize").onclick = () => {
   const on = !$("normalize").classList.contains("on");
@@ -7016,9 +7023,7 @@ async function loadSettings() {
     $("libmonitor").appendChild(custom);
   }
   $("libmonitor").value = String(monitorMinutes);
-  const viz = s.show_visualiser !== false;
-  $("viz").classList.toggle("on", viz);
-  document.body.classList.toggle("noviz", !viz);
+  setVizStyle(s.show_visualiser === false ? "off" : (s.visualiser_style || "bars"), false);
   $("normalize").classList.toggle("on", !!s.normalize);
   $("announce").classList.toggle("on", s.announce !== false);
   checkBoot();
@@ -7141,6 +7146,7 @@ $("shrink").onclick = async () => {
   document.body.classList.toggle("mini-hover", mini);
   $("shrink").title = mini ? "Back to full size" : "Shrink to mini";
   moveControls(mini);
+  buildMeters();
   showUpNext();
   paintGlass();
   try {
@@ -7214,12 +7220,32 @@ function envBands() {
   return out;
 }
 
+/* Which visualiser: bars, wide, ring or pulse -- or off. The wide bars and
+   the ring are the big player's; the mini keeps its seven bars whatever. */
+let vizStyle = "bars";
+const WIDE_BARS = 28;
+function setVizStyle(style, save) {
+  const off = style === "off";
+  vizStyle = off ? vizStyle : (["bars", "wide", "ring", "pulse"].includes(style) ? style : "bars");
+  document.body.classList.toggle("noviz", off);
+  for (const s of ["bars", "wide", "ring", "pulse"])
+    document.body.classList.toggle("viz-" + s, !off && vizStyle === s);
+  markChips("viz", off ? "off" : vizStyle);
+  buildMeters();
+  if (save) {
+    api("/api/setting?key=show_visualiser&value=" + (off ? 0 : 1));
+    if (!off) api("/api/setting?key=visualiser_style&value=" + vizStyle);
+  }
+}
+const wideNow = () => vizStyle === "wide" && !document.body.classList.contains("mini");
+
 function buildMeters() {
   forgetMeterBoxes();          // the cached list is about to be wrong
   document.querySelectorAll(".eq, .miniwave").forEach(box => {
-    if (box.childElementCount === BARS) return;
+    const want = box.classList.contains("miniwave") && wideNow() ? WIDE_BARS : BARS;
+    if (box.childElementCount === want) return;
     box.innerHTML = "";
-    for (let i = 0; i < BARS; i++) box.appendChild(document.createElement("i"));
+    for (let i = 0; i < want; i++) box.appendChild(document.createElement("i"));
   });
   while (meterBars.length < BARS) meterBars.push({ v: 0, peak: 0 });
 }
@@ -7247,6 +7273,78 @@ function meterTargets() {
 }
 const forgetMeterBoxes = () => { meterBoxes = null; };
 
+/* A band's level at any point across the seven, eased between them, so 28
+   bars read as one curve rather than seven steps. */
+function bandAt(x) {
+  const f = Math.max(0, Math.min(BARS - 1, x * (BARS - 1)));
+  const i = Math.floor(f), t = f - i;
+  const a = meterBars[i].v, b = meterBars[Math.min(BARS - 1, i + 1)].v;
+  return a + (b - a) * (1 - Math.cos(t * Math.PI)) / 2;
+}
+
+/* The ring: a wave traced round the cover's rounded edge, moving with the
+   music, in the colour opposite the cover's on the wheel -- white when the
+   cover has no colour to speak of. Drawn only while it's the chosen style. */
+function ringColour() {
+  const m = /rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(artAccent || "");
+  if (!m) return "rgba(255,255,255,.9)";
+  const [r, g, b] = m.slice(1).map(n => +n / 255);
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  if (d < .12) return "rgba(255,255,255,.9)";
+  let h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  h = (h * 60 + 180 + 360) % 360;
+  return `hsl(${h.toFixed(0)},80%,68%)`;
+}
+let ringBox = null;
+function paintRing(level, t) {
+  const cv = $("vizring"), art = $("art");
+  if (!cv || !art) return;
+  const on = vizStyle === "ring" && !document.body.classList.contains("mini") &&
+             !document.body.classList.contains("noviz") && level > 0.002;
+  if (!on) { if (cv.width) { cv.width = 0; ringBox = null; } return; }
+  const pad = 26, w = art.offsetWidth, h = art.offsetHeight;
+  if (!w || !h) return;
+  const dpr = window.devicePixelRatio || 1;
+  const key = `${art.offsetLeft},${art.offsetTop},${w},${h},${dpr}`;
+  if (ringBox !== key) {
+    ringBox = key;
+    Object.assign(cv.style, {left: (art.offsetLeft - pad) + "px", top: (art.offsetTop - pad) + "px",
+                             width: (w + pad * 2) + "px", height: (h + pad * 2) + "px"});
+    cv.width = Math.round((w + pad * 2) * dpr); cv.height = Math.round((h + pad * 2) * dpr);
+  }
+  const x = cv.getContext("2d");
+  x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  x.clearRect(0, 0, w + pad * 2, h + pad * 2);
+  // A squircle the shape of the cover, pushed out by the bands as they move.
+  const cx = pad + w / 2, cy = pad + h / 2, n = 10, N = 220;
+  x.beginPath();
+  for (let k = 0; k <= N; k++) {
+    const th = k / N * Math.PI * 2, c = Math.cos(th), s = Math.sin(th);
+    const ex = Math.sign(c) * Math.pow(Math.abs(c), 2 / n), ey = Math.sign(s) * Math.pow(Math.abs(s), 2 / n);
+    const wave = .5 + .5 * Math.sin(th * 6 + t * 1.7) * bandAt(.15)
+               + .35 * Math.sin(th * 11 - t * 2.3) * bandAt(.5)
+               + .25 * Math.sin(th * 17 + t * 3.1) * bandAt(.85);
+    const push = 5 + wave * 14 * (.35 + level);
+    const px = cx + ex * (w / 2 + push), py = cy + ey * (h / 2 + push);
+    if (k) x.lineTo(px, py); else x.moveTo(px, py);
+  }
+  x.closePath();
+  const colour = ringColour();
+  x.strokeStyle = colour; x.lineWidth = 2.5; x.lineJoin = "round";
+  x.shadowColor = colour; x.shadowBlur = 14;
+  x.globalAlpha = Math.min(1, .35 + level * 1.4);
+  x.stroke();
+}
+
+/* Pulse: the cover itself breathes with the low end. */
+function paintPulse(bass) {
+  const art = $("art");
+  if (!art) return;
+  const on = vizStyle === "pulse" && !document.body.classList.contains("noviz") && bass > 0.002;
+  const want = on ? (1 + bass * 0.05).toFixed(4) : "";
+  if (art.style.scale !== want) art.style.scale = want;
+}
+
 function paintMeter() {
   requestAnimationFrame(paintMeter);
   const boxes = meterTargets();
@@ -7272,6 +7370,9 @@ function paintMeter() {
     if (!live) { meterIdle = true; for (const s of meterBars) { s.v = 0; s.peak = 0; } }
   }
   if (playing) meterIdle = false;
+  const level = meterBars.reduce((a, s) => a + s.v, 0) / BARS;
+  paintRing(meterIdle ? 0 : level, performance.now() / 1000);
+  paintPulse(meterIdle ? 0 : (meterBars[0].v + meterBars[1].v) / 2);
   // Only what actually moved. A bar sitting on a steady note was being
   // written twice a frame to say the same thing, and a tenth of a percent
   // of height is not a thing anyone can see.
@@ -7282,10 +7383,20 @@ function paintMeter() {
     if (h === s.lastH && o === s.lastO) continue;
     s.lastH = h; s.lastO = o;
     for (const box of boxes) {
+      if (box.children.length !== BARS) continue;
       const bar = box.children[i];
       if (!bar) continue;
       bar.style.height = h + "%";
       bar.style.opacity = o;
+    }
+  }
+  // The wide bars: one curve across the cover, every frame.
+  for (const box of boxes) {
+    const n = box.children.length;
+    if (n === BARS || !n) continue;
+    for (let j = 0; j < n; j++) {
+      const v = bandAt(j / (n - 1)) * (.85 + .15 * Math.sin(j * 1.7));
+      box.children[j].style.height = (Math.max(0.05, v) * 100).toFixed(1) + "%";
     }
   }
 }

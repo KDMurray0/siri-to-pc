@@ -2346,7 +2346,7 @@ def playlist_share_page(request: Request, sid: str):
 # owner's playback preferences, they belong to the owner's player, and a
 # guest's session neither reads nor obeys them. Sending them only invited a
 # guest's page to display settings that don't apply to it.
-_GUEST_SETTINGS = ("theme", "show_visualiser", "eq_presets",
+_GUEST_SETTINGS = ("theme", "show_visualiser", "visualiser_style", "eq_presets",
                    "party_mode", "block_full_guests")
 
 # What each outside tool is actually for, in words that mean something to
@@ -2403,7 +2403,7 @@ def api_audio(eq: str = "", normalize: int | None = None,
 
 # Settings the UI is allowed to change, with how to coerce them.
 _SETTABLE = {
-    "artist_cohesion": float, "anchor_pull": float, "show_visualiser": bool, "queue_target": int, "queue_min_ready": int,
+    "artist_cohesion": float, "anchor_pull": float, "show_visualiser": bool, "visualiser_style": str, "queue_target": int, "queue_min_ready": int,
     "artist_run_limit": int, "min_duration": int, "dedupe_hours": int,
     "cookie_close_browser_optin": bool, "cookie_auto_refresh": bool,
     "playlist_download": bool, "queue_max": int, "artist_track_count": int,
@@ -2478,6 +2478,8 @@ def api_setting(request: Request, key: str, value: str = "", _: bool = Auth):
         raise HTTPException(400, "new accounts may be full, phone, or blocked")
     elif key == "https_mode" and parsed not in ("direct", "proxy"):
         raise HTTPException(400, "HTTPS mode must be direct or proxy")
+    elif key == "visualiser_style" and parsed not in ("bars", "wide", "ring", "pulse"):
+        raise HTTPException(400, "The visualiser is bars, wide, ring or pulse")
     elif key == "url_prefix":
         parsed = str(parsed).strip().rstrip("/")
         if parsed and not parsed.startswith("/"):
