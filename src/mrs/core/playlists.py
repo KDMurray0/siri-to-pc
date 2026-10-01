@@ -16,7 +16,7 @@ from ..config import config
 from ..events import Ev, bus
 from ..logging_setup import get
 from ..models import Track, norm_title
-from ..paths import data_dir, write_atomic, replace_file
+from ..paths import data_dir, write_atomic, write_atomic_bytes, replace_file
 
 log = get("playlists")
 
@@ -216,6 +216,53 @@ class Playlists:
         self._save_event()
         return {"ok": True, "count": len(rows)}
 
+    # -- a list's own cover; without one it's the first four songs' ------
+    COVER_FILE = "cover.jpg"
+    COVER_MAX_BYTES = 8 * 1024 * 1024
+
+    def _cover_stamp(self, name: str) -> int:
+        """0 with no cover of its own; else when it changed, for cache-busting."""
+        path = self._folder_path(name) / self.COVER_FILE
+        try:
+            return int(path.stat().st_mtime) if path.is_file() else 0
+        except OSError:
+            return 0
+
+    def cover_path(self, name: str) -> Path | None:
+        path = self._folder_path(name) / self.COVER_FILE
+        return path if path.is_file() else None
+
+    def set_cover(self, name: str, data: bytes) -> dict:
+        """Any picture, made a 640px square JPEG. Only a real image gets saved."""
+        import io
+        from PIL import Image, ImageOps
+        if not data or len(data) > self.COVER_MAX_BYTES:
+            return {"ok": False, "message": "Use a picture under 8 MB"}
+        try:
+            with Image.open(io.BytesIO(data)) as probe:
+                probe.verify()
+            with Image.open(io.BytesIO(data)) as pic:
+                pic = ImageOps.exif_transpose(pic).convert("RGB")
+                pic = ImageOps.fit(pic, (640, 640), Image.LANCZOS)
+                out = io.BytesIO()
+                pic.save(out, "JPEG", quality=88)
+        except Exception:
+            return {"ok": False, "message": "That isn't a picture this can read"}
+        with self._lock:
+            folder = self._folder_path(name)
+            if not (folder / "tracks.json").is_file():
+                return {"ok": False, "message": f"There's no list called {name}"}
+            write_atomic_bytes(folder / self.COVER_FILE, out.getvalue())
+        self._save_event()
+        return {"ok": True, "message": "Cover changed"}
+
+    def clear_cover(self, name: str) -> dict:
+        with self._lock:
+            path = self._folder_path(name) / self.COVER_FILE
+            path.unlink(missing_ok=True)
+        self._save_event()
+        return {"ok": True, "message": "Back to the first four songs"}
+
     def can_undo(self, name: str) -> bool:
         return (self._folder_path(name) / self.UNDO_FILE).is_file()
 
@@ -237,6 +284,10 @@ class Playlists:
             downloaded = sum(1 for t in rows if t.path and Path(t.path).is_file())
             out.append({"name": name, "count": len(rows), "downloaded": downloaded,
                         "shared": self.is_shared(name),
+                        # four covers for a collage, and how long it plays
+                        "arts": [t.art for t in rows[:4] if t.art],
+                        "cover": self._cover_stamp(name),
+                        "seconds": sum(t.duration or 0 for t in rows),
                         "folder": str(self.folder(name))})
         return out
 

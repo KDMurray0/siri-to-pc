@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Music Request</title>
+<script>
+// Inside the full player: "1" is its Now playing view, "settings" its settings panel.
+(function () {
+  var e = new URLSearchParams(location.search).get("embed");
+  if (e) document.documentElement.classList.add(e === "settings" ? "embed-settings" : "embedded");
+})();
+</script>
 <style>
 /* ── palette ───────────────────────────────────────────────────────────
    The artwork is the light source: its dominant colour becomes --accent and
@@ -24,6 +31,16 @@
 [data-theme="ocean"]  {--bg:#0a121c;--panel:#12202f;--fg:#e9f2fb;--sub:#7f9bb5;--line:#1d3247;--accent:#4aa8ff;}
 
 *{box-sizing:border-box;margin:0;padding:0}
+/* Embedded in the full player: it has the bar, the search and the background. */
+html.embedded,html.embedded body,html.embedded .frame,
+html.embed-settings,html.embed-settings body,html.embed-settings .frame{background:transparent!important}
+html.embedded .ambient,html.embedded .transport,html.embedded .search,html.embedded .winbtn,
+html.embedded .timeleft,html.embedded .sidetoggle,html.embedded .glass-backdrop{display:none!important}
+html.embedded body:not(.mini) .stage{padding-top:18px!important;padding-bottom:24px!important}
+html.embed-settings .frame>:not(.sheet){display:none!important}
+html.embed-settings .sheet,html.embed-settings body:not(.mini) .sheet{inset:0!important;left:0!important;top:0!important;
+  translate:none!important;width:100%!important;height:100%!important;border:0!important;border-radius:0!important;
+  box-shadow:none!important;background:transparent!important;transition:none!important}
 /* clip, not just hidden: a hidden box can still be scrolled by focus or
    scrollIntoView, and on a phone that left the page shoved up under the
    keyboard with its top out of reach. */
@@ -1079,6 +1096,8 @@ body.mini .miniwave i{width:2px;border-radius:1px}
 .miniwave{transition:opacity .3s}
 body.paused .miniwave{opacity:.25}
 body.noviz .miniwave{display:none}
+/* Nothing playing: no row of flat bars across the empty cover. */
+body:not(.hastrack) .miniwave{visibility:hidden}
 /* Wide: one curve of thin bars right across the bottom of the cover. */
 body:not(.mini).viz-wide .miniwave{width:auto;left:12px;right:12px;transform:none;
   gap:3px;padding:0 4px 12px;height:52px}
@@ -1549,7 +1568,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 
   <div class="stage">
     <div class="art-wrap drag">
-      <img class="art placeholder" id="art" alt="" draggable="false">
+      <img class="art placeholder" id="art" alt="" draggable="false" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
       <div class="artnote" aria-hidden="true"><span class="restmark"><b></b><b></b><b></b><b></b></span></div>
       <div class="miniwave" id="miniwave" aria-hidden="true"></div>
       <canvas class="vizring" id="vizring" aria-hidden="true" width="0" height="0"></canvas>
@@ -4545,6 +4564,9 @@ $("openSettings").onclick = () => {
   loadSettings();
 };
 function closeSettings() {
+  if (document.documentElement.classList.contains("embed-settings")) {
+    try { parent.postMessage({ type: "close-settings" }, location.origin); } catch (e) {}
+  }
   $("sheet").classList.remove("open", "picked");
   $("settitle").textContent = "Settings";
   if (document.body.classList.contains("setbig")) {
@@ -7137,6 +7159,11 @@ function showUpNext() {
 }
 
 let mini = false, liked = false, miniSwitch = false;
+window.addEventListener("message", e => {
+  if (e.origin === location.origin && e.data && e.data.type === "open-settings") $("openSettings").click();
+});
+if (document.documentElement.classList.contains("embed-settings"))
+  setTimeout(() => $("openSettings").click(), 0);
 $("shrink").onclick = async () => {
   if (miniSwitch) return;
   miniSwitch = true;

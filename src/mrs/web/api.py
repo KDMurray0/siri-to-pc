@@ -604,6 +604,63 @@ async def player_page(request: Request, key: str = Query(default=""),
     return _serve_page(request, "player.html", key, token)
 
 
+@app.get("/app", response_class=HTMLResponse)
+async def app_page(request: Request, key: str = Query(default=""),
+                   token: str = Query(default="")):
+    """The full player: library down the left, a glass rail across the top,
+    views that slide, and the deck. Same credential rules as /player, which
+    stays the pop-out and the phone view."""
+    return _serve_page(request, "app.html", key, token)
+
+
+@app.get("/api/home")
+def api_home(request: Request, _: bool = Auth):
+    """The full player's home: jump back in, top artists, genres, charts and
+    the caller's own lists. A listener's own history, never the owner's."""
+    from ..core import home
+    if _owner_view(request):
+        mine = taste
+    else:
+        me = _profile_for(request)
+        mine = me.taste if me is not None and me.permanent else None
+    return {"status": "ok", **home.sections(mine, _lists_for(request))}
+
+
+@app.get("/api/artist")
+def api_artist(request: Request, name: str = "", _: bool = Auth):
+    """An artist's sheet in the full player: picture, best-known songs, and the
+    acts their listeners also play."""
+    from ..core import home
+    from ..core.kin import kin
+    from ..models import Track
+    from ..resolve import catalog
+    name = (name or "").strip()[:200]
+    if not name:
+        raise HTTPException(400, "Which artist?")
+    _guard_rate(_session_for(request), request)
+    top = [t.to_dict() for t in catalog.artist_top_tracks(name, limit=30)]
+    near = [n for n in kin.prime(Track(title="", artist=name))[:12]]
+    picture = home.picture(name)
+    if not picture:
+        hits = catalog.search_artists(name, limit=1)
+        picture = (hits[0].get("art") or "") if hits else ""
+    return {"status": "ok", "name": name, "art": picture, "top": top,
+            "near": [{"name": n, "art": home.picture(n)} for n in near]}
+
+
+@app.get("/api/album")
+def api_album(request: Request, name: str = "", artist: str = "", _: bool = Auth):
+    """An album's sheet in the full player: its songs, in order."""
+    from ..resolve import catalog
+    name = (name or "").strip()[:200]
+    if not name:
+        raise HTTPException(400, "Which album?")
+    _guard_rate(_session_for(request), request)
+    tracks = [t.to_dict() for t in catalog.album_tracks(name, (artist or "").strip()[:200])]
+    return {"status": "ok", "name": name, "artist": artist, "tracks": tracks,
+            "art": next((t["art"] for t in tracks if t.get("art")), "")}
+
+
 def _serve_page(request: Request, name: str, key: str, token: str):
     """A page, and the credential it gets to keep.
 
@@ -2178,7 +2235,7 @@ def api_playlist(request: Request, op: str, name: str = "",
                  shuffle: bool = False, video_id: str = "", title: str = "",
                  artist: str = "", art: str = "", start: int = 0,
                  shared: bool = False, on: int = 1, new_name: str = "", format: str = "csv",
-                 _: bool = Auth):
+                 image: str = "", _: bool = Auth):
     """Make and play lists — the caller's own, not always the owner's.
 
     `shared=1` names a list in the owner's library that has been opened to
@@ -2194,7 +2251,7 @@ def api_playlist(request: Request, op: str, name: str = "",
         # owner's gets the same answer as if it weren't there.
         if not playlists.is_shared(name):
             raise HTTPException(403, "That list isn't shared")
-        if op in ("delete", "download", "share", "create", "rename", "link"):
+        if op in ("delete", "download", "share", "create", "rename", "link", "cover", "uncover"):
             raise HTTPException(403, "That's the owner's to do")
         mine = playlists
     elif mine is None:
@@ -2311,6 +2368,25 @@ def api_playlist(request: Request, op: str, name: str = "",
             raise HTTPException(403, "Keeping lists on disk is the computer's")
         mine.download_async(name)
         return {"status": "ok", "message": f"Saving {name} offline"}
+    if op == "art":
+        # The list's own cover; the page draws the four-song grid itself.
+        path = mine.cover_path(name) if name in mine.names() else None
+        if path is None:
+            raise HTTPException(404, "No cover of its own")
+        return FileResponse(path, media_type="image/jpeg",
+                            headers={"Cache-Control": "private, max-age=86400"})
+    if op == "cover":
+        import base64
+        raw = image.split(",", 1)[1] if image.startswith("data:") and "," in image else image
+        try:
+            data = base64.b64decode(raw, validate=True)
+        except Exception:
+            raise HTTPException(400, "That isn't a picture this can read")
+        got = mine.set_cover(name, data)
+        return {"status": "ok" if got.get("ok") else "error", **got}
+    if op == "uncover":
+        got = mine.clear_cover(name)
+        return {"status": "ok", **got}
     if op == "tracks":
         by = mine.credit(name)
         rows = []

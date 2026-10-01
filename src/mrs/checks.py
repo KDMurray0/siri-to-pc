@@ -66,6 +66,7 @@ _UNGUARDED_BY_DESIGN = {
                   "the player for the owner and anyone signed in",
     "/setup":     "the Shortcut recipe; owner-only, checked in the body",
     "/player":    "guards itself via _serve_page, which also picks the credential",
+    "/app":       "the full player; guards itself via _serve_page, like /player",
     "/remote":    "same",
     "/welcome":   "same",
     "/api/events": "calls require_key in the body — it needs the pass row "
@@ -5695,6 +5696,23 @@ def _run(verbose: bool = False) -> Result:
                 dup55 = sorted(n55 for n55, k55 in counts55.items() if k55 > 1)
                 c("no top-level name is declared twice (the dead-player bug)",
                   not dup55, ", ".join(dup55))
+            # The full player gets the same treatment.
+            app55 = _page_mod.templates.env.get_template("app.html").render(api_read_only=[])
+            appjs55 = max(re.findall(r"<script\b[^>]*>(.*?)</script>", app55, re.S | re.I), key=len, default="")
+            c("the full player page ships its script", len(appjs55) > 10000, f"script length {len(appjs55)}")
+            if node55:
+                with _tf55.TemporaryDirectory(prefix="mrs-jsparse-") as d55:
+                    js55 = _pl55.Path(d55) / "app.js"
+                    js55.write_text(appjs55, encoding="utf-8")
+                    proc55 = _sp55.run([node55, "--check", str(js55)], capture_output=True, text=True, timeout=60)
+                    c("the full player's JavaScript parses in a real engine", proc55.returncode == 0,
+                      (proc55.stderr or proc55.stdout).strip()[-200:])
+            served55 = get("/app")
+            c("/app serves the full player to the owner",
+              served55.status_code == 200 and 'class="cap left glass"' in served55.text, str(served55.status_code))
+            c("the player can sit inside it: Now playing and the settings panel",
+              'html.embedded .transport' in rendered55 and 'html.embed-settings .frame>:not(.sheet)' in rendered55
+              and "close-settings" in rendered55)
             say("page javascript", c)
 
             # -- 22. focused regressions for the issue register ------------
