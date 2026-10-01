@@ -20,6 +20,7 @@ next to the ones named stand in.
 from __future__ import annotations
 
 import math
+import random
 import re
 import threading
 import time
@@ -28,6 +29,7 @@ from itertools import zip_longest
 
 from ..logging_setup import get
 from ..models import Plan, Track
+from . import curator
 
 log = get("builder")
 
@@ -99,11 +101,18 @@ class GroqBusy(Exception):
         self.wait = max(5.0, float(wait))
 
 
-def anchors_of(what: str) -> list[dict]:
-    """What the description names, as [{"kind": "artist"|"genre"|"song", "name"}]."""
-    from ..resolve import parser
+def anchors_of(what: str, *, model: bool = True) -> list[dict]:
+    """What the description names, as [{"kind": "artist"|"genre"|"song", "name"}].
+
+    model=False reads it locally only -- when the planner has already read it.
+    """
+    from ..resolve import grammar, parser
     from ..resolve.conjunction import looks_like_genre, split_seeds
-    plan = parser.parse(what)
+    if model:
+        plan = parser.parse(what)
+    else:
+        listed = grammar.song_list(what)
+        plan = Plan(kind="mix", items=listed[0]) if listed else grammar.parse(what)
     if plan.kind == "mix" and plan.items:
         return [dict(i) for i in plan.items]
     if plan.kind == "album" and plan.query:
@@ -179,6 +188,49 @@ def _lane_for_genre(genre: str, n: int, taste, progress=None) -> list[Track]:
     return _deal(lanes)[:n]
 
 
+def _spread(main: list, extra: list) -> list:
+    """Both lists in their own order, the second spread evenly through the first."""
+    if not extra or not main:
+        return list(main or extra)
+    placed = [((i + .5) / len(main), 0, x) for i, x in enumerate(main)]
+    placed += [((j + .5) / len(extra), 1, x) for j, x in enumerate(extra)]
+    placed.sort(key=lambda row: (row[0], row[1]))
+    return [x for *_, x in placed]
+
+
+def _blend(main: list[Track], extra: list[Track]) -> list[Track]:
+    return _deal([_spread(main, extra)])
+
+
+def _unclump(tracks: list[Track]) -> list[Track]:
+    """No artist twice in a row, moving as little as it can."""
+    out = list(tracks)
+    for i in range(1, len(out)):
+        prev = out[i - 1].primary_artist()
+        if prev and out[i].primary_artist() == prev:
+            k = next((k for k in range(i + 1, len(out)) if out[k].primary_artist() != prev), None)
+            if k is not None:
+                out.insert(i, out.pop(k))
+    return out
+
+
+def _weave(lanes: list[list[Track]], seed: str = "") -> list[Track]:
+    """Each band's songs spread across the whole list, best-known first.
+
+    Not dealt like cards -- A, B, C, A, B, C -- which is how every list used
+    to read. Each song lands about its fair share of the way through, nudged
+    at random, so the bands meet in a different order every time round.
+    """
+    rng = random.Random(seed or str(len(lanes)))
+    placed = []
+    for lane in lanes:
+        n = len(lane)
+        for j, t in enumerate(lane):
+            placed.append(((j + .5 + rng.uniform(-.45, .45)) / n, rng.random(), t))
+    placed.sort(key=lambda row: (row[0], row[1]))
+    return _unclump(_deal([[t for *_, t in placed]]))
+
+
 def _deal(lanes: list[list[Track]]) -> list[Track]:
     out, seen, keys = [], set(), set()
     for row in zip_longest(*lanes):
@@ -216,17 +268,6 @@ def _found(artist: str, title: str) -> Track | None:
     return None
 
 
-_CURATE = (
-    "You curate playlists. Reply with JSON only. Pick music that FITS: the "
-    "named bands, albums and genres, and other artists that clearly share "
-    "their sound. Stay inside the subgenres they share. Prefer each band's "
-    "best-known songs -- hits and fan favourites -- and leave out the ones "
-    "that don't sound like the rest (a thrash band's ballad, a metal band's "
-    "acoustic single). Vary the artists; at most three songs by any one. "
-    "Never tribute bands, karaoke, re-recordings, live versions or covers "
-    "unless asked.")
-
-
 def _listener_context(taste) -> str:
     if taste is None:
         return ""
@@ -241,24 +282,30 @@ def _listener_context(taste) -> str:
         return ""
 
 
-def _groq_songs(what: str, n: int, context: str = "") -> list[tuple[str, str]]:
-    from ..resolve import llm
-    got = llm.ask_json(_CURATE + ' Format: {"songs":[{"artist":"","title":""}]}',
-                       f"{min(90, n)} songs that fit: {what}.{context}", timeout=30)
-    if got is None and llm.resting() > 0:
-        raise GroqBusy(llm.resting())
-    rows = (got or {}).get("songs") or []
-    return [(str(r.get("artist") or "").strip(), str(r.get("title") or "").strip())
-            for r in rows if isinstance(r, dict) and r.get("artist") and r.get("title")]
+def _brief_or_request(brief, what: str, context: str = ""):
+    """The planner's brief, or the request itself when there isn't one."""
+    from . import curator
+    if brief is not None and brief.describe():
+        return brief
+    return curator.Brief(note=f"Songs that fit: {what}.{context}")
 
 
-def _groq_artists(what: str, n: int, context: str = "") -> list[str]:
-    from ..resolve import llm
-    got = llm.ask_json(_CURATE + ' Format: {"artists":[""]}, best-known first.',
-                       f"{min(120, n)} artists that fit: {what}.{context}", timeout=30)
-    if got is None and llm.resting() > 0:
-        raise GroqBusy(llm.resting())
-    return [str(a).strip() for a in (got or {}).get("artists") or [] if str(a).strip()]
+def _groq_songs(what: str, n: int, context: str = "", brief=None,
+                have: list[tuple[str, str]] | None = None) -> list[tuple[str, str]]:
+    """The worker's songs for the brief, in the order it would play them."""
+    from . import curator
+    try:
+        return curator.songs(_brief_or_request(brief, what, context), n, have=have)
+    except curator.Busy as busy:
+        raise GroqBusy(busy.wait) from None
+
+
+def _groq_artists(what: str, n: int, context: str = "", brief=None) -> list[str]:
+    from . import curator
+    try:
+        return curator.artists(_brief_or_request(brief, what, context), n)
+    except curator.Busy as busy:
+        raise GroqBusy(busy.wait) from None
 
 
 # -- the shared sound ----------------------------------------------------
@@ -284,27 +331,7 @@ _TAG_CHECKS = 320          # song lookups one build may spend on Last.fm
 def _tags(track: Track, artist: bool = False) -> dict[str, int]:
     """Last.fm tags for a song or its band, from the shared cache when held."""
     from .tags import tagstore
-    if not tagstore.enabled():
-        return {}
-    tagstore.load()
-    key = tagstore._artist_key(track) if artist else tagstore._track_key(track)
-    with tagstore._lock:
-        hit = tagstore._cache.get(key)
-        if hit is not None:
-            return hit
-        if key in tagstore._missing:
-            return {}
-    who = (track.artist or "").split(",")[0].strip()
-    try:
-        found = tagstore._fetch_artist(who) if artist else tagstore._fetch_track(who, track.title)
-    except Exception:
-        return {}
-    with tagstore._lock:
-        if found:
-            tagstore._cache[key] = found
-        else:
-            tagstore._missing.add(key)
-    return found
+    return tagstore.lookup(track, artist)
 
 
 def _top(cloud: dict[str, int], n: int = 8) -> list[str]:
@@ -385,6 +412,7 @@ def _lane_for_artist(name: str, n: int, taste, **_) -> list[Track]:
 _VET = ("You vet playlists. Reply with JSON only: {\"odd\":[numbers]}. List only "
         "clear cases; most lists have few or none.")
 _VET_MAX = 240
+_WORKER = curator.WORKER           # the small, busy model
 
 
 def _odd_ones(tracks: list[Track], core: list[str], what: str = "") -> set[str]:
@@ -402,7 +430,7 @@ def _odd_ones(tracks: list[Track], core: list[str], what: str = "") -> set[str]:
                        "the odd ones out: ballads and slow songs (even famous ones), acoustic "
                        "songs, a band's cover of someone else's song, or a different style "
                        "from the rest? A band's usual-sounding hits are not odd.\n" + lines,
-                       timeout=30) or {}
+                       timeout=30, model=_WORKER) or {}
     odd = got.get("odd") if isinstance(got.get("odd"), list) else []
     return {rows[i].key() for i in odd if isinstance(i, int) and 0 <= i < len(rows)}
 
@@ -483,11 +511,10 @@ def _fill(names: list[str], songs: int, taste, core: list[str], progress=None,
         if good:
             lanes.append(good)
     take = per
-    out = _deal([lane[:take] for lane in lanes])
-    while len(out) < songs and any(len(lane) > take for lane in lanes):
+    while take < songs and sum(min(len(lane), take) for lane in lanes) < songs \
+            and any(len(lane) > take for lane in lanes):
         take += max(1, per // 2)
-        out = _deal([lane[:take] for lane in lanes])
-    return out, held
+    return _weave([lane[:take] for lane in lanes], seed=",".join(names)), held
 
 
 def _kin_bands(named: list[str], core: list[str], limit: int) -> list[str]:
@@ -550,7 +577,7 @@ def _named_songs(anchors: list[dict], taste) -> list[Track]:
         return []
     plan = Plan(kind="mix", via="builder")
     with ThreadPoolExecutor(max_workers=6) as pool:
-        got = list(pool.map(lambda a: resolver._mix_item(a, plan, taste), wanted))
+        got = list(pool.map(lambda a: resolver.resolve_item(a, plan, taste), wanted))
     return _deal([[r.tracks[0] for r in got if r]])
 
 
@@ -563,12 +590,13 @@ def _bands_of(anchors: list[dict], first: list[Track]) -> list[str]:
 
 def _fits(what: str, anchors: list[dict], songs: int, taste, progress,
           context: list[Track] | None = None, first: list[Track] | None = None,
-          core: list[str] | None = None) -> list[Track]:
-    """Songs that fit rather than songs by: Groq's picks, checked against the
-    catalogue and the shared sound; the named bands' best-known songs, then
-    bands that sound like them, when that isn't enough."""
+          core: list[str] | None = None, brief=None) -> list[Track]:
+    """Songs that fit rather than songs by: the worker's picks for the brief, in
+    the order it would play them, checked against the catalogue and the shared
+    sound; the named bands' best-known songs, then bands that sound like them,
+    spread through when that isn't enough."""
     from concurrent.futures import ThreadPoolExecutor
-    from ..resolve import llm
+    from ..resolve import llm, ranking
     first = list(first or [])
     core = list(core or [])
     named = _bands_of(anchors, first)
@@ -584,7 +612,8 @@ def _fits(what: str, anchors: list[dict], songs: int, taste, progress,
         if room <= 80:
             if progress:
                 progress("Asking Groq for songs that fit")
-            asks = _groq_songs(what, round(room * 1.3), clue)
+            asks = _groq_songs(what, round(room * 1.3), clue, brief,
+                               have=[(t.artist, t.title) for t in first])
             if progress:
                 progress(f"Checking {len(asks)} songs")
             with ThreadPoolExecutor(max_workers=6) as pool:
@@ -600,71 +629,113 @@ def _fits(what: str, anchors: list[dict], songs: int, taste, progress,
         else:
             if progress:
                 progress("Asking Groq for bands that fit")
-            artists = _groq_artists(what, max(12, room // 5), clue)
-    tracks = _deal([first + picked])
+            artists = _groq_artists(what, max(12, room // 5), clue, brief)
+    keep = {t.key() for t in first}
+    rest = [t for t in _deal([picked]) if t.key() not in keep]
     # Every band they named gets a look in, whatever Groq thought.
-    from ..resolve import ranking
-    missing = [n for n in named if not any(ranking.artist_matches(t, n) for t in tracks)]
+    missing = [n for n in named if not any(ranking.artist_matches(t, n) for t in first + rest)]
     if missing and picked:
         got, off = _fill(missing, 2 * len(missing), taste, core, progress)
-        tracks = _deal([tracks + got])
+        rest = _blend(rest, got)
         held += off
-    if len(tracks) < songs and named:
-        got, off = _fill(named, songs - len(tracks), taste, core, progress)
-        tracks = _deal([tracks + got])
+    if len(first) + len(rest) < songs and named:
+        got, off = _fill(named, songs - len(first) - len(rest), taste, core, progress)
+        rest = _blend(rest, got)
         held += off
-    if len(tracks) < songs:
+    if len(first) + len(rest) < songs:
         more = [a for a in artists if a.casefold() not in {n.casefold() for n in named}]
-        more = more or _kin_bands(named, core, max(8, (songs - len(tracks)) // 3))
-        got, off = _fill(more, songs - len(tracks), taste, core, progress, label="more bands")
-        tracks = _deal([tracks + got])
+        more = more or _kin_bands(named, core, max(8, (songs - len(first) - len(rest)) // 3))
+        got, off = _fill(more, songs - len(first) - len(rest), taste, core, progress,
+                         label="more bands")
+        rest = _blend(rest, got)
         held += off
-    if len(tracks) < songs:
-        tracks = _deal([tracks + held])
-    # The songs they named stay where they are; the rest is dealt out by band,
-    # so three of one band don't run back to back.
-    keep = {t.key() for t in first}
-    lanes: dict[str, list[Track]] = {}
-    for t in tracks:
-        if t.key() not in keep:
-            lanes.setdefault(t.primary_artist(), []).append(t)
-    return first + _deal(list(lanes.values()))
+    if len(first) + len(rest) < songs:
+        rest = _blend(rest, held)
+    # The songs they named lead, in their order; the rest keeps the worker's
+    # running order, with only back-to-back repeats broken up.
+    rest = [t for t in rest if t.key() not in keep]
+    return first + _unclump(rest)
 
 
 def build(what: str, *, songs: int = 0, minutes: int = 0, taste=None,
           progress=None, strict: bool = False,
-          context: list[Track] | None = None) -> list[Track]:
-    """The tracks, not yet saved anywhere."""
-    anchors = _unmerge(anchors_of(what))
-    if not anchors:
-        return []
+          context: list[Track] | None = None, notes: dict | None = None) -> list[Track]:
+    """The tracks, not yet saved anywhere. `notes`, if given, gets the
+    planner's name for the list.
+
+    With Groq: the planner reads the request into a brief first, and the
+    worker picks to it. Without: the request is read locally and the named
+    bands' best-known songs carry it.
+    """
+    from ..resolve import llm
     songs = wanted_size(songs, minutes)
+    brief = None
+    if llm.available():
+        if progress:
+            progress("Reading what you asked for")
+        hint = _listener_context(taste)
+        if context:
+            hint += " Adding to a list with: " + "; ".join(
+                f"{t.title} by {t.artist}" for t in context[:15])[:500]
+        try:
+            brief = curator.plan(what, hint=hint)
+        except curator.Busy as busy:
+            raise GroqBusy(busy.wait) from None
+    anchors = _unmerge(anchors_of(what, model=brief is None))
+    if brief is not None:
+        anchors = _with_brief(anchors, brief, what)
+    if not anchors and not (brief and brief.describe()):
+        return []
     first = _named_songs(anchors, taste)
     songs = max(songs, len(first))
     named = _bands_of(anchors, first)
-    core = core_sound(named) if len(named) >= 2 or not strict else []
+    strict = strict or bool(brief and brief.strict and named)
+    core = list(brief.genres) if brief and brief.genres else (
+        core_sound(named) if len(named) >= 2 or not strict else [])
     if progress and core:
         progress("Keeping to " + ", ".join(core[:4]))
     if not strict:
-        tracks = _fits(what, anchors, songs, taste, progress, context, first, core)
+        tracks = _fits(what, anchors, songs, taste, progress, context, first, core, brief)
     else:
         rest = [a for a in anchors if a["kind"] in ("genre", "album")]
         share = math.ceil(songs * 1.15 / max(1, len(rest) + len(named)))
-        lanes = []
-        for a in rest:
-            if a["kind"] == "genre":
-                lanes.append(_lane_for_genre(a["name"], share, taste, progress))
-            else:
-                lanes.append(_lane_for_album(a["name"], a.get("artist", ""), taste))
-            if progress:
-                progress(f"{a['name']}: {len(lanes[-1])} songs", lanes[-1])
         bands, held = _fill(named, share * len(named), taste, core, progress)
-        tracks = _deal([first + _deal([lane for lane in lanes if lane] + [bands])])
-        if len(tracks) < songs:
-            tracks = _deal([tracks + held])
+        mixed = bands
+        for a in rest:
+            lane = (_lane_for_genre(a["name"], share, taste, progress) if a["kind"] == "genre"
+                    else _lane_for_album(a["name"], a.get("artist", ""), taste))
+            if progress:
+                progress(f"{a['name']}: {len(lane)} songs", lane)
+            mixed = _blend(mixed, lane)
+        keep = {t.key() for t in first}
+        mixed = [t for t in mixed if t.key() not in keep]
+        if len(first) + len(mixed) < songs:
+            mixed = _blend(mixed, [t for t in held if t.key() not in keep])
+        tracks = first + _unclump(mixed)
     if taste is not None:
         tracks = [t for t in tracks if not taste.is_blocked(t)]
+    if notes is not None and brief is not None:
+        notes["title"] = brief.title
     return tracks[:songs]
+
+
+def _with_brief(anchors: list[dict], brief, what: str) -> list[dict]:
+    """The local reading plus what the planner adds -- never minus. A song or
+    band the request doesn't actually mention is left out."""
+    out = list(anchors)
+    songs = {(a.get("artist", "").casefold(), a["name"].casefold())
+             for a in out if a["kind"] == "song"}
+    for artist, title in brief.literal:
+        if (artist.casefold(), title.casefold()) not in songs:
+            out.append({"kind": "song", "name": title, "artist": artist})
+            songs.add((artist.casefold(), title.casefold()))
+    bands = {a["name"].casefold() for a in out if a["kind"] == "artist"}
+    bands |= {a.get("artist", "").casefold() for a in out if a["kind"] == "song"}
+    for name in brief.artists:
+        if name.casefold() not in bands and curator.named_in(name, what):
+            out.append({"kind": "artist", "name": name, "artist": ""})
+            bands.add(name.casefold())
+    return out
 
 
 def wanted_size(songs: int = 0, minutes: int = 0) -> int:
@@ -703,11 +774,15 @@ def start(what: str, *, songs: int = 0, minutes: int = 0, name: str = "",
     def work() -> None:
         try:
             context = store.tracks(target) if store is not None and target else []
+            notes: dict = {}
             tracks = build(what, songs=songs, minutes=minutes, taste=taste,
-                           progress=note, strict=strict, context=context)
+                           progress=note, strict=strict, context=context, notes=notes)
             if not tracks:
                 raise RuntimeError(f"couldn't find anything for {what}")
-            title = target or name or _creative_title(what, tracks)
+            planned = notes.get("title", "")
+            if "playlist" in planned.casefold() or planned.casefold() == what.strip().casefold():
+                planned = ""
+            title = target or name or planned or _creative_title(what, tracks)
             if store is not None:
                 if not target:
                     title = _free(store, title)
@@ -833,13 +908,13 @@ def _creative_title(what: str, tracks: list[Track]) -> str:
     """Name the resulting mix, not the prompt or an arbitrary track count."""
     from ..resolve import llm
     import os
-    if os.environ.get("MRS_TESTING") != "1" and llm.available() and not llm.resting():
+    if os.environ.get("MRS_TESTING") != "1" and llm.available() and not llm.resting(_WORKER):
         sample = "; ".join(f"{t.title} / {t.artist}" for t in tracks[:14])[:900]
         got = llm.ask_json(
             'Name a music playlist like a human DJ. JSON only: {"name":""}. '
             'Give a vivid, short, non-generic name inspired by the actual songs; '
             'never include "playlist", a song count, or simply repeat the prompt.',
-            f"Listener asked: {what[:300]}. Songs: {sample}", timeout=10) or {}
+            f"Listener asked: {what[:300]}. Songs: {sample}", timeout=10, model=_WORKER) or {}
         title = str(got.get("name") or "").strip().strip('"')[:60]
         if title and title.casefold() != what.strip().casefold() and "playlist" not in title.casefold():
             return title

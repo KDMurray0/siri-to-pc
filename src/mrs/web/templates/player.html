@@ -95,8 +95,13 @@ body.mini .timeleft{display:none}
 .artnote{position:absolute;top:50%;left:50%;translate:-50% -50%;
   width:152px;height:152px;display:grid;place-items:center;pointer-events:none;
   opacity:0;transition:opacity .3s ease,width .2s,height .2s}
-.artnote svg{width:38%;height:38%;fill:none;stroke:var(--sub);stroke-width:1.5;
-  stroke-linecap:round;stroke-linejoin:round;opacity:.5}
+.artnote .restmark{width:30%;height:30%;gap:9%;margin:0;align-items:flex-end}
+.artnote .restmark b{flex:1;width:auto;height:auto;border-radius:999px;background:var(--sub);
+  opacity:.5;animation-duration:2.4s}
+.artnote .restmark b:nth-child(1){height:42%}
+.artnote .restmark b:nth-child(2){height:78%}
+.artnote .restmark b:nth-child(3){height:58%}
+.artnote .restmark b:nth-child(4){height:100%}
 .art.placeholder + .artnote{opacity:1}
 body.mini .artnote{width:58px;height:58px;left:0;translate:0 -50%}
 body.mini.mini-hover .artnote{width:74px;height:74px}
@@ -991,12 +996,6 @@ body.private-listen.castblocked #play{animation:castpulse 1.4s ease-in-out infin
 body.mini .stage{display:grid;grid-template-columns:auto minmax(0,1fr);
   grid-template-areas:"art meta" "art ctl";align-items:center;align-content:center;
   column-gap:12px;row-gap:0;padding:11px 14px 11px 12px}
-body.mini:not(.hastrack):not(.hasqueue) .stage{display:flex;align-items:center;
-  padding:7px 12px;min-height:0}
-body.mini:not(.hastrack):not(.hasqueue) .art-wrap,
-body.mini:not(.hastrack):not(.hasqueue) .controls,
-body.mini:not(.hastrack):not(.hasqueue) .upnext{display:none}
-body.mini:not(.hastrack):not(.hasqueue) .meta{padding-right:64px}
 /* Only the text has to dodge the window buttons, and only because it sits at
    the same height as them. Putting that clearance on the whole grid squeezed
    the controls too, leaving a dead strip under the buttons that nothing used. */
@@ -1277,16 +1276,8 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
 /* Desktop: artwork and content above a compact, fixed playback bar.
    CSS pixels keep queue density stable across viewport sizes; browser/OS
    scaling supplies the appropriate physical size on high-DPI displays. */
-.empty-stage{display:none}
-.empty-stage h2{font-size:20px;font-weight:700;color:var(--fg);letter-spacing:-.02em}
-.empty-stage p{font-size:13px;line-height:1.5}
-body:not(.mini):not(.hastrack):not(.hasqueue) .art-wrap,
-body:not(.mini):not(.hastrack):not(.hasqueue) .meta,
-body:not(.mini):not(.hastrack):not(.hasqueue) .transport{display:none}
-body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
-  flex-direction:column;justify-content:center;gap:8px;min-height:116px;
-  color:var(--sub);text-align:center}
-/* The mark: the same four bars as the sign-in page, gently moving. */
+/* Resting is the normal player with an empty cover: the mark in it, the
+   same four bars as the sign-in page, gently moving. */
 .restmark{display:flex;align-items:flex-end;justify-content:center;gap:5px;height:40px;margin:0 auto 6px}
 .restmark b{display:block;width:6px;border-radius:3px;background:var(--accent);
   transform-origin:bottom;animation:restbar 1.15s ease-in-out infinite}
@@ -1381,15 +1372,19 @@ body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
   body:not(.mini).sidehid .sidetoggle span{transform:rotate(180deg)}
 
   body:not(.mini) .transport{position:fixed;inset:auto 0 0;z-index:30;display:grid;
-    /* Equal outer columns keep the play button on the window's centre line.
-       Room runs out in this order: the side padding, then the track text and
-       the progress bar; the volume cluster keeps its width to the end. */
-    grid-template-columns:minmax(0,1fr) minmax(200px,600px) minmax(max-content,1fr);
-    grid-template-rows:36px 22px;align-items:center;column-gap:clamp(8px,1.4vw,16px);
-    width:100%;height:76px;padding:7px clamp(8px,1.6vw,24px) 10px;border:0;
+    /* Two tiers. First the room around the progress bar goes, and the bar
+       keeps its full 600px; the grid hands the fixed middle its size before
+       the 1fr sides get anything. Once the sides are down to a comfortable
+       title and the whole volume cluster, the bar starts giving instead. The
+       volume never does. Equal sides keep play on the window's centre line. */
+    grid-template-columns:minmax(150px,1fr) minmax(220px,600px) minmax(max-content,1fr);
+    grid-template-rows:36px 22px;align-items:center;column-gap:16px;
+    width:100%;height:76px;padding:7px 20px 10px;border:0;
     border-top:1px solid var(--line);border-radius:0;background:var(--bg);
     box-shadow:0 -5px 22px #0002}
-  body:not(.mini) .bartrack{display:flex;grid-column:1;grid-row:1/3;min-width:0}
+  /* Grouped by what they're for: the song on the left, playing it in the
+     middle, the things you do to it -- heart, share, volume -- on the right. */
+  body:not(.mini) .bartrack{display:flex;align-items:center;gap:10px;grid-column:1;grid-row:1/3;min-width:0}
   body:not(.mini) .bartracktext{display:flex;flex-direction:column;min-width:0;gap:3px}
   body:not(.mini) .bartracktext b,body:not(.mini) .bartracktext span{
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1414,28 +1409,14 @@ body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
   body:not(.mini) .transport .row2 .ib svg{width:18px;height:18px}
   body:not(.mini) .transport .vol{flex:0 0 auto;max-width:150px;margin-left:2px}
   body:not(.mini) .transport .upnext{display:none}
-  /* Resting: the player as normal -- list, tabs, bar -- with the mark and
-     an invitation where the cover and its title go. The cover and title
-     keep their size, unseen, so a starting song moves nothing. */
-  body:not(.mini):not(.hastrack):not(.hasqueue) .art-wrap{display:flex;visibility:hidden}
-  body:not(.mini):not(.hastrack):not(.hasqueue) .meta{display:block;visibility:hidden}
-  body:not(.mini):not(.hastrack):not(.hasqueue) .transport{display:grid}
+  /* Resting: the player as normal, with an empty cover. No words to switch to. */
   body:not(.mini):not(.hastrack):not(.hasqueue) .lyrswitch{display:none!important}
-  body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{grid-area:3/1/5/2;
-    justify-self:stretch;align-self:stretch;min-height:0;padding:24px;
-    align-items:center;border-radius:16px;
-    border:1px solid color-mix(in srgb,var(--fg) 8%,transparent);
-    background:linear-gradient(145deg,color-mix(in srgb,var(--accent) 10%,var(--panel)),var(--panel))}
-  body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage h2{font-size:24px}
-  body:not(.mini):not(.hastrack):not(.hasqueue) .restmark{height:64px;gap:8px;margin-bottom:14px}
-  body:not(.mini):not(.hastrack):not(.hasqueue) .restmark b{width:10px;border-radius:5px}
-  body:not(.mini):not(.hastrack):not(.hasqueue) .restmark b:nth-child(1){height:27px}
-  body:not(.mini):not(.hastrack):not(.hasqueue) .restmark b:nth-child(2){height:50px}
-  body:not(.mini):not(.hastrack):not(.hasqueue) .restmark b:nth-child(3){height:37px}
-  body:not(.mini):not(.hastrack):not(.hasqueue) .restmark b:nth-child(4){height:64px}
 }
 @media (min-width:900px) and (max-width:1100px) and (min-height:520px){
   body:not(.mini) .stage{--edge:20px;--gap2:20px}
+  /* The last of the comfortable padding, before the bar starts to give. */
+  body:not(.mini) .transport{padding-inline:12px;column-gap:10px;
+    grid-template-columns:minmax(120px,1fr) minmax(200px,600px) minmax(max-content,1fr)}
 }
 @media (min-width:1500px) and (min-height:520px){
   body:not(.mini) .stage{--gap2:36px;
@@ -1443,29 +1424,22 @@ body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
        instead of along the bottom of the screen. The cover grows with the
        height; the queue stays a list's width. */
     --cover:clamp(300px,calc(100dvh - 330px),560px);--panelw:clamp(320px,20vw,380px);
-    grid-template-columns:var(--cover) minmax(380px,1fr) var(--panelw);
+    grid-template-columns:var(--cover) 1fr var(--panelw);
     grid-template-rows:auto minmax(0,1fr) auto auto minmax(0,1fr) auto;
-    padding-bottom:22px}
+    padding-bottom:100px}
   /* One axis: search, words and deck all centre on the middle column. */
   body:not(.mini) .search{grid-area:1/2;width:min(100%,720px)}
   body:not(.mini) #panel-lyrics{scrollbar-width:none}
   body:not(.mini) #panel-lyrics::-webkit-scrollbar{display:none}
   body:not(.mini) .nav{grid-area:3/3}
   body:not(.mini) .panel{grid-column:3}
-  /* The deck: progress over the buttons, centred under the words. The title
-     is already under the cover, so the bar's copy of it goes. */
-  body:not(.mini) .transport{position:relative;inset:auto;grid-area:6/2;z-index:3;
-    justify-self:center;width:min(100%,660px);height:auto;padding:10px 0 0;
-    grid-template-columns:minmax(max-content,1fr) auto minmax(max-content,1fr);
-    grid-template-rows:auto 40px;row-gap:6px;
-    background:none;border:0;box-shadow:none}
-  body:not(.mini) .bartrack{display:none}
-  body:not(.mini) .transport .prog{grid-area:1/1/2/4}
-  body:not(.mini) .transport .controls{grid-area:2/2;gap:22px}
-  body:not(.mini) .transport .controls .ib{width:36px;height:36px}
-  body:not(.mini) .transport .controls .play{width:44px;height:44px;border-radius:14px}
-  body:not(.mini) .transport .row2{grid-area:2/3/3/4}
-  body:not(.mini) .transport .times{font-size:11px}
+  /* The bar's three columns are the stage's: the song sits under the cover,
+     the controls and progress under the words, the volume under the queue. */
+  body:not(.mini):is(.hastrack,.hasqueue) .transport{
+    grid-template-columns:var(--cover) 1fr var(--panelw);
+    column-gap:var(--gap2);padding:7px var(--edge) 10px}
+  body:not(.mini) .transport .controls,body:not(.mini) .transport .prog{
+    justify-self:center;width:min(100%,600px)}
   body:not(.mini) #panel-lyrics,body:not(.mini) #panel-about{grid-column:2;grid-row:2/6;
     visibility:visible;pointer-events:auto;min-height:0;background:none;border:0;border-radius:0;
     margin:0;padding-inline:24px;align-self:stretch}
@@ -1485,19 +1459,22 @@ body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
     justify-self:center;gap:2px;padding:3px;border-radius:999px;z-index:3;
     background:var(--panel);border:1px solid var(--line)}
   body:not(.mini) .navtab[data-panel="lyrics"],body:not(.mini) #openAbout{display:none}
-  body:not(.mini).sidehid .stage{grid-template-columns:var(--cover) minmax(380px,1fr) 0px}
+  body:not(.mini).sidehid .stage{grid-template-columns:var(--cover) 1fr 0px}
   body:not(.mini).sidehid #panel-lyrics{grid-row:2/6;padding:0 24px 40vh}
   body:not(.mini).sidehid #panel-lyrics .lrow{font-size:32px;line-height:1.65}
 }
-/* Rest at 1500px and up: no words to show, so the middle column goes and the
-   list sits beside the mark; the bar sits under both. */
+/* Rest at 1500px and up: no words yet, so the middle column is shut and the
+   empty cover and the list sit together in the middle. When a song starts
+   it opens and they slide apart to make room for the words. */
 @media (min-width:1500px) and (min-height:520px){
+  body:not(.mini) .stage{transition:grid-template-columns .7s cubic-bezier(.2,.8,.2,1),
+    opacity .12s ease,transform .2s ease}
   body:not(.mini):not(.hastrack):not(.hasqueue) .stage{
-    grid-template-columns:var(--cover) minmax(340px,480px)}
-  body:not(.mini):not(.hastrack):not(.hasqueue) .search{grid-area:1/1/2/3}
-  body:not(.mini):not(.hastrack):not(.hasqueue) .nav{grid-area:3/2}
-  body:not(.mini):not(.hastrack):not(.hasqueue) .panel{grid-column:2}
-  body:not(.mini):not(.hastrack):not(.hasqueue) .transport{grid-area:6/1/7/3}
+    grid-template-columns:var(--cover) 0fr var(--panelw)}
+  body:not(.mini):not(.hastrack):not(.hasqueue) .search{grid-area:1/1/2/4}
+  @media (prefers-reduced-motion:reduce){body:not(.mini) .stage{transition:none}}
+  body:not(.mini):not(.hastrack):not(.hasqueue) #panel-lyrics,
+  body:not(.mini):not(.hastrack):not(.hasqueue) #panel-about{display:none!important}
 }
 @media (min-width:900px) and (min-height:520px) and (max-height:680px){
   body:not(.mini) .stage{padding-top:18px}
@@ -1556,9 +1533,7 @@ body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
   <div class="stage">
     <div class="art-wrap drag">
       <img class="art placeholder" id="art" alt="" draggable="false">
-      <div class="artnote" aria-hidden="true"><svg viewBox="0 0 24 24">
-        <path d="M9 18V5l10-2v13"/><circle cx="6.5" cy="18" r="2.5"/>
-        <circle cx="16.5" cy="16" r="2.5"/></svg></div>
+      <div class="artnote" aria-hidden="true"><span class="restmark"><b></b><b></b><b></b><b></b></span></div>
       <div class="miniwave" id="miniwave" aria-hidden="true"></div>
     </div>
     <div class="meta drag">
@@ -1626,11 +1601,6 @@ body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{display:flex;
         <button class="qbtn" id="addimport">Import as playlist</button>
       </div>
     </div>
-
-    <div class="empty-stage" aria-live="polite">
-      <span class="restmark" aria-hidden="true"><b></b><b></b><b></b><b></b></span>
-      <h2>Choose something to play</h2>
-      <p>Search for a song, artist, album or mood to get started.</p></div>
 
     <div class="nav">
       <button class="navtab on" data-panel="queue" title="Tap again to expand">Queue</button>

@@ -4675,7 +4675,7 @@ def _run(verbose: bool = False) -> Result:
                     "glam metal": [f"GlamBand{i}" for i in range(40)]}
             with _patch.object(_cat44, "artist_top_tracks", _top), \
                     _patch.object(_b44, "_genre_artists", lambda g, want: acts.get(g, [])[:want]), \
-                    _patch.object(_b44, "anchors_of", lambda what: [
+                    _patch.object(_b44, "anchors_of", lambda what, **k: [
                         {"kind": "genre", "name": "nu metal"}, {"kind": "genre", "name": "glam metal"}]):
                 big = _b44.build("nu metal and glam metal", songs=200, strict=True)
                 c("it makes the number of songs asked for", len(big) == 200, str(len(big)))
@@ -4693,7 +4693,7 @@ def _run(verbose: bool = False) -> Result:
                 c("...and never more than the ceiling",
                   len(_b44.build("nu metal", songs=5000, strict=True)) <= _b44.MAX_SONGS)
             with _patch.object(_cat44, "artist_top_tracks", _top), \
-                    _patch.object(_b44, "anchors_of", lambda what: [
+                    _patch.object(_b44, "anchors_of", lambda what, **k: [
                         {"kind": "artist", "name": "Korn"}, {"kind": "artist", "name": "Deftones"}]):
                 two = _b44.build("korn and deftones", songs=20, strict=True)
                 c("two bands give ten each, dealt out in turn",
@@ -5276,13 +5276,14 @@ def _run(verbose: bool = False) -> Result:
               "5 similar:" in _llm53.SYSTEM and "anchor" in _llm53.SYSTEM and len(_llm53.SYSTEM) < 3800)
             # -- playlists: songs that fit, and waiting for Groq
             fake53 = [_T53(video_id=f"F{i:03}", title=f"Fit {i}", artist=f"Band {i % 5}") for i in range(30)]
-            with _patch.object(_b53, "anchors_of", lambda w: [{"kind": "artist", "name": "Korn"}]), \
-                    _patch.object(_b53, "_groq_songs", lambda w, n, context="": [(t.artist, t.title) for t in fake53]), \
+            with _patch.object(_b53, "anchors_of", lambda w, **k: [{"kind": "artist", "name": "Korn"}]), \
+                    _patch.object(_b53, "_groq_songs", lambda w, n, context="", brief=None, have=None: [(t.artist, t.title) for t in fake53]), \
                     _patch.object(_b53, "_found", lambda a, t: next(x for x in fake53 if x.title == t)), \
                     _patch.object(_llm53, "available", lambda: True), \
                     _patch.object(_b53, "_lane_for_artist", lambda n, k, taste, **kwargs: []), \
                     _patch.object(_b53, "_band_songs", lambda n, taste: []), \
                     _patch.object(_b53, "_odd_ones", lambda *a, **k: set()), \
+                    _patch.object(_b53.curator, "plan", lambda what, hint="": _b53.curator.Brief()), \
                     _patch.object(_b53, "_unmerge", lambda a: a):
                 fit53 = _b53.build("korn", songs=20, strict=False)
             c("\"songs that fit\" is Groq's picks, checked against the catalogue",
@@ -5336,26 +5337,30 @@ def _run(verbose: bool = False) -> Result:
               and "minmax(260px,.9fr)" not in page54
               and "minmax(380px,.9fr)" not in page54
               and "--cover:min(100%,clamp(190px" not in page54)
-            c("resting keeps the cover's place, so a starting song moves nothing",
-              "body:not(.mini):not(.hastrack):not(.hasqueue) .art-wrap{display:flex;visibility:hidden}" in page54
-              and "body:not(.mini):not(.hastrack):not(.hasqueue) .empty-stage{grid-area:3/1/5/2;" in page54
-              and "covermode .stage{grid-template-columns:minmax(0,1fr)" not in page54)
-            c("resting is the player as normal: the list, its tabs and the bar stay, with the mark",
-              ".lyrswitch{display:none!important}" in page54
-              and "not(.hasqueue) .panel,\n" not in page54
-              and '<span class="restmark" aria-hidden="true">' in page54)
+            c("resting is the normal player with an empty cover: nothing hidden, nothing swapped in",
+              "empty-stage" not in page54
+              and "not(.hasqueue) .art-wrap" not in page54
+              and "not(.hasqueue) .meta" not in page54
+              and "not(.hasqueue) .controls" not in page54
+              and '<div class="artnote" aria-hidden="true"><span class="restmark">' in page54)
+            c("on a wide screen the cover and list rest together, then slide apart for the words",
+              "grid-template-columns:var(--cover) 0fr var(--panelw)" in page54
+              and "grid-template-columns:var(--cover) 1fr var(--panelw);" in page54
+              and "transition:grid-template-columns .7s" in page54)
             c("resting and playing share every grid row, so the cover can't slide up or down",
-              "body:not(.mini):not(.hastrack):not(.hasqueue) .meta{display:block;visibility:hidden}" in page54
-              and "min-height:60px;margin:16px 0 0;text-align:left" in page54
+              "min-height:60px;margin:16px 0 0;text-align:left" in page54
               and "padding-bottom:28px" not in page54)
             c("the bar keeps play on the centre line; padding gives first, the volume last",
-              "grid-template-columns:minmax(0,1fr) minmax(200px,600px) minmax(max-content,1fr);" in page54
-              and "padding:7px clamp(8px,1.6vw,24px) 10px" in page54
+              "grid-template-columns:minmax(150px,1fr) minmax(220px,600px) minmax(max-content,1fr);" in page54
+              and "padding:7px 20px 10px" in page54
               and "body:not(.mini) .transport .vol{flex:0 0 auto;max-width:150px;" in page54
               and "body:not(.mini) .transport .vol{max-width:90px}" not in page54)
-            c("wide screens: the controls and the progress bar sit under the words",
-              "grid-template-columns:var(--cover) minmax(380px,1fr) var(--panelw);" in page54
-              and "body:not(.mini) .transport{position:relative;inset:auto;grid-area:6/2;" in page54
+            c("wide screens: a Spotify-style bar whose middle sits under the words",
+              "grid-template-columns:var(--cover) 1fr var(--panelw);" in page54
+              and "body:not(.mini):is(.hastrack,.hasqueue) .transport{" in page54
+              and "grid-area:6/2;" not in page54)
+            c("the heart is an interaction: it stays with share and volume",
+              "barlike" not in page54 and "row2 #like{display:none}" not in page54
               and "Words timed to this recording" not in page54
               and "DRAWER_AT" not in page54 and "--drawer:" not in page54)
             c("a phone on its side gets side-by-side panels, not zero-height ones",
@@ -5372,7 +5377,7 @@ def _run(verbose: bool = False) -> Result:
             # -- 56. a list is the whole list -----------------------------------
             c = _Checker("whole lists")
             from .resolve import grammar as _g56, resolver as _rv56, ranking as _rk56
-            from .core import builder as _b56
+            from .core import builder as _b56, curator as _cur56
             from .models import Plan as _P56, Track as _T56
             twelve = ", ".join(f"Song {i} by Band {i}" for i in range(12))
             got56 = _g56.song_list("add these and some others: " + twelve)
@@ -5416,7 +5421,7 @@ def _run(verbose: bool = False) -> Result:
                     return _rv56.Resolution([_T56(video_id="wrong", title="Metallica", artist="Tribute")], "")
                 return _rv56.Resolution([_T56(video_id="one", title=plan.query, artist=plan.artist)], "")
             with _patch.object(_rv56, "resolve", _flip):
-                flip56 = _rv56._mix_item({"kind": "song", "name": "Metallica", "artist": "One",
+                flip56 = _rv56.resolve_item({"kind": "song", "name": "Metallica", "artist": "One",
                                           "either": True}, _P56(kind="mix"))
             c("\"One - Metallica\" is tried the other way round when the first reading is wrong",
               flip56 and flip56.tracks[0].video_id == "one" and flip56.tracks[0].artist == "Metallica")
@@ -5456,11 +5461,11 @@ def _run(verbose: bool = False) -> Result:
                       len(few56) >= 6 and not any("Ballad" in t.title for t in few56)
                       and len(held56) == 2, str([t.title for t in few56]))
                     c("...and its best-known songs come first",
-                      [t.title for t in few56[:2]] == ["Slayer hit 0", "Sodom hit 0"])
+                      sorted(t.title for t in few56[:2]) == ["Slayer hit 0", "Sodom hit 0"])
                     lots56, _ = _b56._fill(["Slayer", "Sodom"], 40, None, core56)
                     c("no song twice, remaster or not",
                       len({t.key() for t in lots56}) == len(lots56))
-                    with _patch.object(_b56, "anchors_of", lambda w: [
+                    with _patch.object(_b56, "anchors_of", lambda w, **k: [
                             {"kind": "artist", "name": "Slayer"}, {"kind": "artist", "name": "Sodom"}]), \
                             _patch.object(_b56, "_unmerge", lambda a: a):
                         all56 = _b56.build("slayer, sodom", songs=40, strict=True)
@@ -5473,7 +5478,7 @@ def _run(verbose: bool = False) -> Result:
             c("a missing comma between two bands is put back",
               [a["name"] for a in un56] == ["hellhammer", "Motorhead", "Celtic Frost"], str(un56))
             c("the prompt asks for well-known songs in the shared sound, not deep cuts",
-              "best-known" in _b56._CURATE and "deep cut" not in _b56._CURATE)
+              "best-known" in _cur56._PICK and "deep cut" not in _cur56._PICK and "cycle through" in _cur56._PICK)
             with _patch.object(_b56, "_listeners",
                                lambda t: 2_000_000 if t.artist == "Metallica" else 50_000):
                 c("a cover is the less-played version of a song two bands here share",
@@ -5481,6 +5486,28 @@ def _run(verbose: bool = False) -> Result:
                                 [_T56(title="x", artist="Metallica"),
                                  _T56(title="Enter Sandman", artist="Metallica")]])
                   == {"motorhead|enter sandman"})
+
+            # The planner can add songs it read in the request, never invent one.
+            got56b = _cur56.brief_from({"literal": [
+                {"artist": "Slayer", "title": "Raining Blood"},
+                {"artist": "Slayer", "title": "South of Heaven"}],
+                "artists": ["Slayer"], "energy": "loud", "strict": "false"},
+                "raining blood by slayer and some other thrash")
+            c("a song the request names is kept; one it doesn't is dropped",
+              got56b.literal == [("Slayer", "Raining Blood")], str(got56b.literal))
+            c("...and a nonsense energy or a stringly false is read sensibly",
+              got56b.energy == "any" and got56b.strict is False)
+            # Order: no band twice running, and not dealt out like cards.
+            four = [[_T56(video_id=f"{b}{i}", title=f"{b} {i}", artist=b) for i in range(5)]
+                    for b in ("A", "B", "C", "D")]
+            woven = _b56._weave(four, seed="x")
+            c("woven: every song once, no band twice in a row",
+              len(woven) == 20 and all(x.artist != y.artist for x, y in zip(woven, woven[1:])))
+            rounds = [tuple(t.artist for t in woven[i:i + 4]) for i in range(0, 20, 4)]
+            c("...and the bands don't come round in the same order every time",
+              len(set(rounds)) > 1, str(rounds))
+            c("a run of one band is broken up, everything else left where it was",
+              [t.artist for t in _b56._unclump([four[0][0], four[0][1], four[1][0]])] == ["A", "B", "A"])
 
             # Smart shuffle: what you skip drifts back, what you love comes forward;
             # the radio leans the same way, only less.

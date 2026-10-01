@@ -386,6 +386,31 @@ class TagStore:
         with self._lock:
             return self._cache.get(tk) or self._cache.get(ak)
 
+    def lookup(self, track: Track, artist: bool = False) -> dict[str, int]:
+        """Tags for a song (or its band) now: from the cache, or asked of
+        Last.fm and kept. Blocks; for background work, not the request path."""
+        if not track or not self.enabled():
+            return {}
+        self.load()
+        key = self._artist_key(track) if artist else self._track_key(track)
+        with self._lock:
+            hit = self._cache.get(key)
+            if hit is not None:
+                return hit
+            if key in self._missing:
+                return {}
+        who = (track.artist or "").split(",")[0].strip()
+        try:
+            found = self._fetch_artist(who) if artist else self._fetch_track(who, track.title)
+        except Exception:
+            return {}
+        with self._lock:
+            if found:
+                self._cache[key] = found
+            else:
+                self._missing.add(key)
+        return found
+
     def _enqueue(self, key: str, track: Track) -> None:
         with self._lock:
             if key in self._queued or len(self._queued) > 500:

@@ -168,7 +168,7 @@ def _mix(plan: Plan, taste=None) -> "Resolution | None":
     from concurrent.futures import ThreadPoolExecutor
     items = [i for i in plan.items[:MIX_MAX] if (i.get("name") or "").strip()]
     with ThreadPoolExecutor(max_workers=6) as pool:
-        got = list(pool.map(lambda i: _mix_item(i, plan, taste), items))
+        got = list(pool.map(lambda i: resolve_item(i, plan, taste), items))
     songs = [r for i, r in zip(items, got) if r and i.get("kind") == "song"]
     rest = [r for i, r in zip(items, got) if r and i.get("kind") != "song"]
     parts = songs + rest
@@ -206,7 +206,7 @@ def _mix(plan: Plan, taste=None) -> "Resolution | None":
 MIX_MAX = 40
 
 
-def _mix_item(item: dict, plan: Plan, taste=None) -> "Resolution | None":
+def resolve_item(item: dict, plan: Plan, taste=None) -> "Resolution | None":
     kind = item.get("kind") or "auto"
     name = (item.get("name") or "").strip()
     artist = item.get("artist", "") or (name if kind == "artist" else "")

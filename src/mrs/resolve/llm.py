@@ -50,7 +50,11 @@ ALIASES = {
 # minute resets. Read that, and a request that can't be afforded goes straight
 # to the local parser instead of waiting on a 429 -- and nothing is asked at all
 # until the reset. The same text asked twice is answered from memory.
+#
+# Groq rations each model on its own (checked: a 20b call leaves the 120b's
+# count alone), so each gets its own budget. _limit is the request parser's.
 _limit = {"left": None, "reset_at": 0.0, "cool_until": 0.0}
+_limits: dict[str, dict] = {}
 _cache: dict[str, tuple[float, dict]] = {}
 _CACHE_DAYS = 14
 _cache_lock = threading.Lock()
@@ -64,27 +68,36 @@ def _seconds(v: str | None) -> float:
     return total
 
 
-def _note_limits(headers) -> None:
+def _limit_for(model: str | None = None) -> dict:
+    """The budget of one model; the parser's own when none is named."""
+    if not model or model == _model():
+        return _limit
+    return _limits.setdefault(model, {"left": None, "reset_at": 0.0, "cool_until": 0.0})
+
+
+def _note_limits(headers, model: str | None = None) -> None:
+    limit = _limit_for(model)
     try:
         left = headers.get("x-ratelimit-remaining-tokens")
         if left is not None:
-            _limit["left"] = int(float(left))
-            _limit["reset_at"] = time.monotonic() + _seconds(headers.get("x-ratelimit-reset-tokens"))
+            limit["left"] = int(float(left))
+            limit["reset_at"] = time.monotonic() + _seconds(headers.get("x-ratelimit-reset-tokens"))
     except Exception:
         pass
 
 
-def resting() -> float:
-    """Seconds until Groq should be asked again; 0 when it can be now."""
-    return max(0.0, _limit["cool_until"] - time.monotonic())
+def resting(model: str | None = None) -> float:
+    """Seconds until this model (the parser's, by default) may be asked again."""
+    return max(0.0, _limit_for(model)["cool_until"] - time.monotonic())
 
 
-def _affordable(cost: int) -> bool:
+def _affordable(cost: int, model: str | None = None) -> bool:
+    limit = _limit_for(model)
     now = time.monotonic()
-    if now < _limit["cool_until"]:
+    if now < limit["cool_until"]:
         return False
-    if _limit["left"] is not None and now < _limit["reset_at"] and _limit["left"] < cost:
-        _limit["cool_until"] = _limit["reset_at"]
+    if limit["left"] is not None and now < limit["reset_at"] and limit["left"] < cost:
+        limit["cool_until"] = limit["reset_at"]
         return False
     return True
 
@@ -244,28 +257,32 @@ def _post(body: dict, timeout: float) -> dict:
                  "Content-Type": "application/json",
                  # Cloudflare blocks the default urllib UA outright.
                  "User-Agent": "MusicRequestServer/2.0"})
+    model = str(body.get("model") or "")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            _note_limits(r.headers)
+            _note_limits(r.headers, model)
             return json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         if e.code == 429:
             wait = _seconds(e.headers.get("x-ratelimit-reset-tokens")) or \
                 float(e.headers.get("retry-after") or 20)
-            _limit["cool_until"] = time.monotonic() + max(2.0, wait)
-            log.info("Groq is resting for %.0fs", max(2.0, wait))
+            _limit_for(model)["cool_until"] = time.monotonic() + max(2.0, wait)
+            log.info("Groq (%s) is resting for %.0fs", model or "default", max(2.0, wait))
         raise
 
 
-def ask_json(system: str, user: str, timeout: float = 8.0) -> dict | None:
-    """One JSON answer, or None. For callers that aren't the request parser."""
+def ask_json(system: str, user: str, timeout: float = 8.0,
+             model: str | None = None) -> dict | None:
+    """One JSON answer, or None. For callers that aren't the request parser;
+    `model` picks which of Groq's budgets it's spent from."""
     if not available() or not user.strip():
         return None
-    if not _affordable((len(system) + len(user)) // 3 + 300):
+    use = (model or _model()).strip()
+    if not _affordable((len(system) + len(user)) // 3 + 300, use):
         return None
     try:
         payload = _post({
-            "model": _model(), "temperature": 0,
+            "model": use, "temperature": 0,
             "response_format": {"type": "json_object"},
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user.strip()}],
