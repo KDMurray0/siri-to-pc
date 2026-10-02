@@ -190,6 +190,7 @@ h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;
 .art{aspect-ratio:1;width:100%;border-radius:9px;background:var(--tint-hi);overflow:hidden;margin-bottom:9px;
   display:grid;grid-template-columns:1fr 1fr}
 .art.one{display:block}
+.art.cov.heart{display:grid;place-items:center}
 .art img{width:100%;height:100%;object-fit:cover}
 .card b{display:block;font-weight:500;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card span{display:block;font-size:12px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -457,16 +458,71 @@ body.drag-list .pinzone{display:block;animation:pop .16s var(--ease)}
   .nav span{display:none}
   .find input{width:min(26vw,220px)}
 }
+/* ── a phone: tabs along the bottom, the playing song just above them,
+   sheets the whole screen, nothing that only shows on hover ── */
+.tabbar{display:none}
+.vsearch{display:none}
+@media (hover:none){
+  .card .go{opacity:1;transform:none;width:38px;height:38px}
+  .gpill .gplay{opacity:1;scale:1}
+  .gpill .gopen{padding-right:46px}
+  .shelfwrap .more{display:none!important}
+  .card,.row,.lrow,.gpill,.bcard{-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+}
 @media (max-width:720px){
-  :root{--ledger:0px;--deck:74px}
-  .ledger{display:none}
-  .canvas{left:0}
-  .view{padding-left:16px;padding-right:16px}
-  .deck{grid-template-columns:minmax(0,1fr) auto;padding:0 12px}
-  .deck .prog,.deck .vol,.ctl #shuffle,.ctl #repeat,.deck #share{display:none}
-  .find{display:none}
+  :root{--ledger:0px;--deck:62px;--tabs:56px;--safe-b:env(safe-area-inset-bottom,0px);--safe-t:env(safe-area-inset-top,0px)}
+  .ledger,.edge,.cap.left,.find{display:none!important}
+  .canvas{left:0!important}
+  .cap.right{top:calc(10px + var(--safe-t));right:12px;height:auto;padding:2px;background:none;box-shadow:none;
+    -webkit-backdrop-filter:none;backdrop-filter:none}
+  .view{padding:calc(14px + var(--safe-t)) 14px calc(var(--deck) + var(--tabs) + var(--safe-b) + 26px) 14px;
+    -webkit-mask-image:none;mask-image:none}
+  .view.keep{padding:var(--safe-t) 0 calc(var(--deck) + var(--tabs) + var(--safe-b) + 8px) 0}
+  h1.title{font-size:28px;margin:4px 56px 18px 0}
+  .sect{margin-bottom:32px}
+  .cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .cards.strip{grid-auto-columns:minmax(132px,40vw);gap:10px}
+  .browse{grid-auto-columns:minmax(260px,82vw)}
+  .logobar{grid-auto-columns:max-content}
+  .gpill .gopen{padding:0 54px 0 18px}
+  .row{grid-template-columns:42px minmax(0,1fr) 44px;gap:12px}
+  .row > span:not(.dur){display:none}
+  .row b::after{content:attr(data-by);display:block;font-size:12px;color:var(--sub);font-weight:400}
+  .toolbar .pill{flex:1 1 auto;justify-content:center}
+  /* the playing song, just above the tabs */
+  .deck{left:8px;right:8px;bottom:calc(var(--tabs) + var(--safe-b) + 6px);height:var(--deck);border-radius:14px;
+    grid-template-columns:minmax(0,1fr) auto;column-gap:6px;padding:0 6px 0 4px}
+  .deck .song{padding:5px 8px 5px 5px;margin-left:0}
+  .deck .song .thumb{width:44px;height:44px}
+  .deck .vol,.deck .side,.ctl #shuffle,.ctl #repeat,.ctl #prev{display:none}
+  .deck .play{gap:0}
+  .deck .ctl{gap:4px}
+  .deck .prog{position:absolute;left:12px;right:12px;bottom:3px;display:block;width:auto;grid-template-columns:1fr}
+  .deck .prog span{display:none}
+  .deck .prog .bar{height:2px}
+  .deck .prog .bar::before{inset:-8px 0}
+  .tabbar{display:grid;position:fixed;left:0;right:0;bottom:0;z-index:21;grid-template-columns:repeat(3,1fr);
+    height:calc(var(--tabs) + var(--safe-b));padding-bottom:var(--safe-b);border-radius:0}
+  .tabbar button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+    font-size:10.5px;font-weight:600;color:var(--sub)}
+  .tabbar button.on{color:var(--fg)}
+  .tabbar .svg{width:22px;height:22px}
+  .vsearch{display:block;width:calc(100% - 50px);height:44px;border-radius:12px;border:0;background:var(--tint-hi);padding:0 14px;
+    outline:0;font-size:16px;margin:0 0 18px}
+  .toast{top:calc(10px + var(--safe-t));left:12px;right:12px;max-width:none;width:auto}
   .scrim{padding:0}
-  .sheet,.setpanel{border-radius:0;height:100%}
+  .sheet,.setpanel{border-radius:0;height:100%;width:100%}
+  .sheet .x{top:calc(12px + var(--safe-t))}
+  .sheet .scroll{padding-bottom:var(--safe-b)}
+  .hero{padding:calc(70px + var(--safe-t)) 16px 16px;flex-direction:column;align-items:flex-start;gap:14px}
+  .hero .pic{width:min(220px,58vw)}
+  .acts{padding:4px 16px 16px}
+  .sheet .part{padding:6px 14px 22px}
+  .menu.ctx{min-width:min(280px,calc(100vw - 24px))}
+  .menu.ctx button{padding:12px 13px;font-size:14.5px}
+  .selbar{bottom:calc(10px + var(--safe-b))}
+  .ask form{width:calc(100vw - 24px)}
+  .pinzone{display:none!important}
 }
 </style>
 </head>
@@ -532,6 +588,11 @@ body.drag-list .pinzone{display:block;animation:pop .16s var(--ease)}
   </div>
 </footer>
 <input type="file" id="coverfile" accept="image/*" hidden>
+<nav class="tabbar glass" aria-label="Sections">
+  <button data-tab="home" class="on"><svg class="svg" viewBox="0 0 24 24"><path d="M12 3 3 10.5V21h6v-6h6v6h6V10.5z"/></svg>Home</button>
+  <button data-tab="search"><svg class="svg" viewBox="0 0 24 24"><path d="M15.5 14h-.8l-.3-.3a6.5 6.5 0 1 0-.7.7l.3.3v.8l5 5 1.5-1.5zm-6 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/></svg>Search</button>
+  <button data-tab="library"><svg class="svg" viewBox="0 0 24 24"><path d="M4 6H2v14a2 2 0 0 0 2 2h14v-2H4zm16-4H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/></svg>Library</button>
+</nav>
 <div class="toast glass" id="toast" role="status"></div>
 
 <script>
@@ -894,7 +955,7 @@ function songRows(tracks, limit = 0) {
   const now = state.track && state.track.video_id;
   return `<div class="rows">` + tracks.map((t, i) =>
     `<button class="row${t.video_id && t.video_id === now ? " now" : ""}${limit && i >= limit ? " extra" : ""}" data-i="${i}" data-vid="${esc(t.video_id || "")}">` +
-    `<div class="thumb">${img(t.art)}</div><div><b>${esc(t.title || t.name)}</b></div>` +
+    `<div class="thumb">${img(t.art)}</div><div><b data-by="${esc(t.artist || "")}">${esc(t.title || t.name)}</b></div>` +
     `<span>${esc(t.artist)}</span><span class="dur">${t.duration ? fmt(t.duration) : ""}</span></button>`).join("") + `</div>`;
 }
 function wireRows(root, tracks, onPlay, owner = null) {
@@ -1946,19 +2007,27 @@ const VIEWS = {
   },
 
   async search(pane, { q = "" } = {}) {
-    if (!q) { pane.innerHTML = `<h1 class="title">Search</h1><div class="empty">A song, an artist, a mood, or a Spotify link.</div>`; return; }
-    pane.innerHTML = `<h1 class="title">${esc(q)}</h1><div class="skel"></div>`;
+    // On a phone the box lives here; on a computer it's up top.
+    const box = `<input class="vsearch" type="search" placeholder="Songs, artists, playlists" aria-label="Search" value="${esc(q)}" enterkeyhint="search">`;
+    const wire = () => { const v = pane.querySelector(".vsearch"); if (!v) return;
+      v.addEventListener("input", () => { $("q").value = v.value; $("q").dispatchEvent(new Event("input")); });
+      v.addEventListener("keydown", e => { if (e.key === "Enter") { $("q").value = v.value; $("q").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" })); v.blur(); } }); };
+    if (!q) { pane.innerHTML = `${box}<h1 class="title">Search</h1><div class="empty">A song, an artist, a mood, or a Spotify link.</div>`; wire(); return; }
+    pane.innerHTML = `${box}<h1 class="title">${esc(q)}</h1><div class="skel"></div>`; wire();
     const r = await api("/api/search?q=" + encodeURIComponent(q));
     if (!r) { pane.innerHTML = `<h1 class="title">${esc(q)}</h1><div class="empty">Search didn't answer. Try again.</div>`; return; }
     const lists = r.playlists || [], artists = r.artists || [], albums = r.albums || [];
     const songs = (r.library || []).concat(r.results || []);
-    let html = `<h1 class="title">${esc(q)}</h1>`;
+    let html = `${box}<h1 class="title">${esc(q)}</h1>`;
     if (songs.length) html += sect("Songs", "", songRows(songs.slice(0, 10)));
     if (artists.length) html += sect("Artists", "", shelf(artists.map(artistCard).join("")));
     if (albums.length) html += sect("Albums", "", shelf(albums.map(albumCard).join("")));
     if (lists.length) html += sect("Your playlists", "", shelf(lists.map(listCard).join("")));
     if (!lists.length && !songs.length && !artists.length && !albums.length) html += `<div class="empty">Nothing for that. Try fewer words.</div>`;
+    const typing = document.activeElement && document.activeElement.classList.contains("vsearch");
     pane.innerHTML = html;
+    wire();
+    if (typing) { const v = pane.querySelector(".vsearch"); v.focus(); v.setSelectionRange(v.value.length, v.value.length); }
     wireRows(pane, songs, t => playSong(t));
     wireCards(pane, { lists, artists });
     wireAlbums(pane, albums);
@@ -2010,8 +2079,12 @@ function slide(inPane, outPane, dir) {
   clearTimeout(slide.t); slide.t = setTimeout(() => canvas.classList.remove("sliding"), 380);
   inPane.animate([{ transform: `translateX(${dir * 8}%)`, opacity: 0 }, { transform: "none", opacity: 1 }],
                  { duration: 340, easing: "cubic-bezier(.2,.8,.2,1)" });
-  if (outPane) outPane.animate([{ transform: "none", opacity: 1 }, { transform: `translateX(${-dir * 6}%)`, opacity: 0 }],
-                               { duration: 240, easing: "cubic-bezier(.4,0,1,1)" }).onfinish = () => finishOut(outPane);
+  if (outPane) {
+    outPane.animate([{ transform: "none", opacity: 1 }, { transform: `translateX(${-dir * 6}%)`, opacity: 0 }],
+                    { duration: 240, easing: "cubic-bezier(.4,0,1,1)" }).onfinish = () => finishOut(outPane);
+    // and on a timer: a window that isn't drawing never finishes the animation
+    setTimeout(() => { if (outPane.isConnected && outPane.classList.contains("leaving")) finishOut(outPane); }, 320);
+  }
 }
 async function nowPlayingPane() {
   // One pane, kept: moving an iframe reloads it, and the player inside holds the lyrics and queue.
@@ -2043,6 +2116,8 @@ async function go(name, params = {}, how = {}) {
   document.body.classList.toggle("focus", name === "nowplaying");
   document.body.classList.remove("peek");
   document.querySelectorAll(".nav").forEach(b => b.classList.toggle("on", b.dataset.go === name));
+  document.querySelectorAll(".tabbar [data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === name ||
+    (b.dataset.tab === "library" && name === "artists")));
   $("back").disabled = !stack.length; $("fwd").disabled = !ahead.length;
   if (name !== "nowplaying") await VIEWS[name](pane, params);
 }
@@ -2210,6 +2285,40 @@ function lvTick() {
   bars.forEach(b => b.querySelectorAll("i").forEach((el, i) => { el.style.height = (22 + lvNow[i] * 78).toFixed(0) + "%"; }));
   lvRaf = requestAnimationFrame(lvTick);
 }
+
+/* ── a phone: the tabs, and a long press for what right-click does ── */
+document.querySelectorAll(".tabbar [data-tab]").forEach(b => b.onclick = async () => {
+  const t = b.dataset.tab;
+  if (t === "search") {
+    if (!current || current.name !== "search") await go("search", { q: $("q").value.trim() });
+    const v = canvas.querySelector(".view:not([hidden]):not(.leaving) .vsearch");
+    if (v) v.focus();
+  } else go(t);
+});
+let press = null;
+document.addEventListener("pointerdown", e => {
+  if (e.pointerType !== "touch") return;
+  let el = e.target;
+  while (el && !el._item) el = el.parentElement;
+  if (!el) return;
+  const p = press = { x: e.clientX, y: e.clientY, el, fired: false };
+  p.timer = setTimeout(() => {
+    if (press !== p) return;
+    p.fired = true;
+    el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: p.x, clientY: p.y }));
+    if (navigator.vibrate) navigator.vibrate(8);
+  }, 480);
+}, true);
+document.addEventListener("pointermove", e => {
+  if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) { clearTimeout(press.timer); press = null; }
+}, true);
+document.addEventListener("pointerup", () => {
+  if (!press) return;
+  clearTimeout(press.timer);
+  if (press.fired) dragEnded = performance.now();      // the lift isn't a tap
+  press = null;
+}, true);
+document.addEventListener("pointercancel", () => { if (press) { clearTimeout(press.timer); press = null; } }, true);
 
 /* ── the event stream ── */
 let es = null;
