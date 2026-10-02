@@ -21,6 +21,29 @@ phone, without touching yours — on the right.
 </p>
 </details>
 
+## The full player
+
+Open the address on a computer or a phone and you get the full player: Home
+with what you played lately, your playlists, your top artists and albums, a bar
+of your genres, and lists other people here have made public; Search; and your
+library down the left (tabs along the bottom on a phone). Playlists, albums and
+artists open as sheets over the page, each with a search of its own. Now
+playing is the classic player inside it: the cover, the words and the queue.
+
+- **Drag and drop.** Grab a song, album, artist or playlist from anywhere. Drop
+  it on a playlist to add it, or on the library to save it. Playlists drag into
+  your own order, or onto *Pin to Home* to become a shelf there.
+- **Right-click** anything for its menu. On a phone, press and hold.
+- **Make one with AI.** The composer takes what it's for, a length (or *Auto*)
+  and how it's made. *Edit with AI* changes a list you already have ("more
+  energetic", "no more Vampire Weekend or anything like them"), and Undo puts it
+  back.
+- **Public playlists.** Make one of yours public with a few tags and anyone
+  here can find it, play it or save a copy.
+- **On a phone it plays on the phone.** The button beside play moves the sound
+  between the phone and the computer. Guests hear it on their own device.
+  `/player?classic=1` (or the profile menu) still opens the classic page.
+
 ## A few things it does that aren't obvious
 
 **Ask for a playlist out loud.** "Make me a thirty minute grunge playlist",
@@ -69,7 +92,9 @@ Browsers that block autoplay show the play button. The public song link itself
 lasts thirty days; expired visits can start again from it.
 
 **Lyrics that sing.** Heavier words, and each one lifts, grows and glows while
-it's sung — more the longer it's held.
+it's sung — more the longer it's held. The timing of each word comes from the
+recording itself wherever Whisper can make it out, misheard words and all; a
+line it can't hear is spread out by syllables instead.
 
 **An optional glass mini player.** On Windows 10 (2004+) and Windows 11, turn
 on the setting in Look to make the shrunk bar bend the desktop behind it, with
@@ -84,8 +109,9 @@ plays on the speakers.
 
 The whole player runs in a browser, so anything with one is a speaker.
 
-- **Your own phone.** The capsule at the top of the output picker moves the
-  sound between this computer and the device you're holding. The song and the
+- **Your own phone.** The button beside play in the full player (or the capsule
+  at the top of the classic player's output picker) moves the sound between
+  this computer and the device you're holding. The song and the
   position come with you; it doesn't start again.
 - **Somebody else's phone.** Make them a link in **Settings → Sharing**. A
   *phone-only* link plays on their device and nowhere else; a *full* link can
