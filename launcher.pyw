@@ -931,7 +931,7 @@ def _tray() -> None:
         import webbrowser
         port = int(srv.runtime.get("port") or config.get("port", 7420))
         webbrowser.open(srv.local_url(
-            port, f"/player?key={config.get('api_key', '')}"))
+            port, f"/app?key={config.get('api_key', '')}"))
 
     def quit_(icon, _it):
         _tray_quit.set()          # so the keep-alive loop doesn't rebuild it

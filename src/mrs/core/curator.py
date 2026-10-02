@@ -195,18 +195,25 @@ def _whole(value, top: int) -> int:
 # -- the grunt work ------------------------------------------------------------
 
 _PICK = (
-    "You curate playlists. Reply with JSON only. Follow the brief. Real, released "
-    "studio recordings by the original artist, each artist's best-known songs "
-    "first. Order them as a DJ would: let the energy build and breathe, never the "
-    "same artist twice in a row, and don't simply cycle through the artists in "
-    "turn. No song twice.")
+    "You curate playlists. Reply with JSON only. Follow the brief. Pick songs for "
+    "this list: well-known songs that suit its sound, mood and energy, each chosen "
+    "because it fits rather than because it is the artist's biggest hit. Real, "
+    "released studio recordings by the original artist. Weight the artists by how well they fit: "
+    "several songs from the ones at the heart of it, one from others, none from "
+    "ones that only half fit. Never ration artists evenly or cycle through them in "
+    "turn. Order it as a DJ would: let the energy build and breathe, never the same "
+    "artist twice in a row. No song twice.")
 
 
-def songs(brief: Brief, n: int, *, have: list[tuple[str, str]] | None = None) -> list[tuple[str, str]]:
-    """(artist, title) pairs that fit the brief, in playing order."""
+def songs(brief: Brief, n: int, *, have: list[tuple[str, str]] | None = None,
+          carry: bool = False) -> list[tuple[str, str]]:
+    """(artist, title) pairs that fit the brief, in playing order. `carry`: the
+    list so far is `have`, and these are the next stretch of it."""
     have = have or []
     taken = (" Already in the list, don't repeat: "
-             + "; ".join(f"{t} by {a}" for a, t in have[:40]) + ".") if have else ""
+             + "; ".join(f"{t} by {a}" for a, t in have[-40:]) + ".") if have else ""
+    if carry and have:
+        taken += " Carry on from the last of those, keeping the flow."
     user = f"{brief.describe()}{taken} {min(90, max(1, n))} songs."
     got = _ask(_PICK + ' Format: {"songs":[{"artist":"","title":""}]}', user,
                prefer=WORKER) or {}

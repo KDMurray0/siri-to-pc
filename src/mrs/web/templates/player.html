@@ -665,16 +665,18 @@ a.btn{text-decoration:none;display:inline-block}
    runs the whole length of the word, smoothly, so a held note keeps growing
    and glowing until it's let go -- and a quick "the" barely moves. */
 @keyframes wordswell {
-  0%   { transform:none; text-shadow:0 0 0 transparent,0 0 0 transparent }
+  0%   { transform:none; margin-inline:0; text-shadow:0 0 0 transparent,0 0 0 transparent }
   100% { transform:translateY(calc(var(--hold) * -5px)) scale(calc(1 + var(--hold) * .2));
+         margin-inline:calc(var(--hold) * var(--wch, 4) * .056em);
          text-shadow:0 0 calc(3px + var(--hold) * 24px) color-mix(in srgb,var(--fg) calc(14% + var(--hold) * 60%),transparent),
                      0 0 calc(var(--hold) * 10px) color-mix(in srgb,var(--accent) calc(var(--hold) * 75%),transparent) }
 }
 @keyframes wordrelease {
   from { transform:translateY(calc(var(--hold) * -5px)) scale(calc(1 + var(--hold) * .2));
+         margin-inline:calc(var(--hold) * var(--wch, 4) * .056em);
          text-shadow:0 0 calc(3px + var(--hold) * 24px) color-mix(in srgb,var(--fg) calc(14% + var(--hold) * 60%),transparent),
                      0 0 calc(var(--hold) * 10px) color-mix(in srgb,var(--accent) calc(var(--hold) * 75%),transparent) }
-  to   { transform:none; text-shadow:0 0 0 transparent,0 0 0 transparent }
+  to   { transform:none; margin-inline:0; text-shadow:0 0 0 transparent,0 0 0 transparent }
 }
 @media (prefers-reduced-motion:reduce){
   .lyrics .lrow .w{transition:color .22s ease,opacity .22s ease}
@@ -1400,23 +1402,31 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
      absolutely-positioned grid item resolves right:0 against its own grid
      cell, not the stage's edge — the tab used to float mid-panel because
      of that. fixed takes it out of the grid's containing-block rules. */
-  body:not(.mini) .sidetoggle{position:relative;grid-area:2/2/6/3;align-self:center;justify-self:start;
-    margin-left:-21px;z-index:6;width:20px;height:48px;display:grid;place-items:center;padding:0;
-    border:1px solid var(--line);border-right:0;border-radius:8px 0 0 8px;
-    background:var(--panel);color:var(--sub);font-size:15px;line-height:1;font-family:inherit;cursor:pointer}
-  body:not(.mini) .sidetoggle:hover{color:var(--fg)}
+  /* Shown, the queue hides itself from its own header. Folded away, one
+     round button at the top right brings it back. */
+  body:not(.mini) .sidetoggle{display:none}
+  body:not(.mini).sidehid .sidetoggle{display:grid;position:fixed;top:22px;right:var(--edge,24px);
+    z-index:30;width:40px;height:40px;place-items:center;padding:0;border-radius:50%;cursor:pointer;
+    border:1px solid var(--line);background:color-mix(in srgb,var(--panel) 80%,transparent);color:var(--sub);
+    -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);box-shadow:0 8px 24px rgba(0,0,0,.3);
+    animation:popin .25s cubic-bezier(.2,.8,.2,1)}
+  body:not(.mini) .sidetoggle svg{width:19px;height:19px;fill:currentColor}
+  body:not(.mini) .sidetoggle:hover{color:var(--fg);background:var(--panel)}
+  html.embedded body:not(.mini) .sidetoggle{top:14px}
+  @keyframes popin{from{opacity:0;transform:scale(.85)}}
   /* Queue folded away: the words take its place, as far as the window can
      hold them. */
   body:not(.mini).sidehid .nav,body:not(.mini).sidehid .panel{visibility:hidden;pointer-events:none}
   body:not(.mini).sidehid #panel-lyrics{display:block;visibility:visible;pointer-events:auto;
     grid-column:2;grid-row:2/6;min-height:0;margin:0;background:none;border:0;border-radius:0;
-    padding:0 8px 30vh;text-align:left;scrollbar-width:none;
+    padding:0 8px 30vh;text-align:center;scrollbar-width:none;
     -webkit-mask-image:linear-gradient(to bottom,transparent,#000 9%,#000 86%,transparent);
     mask-image:linear-gradient(to bottom,transparent,#000 9%,#000 86%,transparent)}
   body:not(.mini).sidehid #panel-lyrics .lyrlead{display:block;height:24vh}
+  body:not(.mini).sidehid #panel-lyrics.prose .lrow{text-align:center}
   body:not(.mini).sidehid #panel-lyrics .lrow{font-size:clamp(20px,2.1vw,28px);line-height:1.6;font-weight:600}
   body:not(.mini).sidehid #panel-lyrics .lrow.active{font-weight:800}
-  body:not(.mini).sidehid .sidetoggle span{transform:rotate(180deg)}
+
 
   body:not(.mini) .transport{position:fixed;inset:auto 0 0;z-index:30;display:grid;
     /* Two tiers. First the room around the progress bar goes, and the bar
@@ -1472,32 +1482,34 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
        instead of along the bottom of the screen. The cover grows with the
        height; the queue stays a list's width. */
     --cover:clamp(300px,calc(100dvh - 330px),560px);--panelw:clamp(320px,20vw,380px);
-    grid-template-columns:var(--cover) 1fr var(--panelw);
+    --words:880px;
+    grid-template-columns:var(--cover) minmax(0,var(--words)) var(--panelw);
     grid-template-rows:auto minmax(0,1fr) auto auto minmax(0,1fr) auto;
-    padding-bottom:100px}
+    justify-content:center;padding-bottom:100px}
   /* One axis: search, words and deck all centre on the middle column. */
   body:not(.mini) .search{grid-area:1/2;width:min(100%,720px)}
   body:not(.mini) #panel-lyrics{scrollbar-width:none}
   body:not(.mini) #panel-lyrics::-webkit-scrollbar{display:none}
   body:not(.mini) .nav{grid-area:2/3}
   body:not(.mini) .panel{grid-column:3}
-  body:not(.mini) .sidetoggle{grid-column:3}
+
   /* The bar's three columns are the stage's: the song sits under the cover,
      the controls and progress under the words, the volume under the queue. */
   body:not(.mini):is(.hastrack,.hasqueue) .transport{
-    grid-template-columns:var(--cover) 1fr var(--panelw);
+    grid-template-columns:var(--cover) minmax(0,var(--words,880px)) var(--panelw);justify-content:center;
     column-gap:var(--gap2);padding:7px var(--edge) 10px}
   body:not(.mini) .transport .controls,body:not(.mini) .transport .prog{
     justify-self:center;width:min(100%,600px)}
   body:not(.mini) #panel-lyrics,body:not(.mini) #panel-about{grid-column:2;grid-row:2/6;
     visibility:visible;pointer-events:auto;min-height:0;background:none;border:0;border-radius:0;
     margin:0;padding-inline:24px;align-self:stretch}
-  body:not(.mini) #panel-lyrics{display:block;padding-block:0 40vh;text-align:left;
+  body:not(.mini) #panel-lyrics{display:block;padding-block:0 40vh;text-align:center;
     -webkit-mask-image:linear-gradient(to bottom,transparent,#000 9%,#000 88%,transparent);
     mask-image:linear-gradient(to bottom,transparent,#000 9%,#000 88%,transparent)}
   body:not(.mini) #panel-lyrics .lyrlead{display:block;height:32vh}
   body:not(.mini) #panel-lyrics .lrow{font-size:32px;line-height:1.65;padding:6px 4px;
     max-width:min(100%,720px);margin-inline:auto;font-weight:600}
+  body:not(.mini) #panel-lyrics.prose .lrow{text-align:center}
   body:not(.mini) #panel-lyrics .lrow.active{font-weight:800}
   body:not(.mini) #panel-lyrics>.muted{margin-top:30vh;font-size:14px}
   body:not(.mini) #panel-about{display:none;padding-block:54px 20px;overflow-y:auto}
@@ -1508,7 +1520,7 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
     justify-self:center;gap:2px;padding:3px;border-radius:999px;z-index:3;
     background:var(--panel);border:1px solid var(--line)}
   body:not(.mini) .navtab[data-panel="lyrics"],body:not(.mini) #openAbout{display:none}
-  body:not(.mini).sidehid .stage{grid-template-columns:var(--cover) 1fr 0px}
+  body:not(.mini).sidehid .stage{grid-template-columns:var(--cover) minmax(0,var(--words)) 0px}
   body:not(.mini).sidehid #panel-lyrics{grid-row:2/6;padding:0 24px 40vh}
   body:not(.mini).sidehid #panel-lyrics .lrow{font-size:32px;line-height:1.65}
 }
@@ -1519,9 +1531,9 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
   body:not(.mini) .stage{transition:grid-template-columns .7s cubic-bezier(.2,.8,.2,1),
     opacity .12s ease,transform .2s ease}
   body:not(.mini):not(.hastrack):not(.hasqueue) .stage{
-    grid-template-columns:var(--cover) 0fr var(--panelw)}
+    grid-template-columns:var(--cover) minmax(0,0px) var(--panelw)}
   body:not(.mini).nowords:not(.sidehid):is(.hastrack,.hasqueue) .stage{
-    grid-template-columns:var(--cover) .35fr var(--panelw)}
+    grid-template-columns:var(--cover) minmax(0,260px) var(--panelw)}
   body:not(.mini).nowords:not(.sidehid):is(.hastrack,.hasqueue) #panel-lyrics>.muted{white-space:nowrap;text-align:center}
   body:not(.mini):not(.hastrack):not(.hasqueue) .search{grid-area:1/1/2/4}
   @media (prefers-reduced-motion:reduce){body:not(.mini) .stage{transition:none}}
@@ -1664,14 +1676,17 @@ body.castblocked #volicon{color:#e0a03a;animation:castpulse 1.4s ease-in-out inf
               aria-label="About this song">
         <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 4.6a1.3 1.3 0 110 2.6 1.3 1.3 0 010-2.6zM13.3 17h-2.6v-6.4h2.6V17z"/></svg>
       </button>
+      <button class="navtab navgear" id="sidehide" title="Hide the queue" aria-label="Hide the queue">
+        <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><path d="M4 4h16a1 1 0 011 1v14a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1zm11 2v12h4V6zM8.6 8.4 7.2 9.8 9.4 12l-2.2 2.2 1.4 1.4L12.2 12z"/></svg>
+      </button>
       <button class="navtab navgear" id="openSettings" title="Settings" aria-label="Settings">
         <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><path d="M19.14 12.94a7.5 7.5 0 000-1.88l2.03-1.58-2-3.46-2.39.96a7.4 7.4 0 00-1.62-.94L14.8 2.5h-4l-.39 2.54c-.58.23-1.13.55-1.62.94l-2.39-.96-2 3.46 2.03 1.58a7.5 7.5 0 000 1.88l-2.03 1.58 2 3.46 2.39-.96c.49.39 1.04.71 1.62.94l.39 2.54h4l.39-2.54c.58-.23 1.13-.55 1.62-.94l2.39.96 2-3.46-2.03-1.58zM12 15.5A3.5 3.5 0 1112 8.5a3.5 3.5 0 010 7z"/></svg>
       </button>
     </div>
     <!-- Sits against the sidebar's edge and moves with it, so the control
          that brings the queue back is where the queue used to be. -->
-    <button class="sidetoggle" id="sidetoggle" title="Hide the queue"
-            aria-label="Hide the queue"><span>‹</span></button>
+    <button class="sidetoggle" id="sidetoggle" title="Show the queue"
+            aria-label="Show the queue"><svg viewBox="0 0 24 24"><path d="M3 6h12v2H3zm0 5h12v2H3zm0 5h8v2H3zm14-5v6.2a3 3 0 1 0 2 2.8V9h3V7h-5z"/></svg></button>
     <!-- Only in the layout that gives the words their own column: there the
          middle can show one of two things and the choice has to be visible.
          Everywhere else the ⓘ beside the gear is the control. -->
@@ -2290,6 +2305,7 @@ function updateRestingView() {
   document.body.classList.toggle("covermode", resting && !restingDismissed);
   setSide(document.body.classList.contains("sidehid"), false);
 }
+$("sidehide").onclick = () => setSide(true);
 $("sidetoggle").onclick = () => {
   if (document.body.classList.contains("covermode")) {
     restingDismissed = true;
@@ -3716,10 +3732,10 @@ let lyricRows = [], lyricStarts = [], lyricGeneration = 0;
 function words(text, timed) {
   if (timed && timed.length) return timed.map(w => {
     const bits = w.text.match(/^(\s*)(.*?)(\s*)$/s);
-    return esc(bits[1]) + `<i class="w">${esc(bits[2])}</i>` + esc(bits[3]);
+    return esc(bits[1]) + `<i class="w" style="--wch:${[...bits[2]].length}">${esc(bits[2])}</i>` + esc(bits[3]);
   }).join("");
   return (text || "").split(/(\s+)/).map(bit =>
-    /^\s*$/.test(bit) ? esc(bit) : `<i class="w">${esc(bit)}</i>`).join("");
+    /^\s*$/.test(bit) ? esc(bit) : `<i class="w" style="--wch:${[...bit].length}">${esc(bit)}</i>`).join("");
 }
 function plainLyricLines(text) {
   const out = [];
@@ -3825,12 +3841,26 @@ function wordTimings(s, idx, row) {
   const next = nextLine ?? (state.duration > 0 ? state.duration : Infinity);
   const timings = line.words.map((w, i) => {
     const from = w.t;
-    const end = w.end ?? Math.min(line.words[i + 1]?.t ?? Infinity, from + .3);
+    // Held until the next word starts: a held note is this word, not a gap.
+    // The last word rings on to its own end, or a little past it.
+    const after = line.words[i + 1]?.t;
+    const end = Number.isFinite(after) ? Math.max(after, from + .08)
+              : (w.end ?? Math.min(from + HOLD_MAX, next));
     if (!Number.isFinite(from) || from < 0 || !Number.isFinite(end) || end <= from) return null;
     const to = next > from ? Math.min(next, end) : end;
     return {from, to};
   });
   if (timings.some(t => !t)) return null;
+  // The aligner tends to start the word after a held note early, which put the
+  // swell on the next word while the last was still being sung. Nothing starts
+  // before the word ahead of it has ended.
+  for (let i = 1; i < timings.length; i++) {
+    const held = line.words[i - 1].end;
+    if (Number.isFinite(held) && timings[i].from < held && held < timings[i].to - .08) {
+      timings[i].from = held;
+      timings[i - 1].to = held;
+    }
+  }
   return row._timings = timings;
 }
 
@@ -7234,7 +7264,8 @@ window.addEventListener("message", e => {
   if (e.origin !== location.origin || !e.data) return;
   if (e.data.type === "open-settings") $("openSettings").click();
   // The full player's queue button, pressed while this is already showing.
-  if (e.data.type === "toggle-queue") $("sidetoggle").click();
+  if (e.data.type === "toggle-queue")
+    (document.body.classList.contains("sidehid") ? $("sidetoggle") : $("sidehide")).click();
 });
 if (document.documentElement.classList.contains("embed-settings"))
   setTimeout(() => {

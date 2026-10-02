@@ -68,26 +68,41 @@ def _get(url: str, timeout: float = 8.0):
 
 # -- Wikipedia ---------------------------------------------------------
 
-def _wiki_page(title: str, artist: str) -> str | None:
-    """The article about this record, not about the band or the phrase."""
+def _wiki_pages(title: str, artist: str) -> list[str]:
+    """Articles that could be about this record, the likeliest first: one
+    called "(Band song)", then "(song)", then one simply named after it."""
     title = _plain(title)
     q = f"{title} {artist} song".strip()
     data = _get(WIKI + "?" + urllib.parse.urlencode({
         "action": "query", "list": "search", "srsearch": q,
-        "srlimit": "5", "format": "json"}))
+        "srlimit": "8", "format": "json"}))
     hits = ((data or {}).get("query") or {}).get("search") or []
     want = _fold(title.lower())
+    band = _fold((artist or "").split(",")[0].strip().lower())
+    ranked = []
     for row in hits:
         name = row.get("title") or ""
         low = _fold(name.lower())
-        # "(song)" is the giveaway; failing that, the article has to at
-        # least be named after the record rather than merely mention it.
-        if "song" in name.lower() or low == want or low.startswith(want + " "):
-            return name
-    # No article actually named after the record. Taking the best-scoring
-    # hit anyway is how a song ended up showing the history of a live album
-    # that merely mentions it.
-    return None
+        # The article has to be named after the record, not merely mention
+        # it: taking the best-scoring hit anyway is how a song ended up
+        # showing the history of a live album it was on.
+        if not (low == want or low.startswith(want + " ")):
+            continue
+        rank = 0 if (band and band in low and "song" in low) else 1 if "song" in low else 2
+        ranked.append((rank, len(ranked), name))
+    return [name for _, _, name in sorted(ranked)]
+
+
+# "Engine No. 9 can refer to: ..." is a list of other songs, not this one's story.
+_DISAMBIG = re.compile(r"\b(?:may|can|might) (?:also )?refer to\b|\bis the name of\b", re.I)
+
+
+def _about_this(text: str, artist: str) -> bool:
+    """The article is this record's: not a list of pages, and it names the band."""
+    if not text or _DISAMBIG.search(text[:400]):
+        return False
+    band = _fold((artist or "").split(",")[0].strip().lower())
+    return not band or band in _fold(text[:6000].lower())
 
 
 def _wiki_text(page: str) -> str:
@@ -266,9 +281,13 @@ def _lookup_claimed(title: str, artist: str) -> dict:
     """Resolve a record after this caller has claimed its in-flight slot."""
     key = _key(title, artist)
     fm = _lastfm(title, artist)
-    page = _wiki_page(title, artist)
-    story = _story_from(_wiki_text(page)) if page else ""
-    if not story:
+    page, story = None, ""
+    for name in _wiki_pages(title, artist)[:3]:
+        text = _wiki_text(name)
+        if _about_this(text, artist):
+            page, story = name, _story_from(text)
+            break
+    if not story and not _DISAMBIG.search((fm.get("summary") or "")[:400]):
         story = fm.get("summary") or ""
     sources = []
     if page:
@@ -296,6 +315,9 @@ def lookup(title: str, artist: str) -> dict | None:
     """
     key = _key(title, artist)
     got = store.cached(key)
+    # Kept from before pages were checked: a disambiguation list told as a story.
+    if got is not None and _DISAMBIG.search((got.get("story") or "")[:400]):
+        got = None
     if got is not None:
         return got
     if not store.claim(key):

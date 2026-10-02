@@ -561,6 +561,27 @@ def _run(verbose: bool = False) -> Result:
             c("...and nonsense is no length at all", _cur7.brief_from({"songs": "lots"}, "x").songs == 0)
             say("undo deletes", c)
 
+            # -- 7f. a long AI list is picked song by song, not dealt by band --
+            c = _Checker("long picks")
+            from unittest import mock as _mock7
+            from .core import builder as _b7
+            calls7 = []
+
+            def _stretch7(what, n, clue="", brief=None, have=None, carry=False):
+                calls7.append((n, carry, len(have or [])))
+                if len(calls7) == 3:
+                    raise _b7.GroqBusy(30)
+                base = len(calls7) * 1000
+                got = [(f"Band {(base + i) % 7}", f"Song {base + i}") for i in range(n)]
+                return got + got[:1]          # the worker repeating itself
+            with _mock7.patch.object(_b7, "_groq_songs", side_effect=_stretch7):
+                run7 = _b7._groq_song_run("late night grunge", 240, "", None, [], None)
+            c("each stretch carries on from the last", [x[1] for x in calls7] == [False, True, True], str(calls7))
+            c("...told what's already there, so nothing comes twice",
+              calls7[1][2] >= 90 and len(run7) == len(set(run7)), str(calls7))
+            c("a busy Groq part-way just ends the run with what it has", len(run7) == 180, str(len(run7)))
+            say("long picks", c)
+
             # -- 8. "inside the house" must mean inside the house ----------
             c = _Checker("home")
             from .web.security import _own_wan, is_home
@@ -1002,6 +1023,12 @@ def _run(verbose: bool = False) -> Result:
               _ins._story_from("\"X\" is a song by Dire Straits. " + "y " * 80
                                + "\n\n== Charts ==\nIt charted.\n"))
             c("nothing in, nothing out", _ins._story_from("") == "")
+            c("a list of pages called the same isn't a song's story",
+              not _ins._about_this("Engine No. 9 can refer to: Engine Engine Number 9, a 1965 song", "Deftones"))
+            c("...nor is an article about another band's song of that name",
+              not _ins._about_this('"Engine Engine Number 9" is a 1965 song by Roger Miller.', "Deftones"))
+            c("...but the band's own song's article is",
+              _ins._about_this('"Engine No. 9" is a song by American alternative metal band Deftones.', "Deftones"))
             c("a record with no title has no panel",
               _ins.about(None)["ready"] is False)
             c("two spellings of the same record are one entry",
@@ -2596,7 +2623,11 @@ def _run(verbose: bool = False) -> Result:
                 signed = client.get("/", cookies=_sign_in_as("1234567890"),
                                     follow_redirects=False)
                 c("someone signed in is sent straight to the player",
-                  signed.status_code == 302 and signed.headers.get("location") == "/player")
+                  signed.status_code == 302 and signed.headers.get("location") == "/app")
+                on_phone = client.get("/", cookies=_sign_in_as("1234567890"), follow_redirects=False,
+                                      headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile"})
+                c("...a phone to the classic one, until the full player has a phone layout",
+                  on_phone.headers.get("location") == "/player", str(on_phone.headers.get("location")))
                 _acc.set_scope("1234567890", "blocked")
                 blk = client.get("/", cookies=_sign_in_as("1234567890"),
                                  follow_redirects=False)
@@ -2635,7 +2666,7 @@ def _run(verbose: bool = False) -> Result:
                 try:
                     c("with the whole house trusted, the owner at home goes straight in",
                       client.get("/", headers={"Host": "127.0.0.1:29544"},
-                                 follow_redirects=False).headers.get("location") == "/player")
+                                 follow_redirects=False).headers.get("location") == "/app")
                 finally:
                     _cfg.set("lan_open_devices", False, save=False)
                 _bans.forgive("testclient")
@@ -2789,7 +2820,7 @@ def _run(verbose: bool = False) -> Result:
                 done = client.post("/auth/claim", data={"name": "  Sam   Rivers ", "terms": "1"},
                                    cookies=held, follow_redirects=False)
                 c("a name and the notice make an account", done.status_code == 302
-                  and done.headers.get("location") == "/player",
+                  and done.headers.get("location") == "/app",
                   f"{done.status_code} {done.headers.get('location')}")
                 made = _acc.get("55501")
                 c("...named what they chose, not what Google calls them",
@@ -2839,7 +2870,7 @@ def _run(verbose: bool = False) -> Result:
                   == {"name": "Priya Nair", "tracking": True})
                 r = _back(st2, _goog._PENDING[st2]["nonce"], "55502")
                 c("...and coming back creates the account outright, with no second page",
-                  r.status_code == 302 and r.headers.get("location") == "/player"
+                  r.status_code == 302 and r.headers.get("location") == "/app"
                   and "mrs_claim=" not in r.headers.get("set-cookie", ""))
                 p2 = _acc.get("55502")
                 c("...under the name they gave", bool(p2) and p2["name"] == "Priya Nair")
@@ -2856,7 +2887,7 @@ def _run(verbose: bool = False) -> Result:
                 st4, _ = _start()
                 r = _back(st4, _goog._PENDING[st4]["nonce"], "55501")
                 c("logging in again goes straight through",
-                  r.status_code == 302 and r.headers.get("location") == "/player"
+                  r.status_code == 302 and r.headers.get("location") == "/app"
                   and "mrs_claim=" not in r.headers.get("set-cookie", ""))
                 c("...and Google's name for them does not replace theirs",
                   _acc.get("55501")["name"] == "Sam Rivers")
@@ -2891,7 +2922,7 @@ def _run(verbose: bool = False) -> Result:
                 client.cookies.clear()
                 st7, _ = _start()
                 r = _back(st7, _goog._PENDING[st7]["nonce"], "55504")
-                c("...once: the next time goes straight through", r.headers.get("location") == "/player")
+                c("...once: the next time goes straight through", r.headers.get("location") == "/app")
 
                 # Remember me: six months, renewed while it's used.
                 ck = r.headers.get("set-cookie", "")
@@ -3373,11 +3404,11 @@ def _run(verbose: bool = False) -> Result:
                       'href="/auth/google/start' in bare.text)
                 r = client.get("/music/", headers=owner_h, follow_redirects=False)
                 c("the owner is sent on to the player, inside the prefix",
-                  r.status_code == 302 and r.headers.get("location") == "/music/player",
+                  r.status_code == 302 and r.headers.get("location") == "/music/app",
                   str(r.headers.get("location")))
                 r = client.get("/", headers=owner_h, follow_redirects=False)
                 c("...and to the bare player when they came in bare",
-                  r.headers.get("location") == "/player")
+                  r.headers.get("location") == "/app")
                 left = client.get("/music/auth/signout", follow_redirects=False)
                 c("signing out lands back at the front, inside the prefix",
                   left.headers.get("location") == "/music/")
@@ -5432,8 +5463,8 @@ def _run(verbose: bool = False) -> Result:
               and "not(.hasqueue) .controls" not in page54
               and '<div class="artnote" aria-hidden="true"><span class="restmark">' in page54)
             c("on a wide screen the cover and list rest together, then slide apart for the words",
-              "grid-template-columns:var(--cover) 0fr var(--panelw)" in page54
-              and "grid-template-columns:var(--cover) 1fr var(--panelw);" in page54
+              "grid-template-columns:var(--cover) minmax(0,0px) var(--panelw)" in page54
+              and "grid-template-columns:var(--cover) minmax(0,var(--words)) var(--panelw);" in page54
               and "transition:grid-template-columns .7s" in page54)
             c("resting and playing share every grid row, so the cover can't slide up or down",
               "min-height:86px;margin:16px 0 0;text-align:left" in page54
@@ -5444,7 +5475,7 @@ def _run(verbose: bool = False) -> Result:
               and "body:not(.mini) .transport .vol{flex:0 0 auto;width:150px;max-width:150px;" in page54
               and "body:not(.mini) .transport .vol{max-width:90px}" not in page54)
             c("wide screens: a Spotify-style bar whose middle sits under the words",
-              "grid-template-columns:var(--cover) 1fr var(--panelw);" in page54
+              "grid-template-columns:var(--cover) minmax(0,var(--words,880px)) var(--panelw);justify-content:center;" in page54
               and "body:not(.mini):is(.hastrack,.hasqueue) .transport{" in page54
               and "grid-area:6/2;" not in page54)
             c("the heart is an interaction: it stays with share and volume",
@@ -5565,8 +5596,9 @@ def _run(verbose: bool = False) -> Result:
                                       {"kind": "artist", "name": "Celtic Frost", "artist": ""}])
             c("a missing comma between two bands is put back",
               [a["name"] for a in un56] == ["hellhammer", "Motorhead", "Celtic Frost"], str(un56))
-            c("the prompt asks for well-known songs in the shared sound, not deep cuts",
-              "best-known" in _cur56._PICK and "deep cut" not in _cur56._PICK and "cycle through" in _cur56._PICK)
+            c("the prompt asks for well-known songs that fit, not each band's hits dealt out in turn",
+              "well-known" in _cur56._PICK and "deep cut" not in _cur56._PICK and "cycle through" in _cur56._PICK
+              and "ration" in _cur56._PICK and "best-known songs first" not in _cur56._PICK)
             with _patch.object(_b56, "_listeners",
                                lambda t: 2_000_000 if t.artist == "Metallica" else 50_000):
                 c("a cover is the less-played version of a song two bands here share",

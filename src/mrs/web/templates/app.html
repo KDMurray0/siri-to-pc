@@ -274,6 +274,12 @@ h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;
 .nowbars i{width:3px;border-radius:1px;background:currentColor;height:40%;animation:bars .9s ease-in-out infinite alternate}
 .nowbars i:nth-child(2){animation-delay:-.3s}.nowbars i:nth-child(3){animation-delay:-.6s}
 body.paused .nowbars i{animation-play-state:paused}
+.nowbars.live i{animation:none;transition:height .08s linear}
+/* covers measured and nudged toward the middle; banners keep their own look */
+.card img,.cov img,.art img,.thumb img,.faces img,.pic img,.fan img{filter:var(--even,none)}
+.row.extra{display:none}
+.showall .row.extra,.finding .row.extra:not(.nomatch){display:grid}
+.moreb{margin:10px 0 0 4px;height:34px;font-size:13px}
 @keyframes bars{to{height:100%}}
 .lrow.playing b{color:var(--accent)}
 .pill{height:40px;padding:0 18px;border-radius:999px;display:inline-flex;align-items:center;gap:7px;font-weight:550;
@@ -338,6 +344,8 @@ body.paused .nowbars i{animation-play-state:paused}
 .side{display:flex;align-items:center;justify-content:flex-end;gap:4px}
 .vol{display:flex;align-items:center;gap:6px}
 .vol .bar{width:104px}
+.vol .bar i,.vol .bar b{transition:width .2s var(--ease),left .2s var(--ease)}
+.vol .bar.drag i,.vol .bar.drag b{transition:none}
 body.noplay .play{opacity:.5}
 
 /* right-click, and every ⋯ */
@@ -802,7 +810,43 @@ const playLiked = (start = 0) => say("/api/smartplaylists/play?kind=liked" + (st
 const playQuery = q => say("/api/play?q=" + encodeURIComponent(q), "Playing " + q);
 
 /* ── pieces ── */
-const img = src => src ? `<img src="${esc(src)}" alt="" loading="lazy" onerror="this.remove()">` : "";
+/* "1816 min" is thirty hours: say so. */
+const span = mins => { mins = Math.round(mins); if (mins < 60) return mins + " min";
+  const h = Math.floor(mins / 60), m = mins % 60; return h + " hr" + (m ? " " + m + " min" : ""); };
+const img = src => src ? `<img src="${esc(src)}" alt="" loading="lazy" crossorigin="anonymous" onload="evenCover(this)" ` +
+  `onerror="if(this.crossOrigin){this.removeAttribute('crossorigin');this.src=this.src}else this.remove()">` : "";
+/* Covers come in every brightness and saturation there is. Each is measured
+   once and nudged toward the middle, so a shelf reads as one shelf. */
+const coverLook = new Map();
+const lookCanvas = Object.assign(document.createElement("canvas"), { width: 24, height: 24 });
+const lookCtx = lookCanvas.getContext("2d", { willReadFrequently: true });
+function evenCover(im) {
+  const src = im.currentSrc || im.src;
+  if (!src || src.startsWith("data:")) return;
+  let f = coverLook.get(src);
+  if (f === undefined) {
+    f = "";
+    try {
+      lookCtx.clearRect(0, 0, 24, 24);
+      lookCtx.drawImage(im, 0, 0, 24, 24);
+      const d = lookCtx.getImageData(0, 0, 24, 24).data;
+      let L = 0, S = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
+        L += .2126 * r + .7152 * g + .0722 * b;
+        S += Math.max(r, g, b) - Math.min(r, g, b);
+      }
+      L /= d.length / 4; S /= d.length / 4;
+      // Toward the middle, gently: art is art, it just shouldn't shout or vanish.
+      const bright = Math.min(1.15, Math.max(.84, Math.pow(.32 / Math.max(.05, L), .35)));
+      const sat = S < .06 ? 1 : Math.min(1.12, Math.max(.84, Math.pow(.26 / S, .35)));
+      if (Math.abs(bright - 1) > .03 || Math.abs(sat - 1) > .03)
+        f = `brightness(${bright.toFixed(2)}) saturate(${sat.toFixed(2)})`;
+    } catch (e) { f = ""; }          // a cover that can't be read stays as it is
+    coverLook.set(src, f);
+  }
+  if (f) im.style.setProperty("--even", f);
+}
 /* A playlist's cover: its own picture if it has one, else the first four songs in a grid. */
 function listCover(p, cls = "art", extra = "") {
   if (p.cover && URL_TOKEN)
@@ -812,11 +856,11 @@ function listCover(p, cls = "art", extra = "") {
 }
 const listKey = p => ctxKey("playlist", p.name, p.shared ? "shared" : "");
 const albumKey = (name, artist) => ctxKey("album", name, artist || "");
-function songRows(tracks) {
+function songRows(tracks, limit = 0) {
   if (!tracks.length) return '<div class="empty">Nothing here yet.</div>';
   const now = state.track && state.track.video_id;
   return `<div class="rows">` + tracks.map((t, i) =>
-    `<button class="row${t.video_id && t.video_id === now ? " now" : ""}" data-i="${i}" data-vid="${esc(t.video_id || "")}">` +
+    `<button class="row${t.video_id && t.video_id === now ? " now" : ""}${limit && i >= limit ? " extra" : ""}" data-i="${i}" data-vid="${esc(t.video_id || "")}">` +
     `<div class="thumb">${img(t.art)}</div><div><b>${esc(t.title || t.name)}</b></div>` +
     `<span>${esc(t.artist)}</span><span class="dur">${t.duration ? fmt(t.duration) : ""}</span></button>`).join("") + `</div>`;
 }
@@ -856,6 +900,7 @@ function wireFind(root, tracks) {
   if (!box) return;
   box.addEventListener("input", () => {
     const words = box.value.toLowerCase().split(/\s+/).filter(Boolean);
+    root.classList.toggle("finding", words.length > 0);
     root.querySelectorAll(".row[data-i]").forEach(r => {
       const t = tracks[+r.dataset.i] || {};
       const hay = `${t.title || t.name || ""} ${t.artist || ""} ${t.album || ""}`.toLowerCase();
@@ -957,7 +1002,7 @@ function openList(p) {
     root.innerHTML = `<div class="hero"><div class="banner">${img(banner)}</div>` +
       `<div class="pic-wrap" style="position:relative">${listCover(fresh, "pic")}</div>` +
       `<div><small>${p.shared ? "Shared playlist" : "Playlist"}</small><h1>${esc(p.name)}</h1>` +
-      `<p>${tracks.length} songs${secs ? " · about " + Math.round(secs / 60) + " min" : ""}</p></div></div>` +
+      `<p>${tracks.length} songs${secs ? " · about " + span(secs / 60) : ""}</p></div></div>` +
       `<div class="acts"><button class="bigplay" data-a="play" data-ctx="${esc(listKey(p))}" title="Play"${tracks.length ? "" : " disabled"}>${ICON.play}</button>` +
       `<button class="round-ib" data-a="shuffle" title="Shuffle play" aria-label="Shuffle play"${tracks.length > 1 ? "" : " disabled"}>${ICON.shuffle}</button>` +
       `<button class="round-ib" data-a="more" aria-haspopup="menu" title="More" aria-label="More">${ICON.more}</button>` +
@@ -1025,12 +1070,38 @@ function openArtist(name) {
     if (!r) { root.insertAdjacentHTML("beforeend", `<div class="pane empty">Couldn't load ${esc(name)}.</div>`); return; }
     root.innerHTML = `<div class="hero"><div class="banner">${img(r.art)}</div><div class="pic one face">${img(r.art)}</div>` +
       `<div><small>Artist</small><h1>${esc(r.name)}</h1><p>${r.top.length} popular songs</p></div></div>` +
-      `<div class="acts"><button class="bigplay" data-a="play" data-ctx="${esc(ctxKey("artist", r.name))}" title="Play">${ICON.play}</button></div>`;
+      `<div class="acts"><button class="bigplay" data-a="play" data-ctx="${esc(ctxKey("artist", r.name))}" title="Play">${ICON.play}</button>` +
+      FIND.replaceAll("Find in here", "Find a song by " + esc(r.name)) + `</div>`;
     root.querySelector('[data-a="play"]').onclick = () => ctxPress(ctxKey("artist", r.name), () => playArtist(r.name));
     paintPlayButtons();
-    root.insertAdjacentHTML("beforeend", part(1, "Popular", songRows(r.top.slice(0, 15))));
-    wireRows(root, r.top, t => playSong(t));
-    if (r.near.length) { root.insertAdjacentHTML("beforeend", part(2, "Fans also like", faceRow(r.near))); wireCards(root, { artists: r.near }); }
+    let songs = r.top;
+    const drawSongs = () => {
+      const box = root.querySelector("[data-songs]");
+      box.innerHTML = songRows(songs, root.classList.contains("showall") ? 0 : 5) +
+        (songs.length > 5 && !root.classList.contains("showall") ? `<button class="pill moreb" data-a="all">View all</button>` : "");
+      wireRows(box, songs, t => playSong(t), { kind: "artist" });
+      const all = box.querySelector('[data-a="all"]');
+      if (all) all.onclick = async () => {
+        all.disabled = true; all.textContent = "Finding the rest…";
+        const more = await api("/api/artist?all=1&name=" + enc(r.name));
+        const seen = new Set(songs.map(t => t.video_id));
+        songs = songs.concat(((more && more.top) || []).filter(t => t.video_id && !seen.has(t.video_id)));
+        root.classList.add("showall");
+        drawSongs();
+        const q = root.querySelector(".infind input"); if (q && q.value) q.dispatchEvent(new Event("input"));
+      };
+      wireFind(root, songs);
+    };
+    root.insertAdjacentHTML("beforeend", part(1, "Popular", `<div data-songs></div>`));
+    drawSongs();
+    let n = 2;
+    if ((r.albums || []).length) {
+      root.insertAdjacentHTML("beforeend", `<div data-albums>${part(n++, "Albums", shelf(r.albums.map(albumCard).join("")))}</div>`);
+      wireAlbums(root.querySelector("[data-albums]"), r.albums);
+      wireShelves(root.querySelector("[data-albums]"));
+    }
+    if (r.near.length) { root.insertAdjacentHTML("beforeend", `<div data-near>${part(n, "Fans also like", faceRow(r.near))}</div>`);
+      wireCards(root.querySelector("[data-near]"), { artists: r.near }); }
   });
 }
 function openGenre(g) {
@@ -1055,7 +1126,7 @@ function openAlbum(name, artist) {
     const tracks = (r && r.tracks) || [];
     const secs = tracks.reduce((a, t) => a + (t.duration || 0), 0);
     root.innerHTML = `<div class="hero"><div class="banner">${img(r && r.art)}</div><div class="pic one">${img(r && r.art)}</div>` +
-      `<div><small>Album</small><h1>${esc(name)}</h1><p>${esc(artist || "")}${tracks.length ? " · " + tracks.length + " songs" : ""}${secs ? " · " + Math.round(secs / 60) + " min" : ""}</p></div></div>` +
+      `<div><small>Album</small><h1>${esc(name)}</h1><p>${esc(artist || "")}${tracks.length ? " · " + tracks.length + " songs" : ""}${secs ? " · " + span(secs / 60) : ""}</p></div></div>` +
       `<div class="acts"><button class="bigplay" data-a="play" data-ctx="${esc(albumKey(name, artist))}" title="Play"${tracks.length ? "" : " disabled"}>${ICON.play}</button>` +
       (tracks.length > 6 ? FIND : "") + `</div>`;
     root.querySelector('[data-a="play"]').onclick = () => ctxPress(albumKey(name, artist), () => playAlbum(name, artist));
@@ -1795,6 +1866,32 @@ function refreshSoon() {
   }, 300);
 }
 
+/* The playing list's bars follow the music itself when the server can hear
+   it: low, middle and high, eased so they move rather than flicker. */
+let lvTarget = [0, 0, 0], lvNow = [0, 0, 0], lvAt = 0, lvRaf = 0;
+function levelIn(d) {
+  if (!d) return;
+  let b;
+  if (d.bands && d.bands.length) {
+    const n = d.bands.length, third = Math.max(1, Math.floor(n / 3));
+    b = [0, 1, 2].map(k => { const part = d.bands.slice(k * third, k === 2 ? n : (k + 1) * third);
+                             return part.reduce((a, x) => a + x, 0) / (part.length || 1); });
+  } else b = [+d.l || +d.m || 0, +d.m || 0, +d.r || +d.m || 0];
+  lvTarget = b.map(x => Math.max(0, Math.min(1, x)));
+  lvAt = performance.now();
+  if (!lvRaf) lvRaf = requestAnimationFrame(lvTick);
+}
+function lvTick() {
+  lvRaf = 0;
+  const bars = document.querySelectorAll(".nowbars");
+  const fresh = performance.now() - lvAt < 700 && state.playing;
+  bars.forEach(b => b.classList.toggle("live", fresh));
+  if (!fresh || !bars.length) return;
+  lvNow = lvNow.map((v, i) => v + (lvTarget[i] - v) * .4);
+  bars.forEach(b => b.querySelectorAll("i").forEach((el, i) => { el.style.height = (22 + lvNow[i] * 78).toFixed(0) + "%"; }));
+  lvRaf = requestAnimationFrame(lvTick);
+}
+
 /* ── the event stream ── */
 let es = null;
 async function connect() {
@@ -1805,6 +1902,7 @@ async function connect() {
     let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
     if (msg.type === "status") applyStatus(msg.data);
     else if (msg.type === "toast") toast(typeof msg.data === "string" ? msg.data : (msg.data || {}).text);
+    else if (msg.type === "level") levelIn(msg.data);
     else if (msg.type === "settings" && msg.data && msg.data.playlists) refreshSoon();
   };
   es.onerror = () => { es.close(); setTimeout(connect, 2500); };

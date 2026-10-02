@@ -494,8 +494,17 @@ async def index(request: Request, key: str = Query(default=""),
         tail = (f"?key={urllib.parse.quote(key, safe='')}"
                 if key and row is None and _key_in_url_ok(request)
                 and same_key(key, config.get("api_key") or "") else "")
-        return RedirectResponse(_pfx.at(request, "/player") + tail, status_code=302)
+        return RedirectResponse(_pfx.at(request, _home_page(request)) + tail, status_code=302)
     return landing()
+
+
+_PHONE = re.compile(r"Mobi|Android|iPhone|iPad|iPod", re.I)
+
+
+def _home_page(request: Request) -> str:
+    """Where the front door leads: the full player on a computer. A phone keeps
+    the classic one until the full player has a phone layout of its own."""
+    return "/player" if _PHONE.search(request.headers.get("user-agent", "")) else "/app"
 
 
 @app.get("/privacy", response_class=HTMLResponse)
@@ -627,7 +636,7 @@ def api_home(request: Request, _: bool = Auth):
 
 
 @app.get("/api/artist")
-def api_artist(request: Request, name: str = "", _: bool = Auth):
+def api_artist(request: Request, name: str = "", all: int = 0, _: bool = Auth):
     """An artist's sheet in the full player: picture, best-known songs, and the
     acts their listeners also play."""
     from ..core import home
@@ -638,13 +647,24 @@ def api_artist(request: Request, name: str = "", _: bool = Auth):
     if not name:
         raise HTTPException(400, "Which artist?")
     _guard_rate(_session_for(request), request)
+    if all:
+        # View all: the whole catalogue, best known first.
+        return {"status": "ok", "name": name,
+                "top": [t.to_dict() for t in catalog.artist_all_tracks(name, cap=200)]}
     top = [t.to_dict() for t in catalog.artist_top_tracks(name, limit=30)]
+    want = name.casefold()
+    albums, seen = [], set()
+    for a in catalog.search_albums(name, limit=12):
+        key = (a.get("name") or "").casefold()
+        if want in (a.get("artist") or "").casefold() and key and key not in seen:
+            seen.add(key)
+            albums.append({"name": a["name"], "artist": a.get("artist") or name, "art": a.get("art") or ""})
     near = [n for n in kin.prime(Track(title="", artist=name))[:12]]
     picture = home.picture(name)
     if not picture:
         hits = catalog.search_artists(name, limit=1)
         picture = (hits[0].get("art") or "") if hits else ""
-    return {"status": "ok", "name": name, "art": picture, "top": top,
+    return {"status": "ok", "name": name, "art": picture, "top": top, "albums": albums,
             "near": [{"name": n, "art": home.picture(n)} for n in near]}
 
 
@@ -4320,6 +4340,8 @@ def _start_session(request: Request, person: dict, next_path: str):
     # A blocked account is let in only far enough to reach its own data (the
     # routes it may use are listed in _BLOCKED_MAY_REACH), and lands on the page
     # that says so rather than on a player it can't use.
+    if (next_path or "/player").strip() == "/player":
+        next_path = _home_page(request)          # the default, not a choice
     dest = base + ("/" if person.get("scope") == "blocked" else _safe_next(next_path))
     resp = RedirectResponse(dest, status_code=302)
     _set_session(resp, request, person["sub"])

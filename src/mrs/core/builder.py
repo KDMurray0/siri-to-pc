@@ -305,13 +305,48 @@ def _brief_or_request(brief, what: str, context: str = ""):
 
 
 def _groq_songs(what: str, n: int, context: str = "", brief=None,
-                have: list[tuple[str, str]] | None = None) -> list[tuple[str, str]]:
+                have: list[tuple[str, str]] | None = None, carry: bool = False) -> list[tuple[str, str]]:
     """The worker's songs for the brief, in the order it would play them."""
     from . import curator
     try:
-        return curator.songs(_brief_or_request(brief, what, context), n, have=have)
+        return curator.songs(_brief_or_request(brief, what, context), n, have=have, carry=carry)
     except curator.Busy as busy:
         raise GroqBusy(busy.wait) from None
+
+
+# Song by song, a stretch at a time, up to this many; past it the rest is
+# filled from the bands the picks lean on.
+SONG_PICK_MAX = 360
+
+
+def _groq_song_run(what: str, n: int, clue: str, brief, first: list[Track], progress) -> list[tuple[str, str]]:
+    """A long list picked as songs, not dealt out band by band: the worker
+    names the next stretch each time, carrying on from where it left off. A
+    busy Groq after the first stretch just ends the run early."""
+    asks: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    while len(asks) < n:
+        want = min(90, n - len(asks))
+        have = [(t.artist, t.title) for t in first] + asks
+        try:
+            got = _groq_songs(what, want, clue, brief, have=have, carry=bool(asks))
+        except GroqBusy:
+            if not asks:
+                raise
+            break
+        fresh = []
+        for a, t in got:
+            k = (a.casefold().strip(), t.casefold().strip())
+            if k not in seen:
+                seen.add(k)
+                fresh.append((a, t))
+        if len(fresh) < max(3, want // 6):
+            asks += fresh
+            break
+        asks += fresh
+        if progress:
+            progress(f"Picked {len(asks)} songs so far")
+    return asks
 
 
 def _groq_artists(what: str, n: int, context: str = "", brief=None) -> list[str]:
@@ -623,11 +658,14 @@ def _fits(what: str, anchors: list[dict], songs: int, taste, progress,
             f"{t.title} by {t.artist}" for t in context[:20])[:700]
     room = max(0, songs - len(first))
     if llm.available() and room:
-        if room <= 80:
+        if room <= SONG_PICK_MAX:
             if progress:
                 progress("Asking Groq for songs that fit")
-            asks = _groq_songs(what, round(room * 1.3), clue, brief,
-                               have=[(t.artist, t.title) for t in first])
+            if room <= 80:
+                asks = _groq_songs(what, round(room * 1.3), clue, brief,
+                                   have=[(t.artist, t.title) for t in first])
+            else:
+                asks = _groq_song_run(what, round(room * 1.2), clue, brief, first, progress)
             if progress:
                 progress(f"Checking {len(asks)} songs")
             with ThreadPoolExecutor(max_workers=6) as pool:
@@ -814,13 +852,14 @@ def start(what: str, *, songs: int = 0, minutes: int = 0, name: str = "",
             else:
                 added = len(tracks)
             mins = round(sum(t.duration or 215 for t in tracks) / 60)
+            length = f"{mins // 60} hr {mins % 60} min" if mins >= 60 else f"{mins} minutes"
             asked = notes.get("size") or wanted_size(songs, minutes)
             short = (f" -- {len(tracks)} of {asked} was all that fit"
                      if len(tracks) < asked else "")
             with _lock:
                 _jobs[job].update(state="done", name=title, count=added, minutes=mins,
                                   detail=(f"{added} songs added" if target else
-                                          f"{len(tracks)} songs, about {mins} minutes") + short)
+                                          f"{len(tracks)} songs, about {length}") + short)
             log.info("built %r: %d songs for %r", title, len(tracks), what)
             _forget_waiting(job)
             if on_done:
