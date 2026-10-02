@@ -48,11 +48,25 @@ CONVERT = {".webm", ".opus", ".ogg", ".flac", ".mkv"}
 CREATE_NO_WINDOW = 0x08000000
 
 _converting: set[str] = set()
+_finished: dict[str, threading.Event] = {}
 _lock = threading.Lock()
+# How long a stream request waits for an encode already under way. Answering
+# 503 instead was the silent correction on iPhones: Safari calls a 503 on a
+# media url "unsupported", the page then decided the format didn't work there,
+# and every format it tried next needed an encode of its own.
+WAIT_FOR_ENCODE = 120.0
 # A conversion is CPU and disk intensive.  Per-job de-duplication alone did
 # not stop a guest cycling through different tracks and creating one ffmpeg
 # process per request.
 MAX_CONVERSIONS = 3
+
+
+def _wait(job: str, timeout: float = WAIT_FOR_ENCODE) -> None:
+    """Until that conversion is done (or the time is up)."""
+    with _lock:
+        done = _finished.get(job)
+    if done is not None:
+        done.wait(timeout)
 
 
 def _claim(job: str) -> str:
@@ -63,6 +77,7 @@ def _claim(job: str) -> str:
         if len(_converting) >= MAX_CONVERSIONS:
             return "busy"
         _converting.add(job)
+        _finished[job] = threading.Event()
         return "claimed"
 
 
@@ -146,6 +161,17 @@ _codecs: dict[tuple[str, float], str] = {}
 def fmt_name(raw: str | None) -> str:
     raw = (raw or "").strip().lower()
     return raw if raw in FORMATS else "aac"
+
+
+def _out_fmt(video_id: str, fmt: str) -> str:
+    """The format a conversion is made in. What the browser plays, unless
+    the download is AAC: re-encoding AAC into Opus for a phone that plays
+    AAC anyway is a second codec change for nothing."""
+    fmt = fmt_name(fmt)
+    if fmt == "aac":
+        return fmt
+    src = source_for(video_id)
+    return fmt if src is not None and _codec(src) == "opus" else "aac"
 
 
 def work_dir() -> Path:
@@ -258,6 +284,11 @@ def _job(video_id: str, tune: str, fmt: str = "aac") -> str:
 
 def playable(video_id: str, tune: str = "",
              fmt: str = "aac") -> tuple[Path | None, str]:
+    return _playable(video_id, tune, fmt)
+
+
+def _playable(video_id: str, tune: str = "",
+              fmt: str = "aac") -> tuple[Path | None, str]:
     """(path, state): ready | arriving | needs conversion | converting | missing.
 
     Downloads are private until yt-dlp publishes the completed final name.
@@ -276,6 +307,7 @@ def playable(video_id: str, tune: str = "",
     # rebuilt — there's no filter chain between the file and the phone.
     if _as_is(src, filter_chain(tune), fmt_name(fmt)):
         return src, "ready"
+    fmt = _out_fmt(video_id, fmt)
     out = _converted(video_id, tune, fmt)
     if out.is_file() and out.stat().st_size > 10_000:
         return out, "ready"
@@ -295,9 +327,14 @@ def convert(video_id: str, tune: str = "", fmt: str = "aac",
     chain = filter_chain(tune)
     if _as_is(src, chain, fmt):
         return src, "ready"
+    fmt = _out_fmt(video_id, fmt)
     job = _job(video_id, tune, fmt)
     if not _claimed:
         claim = _claim(job)
+        if claim == "converting":
+            # Somebody else is already making it: wait for theirs.
+            _wait(job)
+            return _playable(video_id, tune, fmt)
         if claim != "claimed":
             return None, claim
     else:
@@ -338,6 +375,9 @@ def convert(video_id: str, tune: str = "", fmt: str = "aac",
     finally:
         with _lock:
             _converting.discard(job)
+            done = _finished.pop(job, None)
+        if done is not None:
+            done.set()
 
 
 def warm(video_id: str, tune: str = "", fmt: str = "aac") -> bool:
@@ -347,6 +387,7 @@ def warm(video_id: str, tune: str = "", fmt: str = "aac") -> bool:
     _, state = playable(video_id, tune, fmt)
     if state != "needs conversion":
         return state == "ready"
+    fmt = _out_fmt(video_id, fmt)
     job = _job(video_id, tune, fmt)
     if _claim(job) != "claimed":
         return False
@@ -389,6 +430,8 @@ def serve(video_id: str, tune: str = "",
             warm(video_id, tune, fmt)
             path, state = plain, "ready"
     if state in ("needs conversion", "converting"):
+        # convert() waits for an encode already under way rather than
+        # answering "converting", which the route would turn into a 503.
         path, state = convert(video_id, tune, fmt)
     if state == "ready" and path:
         with _lock:

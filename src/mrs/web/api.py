@@ -502,9 +502,19 @@ _PHONE = re.compile(r"Mobi|Android|iPhone|iPad|iPod", re.I)
 
 
 def _home_page(request: Request) -> str:
-    """Where the front door leads: the full player on a computer. A phone keeps
-    the classic one until the full player has a phone layout of its own."""
-    return "/player" if _PHONE.search(request.headers.get("user-agent", "")) else "/app"
+    """Where the front door leads: the full player, on a phone too -- it plays
+    on the phone itself, through the classic player running inside it."""
+    return "/app"
+
+
+def _phone_to_app(request: Request, token: str) -> bool:
+    """A phone opening the classic player is sent to the full one, except where
+    the classic page is the point: embedded in the full player, opened with a
+    one-time ticket, a private share's own listen, or asked for by name."""
+    q = request.query_params
+    return (bool(_PHONE.search(request.headers.get("user-agent", "")))
+            and not q.get("embed") and not q.get("ticket") and q.get("classic") != "1"
+            and not (token or "").startswith("share."))
 
 
 @app.get("/privacy", response_class=HTMLResponse)
@@ -610,6 +620,10 @@ async def player_page(request: Request, key: str = Query(default=""),
     one arrived: turn up with the key and the page can do everything, turn up
     on a shared link and it can listen and nothing else.
     """
+    if _phone_to_app(request, token):
+        query = request.url.query
+        return RedirectResponse(_pfx.at(request, "/app") + (f"?{query}" if query else ""),
+                                status_code=302)
     return _serve_page(request, "player.html", key, token)
 
 

@@ -2693,8 +2693,18 @@ def _run(verbose: bool = False) -> Result:
                   signed.status_code == 302 and signed.headers.get("location") == "/app")
                 on_phone = client.get("/", cookies=_sign_in_as("1234567890"), follow_redirects=False,
                                       headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile"})
-                c("...a phone to the classic one, until the full player has a phone layout",
-                  on_phone.headers.get("location") == "/player", str(on_phone.headers.get("location")))
+                c("...a phone too: the full player plays on the phone itself",
+                  on_phone.headers.get("location") == "/app", str(on_phone.headers.get("location")))
+                ua_phone = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile"}
+                moved = client.get("/player?token=abc", headers=ua_phone, cookies=_sign_in_as("1234567890"),
+                                   follow_redirects=False)
+                c("a phone opening the classic player is sent to the full one, link and all",
+                  moved.status_code == 302 and moved.headers.get("location") == "/app?token=abc",
+                  str(moved.headers.get("location")))
+                stays = [client.get(u, headers=ua_phone, cookies=_sign_in_as("1234567890"), follow_redirects=False)
+                         for u in ("/player?classic=1", "/player?embed=1", "/player?token=share.xyz")]
+                c("...unless it asked for the classic, is embedded, or is a private share's listen",
+                  all(r.status_code != 302 for r in stays), str([r.status_code for r in stays]))
                 _acc.set_scope("1234567890", "blocked")
                 blk = client.get("/", cookies=_sign_in_as("1234567890"),
                                  follow_redirects=False)

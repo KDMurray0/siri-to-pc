@@ -5785,6 +5785,20 @@ async function choosePlace(here) {
 
 $("segphone").onclick = () => choosePlace(true);
 $("segpc").onclick = () => choosePlace(false);
+
+/* The full player, when this page is its engine: the sound is made here and
+   the page around it asks through these. Same origin, so a tap out there
+   counts as a tap in here as far as play() is concerned. */
+window.mrsEngine = {
+  state: () => ({ on: !!cast.on, blocked: !!cast.blocked, owner: !!ME.owner, scope: ME.scope || "",
+                  playing: !!cast.on && !castLive().paused }),
+  // Both elements started inside a tap, so iOS lets either play later.
+  prime() { castPrimed = false; castPrime(); },
+  // Refused earlier for want of a tap; this is the tap.
+  unblock() { if (cast.on && cast.blocked) { castUnblock(); castPlay(castLive()); } },
+  toggle() { $("play").click(); },
+  place(here) { return choosePlace(here); },
+};
 document.addEventListener("click", e => {
   if (devpicker.classList.contains("show") && !devpicker.contains(e.target) &&
       e.target.closest("#volicon") === null) closeDevices();
@@ -6081,7 +6095,9 @@ if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
    plays WebM Opus gets YouTube's own file, untouched and instantly. */
 function fmtBad() {
   try {
-    const got = JSON.parse(localStorage.getItem("fmtbad") || "[]");
+    // fmtbad2: the first list was written by the 503 mistake below, so it
+    // named formats that work.
+    const got = JSON.parse(localStorage.getItem("fmtbad2") || "[]");
     return Array.isArray(got) ? got.filter(x => typeof x === "string") : [];
   } catch (e) { return []; }
 }
@@ -6260,6 +6276,9 @@ const castHush = () => { cast.hush = Date.now(); };
 
 function castOn() {
   cast.on = true;
+  // Safari 16.4+: this page is a music player, so the silent switch and the
+  // lock screen leave it alone.
+  try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (e) {}
   segShow(true);
   document.body.classList.add("casting");
   // Playing here means the Recent tab is showing somebody else's evening.
@@ -6446,6 +6465,7 @@ function castSync(d) {
       castIx = 1 - castIx;
       cast.ready = "";
       const el = castLive();
+      el._handed = "";
       const place = () => { try { el.currentTime = at; } catch (e) {} };
       if (el.readyState >= 1) place();
       else el.addEventListener("loadedmetadata", place, { once: true });
@@ -6454,6 +6474,7 @@ function castSync(d) {
     } else {
       const el = castLive();
       castHush();
+      el._handed = "";
       el.src = castSrc(vid);
       el.addEventListener("loadedmetadata", () => {
         try { el.currentTime = at; } catch (e) {}
@@ -6615,14 +6636,28 @@ function castHandover() {
   cast.vid = next;
   cast.ready = "";
   const el = castLive();
+  el._handed = "";
   try { el.currentTime = 0; } catch (e) {}
   castPlay(el);
   try { from.pause(); } catch (e) {}
   return true;
 }
 
-castEls.forEach(el => el.addEventListener("ended", async () => {
+/* Hand over a moment before the end, not at it. A locked iPhone that hears
+   its page go quiet -- even for the gap between one song ending and the
+   next starting -- mutes that page for good, and the next song never comes.
+   With the next one already loaded in the other element, start it while
+   this one is still sounding. */
+const HANDOVER_EARLY = 0.4;
+castEls.forEach(el => el.addEventListener("timeupdate", () => {
+  if (!cast.on || el !== castLive() || !cast.ready || el._handed === cast.vid) return;
+  const left = (el.duration || 0) - (el.currentTime || 0);
+  if (isFinite(left) && left > 0 && left < HANDOVER_EARLY && castIdle().readyState >= 2) castFinish(el);
+}));
+castEls.forEach(el => el.addEventListener("ended", () => { if (el._handed !== cast.vid) castFinish(el); }));
+async function castFinish(el) {
   if (!cast.on || el !== castLive()) return;
+  el._handed = cast.vid;
   // Audio first, paperwork second. If the guess turns out wrong — the queue
   // was reordered, something was played next — castSync below corrects it,
   // and correcting a track that is playing is cheap. Silence is not.
@@ -6631,6 +6666,7 @@ castEls.forEach(el => el.addEventListener("ended", async () => {
   // waiting for it to say so was a silent gap -- and a locked phone that
   // isn't playing is one iOS puts to sleep before the word arrives.
   if (ME.owner && (lastStatus || {}).repeat === "one") {
+    el._handed = "";
     try { el.currentTime = 0; } catch (e) {}
     castPlay(el);
     return;
@@ -6640,7 +6676,7 @@ castEls.forEach(el => el.addEventListener("ended", async () => {
   if (ME.owner) return;
   const r = await api("/api/session/ended");
   if (r) { lastStatus = r; castSync(r); }
-}));
+}
 
 /* Where we've got to. This is the only clock the server has for a browser
    session, so it also decides what the owner's list says a guest is playing
@@ -6708,6 +6744,16 @@ castEls.forEach(el => el.addEventListener("error", async () => {
   const code = el.error ? el.error.code : 0;
   if (FMT !== "aac" && (code === 3 || code === 4)) {
     const want = cast.vid, tried = FMT;
+    // Once more the same way first. A url answered 503 while its file was
+    // being made reads as code 4 too, and that was marking good formats bad.
+    if (cast.fmtTry !== want + "|" + tried) {
+      cast.fmtTry = want + "|" + tried;
+      setTimeout(() => {
+        if (!cast.on || cast.vid !== want) return;
+        castHush(); el.src = castSrc(want); el.load(); castPlay(el);
+      }, 1500);
+      return;
+    }
     let had = false;
     try {
       const r = await fetch(castSrc(want), { headers: { Range: "bytes=0-1" } });
@@ -6716,7 +6762,7 @@ castEls.forEach(el => el.addEventListener("error", async () => {
     if (had && cast.on && cast.vid === want) {
       const bad = fmtBad();
       if (!bad.includes(tried)) bad.push(tried);
-      tuneStore("fmtbad", JSON.stringify(bad));
+      tuneStore("fmtbad2", JSON.stringify(bad));
       FMT = fmtPick();
       cast.ready = "";
       castHush();

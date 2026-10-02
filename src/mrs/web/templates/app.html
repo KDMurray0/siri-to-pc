@@ -132,6 +132,12 @@ body.focus .edge{display:block}
   mask-image:linear-gradient(to bottom,transparent 0,#000 calc(var(--top) - 4px),#000 calc(100% - var(--deck) - 4px),transparent 100%)}
 .view.keep{padding:calc(var(--top) - 8px) 0 var(--deck) 0;overflow:hidden}
 .view iframe{width:100%;height:100%;border:0;background:transparent;display:block}
+.view.dormant{visibility:hidden;pointer-events:none;z-index:-1}
+/* this device as the speaker: where the sound is, and a nudge when iOS wants a tap */
+#where{display:none}
+body.engine #where{display:grid}
+body.engineblocked #pp{animation:nudge 1.4s ease-in-out infinite}
+@keyframes nudge{50%{box-shadow:0 0 0 8px color-mix(in srgb,var(--accent) 30%,transparent)}}
 h1.title{font-size:clamp(24px,2.6vw,34px);font-weight:650;letter-spacing:-.02em;line-height:1.15;margin:4px 0 20px}
 .sect{margin:0 0 44px}
 .sect>header{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;margin:0 0 14px}
@@ -547,6 +553,7 @@ body.drag-list .pinzone{display:block;animation:pop .16s var(--ease)}
   <button role="menuitem" id="opensettings">Settings</button>
   <button role="menuitemcheckbox" id="kinetic" aria-checked="true">Moving background <span class="switch on" id="kineticv"></span></button>
   <button role="menuitem" id="companion">Companion app <span class="v">Windows</span></button>
+  <button role="menuitem" id="classic" hidden>Classic player</button>
   <hr>
   <button role="menuitem" id="popout" hidden>Open the pop-out player</button>
 </div>
@@ -571,6 +578,7 @@ body.drag-list .pinzone{display:block;animation:pop .16s var(--ease)}
   </button>
   <div class="play">
     <div class="ctl">
+      <button class="ib" id="where" title="Where it plays" aria-label="Where it plays"><svg class="svg" viewBox="0 0 24 24" id="whereicon"></svg></button>
       <button class="ib" id="shuffle" title="Shuffle" aria-label="Shuffle"><svg class="svg" viewBox="0 0 24 24"><path d="M10.6 9.2 5.4 4 4 5.4l5.2 5.2zM14.5 4l2 2L4 18.6 5.4 20 18 7.5l2 2V4zm.3 9.4-1.4 1.4 3.1 3.1-2 2.1H20v-5.5l-2 2z"/></svg></button>
       <button class="ib" id="prev" title="Previous" aria-label="Previous"><svg class="svg" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg></button>
       <button class="ib big" id="pp" title="Play" aria-label="Play"><svg class="svg" viewBox="0 0 24 24" id="ppicon"><path d="M8 5v14l11-7z"/></svg></button>
@@ -629,7 +637,7 @@ function apiMethod(url) {
 async function apiTry(path) {
   const url = new URL(path, location.href);
   const method = apiMethod(url);
-  const headers = { "X-Music-Key": KEY, "X-Play-Here": "0" };
+  const headers = { "X-Music-Key": KEY, "X-Play-Here": HERE ? "1" : "0" };
   const opts = { method, headers };
   let target = BASE + url.pathname + url.search;
   if (method === "POST") {
@@ -656,6 +664,8 @@ function toastUndo(msg, onUndo) {
   clearTimeout(toastT); toastT = setTimeout(() => { t.classList.remove("show"); t.style.pointerEvents = ""; }, 6000);
 }
 let URL_TOKEN = "";
+// Whether this device is the speaker. A guest is, from the first request on.
+let HERE = GUEST;
 async function urlToken() {
   if (URL_TOKEN) return URL_TOKEN;
   if (GUEST) return (URL_TOKEN = KEY);
@@ -817,7 +827,12 @@ document.querySelector(".deck .vol").addEventListener("wheel", e => {
   wheelT = setTimeout(async () => { await api("/api/control/volume?value=" + state.volume); volDrag = false; }, 120);
 }, { passive: false });
 $("mute").onclick = () => api("/api/control/mute");
-$("pp").onclick = () => api("/api/control/" + (state.playing ? "pause" : "resume"));
+$("pp").onclick = () => {
+  // Playing on this device: the engine's own button, inside this tap.
+  const e = HERE && engine();
+  if (e) { e.toggle(); return; }
+  api("/api/control/" + (state.playing ? "pause" : "resume"));
+};
 $("next").onclick = () => api("/api/control/next");
 $("prev").onclick = () => api("/api/control/previous");
 $("shuffle").onclick = () => api("/api/control/shuffle");
@@ -2072,7 +2087,7 @@ function greeting() {
 const canvas = $("canvas");
 let current = null, stack = [], ahead = [], nowPane = null;
 const STILL = matchMedia("(prefers-reduced-motion: reduce)");
-function finishOut(pane) { if (pane === nowPane) pane.hidden = true; else pane.remove(); }
+function finishOut(pane) { if (pane === nowPane) pane.classList.add("dormant"); else pane.remove(); }
 function slide(inPane, outPane, dir) {
   if (STILL.matches) { if (outPane) finishOut(outPane); return; }
   canvas.classList.add("sliding");
@@ -2088,7 +2103,7 @@ function slide(inPane, outPane, dir) {
 }
 async function nowPlayingPane() {
   // One pane, kept: moving an iframe reloads it, and the player inside holds the lyrics and queue.
-  if (nowPane) { nowPane.hidden = false; return nowPane; }
+  if (nowPane) { nowPane.hidden = false; nowPane.classList.remove("dormant"); return nowPane; }
   nowPane = document.createElement("section");
   nowPane.className = "view keep";
   nowPane.innerHTML = `<iframe title="Now playing" src="${BASE}/player?embed=1${await embedAuth()}"></iframe>`;
@@ -2105,7 +2120,7 @@ async function go(name, params = {}, how = {}) {
     ahead = [];
   }
   const dir = how.dir || 1;
-  const old = canvas.querySelector(".view:not([hidden]):not(.leaving)");
+  const old = canvas.querySelector(".view:not([hidden]):not(.leaving):not(.dormant)");
   if (old) old.classList.add("leaving");
   let pane;
   if (name === "nowplaying") pane = await nowPlayingPane();
@@ -2144,7 +2159,7 @@ $("q").addEventListener("input", () => {
   searchT = setTimeout(() => {
     if (current && current.name === "search") {
       current.params = { q };
-      VIEWS.search(canvas.querySelector(".view:not([hidden]):not(.leaving)"), { q });
+      VIEWS.search(canvas.querySelector(".view:not([hidden]):not(.leaving):not(.dormant)"), { q });
     } else go("search", { q });
   }, 300);
 });
@@ -2155,7 +2170,7 @@ $("q").addEventListener("keydown", e => {
   if (current && current.name === "search" && current.params.q === q) return;
   if (current && current.name === "search") {
     current.params = { q };
-    VIEWS.search(canvas.querySelector(".view:not([hidden]):not(.leaving)"), { q });
+    VIEWS.search(canvas.querySelector(".view:not([hidden]):not(.leaving):not(.dormant)"), { q });
   } else go("search", { q });
 });
 
@@ -2249,7 +2264,7 @@ function refreshSoon() {
   clearTimeout(refreshT);
   refreshT = setTimeout(async () => {
     await loadShelf();
-    const pane = canvas.querySelector(".view:not([hidden]):not(.leaving):not(.keep)");
+    const pane = canvas.querySelector(".view:not([hidden]):not(.leaving):not(.dormant):not(.keep)");
     if (pane && current && ["home", "library"].includes(current.name)) {
       const y = pane.scrollTop, across = [...pane.querySelectorAll(".shelfwrap > :nth-child(2)")].map(r => r.scrollLeft);
       await VIEWS[current.name](pane, { ...current.params, quiet: true });
@@ -2291,7 +2306,7 @@ document.querySelectorAll(".tabbar [data-tab]").forEach(b => b.onclick = async (
   const t = b.dataset.tab;
   if (t === "search") {
     if (!current || current.name !== "search") await go("search", { q: $("q").value.trim() });
-    const v = canvas.querySelector(".view:not([hidden]):not(.leaving) .vsearch");
+    const v = canvas.querySelector(".view:not([hidden]):not(.leaving):not(.dormant) .vsearch");
     if (v) v.focus();
   } else go(t);
 });
@@ -2320,12 +2335,76 @@ document.addEventListener("pointerup", () => {
 }, true);
 document.addEventListener("pointercancel", () => { if (press) { clearTimeout(press.timer); press = null; } }, true);
 
+/* ── this device as the speaker ──
+   A guest hears it on their own device, as on the classic player; the owner
+   can send the house's sound to a phone. The playing is done by the classic
+   player running in the Now playing frame -- loaded straight away wherever
+   this device may be the speaker -- and this page asks it through mrsEngine. */
+const PHONE = matchMedia("(pointer:coarse)").matches || /Mobi|Android|iPhone|iPad/.test(navigator.userAgent);
+const ENGINE_WANTED = GUEST || PHONE;
+const PHONE_ICON = '<path d="M7 1h10a2 2 0 0 1 2 2v18a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2zm0 4v14h10V5z"/>';
+const PC_ICON = '<path d="M3 4h18a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-7v2h3v2H7v-2h3v-2H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1 2v9h16V6z"/>';
+function engine() {
+  try {
+    const w = nowPane && nowPane.querySelector("iframe").contentWindow;
+    return w && w.mrsEngine ? w.mrsEngine : null;
+  } catch (e) { return null; }
+}
+async function ensureEngine() {
+  if (nowPane) return;
+  await nowPlayingPane();
+  if (!current || current.name !== "nowplaying") nowPane.classList.add("dormant");
+}
+function engineCheck() {
+  const e = engine();
+  if (!e) return;
+  let s;
+  try { s = e.state(); } catch (err) { return; }
+  const was = HERE;
+  HERE = s.on;
+  document.body.classList.toggle("engineblocked", HERE && s.blocked);
+  $("where").hidden = s.scope === "phone";          // a phone-only link has nowhere else to go
+  $("whereicon").innerHTML = HERE ? PHONE_ICON : PC_ICON;
+  $("where").title = HERE ? "Playing on this device. Tap to play on the computer"
+                          : "Playing on the computer. Tap to play here";
+  $("where").classList.toggle("on", HERE);
+  if (HERE !== was) connect();                       // the stream follows the sound
+}
+$("where").onclick = async () => {
+  const e = engine();
+  if (!e) return;
+  const here = !HERE;
+  await e.place(here);                               // its own toast is in the hidden frame
+  engineCheck();
+  if (HERE === here) toast(here ? (/iPhone|iPad/.test(navigator.userAgent)
+                                   ? "Playing here. Use the phone's volume buttons" : "Playing here")
+                                : "Back to the computer");
+};
+// The first tap starts both of the engine's elements, so iOS lets it play
+// later without one; a tap while it's blocked unblocks it. A click, not a
+// pointerdown: a touch only counts as a gesture once the finger lifts. Not
+// on play itself, which would then pause what this just started.
+let primed = false;
+document.addEventListener("click", ev => {
+  const e = engine();
+  if (!e) return;
+  let s; try { s = e.state(); } catch (err) { return; }
+  if (!primed) { primed = true; e.prime(); }
+  if (s.on && s.blocked && !ev.target.closest("#pp, #where")) e.unblock();
+}, true);
+if (ENGINE_WANTED) {
+  document.body.classList.add("engine");
+  setInterval(engineCheck, 1000);
+  $("classic").hidden = false;
+}
+$("classic").onclick = async () => { location.href = BASE + "/player?classic=1" + await embedAuth(); };
+
 /* ── the event stream ── */
 let es = null;
 async function connect() {
-  if (es) es.close();
   const token = await urlToken();
-  es = new EventSource(BASE + "/api/events?key=" + encodeURIComponent(token) + "&here=0");
+  if (es) es.close();
+  es = new EventSource(BASE + "/api/events?key=" + encodeURIComponent(token) + "&here=" + (HERE ? 1 : 0));
   es.onmessage = ev => {
     let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
     if (msg.type === "status") applyStatus(msg.data);
@@ -2337,7 +2416,11 @@ async function connect() {
 }
 connect();
 loadShelf();
-api("/api/status").then(d => { applyStatus(d); go(location.hash === "#nowplaying" && state.track ? "nowplaying" : "home", {}, { history: false }); });
+api("/api/status").then(async d => {
+  applyStatus(d);
+  await go(location.hash === "#nowplaying" && state.track ? "nowplaying" : "home", {}, { history: false });
+  if (ENGINE_WANTED) ensureEngine();
+});
 </script>
 </body>
 </html>
