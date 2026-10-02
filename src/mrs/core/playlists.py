@@ -293,8 +293,17 @@ class Playlists:
                         "cover": self._cover_stamp(name),
                         "seconds": sum(t.duration or 0 for t in rows),
                         "pinned": name in pinned,
+                        "public": self._public_tags(name),
                         "folder": str(self.folder(name))})
         return out
+
+    def _public_tags(self, name: str):
+        """The tags it's public under, or None while it's private."""
+        try:
+            got = json.loads((self._folder_path(name) / "public.json").read_text("utf-8"))
+            return list(got.get("tags") or []) if isinstance(got, dict) else None
+        except Exception:
+            return None
 
     # -- the library's own things: albums and artists saved to it, the order
     #    the lists are kept in, and the lists pinned to Home --------------

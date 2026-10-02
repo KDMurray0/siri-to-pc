@@ -369,6 +369,12 @@ body.noplay .play{opacity:.5}
 .card.sel{background:color-mix(in srgb,var(--accent) 14%,transparent);box-shadow:inset 0 0 0 2px var(--accent)}
 .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:-8px 0 22px}
 .toolbar .pill{height:36px;font-size:13px}
+/* tags for a public list */
+.ask .tags{display:flex;flex-wrap:wrap;gap:6px;max-height:180px;overflow-y:auto}
+.ask .tags .chip{height:30px;padding:0 12px;font-size:12.5px;text-transform:capitalize}
+.ask p{font-size:12.5px;color:var(--sub);margin:-4px 0 0}
+.pubtag{display:inline-block;margin:6px 6px 0 0;padding:3px 10px;border-radius:999px;background:var(--tint-hi);
+  font-size:11.5px;color:var(--sub);text-transform:capitalize}
 /* a small question in the middle of the page */
 .ask{position:fixed;inset:0;z-index:80;display:grid;place-items:center;background:color-mix(in srgb,var(--bg) 50%,transparent);animation:fade .15s ease}
 .ask form{width:min(380px,calc(100vw - 32px));padding:18px;border-radius:18px;display:flex;flex-direction:column;gap:12px;animation:rise .25s var(--ease)}
@@ -554,7 +560,7 @@ const enc = encodeURIComponent;
 /* ── talking to the server: writes go as POST with a JSON body, like the player ── */
 /* The server's own list says what's a read. Search isn't one -- it remembers
    what was searched -- and asking for it by GET got a 405 every time. */
-const LIST_READS = ["/api/playlist/tracks", "/api/playlist/contains", "/api/playlist/export", "/api/playlist/art"];
+const LIST_READS = ["/api/playlist/tracks", "/api/playlist/contains", "/api/playlist/export", "/api/playlist/art", "/api/playlist/tags"];
 function apiMethod(url) {
   const p = url.pathname;
   return API_READ_ONLY.has(p) || LIST_READS.includes(p) ? "GET" : "POST";
@@ -1273,6 +1279,9 @@ function listMenu(p, { root = null } = {}) {
     ...(p.cover ? [{ label: "Use the first four songs", act: () => uncoverList(p) }] : []),
     { label: "Rename…", act: () => renameList(p) },
     { label: p.pinned ? "Unpin from Home" : "Pin to Home", act: () => pinList(p, !p.pinned) },
+    ...(p.public ? [{ label: "Public · change its tags…", act: () => publishDialog(p) },
+                    { label: "Make it private", act: () => unpublishList(p) }]
+                 : [{ label: "Make it public…", act: () => publishDialog(p) }]),
     "-",
     { label: "Delete playlist", danger: true, act: () => deleteLists([p]) });
   return items;
@@ -1326,6 +1335,78 @@ async function removeSongs(p, list, root) {
   toastUndo(r.body.message || "Removed", async () => {
     const u = await api("/api/playlists/undo?name=" + enc(p.name));
     toast((u && u.ok !== false) ? "Put back" : "Couldn't put them back");
+  });
+}
+/* Public: anyone here can find it, shown first to those whose music it suits.
+   The tags are how it finds them; the list's own artists suggest some. */
+async function publishDialog(p) {
+  const r = await api("/api/playlist/tags?name=" + enc(p.name));
+  const chosen = new Set((r && r.tags) || []);
+  const offered = [...new Set([...chosen, ...((r && r.suggested) || [])])];
+  if (!chosen.size) offered.slice(0, 3).forEach(t => chosen.add(t));
+  const w = document.createElement("div");
+  w.className = "ask";
+  w.innerHTML = `<form class="glass"><b>${r && r.public ? "Its tags" : "Make " + esc(p.name) + " public"}</b>` +
+    `<p>Anyone here can find it. Tags decide who it's shown to first.</p><div class="tags"></div>` +
+    `<input maxlength="30" placeholder="Add a tag and press Enter" aria-label="Add a tag">` +
+    `<div class="row2"><button type="button" class="pill" data-x>Cancel</button><button class="pill primary">${r && r.public ? "Save" : "Make it public"}</button></div></form>`;
+  document.body.appendChild(w);
+  const box = w.querySelector(".tags"), input = w.querySelector("input");
+  const draw = () => { box.innerHTML = offered.map(t => `<button type="button" class="chip${chosen.has(t) ? " on" : ""}" data-t="${esc(t)}">${esc(t)}</button>`).join(""); };
+  draw();
+  box.onclick = e => { const c = e.target.closest("[data-t]"); if (!c) return; const t = c.dataset.t;
+    chosen.has(t) ? chosen.delete(t) : chosen.size < 6 && chosen.add(t); draw(); };
+  input.addEventListener("keydown", e => {
+    if (e.key === "Escape") { e.stopPropagation(); w.remove(); return; }
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const t = input.value.trim().toLowerCase();
+    if (t && !offered.includes(t)) offered.unshift(t);
+    if (t && chosen.size < 6) chosen.add(t);
+    input.value = ""; draw();
+  });
+  w.querySelector("[data-x]").onclick = () => w.remove();
+  w.addEventListener("pointerdown", e => { if (e.target === w) w.remove(); });
+  w.querySelector("form").onsubmit = async e => {
+    e.preventDefault();
+    if (input.value.trim()) { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" })); }
+    const got = await api("/api/playlist/publish?name=" + enc(p.name) + "&on=1&tags=" + enc(JSON.stringify([...chosen])));
+    toast((got && got.message) || "Couldn't do that");
+    if (got && got.ok !== false) w.remove();
+  };
+  input.focus();
+}
+async function unpublishList(p) {
+  const r = await api("/api/playlist/publish?name=" + enc(p.name) + "&on=0");
+  toast((r && r.message) || "Couldn't do that");
+}
+/* Somebody else's public list: play it, or keep a copy of your own. */
+function openPublic(row) {
+  openSheet(async (root, quiet) => {
+    if (!quiet) root.innerHTML = `<div class="hero"><div class="banner"></div><div class="skel" style="width:210px"></div></div>`;
+    const r = await api("/api/public/tracks?id=" + enc(row.id));
+    if (!r) { root.innerHTML = `<div class="pane empty">That list isn't public any more.</div>`; return; }
+    const tracks = r.tracks || [], secs = tracks.reduce((a, t) => a + (t.duration || 0), 0);
+    const key = ctxKey("public", row.id);
+    root.innerHTML = `<div class="hero"><div class="banner">${img((tracks.find(t => t.art) || {}).art)}</div>` +
+      listCover({ ...row, arts: tracks.slice(0, 4).map(t => t.art).filter(Boolean) }, "pic") +
+      `<div><small>Public playlist</small><h1>${esc(r.name)}</h1><p>By ${esc(r.by || "someone here")} · ${tracks.length} songs` +
+      `${secs ? " · about " + span(secs / 60) : ""}</p><div>${(r.tags || []).map(t => `<span class="pubtag">${esc(t)}</span>`).join("")}</div></div></div>` +
+      `<div class="acts"><button class="bigplay" data-a="play" data-ctx="${esc(key)}" title="Play">${ICON.play}</button>` +
+      `<button class="round-ib" data-a="shuffle" title="Shuffle play" aria-label="Shuffle play">${ICON.shuffle}</button>` +
+      `<button class="pill" data-a="copy">Save a copy</button>${tracks.length > 6 ? FIND : ""}</div>`;
+    const play = (start = 0, shuffle = false) => say("/api/public/play?id=" + enc(row.id) + (start ? "&start=" + start : "") + (shuffle ? "&shuffle=1" : ""), "Playing " + r.name);
+    root.querySelector('[data-a="play"]').onclick = () => ctxPress(key, () => play());
+    root.querySelector('[data-a="shuffle"]').onclick = () => play(0, true);
+    root.querySelector('[data-a="copy"]').onclick = async () => {
+      const c = await api("/api/public/copy?id=" + enc(row.id));
+      toast((c && c.message) || (c ? "Saved a copy to your library" : "Couldn't save a copy"));
+    };
+    root.insertAdjacentHTML("beforeend", part(1, "Songs", songRows(tracks)));
+    wireRows(root, tracks, (t, n) => play(n), { kind: "public" });
+    wireSelect(root, tracks, { kind: "public" });
+    wireFind(root, tracks);
+    paintPlayButtons();
   });
 }
 /* A small question in the middle of the page, answered or not. */
@@ -1807,7 +1888,8 @@ function closeOnOutside(scrim, panelSel) {
 const VIEWS = {
   async home(pane, { quiet = false } = {}) {
     if (!quiet) pane.innerHTML = `<h1 class="title">${greeting()}</h1><div class="skel"></div>`;
-    const h = await api("/api/home");
+    const [h, pub] = await Promise.all([api("/api/home"), api("/api/public")]);
+    const others = (pub && pub.lists) || [];
     if (!h) { pane.innerHTML = `<h1 class="title">${greeting()}</h1><div class="empty">Couldn't reach the player.</div>`; return; }
     let html = `<h1 class="title">${greeting()}</h1>`;
     h.genres = centreOut(h.genres);
@@ -1823,6 +1905,10 @@ const VIEWS = {
     });
     if (h.lists.length) html += sect("Your playlists", "The ones you made and the ones shared with you",
       shelf(h.lists.slice(0, 16).map(listCard).join("")), `<button data-go="library">Show all</button>`);
+    if (others.length) html += sect("Playlists for you", "Made public by people here, the ones that suit what you play first",
+      shelf(others.map((p, i) => `<button class="card" data-public="${i}">${listCover(p, "art",
+        `<span class="go" data-playnow="${i}" data-ctx="${esc(ctxKey("public", p.id))}">${ICON.play}</span>`)}` +
+        `<b>${esc(p.name)}</b><span>By ${esc(p.by || "someone here")} · ${p.count} songs</span></button>`).join("")));
     if (h.artists.length) html += sect("Your top artists", "Who you play most", shelf(h.artists.slice(0, 24).map(artistCard).join("")),
       h.artists.length > 8 ? `<button data-go="artists">View all</button>` : "");
     if ((h.albums || []).length) html += sect("Your top albums", "The records you keep coming back to", shelf(h.albums.map(albumCard).join("")));
@@ -1837,6 +1923,12 @@ const VIEWS = {
       b._item = { kind: "song", t, play: () => playList(pl.name, false, i) };
     });
     pane.querySelectorAll("[data-unpin]").forEach(b => b.onclick = () => pinList(h.pinned[+b.dataset.unpin], false));
+    pane.querySelectorAll("[data-public]").forEach(b => {
+      const p = others[+b.dataset.public];
+      b.onclick = e => e.target.closest("[data-playnow]")
+        ? ctxPress(ctxKey("public", p.id), () => say("/api/public/play?id=" + enc(p.id), "Playing " + p.name))
+        : openPublic(p);
+    });
     pane.querySelectorAll("[data-recent]").forEach(b => {
       const t = h.recent[+b.dataset.recent];
       b.onclick = () => playSong(t);
@@ -2005,7 +2097,7 @@ async function loadShelf() {
   shelfKnown = new Set(lists.map(p => (p.shared ? "s:" : "m:") + p.name));
   $("shelf").innerHTML =
     `<button class="lrow" data-liked="1" data-ctx-row="${esc(ctxKey("smart", "liked"))}" title="Liked songs"><div class="cov heart">${ICON.heart}</div><div><b>Liked songs</b><span>Playlist</span></div></button>` +
-    lists.map((p, i) => `<button class="lrow" data-i="${i}" data-ctx-row="${esc(listKey(p))}" title="${esc(p.name)}">${listCover(p, "cov")}<div><b>${esc(p.name)}</b><span>${p.shared ? "Shared · " : ""}${p.count} songs</span></div></button>`).join("") +
+    lists.map((p, i) => `<button class="lrow" data-i="${i}" data-ctx-row="${esc(listKey(p))}" title="${esc(p.name)}">${listCover(p, "cov")}<div><b>${esc(p.name)}</b><span>${p.shared ? "Shared · " : p.public ? "Public · " : ""}${p.count} songs</span></div></button>`).join("") +
     savedItems.map((a, i) => `<button class="lrow" data-saved="${i}" title="${esc(a.name)}"><div class="cov one${a.kind === "artist" ? " round" : ""}">${img(a.art)}</div>` +
       `<div><b>${esc(a.name)}</b><span>${a.kind === "artist" ? "Artist" : "Album" + (a.artist ? " · " + esc(a.artist) : "")}</span></div></button>`).join("");
   if (before) $("shelf").querySelectorAll(".lrow[data-i]").forEach(b => {

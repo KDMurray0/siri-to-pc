@@ -2310,7 +2310,8 @@ def api_playlist(request: Request, op: str, name: str = "",
                  shuffle: bool = False, video_id: str = "", title: str = "",
                  artist: str = "", art: str = "", start: int = 0,
                  shared: bool = False, on: int = 1, new_name: str = "", format: str = "csv",
-                 image: str = "", ids: str = "", undo: str = "", _: bool = Auth):
+                 image: str = "", ids: str = "", undo: str = "", tags: str = "",
+                 _: bool = Auth):
     """Make and play lists — the caller's own, not always the owner's.
 
     `shared=1` names a list in the owner's library that has been opened to
@@ -2327,7 +2328,7 @@ def api_playlist(request: Request, op: str, name: str = "",
         if not playlists.is_shared(name):
             raise HTTPException(403, "That list isn't shared")
         if op in ("delete", "download", "share", "create", "rename", "link", "cover", "uncover",
-                  "reorder", "removemany", "restore"):
+                  "reorder", "removemany", "restore", "publish", "tags"):
             raise HTTPException(403, "That's the owner's to do")
         mine = playlists
     elif mine is None:
@@ -2433,6 +2434,28 @@ def api_playlist(request: Request, op: str, name: str = "",
         return {"status": "ok" if got.get("ok") else "error", **got}
     if op == "restore":
         got = mine.restore(undo)
+        return {"status": "ok" if got.get("ok") else "error", **got}
+    if op == "tags":
+        from ..core import public_lists
+        if name not in mine.names():
+            raise HTTPException(404, "Choose one of your playlists")
+        m = public_lists.marker(mine, name) or {}
+        return {"status": "ok", "public": bool(m), "tags": m.get("tags", []),
+                "suggested": public_lists.suggest_tags(mine, name)}
+    if op == "publish":
+        from ..core import public_lists
+        if name not in mine.names():
+            raise HTTPException(404, "Choose one of your playlists")
+        if not on:
+            got = public_lists.unpublish(mine, name)
+        else:
+            try:
+                wanted = json.loads(tags or "[]")
+            except ValueError:
+                raise HTTPException(400, "tags must be a JSON list")
+            if not isinstance(wanted, list):
+                raise HTTPException(400, "tags must be a JSON list")
+            got = public_lists.publish(mine, name, wanted, _publisher_name(request), _viewer_key(request))
         return {"status": "ok" if got.get("ok") else "error", **got}
     if op == "removemany":
         wanted = {v for v in (ids or "").split(",") if v.strip()}
@@ -4269,6 +4292,70 @@ def download_client(request: Request):
                             429, base=base)
     return FileResponse(built, media_type="application/zip", filename="MusicClient.zip",
                         headers={"Cache-Control": "no-store"})
+
+
+def _viewer_key(request: Request) -> str:
+    """Whose library this is, as the public catalogue keys it."""
+    me = _profile_for(request)
+    return me.id if me is not None else "owner"
+
+
+def _publisher_name(request: Request) -> str:
+    return _whoami(request) or (config.get("server_name") or "The host")
+
+
+@app.get("/api/public")
+def api_public(request: Request, _: bool = Auth):
+    """Other people's public lists, the ones that suit what this listener plays first."""
+    from ..core import home, public_lists
+    if _owner_view(request):
+        mine = taste
+    else:
+        me = _profile_for(request)
+        mine = me.taste if me is not None and me.permanent else None
+    names = [r.get("artist", "") for r in (mine.top_artists(16) if mine is not None else [])
+             if isinstance(r, dict) and r.get("artist")]
+    genres = [g["name"] for g in home._genres(names)] if names else []
+    return {"status": "ok", "lists": public_lists.for_listener(genres, _viewer_key(request))}
+
+
+@app.get("/api/public/tracks")
+def api_public_tracks(request: Request, id: str = "", _: bool = Auth):
+    from ..core import public_lists
+    row = public_lists.find(id)
+    if not row:
+        raise HTTPException(404, "That list isn't public any more")
+    return {"status": "ok", **public_lists.describe(row),
+            "tracks": [t.to_dict() for t in public_lists.tracks(row)]}
+
+
+@app.get("/api/public/play")
+def api_public_play(request: Request, id: str = "", start: int = 0, shuffle: bool = False,
+                    _: bool = Auth):
+    from ..core import public_lists
+    row = public_lists.find(id)
+    if not row:
+        raise HTTPException(404, "That list isn't public any more")
+    room = _session_for(request)
+    _guard_rate(room, request)
+    if not room:
+        _guard_shared(request)
+    queue = room.queue if room else player.queue
+    queue.play_now(public_lists.tracks(row), shuffle=shuffle, hold_radio=True, kind="playlist",
+                   lead=start, context={"kind": "public", "name": row["id"]})
+    return {"status": "ok", "message": f"Playing {row['name']}"}
+
+
+@app.get("/api/public/copy")
+def api_public_copy(request: Request, id: str = "", _: bool = Auth):
+    """Keep a copy of somebody's public list in your own library."""
+    from ..core import public_lists
+    store = _collection_store(request)
+    row = public_lists.find(id)
+    if not row:
+        raise HTTPException(404, "That list isn't public any more")
+    got = store.import_copy(row["name"], public_lists.tracks(row))
+    return {"status": "ok" if got.get("ok", True) else "error", **got}
 
 
 @app.get("/api/collection")

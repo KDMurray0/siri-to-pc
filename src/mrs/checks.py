@@ -610,6 +610,37 @@ def _run(verbose: bool = False) -> Result:
                   str(lib7.collection()))
             say("your library", c)
 
+            # -- 7h. public playlists, shown to the people they suit ----------
+            c = _Checker("public lists")
+            from .core import public_lists as _pub7
+            from .paths import data_dir as _dd7
+            _pub7.forget()
+            mine7 = _plm7.playlists
+            theirs7 = _plm7.Playlists(home=_dd7() / "profiles" / "pubcheck7")
+            mine7.create("Owner grunge 7h")
+            mine7.add_many("Owner grunge 7h", [_Tk(video_id="og1", title="Would?", artist="Alice in Chains")])
+            for n7, tag7 in (("Their grunge 7h", "grunge"), ("Their jazz 7h", "jazz")):
+                theirs7.create(n7)
+                theirs7.add_many(n7, [_Tk(video_id=n7[:9] + "1", title="Song", artist="Band")])
+                _pub7.publish(theirs7, n7, [tag7.upper(), " " + tag7 + " "], "Sam", "pubcheck7")
+            c("a list needs a tag to go public", not _pub7.publish(mine7, "Owner grunge 7h", [], "Host", "owner")["ok"])
+            c("tags are tidied: lower case, once each", _pub7.marker(theirs7, "Their jazz 7h")["tags"] == ["jazz"])
+            _pub7.publish(mine7, "Owner grunge 7h", ["grunge"], "Host", "owner")
+            shown7 = _pub7.for_listener(["grunge", "alternative rock"], "owner")
+            names7 = [r["name"] for r in shown7]
+            c("your own public lists aren't suggested back to you", "Owner grunge 7h" not in names7, str(names7))
+            c("the one that suits what you play comes first", names7[:2] == ["Their grunge 7h", "Their jazz 7h"], str(names7))
+            c("...and it can be opened and played from", _pub7.tracks(_pub7.find(shown7[0]["id"]))[0].title == "Song")
+            c("its library says it's public", next(r for r in theirs7.summary() if r["name"] == "Their jazz 7h")["public"] == ["jazz"])
+            _pub7.unpublish(theirs7, "Their jazz 7h")
+            c("made private, it's gone from the catalogue",
+              "Their jazz 7h" not in [r["name"] for r in _pub7.for_listener([], "owner")])
+            for n7 in ("Their grunge 7h", "Their jazz 7h"):
+                theirs7.delete(n7)
+            mine7.delete("Owner grunge 7h")
+            _pub7.forget()
+            say("public lists", c)
+
             # -- 8. "inside the house" must mean inside the house ----------
             c = _Checker("home")
             from .web.security import _own_wan, is_home
