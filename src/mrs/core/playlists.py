@@ -576,6 +576,80 @@ class Playlists:
             self._save(name, rows)
         return {"ok": True, "message": "Removed", "count": len(rows)}
 
+    # -- deleting with a way back --------------------------------------
+    TRASH = ".trash"
+    TRASH_DAYS = 7
+
+    def trash(self, name: str) -> dict:
+        """Delete, but moved aside rather than removed, for a week. The token
+        it returns brings it back."""
+        import secrets
+        with self._lock:
+            if name in self._downloading or name in self._importing:
+                return {"ok": False, "message": "Wait for this playlist to finish importing or downloading"}
+            folder = self._folder_path(name)
+            if not folder.is_dir() or not (folder / "tracks.json").is_file():
+                return {"ok": False, "message": f"There's no list called {name}"}
+            bin_ = Path(self.root()) / self.TRASH
+            bin_.mkdir(exist_ok=True)
+            self._empty_old_trash(bin_)
+            token = secrets.token_hex(8)
+            try:
+                (folder / "name.txt").write_text(name, encoding="utf-8")
+                (folder / "deleted.txt").write_text(str(int(time.time())), encoding="utf-8")
+                folder.rename(bin_ / token)
+            except OSError as exc:
+                return {"ok": False, "message": str(exc)}
+        self._save_event()
+        return {"ok": True, "message": f"Deleted {name}", "undo": token}
+
+    def restore(self, token: str) -> dict:
+        """Undo a delete from the last week."""
+        if not re.fullmatch(r"[0-9a-f]{16}", token or ""):
+            return {"ok": False, "message": "That can't be brought back"}
+        with self._lock:
+            src = Path(self.root()) / self.TRASH / token
+            if not (src / "tracks.json").is_file():
+                return {"ok": False, "message": "That's gone for good"}
+            name = self._display_name(src)
+            if name in self.names():
+                return {"ok": False, "message": f"There's already a list called {name}"}
+            dest = self._inside(_playlist_leaf(name))
+            if dest.exists():
+                return {"ok": False, "message": f"There's already a list called {name}"}
+            try:
+                (src / "deleted.txt").unlink(missing_ok=True)
+                src.rename(dest)
+            except OSError as exc:
+                return {"ok": False, "message": str(exc)}
+        self._save_event()
+        return {"ok": True, "message": f"{name} is back", "name": name}
+
+    def _empty_old_trash(self, bin_: Path) -> None:
+        cutoff = time.time() - self.TRASH_DAYS * 86400
+        for d in bin_.iterdir():
+            try:
+                when = int((d / "deleted.txt").read_text(encoding="utf-8").strip() or 0)
+            except (OSError, ValueError):
+                when = 0
+            if when < cutoff:
+                shutil.rmtree(d, ignore_errors=True)
+
+    def remove_many(self, name: str, video_ids: set[str]) -> dict:
+        """Take several songs out at once; one undo puts them all back."""
+        rows = self.rows(name)
+        if not rows:
+            return {"ok": False, "message": f"There's no list called {name}"}
+        keep = [row for row, track in rows if track.video_id not in video_ids]
+        gone = len(rows) - len(keep)
+        if not gone:
+            return {"ok": False, "message": "None of those are in the list"}
+        got = self.rewrite(name, keep)
+        if not got.get("ok"):
+            return got
+        return {"ok": True, "message": f"Removed {gone} song{'s' if gone != 1 else ''}",
+                "removed": gone, "count": len(keep)}
+
     def delete(self, name: str, *, keep_files: bool = False) -> dict:
         with self._lock:
             # folder() creates its target for writers. A deletion must not

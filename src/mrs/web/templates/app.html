@@ -340,6 +340,58 @@ body.paused .nowbars i{animation-play-state:paused}
 .vol .bar{width:104px}
 body.noplay .play{opacity:.5}
 
+/* right-click, and every ⋯ */
+.menu.ctx{position:fixed;right:auto;top:auto;z-index:70;min-width:220px;max-width:min(320px,calc(100vw - 16px));
+  max-height:min(70vh,520px);overflow-y:auto;transform-origin:top left}
+.menu button.danger{color:#ff7b7b}
+.menu .menuin{display:flex;gap:6px;padding:6px}
+.menu .menuin input{flex:1;min-width:0;height:32px;border-radius:8px;border:1px solid var(--line);background:var(--tint);padding:0 10px;outline:0}
+.ledger h2 .hbtns{display:flex;gap:2px}
+/* picking songs: a tick on the cover, a bar with what to do with them */
+.row.sel{background:color-mix(in srgb,var(--accent) 16%,transparent);box-shadow:inset 3px 0 0 var(--accent)}
+.selecting .row .thumb::after{opacity:1;background:rgba(0,0,0,.4) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='8.5' fill='none' stroke='white' stroke-width='2'/%3E%3C/svg%3E") center/20px no-repeat}
+.selecting .row.sel .thumb::after{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='10' fill='white'/%3E%3Cpath d='M7.5 12.5l3 3 6-6.5' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")}
+.selbar{position:sticky;bottom:14px;z-index:5;display:flex;align-items:center;gap:8px;margin:0 20px 14px;
+  padding:8px 8px 8px 18px;border-radius:999px;flex-wrap:wrap;animation:rise .25s var(--ease)}
+.view .selbar{margin:0 0 14px}
+.selbar .grow{flex:1}
+.selbar .pill{height:34px;padding:0 14px;font-size:13px}
+.pill.danger{background:color-mix(in srgb,#ff4d4d 20%,transparent);color:#ff9a9a}
+.selecting .card[data-list]{cursor:default}
+.card.sel{background:color-mix(in srgb,var(--accent) 14%,transparent);box-shadow:inset 0 0 0 2px var(--accent)}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:-8px 0 22px}
+.toolbar .pill{height:36px;font-size:13px}
+/* a small question in the middle of the page */
+.ask{position:fixed;inset:0;z-index:80;display:grid;place-items:center;background:color-mix(in srgb,var(--bg) 50%,transparent);animation:fade .15s ease}
+.ask form{width:min(380px,calc(100vw - 32px));padding:18px;border-radius:18px;display:flex;flex-direction:column;gap:12px;animation:rise .25s var(--ease)}
+.ask input{height:40px;border-radius:10px;border:1px solid var(--line);background:var(--tint);padding:0 12px;outline:0}
+.ask .row2{display:flex;gap:8px;justify-content:flex-end}
+/* the AI composer */
+.compose textarea{width:100%;min-height:104px;resize:vertical;border-radius:14px;border:1px solid var(--line);background:var(--tint);
+  padding:14px 16px;font:inherit;font-size:15px;line-height:1.45;outline:0;color:inherit}
+.compose textarea:focus{border-color:color-mix(in srgb,var(--fg) 30%,transparent)}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{height:34px;padding:0 14px;border-radius:999px;background:var(--tint);font-size:13px;color:var(--sub);transition:background .15s,color .15s}
+.chip:hover{background:var(--tint-hi);color:var(--fg)}
+.chip.on{background:var(--fg);color:var(--bg)}
+.compose .hint{font-size:12px;color:var(--sub);margin-top:9px}
+.compose select,.compose .name{height:38px;border-radius:10px;border:1px solid var(--line);background:var(--panel);padding:0 10px;color:inherit;outline:0}
+.compose .name{flex:1;min-width:180px}
+.aiart{display:grid!important;place-items:center;background:radial-gradient(circle at 30% 25%,color-mix(in srgb,var(--accent) 50%,transparent),transparent 62%),var(--tint-hi)}
+.aiart .svg{width:64px;height:64px}
+.aiprog{display:flex;align-items:center;gap:12px;font-size:15px}
+.spark{width:22px;height:22px;border-radius:50%;border:2px solid var(--tint-hi);border-top-color:var(--accent);animation:spin 1s linear infinite;flex:0 0 auto}
+@keyframes spin{to{transform:rotate(360deg)}}
+.previews{display:flex;flex-direction:column;gap:6px;margin-top:14px}
+.previews span{font-size:13px;color:var(--sub)}
+/* the AI at work, as the library shows it */
+.jobs{padding:0 6px}
+.lrow.job .cov{display:grid;place-items:center;color:var(--accent);
+  background:linear-gradient(90deg,var(--tint),var(--tint-hi),var(--tint));background-size:200% 100%;animation:shimmer 1.2s linear infinite}
+.lrow.job span,.lrow.editing span{color:var(--accent)}
+.lrow.editing .cov{position:relative}
+.lrow.editing .cov::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.22),transparent);
+  background-size:200% 100%;animation:shimmer 1.2s linear infinite}
 /* sharing a song: a card over the button, not a toast with a URL in it */
 .sharepop{position:fixed;z-index:45;width:min(340px,calc(100vw - 24px));padding:14px;border-radius:18px;
   animation:pop .16s var(--ease);transform-origin:bottom right}
@@ -406,8 +458,10 @@ body.noplay .play{opacity:.5}
 
 <div class="edge" id="edge" aria-hidden="true"></div>
 <aside class="ledger glass" aria-label="Your library">
-  <h2><span>Your library</span><button id="newbtn" title="New playlist" aria-label="New playlist"><svg class="svg" viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg></button></h2>
+  <h2><span>Your library</span><div class="hbtns"><button id="aibtn" title="Make a playlist with AI" aria-label="Make a playlist with AI"><svg class="svg" viewBox="0 0 24 24"><path d="M12 2.5l2.1 6.4 6.4 2.1-6.4 2.1L12 19.5l-2.1-6.4L3.5 11l6.4-2.1zM19 15l.9 2.6 2.6.9-2.6.9L19 22l-.9-2.6-2.6-.9 2.6-.9z"/></svg></button>
+    <button id="newbtn" title="New playlist" aria-label="New playlist"><svg class="svg" viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg></button></div></h2>
   <form class="newlist" id="newlist" hidden><input id="newname" maxlength="120" placeholder="Playlist name" aria-label="Playlist name" required></form>
+  <div class="jobs" id="jobs"></div>
   <div class="shelf" id="shelf"></div>
 </aside>
 
@@ -457,7 +511,10 @@ const ICON = {
   heart: '<svg class="svg" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54z"/></svg>',
   shuffle: '<svg class="svg" viewBox="0 0 24 24"><path d="M10.6 9.2 5.4 4 4 5.4l5.2 5.2zM14.5 4l2 2L4 18.6 5.4 20 18 7.5l2 2V4zm.3 9.4-1.4 1.4 3.1 3.1-2 2.1H20v-5.5l-2 2z"/></svg>',
   close: '<svg class="svg" viewBox="0 0 24 24"><path d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6z"/></svg>',
+  spark: '<svg class="svg" viewBox="0 0 24 24"><path d="M12 2.5l2.1 6.4 6.4 2.1-6.4 2.1L12 19.5l-2.1-6.4L3.5 11l6.4-2.1zM19 15l.9 2.6 2.6.9-2.6.9L19 22l-.9-2.6-2.6-.9 2.6-.9z"/></svg>',
+  more: '<svg class="svg" viewBox="0 0 24 24"><path d="M6 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg>',
 };
+const enc = encodeURIComponent;
 
 /* ── talking to the server: writes go as POST with a JSON body, like the player ── */
 /* The server's own list says what's a read. Search isn't one -- it remembers
@@ -713,8 +770,18 @@ $("queuebtn").onclick = () => {
   } else go("nowplaying");
 };
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") { closeShare(); closeOverlay(); return; }
-  if (e.target.closest("input,textarea") || e.ctrlKey || e.metaKey) return;
+  if (e.key === "Escape") {
+    if (closeMenu()) return;
+    const picking = document.querySelector(".scroll.selecting,.view.selecting");
+    if (picking) { stopSelecting(picking); return; }
+    closeShare(); closeOverlay(); return;
+  }
+  if (e.target.closest("input,textarea,select") || e.ctrlKey || e.metaKey) return;
+  if (e.key === "Delete" || e.key === "Backspace") {
+    const root = document.querySelector(".scrim .scroll.selecting");
+    if (root && root._sel && root._sel.size && ownList(root._owner)) { e.preventDefault(); removeSongs(root._owner.p, picked(root), root); }
+    return;
+  }
   if (e.code === "Space") { e.preventDefault(); $("pp").click(); }
 });
 
@@ -753,8 +820,13 @@ function songRows(tracks) {
     `<div class="thumb">${img(t.art)}</div><div><b>${esc(t.title || t.name)}</b></div>` +
     `<span>${esc(t.artist)}</span><span class="dur">${t.duration ? fmt(t.duration) : ""}</span></button>`).join("") + `</div>`;
 }
-const wireRows = (root, tracks, onPlay) =>
-  root.querySelectorAll(".row[data-i]").forEach(b => b.onclick = () => onPlay(tracks[+b.dataset.i], +b.dataset.i));
+function wireRows(root, tracks, onPlay, owner = null) {
+  root.querySelectorAll(".row[data-i]").forEach(b => {
+    const i = +b.dataset.i, play = () => onPlay(tracks[i], i);
+    b.onclick = play;
+    b._item = { kind: "song", t: tracks[i], i, owner, root, play };
+  });
+}
 function markNowPlaying() {
   const now = state.track && state.track.video_id;
   document.querySelectorAll(".row[data-vid]").forEach(r => r.classList.toggle("now", !!now && r.dataset.vid === now));
@@ -819,6 +891,7 @@ const albumCard = (a, i) => `<button class="card" data-album="${i}"><div class="
   `<span class="go" data-playnow="${i}" data-ctx="${esc(albumKey(a.name, a.artist))}">${ICON.play}</span></div>` +
   `<b>${esc(a.name)}</b><span>${esc(a.artist || "Album")}</span></button>`;
 function wireAlbums(root, albums) {
+  root.querySelectorAll("[data-album]").forEach(b => (b._item = { kind: "album", a: albums[+b.dataset.album] }));
   root.querySelectorAll("[data-album]").forEach(b => b.onclick = e => {
     const a = albums[+b.dataset.album];
     if (e.target.closest("[data-playnow]")) ctxPress(albumKey(a.name, a.artist), () => playAlbum(a.name, a.artist));
@@ -830,11 +903,18 @@ const listCard = (p, i) => `<button class="card" data-list="${i}">` +
   listCover(p, "art", `<span class="go" data-playnow="${i}" data-ctx="${esc(listKey(p))}">${ICON.play}</span>`) +
   `<b>${esc(p.name)}</b><span>${p.shared ? "Shared · " : ""}${p.count} songs</span></button>`;
 function wireCards(root, { lists = [], artists = [] } = {}) {
-  root.querySelectorAll("[data-list]").forEach(b => b.onclick = e => {
+  root.querySelectorAll("[data-list]").forEach(b => {
     const p = lists[+b.dataset.list];
-    if (e.target.closest("[data-playnow]")) ctxPress(listKey(p), () => playList(p.name, p.shared)); else openList(p);
+    b._item = { kind: "list", p };
+    b.onclick = e => {
+      if (e.target.closest("[data-playnow]")) ctxPress(listKey(p), () => playList(p.name, p.shared)); else openList(p);
+    };
   });
-  root.querySelectorAll("[data-artist]").forEach(b => b.onclick = () => openArtist(artists[+b.dataset.artist].name));
+  root.querySelectorAll("[data-artist]").forEach(b => {
+    const a = artists[+b.dataset.artist];
+    b._item = { kind: "artist", a };
+    b.onclick = () => openArtist(a.name);
+  });
 }
 
 /* ── sheets: playlists, artists and albums open over the page ── */
@@ -869,7 +949,7 @@ function openSheet(build) {
 function openList(p) {
   openSheet(async (root, quiet) => {
     if (!quiet) root.innerHTML = `<div class="hero"><div class="banner"></div><div class="skel" style="width:210px"></div></div>`;
-    const r = await api("/api/playlist/tracks?name=" + encodeURIComponent(p.name) + (p.shared ? "&shared=1" : ""));
+    const r = await api("/api/playlist/tracks?name=" + enc(p.name) + (p.shared ? "&shared=1" : ""));
     const tracks = (r && r.tracks) || [];
     const secs = tracks.reduce((a, t) => a + (t.duration || 0), 0);
     const fresh = { ...p, arts: tracks.slice(0, 4).map(t => t.art).filter(Boolean) };
@@ -880,40 +960,26 @@ function openList(p) {
       `<p>${tracks.length} songs${secs ? " · about " + Math.round(secs / 60) + " min" : ""}</p></div></div>` +
       `<div class="acts"><button class="bigplay" data-a="play" data-ctx="${esc(listKey(p))}" title="Play"${tracks.length ? "" : " disabled"}>${ICON.play}</button>` +
       `<button class="round-ib" data-a="shuffle" title="Shuffle play" aria-label="Shuffle play"${tracks.length > 1 ? "" : " disabled"}>${ICON.shuffle}</button>` +
-      (p.shared ? "" : `<span class="actwrap"><button class="round-ib" data-a="more" aria-haspopup="menu" title="More" aria-label="More">&#8943;</button>` +
-        `<div class="menu glass" role="menu" hidden data-m>` +
-        `<button role="menuitem" data-a="reorder">Shuffle the order</button>` +
-        `<button role="menuitem" data-a="cover">Change cover</button>` +
-        (p.cover ? `<button role="menuitem" data-a="uncover">Use the first four songs</button>` : "") +
-        `</div></span>`) + (tracks.length > 6 ? FIND : "") + `</div>`;
+      `<button class="round-ib" data-a="more" aria-haspopup="menu" title="More" aria-label="More">${ICON.more}</button>` +
+      (tracks.length > 6 ? FIND : "") + `</div>`;
     root.querySelector('[data-a="play"]').onclick = () => ctxPress(listKey(p), () => playList(p.name, p.shared));
     root.querySelector('[data-a="shuffle"]').onclick = () => playList(p.name, p.shared, 0, true);
-    paintPlayButtons();
-    const more = root.querySelector('[data-a="more"]');
-    if (more) more.onclick = e => { e.stopPropagation(); const m = root.querySelector("[data-m]"); m.hidden = !m.hidden; };
-    root.addEventListener("click", e => { const m = root.querySelector("[data-m]"); if (m && !e.target.closest(".actwrap")) m.hidden = true; });
-    const reorder = root.querySelector('[data-a="reorder"]');
-    if (reorder) reorder.onclick = async () => {
-      const r = await api("/api/playlist/reorder?name=" + encodeURIComponent(p.name));
-      if (!r || r.ok === false) { toast((r && r.message) || "Couldn't shuffle that"); return; }
-      toastUndo("Shuffled the order", async () => {
-        const u = await api("/api/playlists/undo?name=" + encodeURIComponent(p.name));
-        toast((u && u.message) || "Couldn't undo that"); await loadShelf(); openList(p);
-      });
-      await loadShelf(); openList(p);
+    root.querySelector('[data-a="more"]').onclick = e => {
+      e.stopPropagation();
+      const b = e.currentTarget.getBoundingClientRect();
+      openMenu(b.left, b.bottom + 6, listMenu(p, { root }));
     };
-    const cover = root.querySelector('[data-a="cover"]');
-    if (cover) cover.onclick = () => pickCover(p);
-    const uncover = root.querySelector('[data-a="uncover"]');
-    if (uncover) uncover.onclick = async () => { const u = await api("/api/playlist/uncover?name=" + encodeURIComponent(p.name));
-      toast(u && u.message); await loadShelf(); openList({ ...p, cover: 0 }); };
+    paintPlayButtons();
     root.insertAdjacentHTML("beforeend", part(1, "Songs", songRows(tracks)));
-    wireRows(root, tracks, (t, n) => playList(p.name, p.shared, n));
+    const owner = { kind: "list", p };
+    wireRows(root, tracks, (t, n) => playList(p.name, p.shared, n), owner);
+    wireSelect(root, tracks, owner);
     wireFind(root, tracks);
     const people = [...new Set(tracks.map(t => (t.artist || "").split(",")[0].trim()).filter(Boolean))].slice(0, 14)
       .map(name => ({ name, art: (tracks.find(t => (t.artist || "").startsWith(name)) || {}).art || "" }));
     if (people.length > 1) { root.insertAdjacentHTML("beforeend", part(2, "Who's on it", faceRow(people))); wireCards(root, { artists: people }); }
   });
+  if (overlay) overlay.dataset.list = p.name;
 }
 function pickCover(p) {
   const input = $("coverfile");
@@ -946,7 +1012,8 @@ function openLiked() {
     root.querySelector('[data-a="shuffle"]').onclick = async () => { if (!state.shuffle) await api("/api/control/shuffle"); playLiked(); };
     root.insertAdjacentHTML("beforeend", part(1, "Songs", songRows(tracks)));
     // Liked plays newest first, so a row is that far into the list.
-    wireRows(root, tracks, (t, n) => playLiked(n));
+    wireRows(root, tracks, (t, n) => playLiked(n), { kind: "liked" });
+    wireSelect(root, tracks, { kind: "liked" });
     wireFind(root, tracks);
     paintPlayButtons();
   });
@@ -994,10 +1061,440 @@ function openAlbum(name, artist) {
     root.querySelector('[data-a="play"]').onclick = () => ctxPress(albumKey(name, artist), () => playAlbum(name, artist));
     paintPlayButtons();
     root.insertAdjacentHTML("beforeend", part(1, "Songs", songRows(tracks)));
-    wireRows(root, tracks, t => playSong(t));
+    wireRows(root, tracks, t => playSong(t), { kind: "album" });
+    wireSelect(root, tracks, { kind: "album" });
     wireFind(root, tracks);
   });
 }
+
+/* ── menus: right-click anywhere it means something, and every ⋯ ── */
+let ctxMenu = null;
+function closeMenu() { if (!ctxMenu) return false; ctxMenu.remove(); ctxMenu = null; return true; }
+function openMenu(x, y, items) {
+  closeMenu();
+  const m = document.createElement("div");
+  m.className = "menu glass ctx"; m.setAttribute("role", "menu");
+  m.innerHTML = items.map((it, i) => it === "-" ? "<hr>" :
+    `<button role="menuitem" data-i="${i}"${it.danger ? ' class="danger"' : ""}>${esc(it.label)}${it.hint ? `<span class="v">${esc(it.hint)}</span>` : ""}</button>`).join("");
+  document.body.appendChild(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.max(8, Math.min(x, innerWidth - r.width - 8)) + "px";
+  m.style.top = Math.max(8, Math.min(y, innerHeight - r.height - 8)) + "px";
+  m.addEventListener("click", e => {
+    const b = e.target.closest("[data-i]"); if (!b) return;
+    const it = items[+b.dataset.i];
+    if (it.keep) { it.act(m, b); return; }
+    closeMenu(); it.act();
+  });
+  ctxMenu = m;
+  const first = m.querySelector("button"); if (first) first.focus({ preventScroll: true });
+}
+document.addEventListener("pointerdown", e => { if (ctxMenu && !ctxMenu.contains(e.target)) closeMenu(); }, true);
+window.addEventListener("blur", closeMenu);
+document.addEventListener("contextmenu", e => {
+  if (e.target.closest("input,textarea,select")) return;
+  let el = e.target;
+  while (el && !el._item) el = el.parentElement;
+  if (!el) return;
+  e.preventDefault();
+  const it = el._item;
+  const items = it.kind === "song" ? songMenu(it)
+    : it.kind === "list" ? listMenu(it.p)
+    : it.kind === "liked" ? [{ label: "Play", act: () => ctxPress(ctxKey("smart", "liked"), () => playLiked()) }, { label: "Open", act: openLiked }]
+    : it.kind === "album" ? [{ label: "Play", act: () => ctxPress(albumKey(it.a.name, it.a.artist), () => playAlbum(it.a.name, it.a.artist)) },
+        { label: "Open", act: () => openAlbum(it.a.name, it.a.artist) },
+        ...(it.a.artist ? [{ label: "Go to " + it.a.artist.split(",")[0], act: () => openArtist(it.a.artist.split(",")[0].trim()) }] : [])]
+    : it.kind === "artist" ? [{ label: "Play", act: () => ctxPress(ctxKey("artist", it.a.name), () => playArtist(it.a.name)) },
+        { label: "Open", act: () => openArtist(it.a.name) }]
+    : [];
+  if (items.length) openMenu(e.clientX, e.clientY, items);
+});
+const ownList = owner => !!(owner && owner.kind === "list" && !owner.p.shared);
+const songItem = t => ({ kind: "song", video_id: t.video_id, title: t.title || t.name || "", name: t.title || t.name || "",
+                         artist: t.artist || "", art: t.art || "" });
+function queueSongs(list, mode) {
+  const n = list.length;
+  return say("/api/play/pick?items=" + enc(JSON.stringify(list.map(songItem))) + "&mode=" + mode,
+             mode === "next" ? (n > 1 ? `Playing ${n} songs next` : "Playing next") : (n > 1 ? `Added ${n} songs to the queue` : "Added to the queue"));
+}
+function songMenu(it) {
+  const root = it.root, many = root && root._sel && root._sel.has(it.i) && root._sel.size > 1;
+  const list = many ? picked(root) : [it.t], n = list.length;
+  const items = many ? [] : [{ label: "Play", act: it.play || (() => playSong(it.t)) }];
+  items.push({ label: many ? `Play ${n} next` : "Play next", act: () => queueSongs(list, "next") },
+             { label: many ? `Add ${n} to the queue` : "Add to the queue", act: () => queueSongs(list, "queue") },
+             { label: many ? `Add ${n} to a playlist…` : "Add to a playlist…", keep: true, act: m => addToListMenu(list, m) });
+  const who = (it.t.artist || "").split(",")[0].trim();
+  if (!many && who) items.push("-", { label: "Go to " + who, act: () => openArtist(who) });
+  if (ownList(it.owner)) items.push("-", { label: many ? `Remove ${n} songs` : "Remove from this playlist", danger: true,
+                                          act: () => removeSongs(it.owner.p, list, root) });
+  return items;
+}
+/* The same menu, swapped for the list of playlists. */
+function addToListMenu(tracks, m) {
+  const mine = shelfLists.filter(p => !p.shared);
+  const r = m.getBoundingClientRect();
+  openMenu(r.left, r.top, [{ label: "New playlist…", act: async () => {
+      const name = await askText("New playlist", "", "Make it");
+      if (!name) return;
+      const c = await api("/api/playlist/create?name=" + enc(name));
+      if (!c || c.ok === false) { toast((c && c.message) || "Couldn't make that"); return; }
+      addSongsTo(c.name || name, tracks);
+    } }, ...(mine.length ? ["-"] : []),
+    ...mine.map(p => ({ label: p.name, hint: p.count + "", act: () => addSongsTo(p.name, tracks) }))]);
+}
+async function addSongsTo(name, tracks) {
+  let added = 0;
+  for (const t of tracks) {
+    const r = await api("/api/playlist/add?name=" + enc(name) + "&video_id=" + enc(t.video_id || "") +
+      "&title=" + enc(t.title || t.name || "") + "&artist=" + enc(t.artist || "") + "&art=" + enc(t.art || ""));
+    if (r && r.ok !== false) added++;
+  }
+  toast(added ? `Added ${added > 1 ? added + " songs" : "it"} to ${name}` : `Couldn't add to ${name}`);
+}
+function listMenu(p, { root = null } = {}) {
+  const items = [{ label: "Play", act: () => ctxPress(listKey(p), () => playList(p.name, p.shared)) },
+                 { label: "Shuffle play", act: () => playList(p.name, p.shared, 0, true) }];
+  if (root) items.push({ label: "Select songs", act: () => startSelecting(root) });
+  else items.push({ label: "Open", act: () => openList(p) });
+  if (!p.shared) items.push("-",
+    { label: "Edit with AI…", hint: "AI", act: () => openComposer({ mode: "edit", list: p }) },
+    { label: "Shuffle the order", act: () => reorderList(p) },
+    { label: "Change cover", act: () => pickCover(p) },
+    ...(p.cover ? [{ label: "Use the first four songs", act: () => uncoverList(p) }] : []),
+    { label: "Rename…", act: () => renameList(p) },
+    "-",
+    { label: "Delete playlist", danger: true, act: () => deleteLists([p]) });
+  return items;
+}
+async function reorderList(p) {
+  const r = await api("/api/playlist/reorder?name=" + enc(p.name));
+  if (!r || r.ok === false) { toast((r && r.message) || "Couldn't shuffle that"); return; }
+  toastUndo("Shuffled the order", async () => {
+    const u = await api("/api/playlists/undo?name=" + enc(p.name));
+    toast((u && u.message) || "Couldn't undo that");
+  });
+}
+async function uncoverList(p) {
+  const u = await api("/api/playlist/uncover?name=" + enc(p.name));
+  toast(u && u.message);
+}
+async function renameList(p) {
+  const name = await askText("Rename playlist", p.name, "Rename");
+  if (!name || name === p.name) return;
+  const r = await api("/api/playlist/rename?name=" + enc(p.name) + "&new_name=" + enc(name));
+  toast((r && r.message) || "Couldn't rename that");
+  if (r && r.ok !== false && overlay && overlay.dataset.list === p.name) openList({ ...p, name: r.name || name });
+}
+async function newList() {
+  const name = await askText("New playlist", "", "Make it");
+  if (!name) return;
+  const r = await api("/api/playlist/create?name=" + enc(name));
+  toast((r && r.message) || "Couldn't make that");
+}
+/* Deleting: gone from the library at once, back with Undo for a week. */
+async function deleteLists(ps) {
+  const tokens = [];
+  for (const p of ps) {
+    const r = await api("/api/playlist/delete?name=" + enc(p.name));
+    if (r && r.ok !== false && r.undo) tokens.push(r.undo);
+  }
+  if (overlay && ps.some(p => overlay.dataset.list === p.name)) closeOverlay();
+  if (!tokens.length) { toast("Couldn't delete that"); return; }
+  toastUndo(tokens.length > 1 ? `Deleted ${tokens.length} playlists` : `Deleted ${ps[0].name}`, async () => {
+    let back = 0;
+    for (const t of tokens) { const u = await api("/api/playlist/restore?undo=" + t); if (u && u.ok !== false) back++; }
+    toast(back ? (back > 1 ? `${back} playlists are back` : "It's back") : "Couldn't bring that back");
+  });
+}
+async function removeSongs(p, list, root) {
+  const ids = list.map(t => t.video_id).filter(Boolean);
+  if (!ids.length) return;
+  const r = await apiTry("/api/playlist/removemany?name=" + enc(p.name) + "&ids=" + enc(ids.join(",")));
+  if (!r.ok || r.body.ok === false) { toast(r.body.message || r.body.detail || "Couldn't remove those"); return; }
+  if (root) stopSelecting(root);
+  toastUndo(r.body.message || "Removed", async () => {
+    const u = await api("/api/playlists/undo?name=" + enc(p.name));
+    toast((u && u.ok !== false) ? "Put back" : "Couldn't put them back");
+  });
+}
+/* A small question in the middle of the page, answered or not. */
+function askText(title, value = "", ok = "OK") {
+  return new Promise(resolve => {
+    const w = document.createElement("div");
+    w.className = "ask";
+    w.innerHTML = `<form class="glass"><b>${esc(title)}</b><input maxlength="120" value="${esc(value)}" aria-label="${esc(title)}">` +
+      `<div class="row2"><button type="button" class="pill" data-x>Cancel</button><button class="pill primary">${esc(ok)}</button></div></form>`;
+    document.body.appendChild(w);
+    const input = w.querySelector("input");
+    input.focus(); input.select();
+    const done = v => { w.remove(); resolve(v); };
+    w.querySelector("[data-x]").onclick = () => done(null);
+    w.addEventListener("pointerdown", e => { if (e.target === w) done(null); });
+    w.querySelector("form").onsubmit = e => { e.preventDefault(); done(input.value.trim() || null); };
+    input.addEventListener("keydown", e => { if (e.key === "Escape") { e.stopPropagation(); done(null); } });
+  });
+}
+
+/* ── picking songs: Ctrl or Shift, or Select songs from the menu. A click
+   then picks a song instead of playing it; a bar says what to do with them. ── */
+const picked = root => [...root._sel].sort((a, b) => a - b).map(i => root._selTracks[i]).filter(Boolean);
+function wireSelect(root, tracks, owner) {
+  root._sel = new Set(); root._selTracks = tracks; root._owner = owner;
+  renderSelbar(root);
+  if (root._selWired) return;
+  root._selWired = true;
+  let last = -1;
+  root.addEventListener("click", e => {
+    const row = e.target.closest(".row[data-i]");
+    if (!row || !root.contains(row)) return;
+    if (!(e.ctrlKey || e.metaKey || e.shiftKey || root.classList.contains("selecting"))) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    root.classList.add("selecting");
+    const i = +row.dataset.i, rows = [...root.querySelectorAll(".row[data-i]")];
+    if (e.shiftKey && last >= 0) {
+      const [a, b] = [Math.min(last, i), Math.max(last, i)];
+      rows.forEach(r => { const k = +r.dataset.i; if (k >= a && k <= b && !r.classList.contains("nomatch")) root._sel.add(k); });
+    } else if (root._sel.has(i)) root._sel.delete(i);
+    else root._sel.add(i);
+    last = i;
+    paintSelection(root);
+  }, true);
+}
+function paintSelection(root) {
+  root.querySelectorAll(".row[data-i]").forEach(r => r.classList.toggle("sel", root._sel.has(+r.dataset.i)));
+  renderSelbar(root);
+}
+function startSelecting(root) { root.classList.add("selecting"); if (root._sel) paintSelection(root); else renderListSelbar(root); }
+function stopSelecting(root) {
+  root.classList.remove("selecting");
+  if (root._sel) { root._sel.clear(); paintSelection(root); }
+  if (root._picked) { root._picked.clear(); paintListSelection(root); }
+}
+function renderSelbar(root) {
+  let bar = root.querySelector(":scope > .selbar");
+  const n = root._sel.size;
+  if (!n && !root.classList.contains("selecting")) { if (bar) bar.remove(); return; }
+  if (!bar) { bar = document.createElement("div"); bar.className = "selbar glass"; root.appendChild(bar); }
+  const own = ownList(root._owner);
+  bar.innerHTML = `<b>${n ? n + " picked" : "Pick songs"}</b><span class="grow"></span>` +
+    (n ? `<button class="pill" data-s="next">Play next</button><button class="pill" data-s="add">Add to a playlist</button>` : "") +
+    (n && own ? `<button class="pill danger" data-s="remove">Remove</button>` : "") +
+    `<button class="pill" data-s="done">Done</button>`;
+  bar.querySelector('[data-s="done"]').onclick = () => stopSelecting(root);
+  const next = bar.querySelector('[data-s="next"]');
+  if (next) next.onclick = () => queueSongs(picked(root), "next");
+  const add = bar.querySelector('[data-s="add"]');
+  if (add) add.onclick = e => { const r = e.currentTarget.getBoundingClientRect(); const m = document.createElement("div");
+    m.getBoundingClientRect = () => ({ left: r.left, top: r.top - 8 }); addToListMenu(picked(root), m); };
+  const rm = bar.querySelector('[data-s="remove"]');
+  if (rm) rm.onclick = () => removeSongs(root._owner.p, picked(root), root);
+}
+/* The library page's own picking, of whole playlists. */
+function wireListSelect(pane, lists) {
+  pane._picked = new Set(); pane._lists = lists;
+  renderListSelbar(pane);
+  if (pane._listWired) return;
+  pane._listWired = true;
+  pane.addEventListener("click", e => {
+    const card = e.target.closest(".card[data-list]");
+    if (!card || !(e.ctrlKey || e.metaKey || e.shiftKey || pane.classList.contains("selecting"))) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    pane.classList.add("selecting");
+    const i = +card.dataset.list;
+    if (pane._picked.has(i)) pane._picked.delete(i); else pane._picked.add(i);
+    paintListSelection(pane);
+  }, true);
+}
+function paintListSelection(pane) {
+  pane.querySelectorAll(".card[data-list]").forEach(c => c.classList.toggle("sel", pane._picked.has(+c.dataset.list)));
+  renderListSelbar(pane);
+}
+function renderListSelbar(pane) {
+  let bar = pane.querySelector(":scope > .selbar");
+  const chosen = [...pane._picked].map(i => pane._lists[i]).filter(p => p && !p.shared);
+  if (!pane._picked.size && !pane.classList.contains("selecting")) { if (bar) bar.remove(); return; }
+  if (!bar) { bar = document.createElement("div"); bar.className = "selbar glass"; pane.appendChild(bar); }
+  bar.innerHTML = `<b>${chosen.length ? chosen.length + " picked" : "Pick playlists"}</b><span class="grow"></span>` +
+    (chosen.length ? `<button class="pill danger" data-s="delete">Delete</button>` : "") + `<button class="pill" data-s="done">Done</button>`;
+  bar.querySelector('[data-s="done"]').onclick = () => stopSelecting(pane);
+  const del = bar.querySelector('[data-s="delete"]');
+  if (del) del.onclick = async () => { await deleteLists(chosen); stopSelecting(pane); };
+}
+
+/* ── the AI: making a list, or changing one. Each is a job the library
+   shows while it runs -- a new row for a list being made, a shimmer on a
+   list being changed -- so the two never look alike. ── */
+const LENGTHS = [{ label: "Auto" }, { label: "30 min", minutes: 30 }, { label: "1 hour", minutes: 60 },
+                 { label: "2 hours", minutes: 120 }, { label: "100 songs", songs: 100 }];
+const HOWS = [{ label: "Mix it up", hint: "Who you name, and the bands around them" },
+              { label: "Only who I name", strict: 1, hint: "Nothing but the artists you mention" },
+              { label: "Lean on my favourites", lean: "mine", hint: "Mostly what you already play" },
+              { label: "Find me new music", lean: "new", hint: "Mostly bands you don't play yet" }];
+const JOBS = new Map();
+const finished = j => j.state === "done" || j.state === "failed";
+function saveJobs() {
+  store.set("aijobs", JSON.stringify([...JOBS.values()].filter(j => !finished(j))
+    .map(j => ({ id: j.id, kind: j.kind, name: j.name, target: j.target, what: j.what }))));
+}
+function trackJob(job) { JOBS.set(job.id, job); saveJobs(); renderJobs(); pollJobs(); }
+let pollT = null, polling = false;
+async function pollJobs() {
+  clearTimeout(pollT);
+  if (polling) return;
+  polling = true;
+  try {
+    for (const j of [...JOBS.values()].filter(j => !finished(j))) {
+      const r = await apiTry("/api/playlists/job?job=" + enc(j.id));
+      if (r.status === 404) Object.assign(j, { state: "failed", detail: "That one was lost along the way" });
+      else if (r.ok) Object.assign(j, r.body, { kind: r.body.kind || j.kind });
+      (j.listeners || []).forEach(fn => fn(j));
+      if (finished(j) && !j.told) {
+        j.told = true;
+        if (j.state === "failed") toast(j.detail || "The AI couldn't do that one");
+        else if (j.kind === "change") toastUndo(`Changed ${j.name}`, () => undoChange(j));
+        else toast(`${j.kind === "add" ? "Added to" : "Made"} ${j.name}: ${j.detail || "done"}`);
+        refreshSoon();
+        setTimeout(() => { JOBS.delete(j.id); renderJobs(); }, 120000);
+      }
+    }
+  } finally { polling = false; }
+  saveJobs(); renderJobs();
+  if ([...JOBS.values()].some(j => !finished(j))) pollT = setTimeout(pollJobs, 1500);
+}
+async function undoChange(j) {
+  const u = await api("/api/playlists/undo?name=" + enc(j.target || j.name));
+  toast((u && u.ok !== false) ? `${j.target || j.name} is back as it was` : "Couldn't undo that");
+}
+function renderJobs() {
+  const making = [...JOBS.values()].filter(j => j.kind !== "change" && !finished(j));
+  $("jobs").innerHTML = making.map(j => `<button class="lrow job" data-job="${esc(j.id)}" title="${esc(j.what || "")}">` +
+    `<div class="cov">${ICON.spark}</div><div><b>${esc(j.name || (j.what || "").slice(0, 40))}</b>` +
+    `<span>${j.kind === "add" ? "Adding songs…" : j.state === "waiting" ? "Waiting for the AI…" : "Making it…"}</span></div></button>`).join("");
+  $("jobs").querySelectorAll("[data-job]").forEach(b => b.onclick = () => openComposer({ job: JOBS.get(b.dataset.job) }));
+  const editing = new Map([...JOBS.values()].filter(j => j.kind === "change" && !finished(j)).map(j => [j.target || j.name, j]));
+  $("shelf").querySelectorAll(".lrow[data-i]").forEach(r => {
+    const p = shelfLists[+r.dataset.i], j = p && !p.shared ? editing.get(p.name) : null;
+    r.classList.toggle("editing", !!j);
+    const sub = r.querySelector("span");
+    if (!sub) return;
+    if (j) { if (sub.dataset.was == null) sub.dataset.was = sub.textContent; sub.textContent = "Changing with AI…"; }
+    else if (sub.dataset.was != null) { sub.textContent = sub.dataset.was; delete sub.dataset.was; }
+  });
+}
+function openComposer({ mode = "make", list = null, job = null } = {}) {
+  if (job) mode = job.kind === "change" ? "edit" : "make";
+  const edit = mode === "edit";
+  const target = list || (job && job.kind === "change" ? { name: job.target || job.name } : null);
+  openSheet(root => {
+    root.classList.add("compose");
+    root.innerHTML = `<div class="hero"><div class="banner"></div><div class="pic one aiart">${ICON.spark}</div>` +
+      `<div><small>${edit ? "AI edit" : "AI playlist"}</small><h1>${edit ? "Change " + esc(target.name) : "Make a playlist"}</h1>` +
+      `<p>${edit ? "Say what should change. It can add, take out and reshape the whole list, and one Undo puts it back."
+                 : "Say what it's for, who's in it and how it should feel."}</p></div></div><div data-body></div>`;
+    const body = root.querySelector("[data-body]");
+    if (job) showProgress(body, job, target);
+    else drawForm(body, edit, target);
+  });
+}
+async function drawForm(body, edit, target, keep = "") {
+  let examples = edit
+    ? ["More energetic", "Take out the slow ones", "Add 20 more like these", "Make it flow better", "Keep it to the heavier stuff", "More like the first ten songs"]
+    : ["Late-night drive", "Gym: heavy and fast", "Rainy Sunday, nothing loud", "90s alternative deep cuts", "Songs like what I've played this week"];
+  body.innerHTML = `<div class="part"><textarea class="askbox" maxlength="${edit ? 1000 : 4000}" aria-label="${edit ? "What should change" : "What it should be"}" ` +
+    `placeholder="${edit ? "Make it more energetic and drop the ballads" : "Late-night grunge with a bit of Alice in Chains, nothing too slow"}">${esc(keep)}</textarea>` +
+    `<div class="chips" data-ex style="margin-top:12px"></div></div>` +
+    (edit ? "" :
+      part(1, "How long", `<div class="chips" data-len>${LENGTHS.map((l, i) => `<button class="chip${i ? "" : " on"}" data-i="${i}">${esc(l.label)}</button>`).join("")}</div>` +
+        `<p class="hint">Auto lets the AI decide from what it's for.</p>`) +
+      part(2, "How it's made", `<div class="chips" data-how>${HOWS.map((h, i) => `<button class="chip${i ? "" : " on"}" data-i="${i}">${esc(h.label)}</button>`).join("")}</div>` +
+        `<p class="hint" data-howhint>${esc(HOWS[0].hint)}</p>`) +
+      part(3, "Where it goes", `<div style="display:flex;gap:8px;flex-wrap:wrap"><select data-target aria-label="Where it goes"><option value="">A new playlist</option>` +
+        shelfLists.filter(p => !p.shared).map(p => `<option>${esc(p.name)}</option>`).join("") + `</select>` +
+        `<input class="name" data-name maxlength="60" placeholder="Name it, or leave it to the AI" aria-label="Name"></div>`)) +
+    `<div class="acts"><button class="pill primary" data-go>${ICON.spark}${edit ? "Change it" : "Make it"}</button></div>`;
+  const ta = body.querySelector("textarea");
+  const chips = ex => { body.querySelector("[data-ex]").innerHTML = ex.map(x => `<button class="chip" data-x="${esc(x)}">${esc(x)}</button>`).join(""); };
+  chips(examples);
+  if (!edit) api("/api/playlists/suggest").then(r => { if (r && r.suggestion && body.isConnected) chips([r.suggestion, ...examples.slice(0, 4)]); });
+  body.querySelector("[data-ex]").addEventListener("click", e => {
+    const c = e.target.closest("[data-x]"); if (!c) return;
+    ta.value = c.dataset.x; ta.focus();
+  });
+  let len = 0, how = 0;
+  const group = (sel, set) => { const g = body.querySelector(sel); if (g) g.addEventListener("click", e => {
+    const c = e.target.closest("[data-i]"); if (!c) return;
+    g.querySelectorAll(".chip").forEach(x => x.classList.toggle("on", x === c)); set(+c.dataset.i); }); };
+  group("[data-len]", i => (len = i));
+  group("[data-how]", i => { how = i; body.querySelector("[data-howhint]").textContent = HOWS[i].hint; });
+  const sel = body.querySelector("[data-target]"), nameIn = body.querySelector("[data-name]");
+  if (sel) sel.onchange = () => { nameIn.hidden = !!sel.value; };
+  setTimeout(() => ta.focus(), 60);
+  ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) body.querySelector("[data-go]").click(); });
+  body.querySelector("[data-go]").onclick = async e => {
+    const what = ta.value.trim();
+    if (what.length < 2) { ta.focus(); toast(edit ? "Say what should change" : "Say what it should be"); return; }
+    e.currentTarget.disabled = true;
+    let r, job;
+    if (edit) {
+      r = await apiTry("/api/playlists/change?name=" + enc(target.name) + "&what=" + enc(what));
+      job = { kind: "change", name: target.name, target: target.name };
+    } else {
+      const L = LENGTHS[len], H = HOWS[how], into = sel.value, named = nameIn.value.trim();
+      r = await apiTry("/api/playlists/make?what=" + enc(what) + (L.songs ? "&songs=" + L.songs : "") + (L.minutes ? "&minutes=" + L.minutes : "") +
+        (H.strict ? "&strict=1" : "") + (H.lean ? "&lean=" + H.lean : "") + (into ? "&target=" + enc(into) : "") +
+        (named && !into ? "&name=" + enc(named) : ""));
+      job = { kind: into ? "add" : "make", name: into || named, target: into };
+    }
+    if (!r.ok || !r.body.job) {
+      e.currentTarget.disabled = false;
+      toast((r.body && (typeof r.body.detail === "string" ? r.body.detail : r.body.message)) || "Couldn't start that");
+      return;
+    }
+    Object.assign(job, { id: r.body.job, what, state: "building", detail: edit ? "Reading what you want changed" : "Reading what you asked for" });
+    trackJob(job);
+    showProgress(body, job, target);
+  };
+}
+function showProgress(body, job, target) {
+  let sig = "";
+  const draw = j => {
+    if (!body.isConnected) { j.listeners = (j.listeners || []).filter(f => f !== draw); return; }
+    const now = JSON.stringify([j.state, j.detail, j.found, j.previews, j.name]);
+    if (now === sig) return;
+    sig = now;
+    const edit = j.kind === "change";
+    if (j.state === "done") {
+      body.innerHTML = `<div class="part"><div class="aiprog"><span style="color:var(--accent);display:grid">${ICON.spark}</span><b>${esc(j.detail || "Done")}</b></div>` +
+        (edit && (j.gone || []).length ? `<div class="previews">${j.gone.map(g => `<span>Took out ${esc(g)}</span>`).join("")}</div>` : "") + `</div>` +
+        `<div class="acts"><button class="pill primary" data-a="open">Open ${esc(j.name || "it")}</button>` +
+        `<button class="pill" data-a="play">${ICON.play}Play it</button>` + (edit && j.undo ? `<button class="pill" data-a="undo">Undo</button>` : "") + `</div>`;
+      body.querySelector('[data-a="open"]').onclick = async () => {
+        const lists = await loadShelf();
+        openList(lists.find(p => p.name === j.name && !p.shared) || { name: j.name });
+      };
+      body.querySelector('[data-a="play"]').onclick = () => playList(j.name, false);
+      const u = body.querySelector('[data-a="undo"]');
+      if (u) u.onclick = async () => { await undoChange(j); u.remove(); };
+    } else if (j.state === "failed") {
+      body.innerHTML = `<div class="part"><div class="aiprog"><b>${esc(j.detail || "That didn't work")}</b></div></div>` +
+        `<div class="acts"><button class="pill primary" data-a="again">Try again</button></div>`;
+      body.querySelector('[data-a="again"]').onclick = () => { sig = ""; drawForm(body, edit, target, j.what || ""); };
+    } else {
+      body.innerHTML = `<div class="part"><div class="aiprog"><span class="spark"></span><b>${esc(j.detail || "Working on it")}</b></div>` +
+        `<p class="hint">${j.found ? j.found + " songs found so far" : edit ? "Reading the list" : "This takes a minute for a big list"}</p>` +
+        `<div class="previews">${(j.previews || []).map(x => `<span>${esc(x)}</span>`).join("")}</div></div>` +
+        `<div class="acts"><button class="pill" data-a="bg">Carry on in the background</button></div>`;
+      body.querySelector('[data-a="bg"]').onclick = closeOverlay;
+    }
+  };
+  job.listeners = (job.listeners || []).concat(draw);
+  draw(job);
+}
+try {
+  for (const j of JSON.parse(store.get("aijobs") || "[]")) JOBS.set(j.id, { ...j, state: "building", detail: "" });
+} catch (e) {}
+if (JOBS.size) setTimeout(pollJobs, 800);
 
 /* ── settings: the player's own settings, in a panel over the page ── */
 async function openSettings() {
@@ -1052,7 +1549,11 @@ const VIEWS = {
     if (!h.recent.length && !h.artists.length && !h.charts.length && !h.lists.length)
       html += `<div class="empty">Play a few songs and this fills up with what you like. Search up top to start.</div>`;
     pane.innerHTML = html;
-    pane.querySelectorAll("[data-recent]").forEach(b => b.onclick = () => playSong(h.recent[+b.dataset.recent]));
+    pane.querySelectorAll("[data-recent]").forEach(b => {
+      const t = h.recent[+b.dataset.recent];
+      b.onclick = () => playSong(t);
+      b._item = { kind: "song", t, play: () => playSong(t) };
+    });
     pane.querySelectorAll("[data-genre]").forEach(b => b.onclick = () => playQuery(h.genres[+b.dataset.genre].name));
     pane.querySelectorAll("[data-genre-open]").forEach(b => b.onclick = () => openGenre(h.genres[+b.dataset.genreOpen]));
     pane.querySelectorAll("[data-go]").forEach(b => b.onclick = () => go(b.dataset.go));
@@ -1097,11 +1598,18 @@ const VIEWS = {
   async library(pane, { quiet = false } = {}) {
     if (!quiet) pane.innerHTML = `<h1 class="title">Your library</h1><div class="skel"></div>`;
     const lists = await loadShelf();
-    pane.innerHTML = `<h1 class="title">Your library</h1><div class="cards">` +
+    pane.innerHTML = `<h1 class="title">Your library</h1>` +
+      `<div class="toolbar"><button class="pill primary" data-a="ai">${ICON.spark}Make one with AI</button>` +
+      `<button class="pill" data-a="new">New playlist</button><button class="pill" data-a="select">Select</button></div><div class="cards">` +
       `<button class="card" data-liked><div class="art one cov heart" style="width:100%;height:auto;aspect-ratio:1;border-radius:9px">${ICON.heart.replace('class="svg"', 'class="svg" style="width:44px;height:44px"')}</div><b>Liked songs</b><span>Everything you've hearted</span></button>` +
       lists.map(listCard).join("") + `</div>`;
     pane.querySelector("[data-liked]").onclick = openLiked;
+    pane.querySelector("[data-liked]")._item = { kind: "liked" };
     wireCards(pane, { lists });
+    pane.querySelector('[data-a="ai"]').onclick = () => openComposer();
+    pane.querySelector('[data-a="new"]').onclick = newList;
+    pane.querySelector('[data-a="select"]').onclick = () => pane.classList.contains("selecting") ? stopSelecting(pane) : startSelecting(pane);
+    wireListSelect(pane, lists);
     paintPlayButtons();
   },
 };
@@ -1197,7 +1705,7 @@ $("q").addEventListener("keydown", e => {
 });
 
 /* ── the ledger ── */
-let shelfKnown = null;
+let shelfKnown = null, shelfLists = [];
 async function loadShelf() {
   const r = await api("/api/playlists");
   const lists = ((r && r.playlists) || []).concat(((r && r.shared) || []).map(p => ({ ...p, shared: true })));
@@ -1212,10 +1720,18 @@ async function loadShelf() {
     if (!before.has((p.shared ? "s:" : "m:") + p.name)) b.classList.add("fresh");
   });
   $("shelf").querySelector("[data-liked]").onclick = openLiked;
-  $("shelf").querySelectorAll(".lrow[data-i]").forEach(b => b.onclick = () => openList(lists[+b.dataset.i]));
+  $("shelf").querySelector("[data-liked]")._item = { kind: "liked" };
+  $("shelf").querySelectorAll(".lrow[data-i]").forEach(b => {
+    const p = lists[+b.dataset.i];
+    b.onclick = () => openList(p);
+    b._item = { kind: "list", p };
+  });
+  shelfLists = lists;
   paintPlayButtons();
+  renderJobs();
   return lists;
 }
+$("aibtn").onclick = () => openComposer();
 $("newbtn").onclick = () => { $("newlist").hidden = !$("newlist").hidden; if (!$("newlist").hidden) $("newname").focus(); };
 $("newlist").onsubmit = async e => {
   e.preventDefault();

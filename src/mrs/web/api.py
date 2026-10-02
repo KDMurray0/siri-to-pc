@@ -1974,7 +1974,8 @@ def api_smartplaylist_play(request: Request, kind: str, start: int = 0, _: bool 
 
 @app.get("/api/playlists/make")
 def api_playlists_make(request: Request, what: str = "", songs: int = 0, minutes: int = 0,
-                       name: str = "", target: str = "", strict: int = 0, _: bool = Auth):
+                       name: str = "", target: str = "", strict: int = 0, lean: str = "",
+                       _: bool = Auth):
     """Make a playlist of a given size from a description, in the background.
 
     "nu metal and glam metal", 500 songs: filled from each band's or genre's
@@ -2001,7 +2002,7 @@ def api_playlists_make(request: Request, what: str = "", songs: int = 0, minutes
     try:
         job = builder.start(what, songs=songs, minutes=minutes, name=name.strip()[:60],
                             target=target, store=store, taste=getattr(queue, "taste", None),
-                            strict=bool(strict))
+                            strict=bool(strict), lean=lean if lean in builder.LEANS else "")
     except builder.BuildBusy as exc:
         raise HTTPException(429, str(exc)) from None
     return {"status": "ok", "job": job, "message": f"Making it: {what}"}
@@ -2168,7 +2169,8 @@ def api_playlist_suggest(request: Request, _: bool = Auth):
     """A prompt drawn only from this listener's own listening history."""
     room = _session_for(request)
     mine = room.queue.taste if room else taste
-    names = [r.get("artist", "") for r in mine.top_artists(4)]
+    from ..core import home
+    names = [home.display(r.get("artist", "")) for r in mine.top_artists(4) if r.get("artist")]
     names = list(dict.fromkeys(n for n in names if n))[:3]
     if not names:
         recent = mine.recent(12)
@@ -2280,7 +2282,7 @@ def api_playlist(request: Request, op: str, name: str = "",
                  shuffle: bool = False, video_id: str = "", title: str = "",
                  artist: str = "", art: str = "", start: int = 0,
                  shared: bool = False, on: int = 1, new_name: str = "", format: str = "csv",
-                 image: str = "", _: bool = Auth):
+                 image: str = "", ids: str = "", undo: str = "", _: bool = Auth):
     """Make and play lists — the caller's own, not always the owner's.
 
     `shared=1` names a list in the owner's library that has been opened to
@@ -2296,7 +2298,8 @@ def api_playlist(request: Request, op: str, name: str = "",
         # owner's gets the same answer as if it weren't there.
         if not playlists.is_shared(name):
             raise HTTPException(403, "That list isn't shared")
-        if op in ("delete", "download", "share", "create", "rename", "link", "cover", "uncover", "reorder"):
+        if op in ("delete", "download", "share", "create", "rename", "link", "cover", "uncover",
+                  "reorder", "removemany", "restore"):
             raise HTTPException(403, "That's the owner's to do")
         mine = playlists
     elif mine is None:
@@ -2349,6 +2352,8 @@ def api_playlist(request: Request, op: str, name: str = "",
                         headers={"Content-Disposition": f'attachment; filename="{filename}"'})
     if op == "rename":
         got = mine.rename(name, new_name)
+        if got["ok"]:
+            changed()
         return {"status": "ok" if got["ok"] else "error", **got}
     if op == "link":
         from ..core import playlist_shares
@@ -2393,9 +2398,21 @@ def api_playlist(request: Request, op: str, name: str = "",
             changed()
         return {"status": "ok" if got.get("ok") else "error", **got}
     if op == "delete":
-        got = mine.delete(name)
+        # Moved aside for a week, so the page can offer Undo.
+        got = mine.trash(name)
         if got.get("ok"):
             changed()
+        return {"status": "ok" if got.get("ok") else "error", **got}
+    if op == "restore":
+        got = mine.restore(undo)
+        return {"status": "ok" if got.get("ok") else "error", **got}
+    if op == "removemany":
+        wanted = {v for v in (ids or "").split(",") if v.strip()}
+        if not wanted or len(wanted) > 5000:
+            raise HTTPException(400, "Say which songs")
+        if name not in mine.names():
+            raise HTTPException(404, "Choose one of your playlists")
+        got = mine.remove_many(name, wanted)
         return {"status": "ok" if got.get("ok") else "error", **got}
     if op == "play":
         if room:

@@ -520,6 +520,47 @@ def _run(verbose: bool = False) -> Result:
             c("asking for something else forgets the list", q7e.playing_from() == {} and q7e._order == [])
             say("shuffle off", c)
 
+            # -- 7e. deleting with a way back --------------------------------
+            c = _Checker("undo deletes")
+            import pathlib as _pl7
+            import tempfile as _tf7
+            from .core import curator as _cur7
+            from .core import playlists as _plm7
+            with _tf7.TemporaryDirectory(prefix="mrs-trash-") as root7:
+                lists7 = _plm7.Playlists(home=_pl7.Path(root7))
+                lists7.create("Road trip")
+                lists7.add_many("Road trip", [_Tk(video_id=f"rt{i}", title=f"Song {i}", artist="Band")
+                                              for i in range(6)])
+                gone7 = lists7.remove_many("Road trip", {"rt1", "rt3", "rt9"})
+                c("several songs go at once", gone7.get("removed") == 2
+                  and [t.video_id for t in lists7.tracks("Road trip")] == ["rt0", "rt2", "rt4", "rt5"], str(gone7))
+                lists7.undo_rewrite("Road trip")
+                c("...and one undo puts them all back, in their places",
+                  [t.video_id for t in lists7.tracks("Road trip")] == [f"rt{i}" for i in range(6)])
+                del7 = lists7.trash("Road trip")
+                c("a deleted list is gone from the library", del7.get("ok") and "Road trip" not in lists7.names(),
+                  str(del7))
+                c("...but can come back", bool(del7.get("undo")))
+                c("a made-up token brings nothing back", not lists7.restore("../../etc")["ok"]
+                  and not lists7.restore("0" * 16)["ok"])
+                back7 = lists7.restore(del7["undo"])
+                c("undo restores it whole", back7.get("ok") and "Road trip" in lists7.names()
+                  and len(lists7.tracks("Road trip")) == 6, str(back7))
+                c("...once", not lists7.restore(del7["undo"])["ok"])
+                old7 = lists7.trash("Road trip")["undo"]
+                stamp7 = _pl7.Path(root7) / "playlists" / ".trash" / old7 / "deleted.txt"
+                if not stamp7.exists():
+                    stamp7 = next(_pl7.Path(root7).rglob(f"{old7}/deleted.txt"))
+                stamp7.write_text("0", encoding="utf-8")
+                lists7.create("Another")
+                lists7.add_many("Another", [_Tk(video_id="an1", title="One", artist="Band")])
+                lists7.trash("Another")
+                c("a week on, the bin is emptied", not lists7.restore(old7)["ok"])
+            b7 = _cur7.brief_from({"songs": "120", "minutes": 9999, "note": "x"}, "a long party")
+            c("the planner's length is read, and kept in bounds", b7.songs == 120 and b7.minutes == 24 * 60)
+            c("...and nonsense is no length at all", _cur7.brief_from({"songs": "lots"}, "x").songs == 0)
+            say("undo deletes", c)
+
             # -- 8. "inside the house" must mean inside the house ----------
             c = _Checker("home")
             from .web.security import _own_wan, is_home

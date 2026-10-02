@@ -289,6 +289,13 @@ def _listener_context(taste) -> str:
         return ""
 
 
+# How the list leans, as the composer offers it.
+LEANS = {
+    "mine": " Lean on the listener's own favourites: mostly artists and songs they already play.",
+    "new": " Mostly artists the listener doesn't already play: this is for finding new music.",
+}
+
+
 def _brief_or_request(brief, what: str, context: str = ""):
     """The planner's brief, or the request itself when there isn't one."""
     from . import curator
@@ -666,7 +673,8 @@ def _fits(what: str, anchors: list[dict], songs: int, taste, progress,
 
 def build(what: str, *, songs: int = 0, minutes: int = 0, taste=None,
           progress=None, strict: bool = False,
-          context: list[Track] | None = None, notes: dict | None = None) -> list[Track]:
+          context: list[Track] | None = None, notes: dict | None = None,
+          lean: str = "") -> list[Track]:
     """The tracks, not yet saved anywhere. `notes`, if given, gets the
     planner's name for the list.
 
@@ -675,12 +683,13 @@ def build(what: str, *, songs: int = 0, minutes: int = 0, taste=None,
     bands' best-known songs carry it.
     """
     from ..resolve import llm
+    auto = not songs and not minutes
     songs = wanted_size(songs, minutes)
     brief = None
     if llm.available():
         if progress:
             progress("Reading what you asked for")
-        hint = _listener_context(taste)
+        hint = _listener_context(taste) + LEANS.get(lean, "")
         if context:
             hint += " Adding to a list with: " + "; ".join(
                 f"{t.title} by {t.artist}" for t in context[:15])[:500]
@@ -688,6 +697,11 @@ def build(what: str, *, songs: int = 0, minutes: int = 0, taste=None,
             brief = curator.plan(what, hint=hint)
         except curator.Busy as busy:
             raise GroqBusy(busy.wait) from None
+        # Auto: the planner read how long it should be from what it's for.
+        if auto and (brief.songs or brief.minutes):
+            songs = wanted_size(brief.songs, brief.minutes)
+    if notes is not None:
+        notes["size"] = songs
     anchors = _unmerge(anchors_of(what, model=brief is None))
     if brief is not None:
         anchors = _with_brief(anchors, brief, what)
@@ -753,7 +767,7 @@ def wanted_size(songs: int = 0, minutes: int = 0) -> int:
 
 def start(what: str, *, songs: int = 0, minutes: int = 0, name: str = "",
           store=None, taste=None, on_done=None, strict: bool = False,
-          target: str = "", job_id: str = "") -> str:
+          target: str = "", job_id: str = "", lean: str = "") -> str:
     """Build in the background and save it as a playlist. Returns a job id."""
     import secrets
     owner = _store_key(store)
@@ -769,6 +783,7 @@ def start(what: str, *, songs: int = 0, minutes: int = 0, name: str = "",
             _admit_build(owner, now)
         _jobs[job] = {"what": what, "state": "building", "detail": "Reading what you asked for",
                       "at": now, "name": name, "target": target, "_owner": owner,
+                      "kind": "add" if target else "make",
                       "count": 0, "found": 0, "previews": [], "strict": strict}
 
     def note(detail: str, tracks: list[Track] | None = None) -> None:
@@ -783,7 +798,7 @@ def start(what: str, *, songs: int = 0, minutes: int = 0, name: str = "",
             context = store.tracks(target) if store is not None and target else []
             notes: dict = {}
             tracks = build(what, songs=songs, minutes=minutes, taste=taste,
-                           progress=note, strict=strict, context=context, notes=notes)
+                           progress=note, strict=strict, context=context, notes=notes, lean=lean)
             if not tracks:
                 raise RuntimeError(f"couldn't find anything for {what}")
             planned = notes.get("title", "")
@@ -799,7 +814,7 @@ def start(what: str, *, songs: int = 0, minutes: int = 0, name: str = "",
             else:
                 added = len(tracks)
             mins = round(sum(t.duration or 215 for t in tracks) / 60)
-            asked = wanted_size(songs, minutes)
+            asked = notes.get("size") or wanted_size(songs, minutes)
             short = (f" -- {len(tracks)} of {asked} was all that fit"
                      if len(tracks) < asked else "")
             with _lock:
@@ -819,7 +834,7 @@ def start(what: str, *, songs: int = 0, minutes: int = 0, name: str = "",
             _keep_waiting(job, what, songs, minutes, name, strict, store, target)
             timer = threading.Timer(busy.wait, lambda: start(
                 what, songs=songs, minutes=minutes, name=name, store=store, taste=taste,
-                on_done=on_done, strict=strict, target=target, job_id=job))
+                on_done=on_done, strict=strict, target=target, job_id=job, lean=lean))
             timer.daemon = True
             timer.start()
         except Exception as exc:

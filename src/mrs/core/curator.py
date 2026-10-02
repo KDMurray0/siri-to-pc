@@ -51,6 +51,8 @@ class Brief:
     avoid: list[str] = field(default_factory=list)
     strict: bool = False
     note: str = ""
+    songs: int = 0          # the length it asks for, or suits; 0 when nothing says
+    minutes: int = 0
 
     def describe(self) -> str:
         """The brief, as the worker reads it."""
@@ -141,10 +143,13 @@ _PLAN = (
     "wouldn't fit (ballads, covers, live versions, an artist's off-style songs). "
     "strict: true only if they want nothing but the named artists. title: a short "
     "evocative name for the list, never the word playlist. note: two or three "
-    "sentences telling the curator exactly what to pick.")
+    "sentences telling the curator exactly what to pick. songs and minutes: the "
+    "length the request asks for, or that suits what it's for (a run about 45 "
+    "minutes, a party about 3 hours, a quick mix about 15 songs); both 0 when "
+    "nothing suggests a length.")
 _PLAN_FORMAT = ('{"title":"","literal":[{"artist":"","title":""}],"artists":[],'
                 '"genres":[],"mood":"","energy":"any","era":"","avoid":[],'
-                '"strict":false,"note":""}')
+                '"strict":false,"note":"","songs":0,"minutes":0}')
 
 
 def plan(what: str, *, hint: str = "") -> Brief:
@@ -175,7 +180,16 @@ def brief_from(got: dict, what: str) -> Brief:
         avoid=_strings(got.get("avoid"), 8),
         strict=_truthy(got.get("strict")),
         note=str(got.get("note") or "").strip()[:600],
+        songs=_whole(got.get("songs"), 1000),
+        minutes=_whole(got.get("minutes"), 24 * 60),
     )
+
+
+def _whole(value, top: int) -> int:
+    try:
+        return max(0, min(top, int(float(value or 0))))
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 # -- the grunt work ------------------------------------------------------------
