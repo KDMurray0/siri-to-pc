@@ -279,7 +279,11 @@ class Playlists:
 
     def summary(self) -> list[dict]:
         out = []
-        for name in self.names():
+        coll = self.collection()
+        place = {n: i for i, n in enumerate(coll["order"])}
+        pinned = set(coll["pinned"])
+        names = sorted(self.names(), key=lambda n: place.get(n, len(place)))
+        for name in names:
             rows = self.tracks(name)
             downloaded = sum(1 for t in rows if t.path and Path(t.path).is_file())
             out.append({"name": name, "count": len(rows), "downloaded": downloaded,
@@ -288,8 +292,80 @@ class Playlists:
                         "arts": [t.art for t in rows[:4] if t.art],
                         "cover": self._cover_stamp(name),
                         "seconds": sum(t.duration or 0 for t in rows),
+                        "pinned": name in pinned,
                         "folder": str(self.folder(name))})
         return out
+
+    # -- the library's own things: albums and artists saved to it, the order
+    #    the lists are kept in, and the lists pinned to Home --------------
+    COLLECTION_FILE = "collection.json"
+
+    def _collection_path(self) -> Path:
+        return Path(self.root()) / self.COLLECTION_FILE
+
+    def collection(self) -> dict:
+        try:
+            got = json.loads(self._collection_path().read_text("utf-8"))
+        except Exception:
+            got = {}
+        got = got if isinstance(got, dict) else {}
+        saved = [x for x in (got.get("saved") or []) if isinstance(x, dict)
+                 and x.get("kind") in ("album", "artist") and isinstance(x.get("name"), str)]
+        return {"saved": saved[:500],
+                "order": [n for n in (got.get("order") or []) if isinstance(n, str)][:2000],
+                "pinned": [n for n in (got.get("pinned") or []) if isinstance(n, str)][:12]}
+
+    def _write_collection(self, coll: dict) -> None:
+        write_atomic(self._collection_path(), json.dumps(coll, indent=1))
+        self._save_event()
+
+    @staticmethod
+    def _same(x: dict, kind: str, name: str, artist: str) -> bool:
+        return (x.get("kind") == kind and (x.get("name") or "").casefold() == name.casefold()
+                and (x.get("artist") or "").casefold() == (artist or "").casefold())
+
+    def save_item(self, kind: str, name: str, artist: str = "", art: str = "") -> dict:
+        name, artist = (name or "").strip()[:200], (artist or "").strip()[:200]
+        if kind not in ("album", "artist") or not name:
+            return {"ok": False, "message": "Only albums and artists can be saved"}
+        with self._lock:
+            coll = self.collection()
+            if any(self._same(x, kind, name, artist) for x in coll["saved"]):
+                return {"ok": True, "message": f"{name} is already in your library"}
+            coll["saved"].insert(0, {"kind": kind, "name": name, "artist": artist,
+                                     "art": (art or "")[:1000], "at": int(time.time())})
+            self._write_collection(coll)
+        return {"ok": True, "message": f"Saved {name} to your library"}
+
+    def unsave_item(self, kind: str, name: str, artist: str = "") -> dict:
+        with self._lock:
+            coll = self.collection()
+            kept = [x for x in coll["saved"] if not self._same(x, kind, name or "", artist or "")]
+            if len(kept) == len(coll["saved"]):
+                return {"ok": False, "message": "That isn't in your library"}
+            coll["saved"] = kept
+            self._write_collection(coll)
+        return {"ok": True, "message": f"Took {name} out of your library"}
+
+    def set_order(self, names: list[str]) -> dict:
+        with self._lock:
+            have = set(self.names())
+            coll = self.collection()
+            coll["order"] = [n for n in dict.fromkeys(names) if n in have]
+            self._write_collection(coll)
+        return {"ok": True, "message": "Moved"}
+
+    def set_pinned(self, name: str, on: bool) -> dict:
+        with self._lock:
+            if name not in self.names():
+                return {"ok": False, "message": f"There's no list called {name}"}
+            coll = self.collection()
+            pins = [n for n in coll["pinned"] if n != name]
+            if on:
+                pins.insert(0, name)
+            coll["pinned"] = pins[:12]
+            self._write_collection(coll)
+        return {"ok": True, "message": f"Pinned {name} to Home" if on else f"Unpinned {name}"}
 
     # -- shared lists --------------------------------------------------
     # A list the whole house can add to. The folder stays the owner's —
@@ -453,6 +529,12 @@ class Playlists:
                 return {"ok": False, "message": "A playlist already has that name"}
             # Keep paths, offline files, collaboration flags and credits intact.
             write_atomic(folder / "name.txt", new_name)
+            # ...and its place in the library, and its pin on Home.
+            coll = self.collection()
+            if name in coll["order"] or name in coll["pinned"]:
+                coll["order"] = [new_name if n == name else n for n in coll["order"]]
+                coll["pinned"] = [new_name if n == name else n for n in coll["pinned"]]
+                write_atomic(self._collection_path(), json.dumps(coll, indent=1))
         self._save_event()
         return {"ok": True, "name": new_name, "message": f"Renamed to {new_name}"}
 

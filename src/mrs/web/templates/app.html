@@ -400,6 +400,31 @@ body.noplay .play{opacity:.5}
 .lrow.editing .cov{position:relative}
 .lrow.editing .cov::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.22),transparent);
   background-size:200% 100%;animation:shimmer 1.2s linear infinite}
+/* dragging: a chip under the pointer, the library lighting up for it */
+body.dragging,body.dragging *{user-select:none;-webkit-user-select:none;cursor:grabbing!important}
+.ghost{position:fixed;left:0;top:0;z-index:95;pointer-events:none;display:flex;align-items:center;gap:10px;
+  padding:6px 14px 6px 6px;border-radius:12px;max-width:280px;box-shadow:0 14px 40px rgba(0,0,0,.45);
+  animation:pop .14s var(--ease)}
+.ghost .thumb{width:38px;height:38px;flex:0 0 auto}
+.ghost .thumb::after{display:none}
+.ghost b{display:block;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ghost span{display:block;font-size:11.5px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ghost .count{position:absolute;right:-8px;top:-8px;min-width:22px;height:22px;padding:0 6px;border-radius:999px;
+  background:var(--accent);color:var(--accent-ink);font-size:11.5px;font-weight:700;display:grid;place-items:center}
+body.dragging .ledger{box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--accent) 55%,transparent),0 20px 60px rgba(0,0,0,.4)}
+body.dragging.focus .ledger{transform:none;opacity:1}
+.lrow.dropon{background:color-mix(in srgb,var(--accent) 24%,transparent)!important;box-shadow:inset 0 0 0 1.5px var(--accent)}
+.lrow.drop-before{box-shadow:inset 0 2px 0 var(--accent)}
+.lrow.drop-after{box-shadow:inset 0 -2px 0 var(--accent)}
+.ledger.dropsave{background:color-mix(in srgb,var(--accent) 10%,var(--glass))}
+.drophint{display:none;margin:0 8px 8px;padding:9px 12px;border-radius:10px;font-size:12px;color:var(--sub);
+  border:1.5px dashed color-mix(in srgb,var(--fg) 22%,transparent);text-align:center}
+body.dragging .drophint{display:block}
+.pinzone{position:fixed;left:50%;top:calc(var(--top) + 6px);translate:-50% 0;z-index:60;padding:12px 22px;border-radius:999px;
+  font-size:13px;font-weight:600;border:1.5px dashed color-mix(in srgb,var(--fg) 30%,transparent);display:none}
+body.drag-list .pinzone{display:block;animation:pop .16s var(--ease)}
+.pinzone.dropon{background:color-mix(in srgb,var(--accent) 28%,var(--glass));border-color:var(--accent)}
+.lrow .cov.round{border-radius:50%}
 /* sharing a song: a card over the button, not a toast with a URL in it */
 .sharepop{position:fixed;z-index:45;width:min(340px,calc(100vw - 24px));padding:14px;border-radius:18px;
   animation:pop .16s var(--ease);transform-origin:bottom right}
@@ -470,10 +495,12 @@ body.noplay .play{opacity:.5}
     <button id="newbtn" title="New playlist" aria-label="New playlist"><svg class="svg" viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg></button></div></h2>
   <form class="newlist" id="newlist" hidden><input id="newname" maxlength="120" placeholder="Playlist name" aria-label="Playlist name" required></form>
   <div class="jobs" id="jobs"></div>
+  <div class="drophint" id="drophint">Drop on a playlist to add it</div>
   <div class="shelf" id="shelf"></div>
 </aside>
 
 <main class="canvas" id="canvas"></main>
+<div class="pinzone glass" id="pinzone">Pin to Home</div>
 
 <footer class="deck glass">
   <button class="song" id="song" title="Now playing">
@@ -1174,9 +1201,10 @@ document.addEventListener("contextmenu", e => {
     : it.kind === "liked" ? [{ label: "Play", act: () => ctxPress(ctxKey("smart", "liked"), () => playLiked()) }, { label: "Open", act: openLiked }]
     : it.kind === "album" ? [{ label: "Play", act: () => ctxPress(albumKey(it.a.name, it.a.artist), () => playAlbum(it.a.name, it.a.artist)) },
         { label: "Open", act: () => openAlbum(it.a.name, it.a.artist) },
-        ...(it.a.artist ? [{ label: "Go to " + it.a.artist.split(",")[0], act: () => openArtist(it.a.artist.split(",")[0].trim()) }] : [])]
+        ...(it.a.artist ? [{ label: "Go to " + it.a.artist.split(",")[0], act: () => openArtist(it.a.artist.split(",")[0].trim()) }] : []),
+        "-", saveItem("album", it.a)]
     : it.kind === "artist" ? [{ label: "Play", act: () => ctxPress(ctxKey("artist", it.a.name), () => playArtist(it.a.name)) },
-        { label: "Open", act: () => openArtist(it.a.name) }]
+        { label: "Open", act: () => openArtist(it.a.name) }, "-", saveItem("artist", it.a)]
     : [];
   if (items.length) openMenu(e.clientX, e.clientY, items);
 });
@@ -1223,6 +1251,16 @@ async function addSongsTo(name, tracks) {
   }
   toast(added ? `Added ${added > 1 ? added + " songs" : "it"} to ${name}` : `Couldn't add to ${name}`);
 }
+function saveItem(kind, a) {
+  return isSaved(kind, a)
+    ? { label: "Take out of your library", act: () => collect("unsave", kind, a) }
+    : { label: "Save to your library", act: () => collect("save", kind, a) };
+}
+async function collect(how, kind, a) {
+  const r = await api(`/api/collection/${how}?kind=${kind}&name=${enc(a.name)}&artist=${enc(kind === "album" ? a.artist || "" : "")}&art=${enc(a.art || "")}`);
+  toast((r && r.message) || "Couldn't do that");
+}
+const pinList = (p, on) => api("/api/collection/pin?name=" + enc(p.name) + "&on=" + (on ? 1 : 0)).then(r => toast((r && r.message) || "Couldn't do that"));
 function listMenu(p, { root = null } = {}) {
   const items = [{ label: "Play", act: () => ctxPress(listKey(p), () => playList(p.name, p.shared)) },
                  { label: "Shuffle play", act: () => playList(p.name, p.shared, 0, true) }];
@@ -1234,6 +1272,7 @@ function listMenu(p, { root = null } = {}) {
     { label: "Change cover", act: () => pickCover(p) },
     ...(p.cover ? [{ label: "Use the first four songs", act: () => uncoverList(p) }] : []),
     { label: "Rename…", act: () => renameList(p) },
+    { label: p.pinned ? "Unpin from Home" : "Pin to Home", act: () => pinList(p, !p.pinned) },
     "-",
     { label: "Delete playlist", danger: true, act: () => deleteLists([p]) });
   return items;
@@ -1567,6 +1606,173 @@ try {
 } catch (e) {}
 if (JOBS.size) setTimeout(pollJobs, 800);
 
+/* ── dragging: a song, an album, an artist or a list, from anywhere ──
+   No grips: press and move. The library lights up for whatever it can take;
+   leaving a sheet well behind closes it so the library is there to drop on;
+   a drop on nothing sends the chip back where it came from. */
+let drag = null;
+const NOT_DRAGGED = "input,textarea,select,.bar,.go,.bigplay,.round-ib,.x,.more,.selbar,.menu,.infind,[data-a],[data-unpin]";
+document.addEventListener("pointerdown", e => {
+  if (e.button !== 0 || e.pointerType === "touch" || e.target.closest(NOT_DRAGGED)) return;
+  let el = e.target;
+  while (el && !el._item) el = el.parentElement;
+  if (!el || el._item.kind === "liked") return;
+  drag = { item: el._item, src: el, x0: e.clientX, y0: e.clientY, id: e.pointerId, live: false };
+}, true);
+document.addEventListener("pointermove", e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  if (!drag.live) {
+    if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 6) return;
+    startDrag(e);
+  }
+  e.preventDefault();
+  moveDrag(e.clientX, e.clientY);
+}, true);
+document.addEventListener("pointerup", e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  if (drag.live) { e.preventDefault(); endDrag(e.clientX, e.clientY); } else drag = null;
+}, true);
+document.addEventListener("pointercancel", () => { if (drag && drag.live) zipBack(); drag = null; }, true);
+function dragPayload(it) {
+  if (it.kind === "song") {
+    const root = it.root, many = root && root._sel && root._sel.has(it.i) && root._sel.size > 1;
+    const songs = many ? picked(root) : [it.t];
+    return { kind: "song", songs, title: many ? `${songs.length} songs` : (it.t.title || it.t.name || ""),
+             sub: many ? "" : it.t.artist || "", art: it.t.art, count: many ? songs.length : 0 };
+  }
+  if (it.kind === "album") return { kind: "album", a: it.a, title: it.a.name, sub: "Album" + (it.a.artist ? " · " + it.a.artist : ""), art: it.a.art };
+  if (it.kind === "artist") return { kind: "artist", a: it.a, title: it.a.name, sub: "Artist", art: it.a.art };
+  if (it.kind === "list") return { kind: "list", p: it.p, title: it.p.name, sub: "Playlist", art: (it.p.arts || [])[0] };
+  return null;
+}
+function startDrag(e) {
+  const load = dragPayload(drag.item);
+  if (!load) { drag = null; return; }
+  drag.fromSheet = !!drag.src.closest(".scrim");
+  try { drag.src.setPointerCapture(drag.id); } catch (err) {}
+  showGhost(load);
+}
+function showGhost(load) {
+  drag.live = true;
+  drag.load = load;
+  closeMenu();
+  const g = document.createElement("div");
+  g.className = "ghost glass";
+  g.innerHTML = `<div class="thumb${load.kind === "artist" ? " round" : ""}"${load.kind === "artist" ? ' style="border-radius:50%"' : ""}>${img(load.art)}</div>` +
+    `<div style="min-width:0"><b>${esc(load.title)}</b>${load.sub ? `<span>${esc(load.sub)}</span>` : ""}</div>` +
+    (load.count ? `<i class="count">${load.count}</i>` : "");
+  document.body.appendChild(g);
+  drag.ghost = g;
+  document.body.classList.add("dragging", "drag-" + load.kind);
+  $("drophint").textContent = load.kind === "list" ? "Drop between playlists to move it"
+    : load.kind === "song" ? "Drop on a playlist to add it"
+    : "Drop here to save it, or on a playlist to add it";
+}
+// The click that ends a drag isn't a click; nor is a picture's own drag a drag.
+let dragEnded = 0;
+window.addEventListener("click", ev => {
+  if (performance.now() - dragEnded < 80) { ev.stopPropagation(); ev.preventDefault(); }
+}, true);
+document.addEventListener("dragstart", ev => { if (!ev.target.closest("input,textarea")) ev.preventDefault(); });
+function dropTarget(x, y) {
+  const under = document.elementFromPoint(x, y);
+  if (!under) return null;
+  if (under.closest("#pinzone")) return drag.load.kind === "list" ? { kind: "pin", el: $("pinzone") } : null;
+  const row = under.closest(".ledger .lrow[data-i]");
+  if (row) {
+    const p = shelfLists[+row.dataset.i];
+    if (drag.load.kind === "list") {
+      if (p.shared || p.name === drag.load.p.name) return null;
+      const r = row.getBoundingClientRect();
+      return { kind: "move", el: row, p, after: y > r.top + r.height / 2 };
+    }
+    return p.shared ? null : { kind: "add", el: row, p };
+  }
+  if (under.closest(".ledger") && (drag.load.kind === "album" || drag.load.kind === "artist"))
+    return { kind: "save", el: document.querySelector(".ledger") };
+  return null;
+}
+function moveDrag(x, y) {
+  drag.ghost.style.transform = `translate(${x + 14}px, ${y + 12}px)`;
+  // Out of a sheet and well clear of it: the sheet goes, the library's there.
+  if (drag.fromSheet && overlay) {
+    const r = overlay.querySelector(".sheet").getBoundingClientRect(), m = 56;
+    if (x < r.left - m || x > r.right + m || y < r.top - m || y > r.bottom + m) { closeOverlay(); drag.fromSheet = false; }
+  }
+  const t = dropTarget(x, y);
+  const was = drag.target;
+  if (was && (!t || was.el !== t.el || was.after !== t.after)) was.el.classList.remove("dropon", "drop-before", "drop-after", "dropsave");
+  if (t) t.el.classList.add(t.kind === "move" ? (t.after ? "drop-after" : "drop-before") : t.kind === "save" ? "dropsave" : "dropon");
+  drag.target = t;
+}
+function stopDragging() {
+  dragEnded = performance.now();
+  if (drag && drag.target) drag.target.el.classList.remove("dropon", "drop-before", "drop-after", "dropsave");
+  document.body.classList.remove("dragging", "drag-song", "drag-album", "drag-artist", "drag-list");
+}
+function zipBack() {
+  const d = drag, g = d && d.ghost;
+  stopDragging();
+  if (!g) return;
+  const from = g.getBoundingClientRect();
+  const home = d.src.isConnected ? d.src.getBoundingClientRect() : null;
+  const to = home ? `translate(${home.left + 8}px, ${home.top + home.height / 2 - from.height / 2}px)` : g.style.transform;
+  g.animate([{ transform: g.style.transform, opacity: 1 }, { transform: to, opacity: home ? .6 : 0 }],
+            { duration: 280, easing: "cubic-bezier(.3,.7,.2,1)" }).onfinish = () => g.remove();
+  setTimeout(() => g.remove(), 400);
+}
+async function endDrag(x, y) {
+  const d = drag;
+  const t = dropTarget(x, y);
+  if (!t) { zipBack(); drag = null; return; }
+  stopDragging();
+  d.ghost.animate([{ opacity: 1, transform: d.ghost.style.transform + " scale(1)" },
+                   { opacity: 0, transform: d.ghost.style.transform + " scale(.6)" }], { duration: 180 }).onfinish = () => d.ghost.remove();
+  drag = null;
+  const L = d.load;
+  if (t.kind === "add") {
+    if (L.kind === "song") addSongsTo(t.p.name, L.songs);
+    else if (L.kind === "album") {
+      const r = await api("/api/album?name=" + enc(L.a.name) + "&artist=" + enc(L.a.artist || ""));
+      const songs = (r && r.tracks) || [];
+      songs.length ? addSongsTo(t.p.name, songs) : toast("Couldn't find that album's songs");
+    } else if (L.kind === "artist") {
+      const r = await api("/api/artist?name=" + enc(L.a.name));
+      const songs = ((r && r.top) || []).slice(0, 10);
+      songs.length ? addSongsTo(t.p.name, songs) : toast("Couldn't find their songs");
+    }
+  } else if (t.kind === "save") collect("save", L.kind, L.a);
+  else if (t.kind === "pin") pinList(L.p, true);
+  else if (t.kind === "move") {
+    const names = shelfLists.filter(p => !p.shared).map(p => p.name).filter(n => n !== L.p.name);
+    let at = names.indexOf(t.p.name);
+    if (t.after) at += 1;
+    names.splice(Math.max(0, at), 0, L.p.name);
+    const r = await api("/api/collection/order?names=" + enc(JSON.stringify(names)));
+    if (!r) toast("Couldn't move that");
+  }
+}
+document.addEventListener("keydown", e => { if (e.key === "Escape" && drag && drag.live) { e.stopImmediatePropagation(); zipBack(); drag = null; } }, true);
+/* A queue row carried out of Now playing: the frame keeps the pointer and
+   tells the page where it is; the page shows the chip, opens the library and
+   takes the drop. */
+window.addEventListener("message", e => {
+  if (e.origin !== location.origin || !e.data || e.data.type !== "qdrag") return;
+  const f = nowPane && nowPane.querySelector("iframe");
+  if (!f) return;
+  const r = f.getBoundingClientRect(), x = r.left + e.data.x, y = r.top + e.data.y, t = e.data.song || {};
+  if (e.data.phase === "move") {
+    if (!drag || !drag.fromFrame) {
+      drag = { src: f, fromFrame: true, live: false };
+      showGhost({ kind: "song", songs: [t], title: t.title || "", sub: t.artist || "", art: t.art });
+    }
+    moveDrag(x, y);
+  } else if (drag && drag.fromFrame) {
+    if (e.data.phase === "drop") endDrag(x, y);
+    else { stopDragging(); if (drag.ghost) drag.ghost.remove(); drag = null; }
+  }
+});
+
 /* ── settings: the player's own settings, in a panel over the page ── */
 async function openSettings() {
   closeOverlay();
@@ -1610,6 +1816,11 @@ const VIEWS = {
         `<button class="gplay" data-genre="${i}" title="Play ${esc(g.name)}" aria-label="Play ${esc(g.name)}">${ICON.play}</button></div>`).join(""), "logobar"));
     if (h.recent.length) html += sect("Jump back in", "What you played lately", shelf(
       h.recent.map((t, i) => `<button class="card" data-recent="${i}"><div class="art one">${img(t.art)}<span class="go">${ICON.play}</span></div><b>${esc(t.title)}</b><span>${esc(t.artist)}</span></button>`).join("")));
+    (h.pinned || []).forEach((pl, k) => {
+      html += sect(pl.name, `Pinned · ${pl.count} songs`, shelf(pl.tracks.map((t, i) =>
+        `<button class="card" data-pinned="${k}" data-i="${i}"><div class="art one">${img(t.art)}<span class="go">${ICON.play}</span></div>` +
+        `<b>${esc(t.title)}</b><span>${esc(t.artist)}</span></button>`).join("")), `<button data-unpin="${k}">Unpin</button>`);
+    });
     if (h.lists.length) html += sect("Your playlists", "The ones you made and the ones shared with you",
       shelf(h.lists.slice(0, 16).map(listCard).join("")), `<button data-go="library">Show all</button>`);
     if (h.artists.length) html += sect("Your top artists", "Who you play most", shelf(h.artists.slice(0, 24).map(artistCard).join("")),
@@ -1620,6 +1831,12 @@ const VIEWS = {
     if (!h.recent.length && !h.artists.length && !h.charts.length && !h.lists.length)
       html += `<div class="empty">Play a few songs and this fills up with what you like. Search up top to start.</div>`;
     pane.innerHTML = html;
+    pane.querySelectorAll("[data-pinned]").forEach(b => {
+      const pl = h.pinned[+b.dataset.pinned], i = +b.dataset.i, t = pl.tracks[i];
+      b.onclick = () => playList(pl.name, false, i);
+      b._item = { kind: "song", t, play: () => playList(pl.name, false, i) };
+    });
+    pane.querySelectorAll("[data-unpin]").forEach(b => b.onclick = () => pinList(h.pinned[+b.dataset.unpin], false));
     pane.querySelectorAll("[data-recent]").forEach(b => {
       const t = h.recent[+b.dataset.recent];
       b.onclick = () => playSong(t);
@@ -1776,16 +1993,21 @@ $("q").addEventListener("keydown", e => {
 });
 
 /* ── the ledger ── */
-let shelfKnown = null, shelfLists = [];
+let shelfKnown = null, shelfLists = [], savedItems = [];
+const savedKey = a => `${a.kind}|${(a.name || "").toLowerCase()}|${(a.artist || "").toLowerCase()}`;
+const isSaved = (kind, a) => savedItems.some(x => savedKey(x) === savedKey({ kind, name: a.name, artist: kind === "album" ? a.artist : "" }));
 async function loadShelf() {
-  const r = await api("/api/playlists");
+  const [r, coll] = await Promise.all([api("/api/playlists"), api("/api/collection")]);
+  savedItems = (coll && coll.saved) || [];
   const lists = ((r && r.playlists) || []).concat(((r && r.shared) || []).map(p => ({ ...p, shared: true })));
   await urlToken();
   const before = shelfKnown;
   shelfKnown = new Set(lists.map(p => (p.shared ? "s:" : "m:") + p.name));
   $("shelf").innerHTML =
     `<button class="lrow" data-liked="1" data-ctx-row="${esc(ctxKey("smart", "liked"))}" title="Liked songs"><div class="cov heart">${ICON.heart}</div><div><b>Liked songs</b><span>Playlist</span></div></button>` +
-    lists.map((p, i) => `<button class="lrow" data-i="${i}" data-ctx-row="${esc(listKey(p))}" title="${esc(p.name)}">${listCover(p, "cov")}<div><b>${esc(p.name)}</b><span>${p.shared ? "Shared · " : ""}${p.count} songs</span></div></button>`).join("");
+    lists.map((p, i) => `<button class="lrow" data-i="${i}" data-ctx-row="${esc(listKey(p))}" title="${esc(p.name)}">${listCover(p, "cov")}<div><b>${esc(p.name)}</b><span>${p.shared ? "Shared · " : ""}${p.count} songs</span></div></button>`).join("") +
+    savedItems.map((a, i) => `<button class="lrow" data-saved="${i}" title="${esc(a.name)}"><div class="cov one${a.kind === "artist" ? " round" : ""}">${img(a.art)}</div>` +
+      `<div><b>${esc(a.name)}</b><span>${a.kind === "artist" ? "Artist" : "Album" + (a.artist ? " · " + esc(a.artist) : "")}</span></div></button>`).join("");
   if (before) $("shelf").querySelectorAll(".lrow[data-i]").forEach(b => {
     const p = lists[+b.dataset.i];
     if (!before.has((p.shared ? "s:" : "m:") + p.name)) b.classList.add("fresh");
@@ -1796,6 +2018,11 @@ async function loadShelf() {
     const p = lists[+b.dataset.i];
     b.onclick = () => openList(p);
     b._item = { kind: "list", p };
+  });
+  $("shelf").querySelectorAll(".lrow[data-saved]").forEach(b => {
+    const a = savedItems[+b.dataset.saved];
+    b._item = { kind: a.kind, a };
+    b.onclick = () => a.kind === "artist" ? openArtist(a.name) : openAlbum(a.name, a.artist);
   });
   shelfLists = lists;
   paintPlayButtons();

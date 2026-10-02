@@ -582,6 +582,34 @@ def _run(verbose: bool = False) -> Result:
             c("a busy Groq part-way just ends the run with what it has", len(run7) == 180, str(len(run7)))
             say("long picks", c)
 
+            # -- 7g. the library keeps albums, artists, an order and pins ----
+            c = _Checker("your library")
+            with _tf7.TemporaryDirectory(prefix="mrs-coll-") as root7g:
+                lib7 = _plm7.Playlists(home=_pl7.Path(root7g))
+                for n7 in ("Alpha", "Bravo", "Charlie"):
+                    lib7.create(n7)
+                    lib7.add_many(n7, [_Tk(video_id=n7 + "1", title="One", artist="Band")])
+                c("an album dropped on the library is kept",
+                  lib7.save_item("album", "Dirt", "Alice in Chains", "x")["ok"]
+                  and lib7.collection()["saved"][0]["name"] == "Dirt")
+                lib7.save_item("album", "dirt", "alice in chains")
+                c("...once, however it's written", len(lib7.collection()["saved"]) == 1)
+                c("only albums and artists", not lib7.save_item("song", "Rooster")["ok"])
+                c("...and can be taken out again", lib7.unsave_item("album", "Dirt", "Alice in Chains")["ok"]
+                  and lib7.collection()["saved"] == [])
+                lib7.set_order(["Charlie", "Alpha", "Nope"])
+                c("dragging the lists puts them in that order",
+                  [r["name"] for r in lib7.summary()] == ["Charlie", "Alpha", "Bravo"],
+                  str([r["name"] for r in lib7.summary()]))
+                lib7.set_pinned("Bravo", True)
+                c("a list pinned to Home says so", [r["name"] for r in lib7.summary() if r["pinned"]] == ["Bravo"])
+                lib7.rename("Charlie", "Delta")
+                lib7.rename("Bravo", "Echo")
+                c("renaming keeps its place and its pin",
+                  [r["name"] for r in lib7.summary()][0] == "Delta" and lib7.collection()["pinned"] == ["Echo"],
+                  str(lib7.collection()))
+            say("your library", c)
+
             # -- 8. "inside the house" must mean inside the house ----------
             c = _Checker("home")
             from .web.security import _own_wan, is_home

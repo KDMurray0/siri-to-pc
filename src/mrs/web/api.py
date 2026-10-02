@@ -632,7 +632,15 @@ def api_home(request: Request, _: bool = Auth):
     else:
         me = _profile_for(request)
         mine = me.taste if me is not None and me.permanent else None
-    return {"status": "ok", **home.sections(mine, _lists_for(request))}
+    lists = _lists_for(request)
+    pinned = []
+    if lists is not None:
+        for name in lists.collection()["pinned"]:
+            if name in lists.names():
+                rows = lists.tracks(name)
+                pinned.append({"name": name, "tracks": [t.to_dict() for t in rows[:24]],
+                               "count": len(rows)})
+    return {"status": "ok", **home.sections(mine, lists), "pinned": pinned}
 
 
 @app.get("/api/artist")
@@ -4261,6 +4269,54 @@ def download_client(request: Request):
                             429, base=base)
     return FileResponse(built, media_type="application/zip", filename="MusicClient.zip",
                         headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/collection")
+def api_collection(request: Request, _: bool = Auth):
+    """Albums and artists saved to the library, its order, and what's pinned to Home."""
+    store = _lists_for(request)
+    if store is None:
+        return {"status": "ok", "saved": [], "order": [], "pinned": []}
+    return {"status": "ok", **store.collection()}
+
+
+def _collection_store(request: Request):
+    store = _lists_for(request)
+    if store is None:
+        raise HTTPException(409, "Your library needs an account or the owner's player")
+    return store
+
+
+@app.get("/api/collection/save")
+def api_collection_save(request: Request, kind: str = "", name: str = "", artist: str = "",
+                        art: str = "", _: bool = Auth):
+    got = _collection_store(request).save_item(kind, name, artist, art)
+    return {"status": "ok" if got.get("ok") else "error", **got}
+
+
+@app.get("/api/collection/unsave")
+def api_collection_unsave(request: Request, kind: str = "", name: str = "", artist: str = "",
+                          _: bool = Auth):
+    got = _collection_store(request).unsave_item(kind, name, artist)
+    return {"status": "ok" if got.get("ok") else "error", **got}
+
+
+@app.get("/api/collection/order")
+def api_collection_order(request: Request, names: str = "", _: bool = Auth):
+    try:
+        order = json.loads(names or "[]")
+    except ValueError:
+        raise HTTPException(400, "names must be a JSON list")
+    if not isinstance(order, list) or len(order) > 2000:
+        raise HTTPException(400, "names must be a JSON list")
+    got = _collection_store(request).set_order([str(n) for n in order])
+    return {"status": "ok", **got}
+
+
+@app.get("/api/collection/pin")
+def api_collection_pin(request: Request, name: str = "", on: int = 1, _: bool = Auth):
+    got = _collection_store(request).set_pinned(name, bool(on))
+    return {"status": "ok" if got.get("ok") else "error", **got}
 
 
 @app.get("/api/companion")

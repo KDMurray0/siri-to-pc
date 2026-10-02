@@ -375,17 +375,13 @@ div.qi::after{content:"";position:absolute;inset:24%;opacity:.4;
 .q:hover .why{opacity:.75}
 .q.cur .qn{color:var(--accent)}
 .qctl{display:flex;gap:2px;opacity:0;transition:opacity .15s}
-/* six dots you can grab; always visible, since a handle you can't see isn't
-   a handle. touch-action tells the browser we handle the drag ourselves,
-   otherwise it scrolls the panel instead. */
-.grip{display:grid;grid-template-columns:1fr 1fr;gap:2px;padding:4px 3px;
-  cursor:grab;touch-action:none;opacity:.45;align-content:center;flex:0 0 auto}
-.grip:hover{opacity:1}
-.grip i{width:3px;height:3px;border-radius:50%;background:var(--sub);display:block}
-.grip:hover i{background:var(--accent)}
+/* The whole row is the handle: press and move, no dots to aim for. */
+.q{cursor:grab}
 .q.dragging{opacity:.9;background:color-mix(in srgb,var(--accent) 16%,var(--panel));
   box-shadow:0 8px 20px rgba(0,0,0,.45);cursor:grabbing;position:relative;z-index:5}
-.q.dragging .grip{cursor:grabbing;opacity:1}
+/* carried out of the list in the full player: the page around it has it now */
+.q.dragging.handed{opacity:.35;box-shadow:none;background:none}
+body.reordering,body.reordering *{user-select:none;-webkit-user-select:none;cursor:grabbing}
 body.reordering .q{transition:transform .12s ease}
 .q:hover .qctl{opacity:1}
 .qc{background:none;border:0;color:var(--sub);cursor:pointer;width:22px;height:22px;
@@ -3606,33 +3602,61 @@ function qRow(t) {
     `<div class="qa">${esc(t.artist||"")}${why}</div></div>${eq}` +
     `<div class="qctl">` +
       `<button class="qc danger" data-act="del" data-i="${t.index}" title="Remove">✕</button>` +
-      `<span class="grip" title="Drag to reorder">${GRIP}</span>` +
     `</div></div>`;
 }
-const GRIP = "<i></i><i></i><i></i><i></i><i></i><i></i>";
 let dragging = () => false;   // replaced once the queue drag is wired
 
-/* Drag a row by its dots. The DOM is reordered as you go so you can see where
-   it will land, then the real playlist index is sent once on release.
+/* Grab a row anywhere and move it. The DOM is reordered as you go so you can
+   see where it will land, then the real playlist index is sent once on
+   release. A press that doesn't move is still a click (it jumps to the song);
+   a finger has to hold a moment first, so a swipe still scrolls.
    Rows carry their true queue index in data-idx — the visible list can start
-   part-way down, so DOM position is not the index. */
+   part-way down, so DOM position is not the index.
+   Inside the full player, a row carried out of the list is handed to the page
+   around it, which can drop it on a playlist; the row goes back where it was. */
+const EMBEDDED = document.documentElement.classList.contains("embedded");
 function enableDrag(box, rowSel, onDrop) {
-  let drag = null;
-  box.addEventListener("pointerdown", e => {
-    const grip = e.target.closest(".grip");
-    if (!grip) return;
-    const row = grip.closest(rowSel);
-    if (!row) return;
-    e.preventDefault();
+  let drag = null, press = null;
+  const begin = p => {
     const rows = [...box.querySelectorAll(rowSel)];
-    drag = { row, order: rows.map(r => +r.dataset.idx), from: +row.dataset.idx };
-    row.setPointerCapture(e.pointerId);
-    row.classList.add("dragging");
+    drag = { row: p.row, order: rows.map(r => +r.dataset.idx), from: +p.row.dataset.idx,
+             home: p.row.nextSibling, out: false };
+    try { p.row.setPointerCapture(p.id); } catch (err) {}
+    p.row.classList.add("dragging");
     document.body.classList.add("reordering");
+    press = null;
+  };
+  const songOf = row => {
+    const q = lastQ.find(x => String(x.index) === row.dataset.idx) || {};
+    return { video_id: q.video_id || "", title: q.title || "", artist: q.artist || "", art: q.art || "" };
+  };
+  const tell = (phase, e) => parent.postMessage({ type: "qdrag", phase, x: e ? e.clientX : 0, y: e ? e.clientY : 0,
+                                                  song: drag && songOf(drag.row) }, location.origin);
+  box.addEventListener("pointerdown", e => {
+    if (e.button !== 0 || e.target.closest("button,input,a")) return;
+    const row = e.target.closest(rowSel);
+    if (!row) return;
+    press = { row, x: e.clientX, y: e.clientY, id: e.pointerId, touch: e.pointerType === "touch" };
+    if (press.touch) { const p = press; p.hold = setTimeout(() => { if (press === p) begin(p); }, 320); }
   });
   box.addEventListener("pointermove", e => {
+    if (press && !drag) {
+      const moved = Math.hypot(e.clientX - press.x, e.clientY - press.y);
+      if (press.touch) { if (moved > 8) { clearTimeout(press.hold); press = null; } return; }
+      if (moved < 6) return;
+      begin(press);
+    }
     if (!drag) return;
     e.preventDefault();
+    const r = box.getBoundingClientRect();
+    const out = EMBEDDED && parent !== window && (e.clientX < r.left - 28 || e.clientX > r.right + 28);
+    if (out !== drag.out) {
+      drag.out = out;
+      drag.row.classList.toggle("handed", out);
+      if (out) box.insertBefore(drag.row, drag.home && drag.home.parentNode === box ? drag.home : null);
+      else tell("leave");
+    }
+    if (out) { tell("move", e); return; }
     for (const other of box.querySelectorAll(rowSel)) {
       if (other === drag.row) continue;
       const r = other.getBoundingClientRect();
@@ -3642,12 +3666,16 @@ function enableDrag(box, rowSel, onDrop) {
       if (e.clientY > mid && after) { box.insertBefore(drag.row, other.nextSibling); break; }
     }
   });
-  const finish = () => {
+  const finish = e => {
+    if (press) { clearTimeout(press.hold); press = null; }
     if (!drag) return;
-    const { row, order, from } = drag;
+    const { row, order, from, out } = drag;
+    if (out) tell(e && e.type === "pointerup" ? "drop" : "leave", e);
     drag = null;
-    row.classList.remove("dragging");
+    row.classList.remove("dragging", "handed");
     document.body.classList.remove("reordering");
+    justDragged = Date.now();          // the release must not also jump tracks
+    if (out) return;
     const pos = [...box.querySelectorAll(rowSel)].indexOf(row);
     const to = order[pos];
     if (to !== undefined && to !== from) onDrop(from, to);
@@ -3698,9 +3726,8 @@ function renderQueue(rows) {
   const h = $("qHist");
   if (h) h.onclick = e => { e.stopPropagation(); histOpen = !histOpen; renderQueue(lastQ); };
 }
-let justDragged = 0;
+var justDragged = 0;
 dragging = enableDrag($("panel-queue"), ".q", (from, to) => {
-  justDragged = Date.now();          // the release must not also jump tracks
   api("/api/queue/move?from=" + from + "&to=" + to);
 });
 
@@ -3713,7 +3740,7 @@ $("panel-queue").addEventListener("click", e => {
       api("/api/queue/remove?index=" + i).then(() => toast("Removed — press Z to undo"));
     return;
   }
-  if (e.target.closest(".grip") || Date.now() - justDragged < 250) return;
+  if (Date.now() - justDragged < 250) return;
   const row = e.target.closest(".q");
   if (row) api("/api/queue/jump?index=" + row.dataset.idx);
 });
