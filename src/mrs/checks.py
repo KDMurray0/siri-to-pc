@@ -2741,6 +2741,17 @@ def _run(verbose: bool = False) -> Result:
                          for u in ("/player?classic=1", "/player?embed=1", "/player?token=share.xyz")]
                 c("...unless it asked for the classic, is embedded, or is a private share's listen",
                   all(r.status_code != 302 for r in stays), str([r.status_code for r in stays]))
+                # A guest's full player plays through the classic page inside
+                # it; if that page won't load for them, they hear nothing.
+                as_guest = _sign_in_as("1234567890")
+                engine_page = client.get("/player?embed=1", headers=ua_phone, cookies=as_guest)
+                c("a guest's full player has its engine: the classic page loads embedded",
+                  engine_page.status_code == 200 and "window.mrsEngine" in engine_page.text
+                  and 'const GUEST = "1" === "1"' in engine_page.text, str(engine_page.status_code))
+                app_page = client.get("/app", headers=ua_phone, cookies=as_guest)
+                c("...and the full player knows it's a guest's, so it plays on their phone",
+                  app_page.status_code == 200 and 'const GUEST = "1" === "1"' in app_page.text
+                  and "let HERE = GUEST" in app_page.text, str(app_page.status_code))
                 _acc.set_scope("1234567890", "blocked")
                 blk = client.get("/", cookies=_sign_in_as("1234567890"),
                                  follow_redirects=False)
