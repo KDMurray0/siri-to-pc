@@ -1742,6 +1742,42 @@ def _run(verbose: bool = False) -> Result:
                           headers={"X-Music-Key": "nope"}).status_code in (401, 403))
             say("asking by lyric", c)
 
+            # Whisper mishears sung words; a line is timed from the ones it
+            # got right, the rest placed between them, or not at all.
+            c = _Checker("word timing")
+            from .resolve.lyric_alignment import _match_words
+
+            def heard_as(*spans):
+                return [{"token": tok, "t": a, "end": b} for tok, a, b in spans]
+
+            exact, _ = _match_words("I push my fingers", heard_as(
+                ("i", 1.0, 1.2), ("push", 1.2, 1.5), ("my", 1.5, 1.7), ("fingers", 1.7, 2.3)), 0, 1.0, 5.0)
+            c("every word heard: every word timed, ends and all",
+              [w["t"] for w in exact] == [1.0, 1.2, 1.5, 1.7] and all("end" in w for w in exact), str(exact))
+            misheard, _ = _match_words("I have screamed until my veins collapsed", heard_as(
+                ("i", 53.4, 53.5), ("have", 53.5, 53.6), ("streamed", 53.6, 53.9), ("until", 53.9, 54.1),
+                ("my", 54.1, 54.7), ("pains", 54.7, 54.8), ("collapse", 54.8, 55.0)), 0, 53.4, 55.1)
+            c("misheard words still count (streamed, collapse); one too far off (pains) is placed between",
+              len(misheard) == 7 and "end" in misheard[2] and "end" in misheard[6]
+              and "end" not in misheard[5] and misheard[4]["end"] <= misheard[5]["t"] < misheard[6]["t"],
+              str(misheard))
+            gap, _ = _match_words("I've wished for this, I've bitched at that", heard_as(
+                ("ive", 59.9, 60.3), ("wished", 60.3, 60.5), ("for", 60.5, 60.7), ("this", 60.7, 61.1),
+                ("ive", 61.1, 61.2), ("at", 61.3, 61.4), ("that", 61.4, 61.6)), 0, 60.1, 61.7)
+            between = gap[5] if len(gap) == 8 else {}
+            c("an unheard word sits between its neighbours, with no end of its own",
+              len(gap) == 8 and between.get("text", "").strip() == "bitched" and "end" not in between
+              and gap[4]["end"] <= between["t"] < gap[6]["t"], str(gap))
+            c("...and the words keep their punctuation, one per word shown",
+              [w["text"] for w in gap][:4] == ["I've ", "wished ", "for ", "this, "], str([w["text"] for w in gap]))
+            nonsense, at = _match_words("Shapes and colors are all I see", heard_as(
+                ("singing", 72.3, 72.8), ("loud", 72.8, 73.4), ("tonight", 73.4, 74.0)), 0, 72.3, 80.0)
+            c("too little heard: the line stays untimed", nonsense == [] and at == 0, str(nonsense))
+            far, _ = _match_words("Safe and sound", heard_as(
+                ("safe", 90.0, 90.4), ("and", 90.4, 90.5), ("sound", 90.5, 91.0)), 0, 60.0, 66.0)
+            c("words heard elsewhere in the song aren't borrowed", far == [], str(far))
+            say("word timing", c)
+
             # -- 13. shuffle as a standing preference ----------------------
             c = _Checker("shuffle")
             from .requests import _shuffle_wanted

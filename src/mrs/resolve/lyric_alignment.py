@@ -2,13 +2,14 @@
 
 LRCLIB's normal LRC knows line starts, not the words inside each line.  A
 background Whisper transcription supplies audible word spans; lyric-align
-matches those spans back to the known lyric text.  Unmatched or implausible
-lines retain their trustworthy LRC line timing, without a fabricated karaoke
-schedule.  Successful results are cached by recording and transcript.
+matches those spans back to the known lyric text, misheard words and all.  A
+line too little of which was heard keeps its LRC line timing.  Successful
+results are cached by recording and transcript.
 """
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import math
@@ -27,7 +28,7 @@ _lock = threading.Lock()
 _jobs: set[str] = set()
 _failed: set[str] = set()
 _worker_slots = threading.Semaphore(1)
-_CACHE_VERSION = 2  # v1 redistributed characters instead of preserving ASR word spans.
+_CACHE_VERSION = 3  # v2 timed a line only if every word was heard exactly.
 
 
 def _key(track, lines: list[dict]) -> str | None:
@@ -209,14 +210,26 @@ def _audio_words(segments) -> list[dict]:
     return sorted(words, key=lambda w: (w["t"], w["end"]))
 
 
-def _match_words(text: str, audio: list[dict], cursor: int,
-                 anchor: float, end: float | None = None) -> tuple[list[dict], int]:
-    """Match a complete line to consecutive recognized words near its anchor.
+# A line counts as heard when this share of its words is; Whisper mishears
+# sung words often enough ("streamed" for "screamed") that asking for every
+# one left four lines in five to the syllable guess.
+_HEARD = .6
+_NEAR = .62            # spelling likeness for the same word misheard
+_JOIN = .8             # stricter where two words meet one
+_SKIP_LYRIC, _SKIP_AUDIO = -.45, -.35
 
-    Punctuation/case may differ, and an ASR split such as ``I`` + ``'m`` may
-    supply one lyric word. Missing or changed words leave the line untimed;
-    we never allocate sound to words by their length or fill silent gaps.
-    """
+
+def _alike(a: str, b: str) -> float:
+    if a == b:
+        return 1.0
+    if not a or not b:
+        return 0.0
+    r = difflib.SequenceMatcher(None, a, b).ratio()
+    return r if r >= _NEAR else 0.0
+
+
+def _lyric_words(text: str) -> list[tuple[str, str]]:
+    """(token, what's shown) per word, punctuation riding on its word."""
     wanted: list[tuple[str, str]] = []
     prefix = ""
     for match in re.finditer(r"\S+\s*", text):
@@ -226,45 +239,133 @@ def _match_words(text: str, audio: list[dict], cursor: int,
             wanted.append((token, prefix + display))
             prefix = ""
         elif wanted:
-            token_before, text_before = wanted[-1]
-            wanted[-1] = (token_before, text_before + display)
+            wanted[-1] = (wanted[-1][0], wanted[-1][1] + display)
         else:
             prefix += display
+    return wanted
+
+
+def _match_words(text: str, audio: list[dict], cursor: int,
+                 anchor: float, end: float | None = None) -> tuple[list[dict], int]:
+    """Time a line's words from the recognised words near its anchor.
+
+    Lyric and audio words are lined up allowing misheard, missing and extra
+    words, and a word heard as two or two heard as one. Too few heard and the
+    line is left untimed. The misheard ones are placed between the heard
+    words either side of them, by length, and carry no end of their own.
+    """
+    wanted = _lyric_words(text)
     if not wanted:
         return [], cursor
-    candidates = []
-    for first in range(cursor, len(audio)):
-        if audio[first]["t"] < anchor - 1.5:
-            continue
-        if audio[first]["t"] > anchor + 2.2:
-            break
-        pos, matched = first, []
-        for token, display in wanted:
-            beginning, combined = pos, ""
-            while pos < len(audio) and pos < beginning + 3:
-                # Joining fragments of a contraction must not span a breath.
-                if pos > beginning and audio[pos]["t"] - audio[pos - 1]["end"] > .2:
-                    break
-                combined += audio[pos]["token"]
-                pos += 1
-                if combined == token:
-                    matched.append({"text": display, "t": audio[beginning]["t"],
-                                    "end": audio[pos - 1]["end"]})
-                    break
-                if not token.startswith(combined):
-                    break
-            else:
-                break
-            if combined != token:
-                break
-        if (len(matched) == len(wanted) and
-                (end is None or matched[-1]["end"] <= end + .5) and
-                all(a["end"] <= b["t"] + .03 for a, b in zip(matched, matched[1:]))):
-            candidates.append((abs(matched[0]["t"] - anchor), matched, pos))
-    if not candidates:
+    m = len(wanted)
+    stop = (end if end is not None else anchor + 4 + .6 * m) + .5
+    lo = cursor
+    while lo < len(audio) and audio[lo]["t"] < anchor - 1.5:
+        lo += 1
+    hi = lo
+    while hi < len(audio) and audio[hi]["t"] < stop:
+        hi += 1
+    window = audio[lo:hi]
+    n = len(window)
+    if not n:
         return [], cursor
-    _, matched, pos = min(candidates, key=lambda candidate: candidate[0])
-    return matched, pos
+    neg = -1e9
+    # best[i][j]: i lyric words placed using the first j window words. Audio
+    # before the line and after it costs nothing; skips inside it do.
+    best = [[neg] * (n + 1) for _ in range(m + 1)]
+    back: list[list[tuple | None]] = [[None] * (n + 1) for _ in range(m + 1)]
+    for j in range(n + 1):
+        best[0][j] = 0.0
+    for i in range(1, m + 1):
+        token = wanted[i - 1][0]
+        for j in range(n + 1):
+            top, how = neg, None
+            if best[i - 1][j] > neg and best[i - 1][j] + _SKIP_LYRIC > top:
+                top, how = best[i - 1][j] + _SKIP_LYRIC, ("lyric",)
+            if j and best[i][j - 1] > neg and best[i][j - 1] + _SKIP_AUDIO > top:
+                top, how = best[i][j - 1] + _SKIP_AUDIO, ("audio",)
+            if j:
+                s = _alike(token, window[j - 1]["token"])
+                if s and best[i - 1][j - 1] + s > top:
+                    top, how = best[i - 1][j - 1] + s, ("pair", 1)
+            # one word heard as two ("i" + "m"), never across a breath
+            if j >= 2 and window[j - 1]["t"] - window[j - 2]["end"] <= .2:
+                s = _alike(token, window[j - 2]["token"] + window[j - 1]["token"])
+                if s >= _JOIN and best[i - 1][j - 2] + s - .1 > top:
+                    top, how = best[i - 1][j - 2] + s - .1, ("pair", 2)
+            # two heard as one ("gotta" for "got to")
+            if i >= 2 and j:
+                s = _alike(wanted[i - 2][0] + token, window[j - 1]["token"])
+                if s >= _JOIN and best[i - 2][j - 1] + 2 * s - .3 > top:
+                    top, how = best[i - 2][j - 1] + 2 * s - .3, ("both",)
+            best[i][j], back[i][j] = top, how
+    j = max(range(n + 1), key=lambda k: best[m][k])
+    if best[m][j] <= 0:
+        return [], cursor
+    heard: list[tuple[float, float] | None] = [None] * m
+    i = m
+    while i > 0 and back[i][j] is not None:
+        how = back[i][j]
+        if how[0] == "lyric":
+            i -= 1
+        elif how[0] == "audio":
+            j -= 1
+        elif how[0] == "pair":
+            k = how[1]
+            heard[i - 1] = (window[j - k]["t"], window[j - 1]["end"])
+            i, j = i - 1, j - k
+        else:
+            w = window[j - 1]
+            mid = (w["t"] + w["end"]) / 2
+            heard[i - 2], heard[i - 1] = (w["t"], mid), (mid, w["end"])
+            i, j = i - 2, j - 1
+    got = [h for h in heard if h]
+    if len(got) < max(1, math.ceil(_HEARD * m)):
+        return [], cursor
+    first_at = next(k for k, h in enumerate(heard) if h)
+    if not anchor - 1.5 <= got[0][0] <= anchor + 2.2 + .4 * first_at:
+        return [], cursor
+    if end is not None and got[-1][1] > end + .5:
+        return [], cursor
+    if any(a[1] > b[0] + .03 for a, b in zip(got, got[1:])):
+        return [], cursor
+    out: list[dict] = []
+    i = 0
+    while i < m:
+        h = heard[i]
+        if h:
+            out.append({"text": wanted[i][1], "t": round(h[0], 3), "end": round(h[1], 3)})
+            i += 1
+            continue
+        k = i
+        while k < m and not heard[k]:
+            k += 1
+        run = wanted[i:k]
+        before = out[-1]["end"] if out else None
+        nxt = heard[k][0] if k < m else None
+        if before is None:
+            # leading: into the first heard word at a singable pace
+            a, b = nxt - min(.3 * len(run), max(.12, nxt - anchor)), nxt
+        elif nxt is None:
+            # trailing: after the last heard word, short of the next line
+            a, b = before, min(before + .32 * len(run), end - .05 if end is not None else math.inf)
+            if b <= a:
+                b = a + .08 * len(run)
+        else:
+            a, b = before, max(nxt, before + .04 * len(run))
+        weights = [len(token) + 1.5 for token, _ in run]
+        total, acc = sum(weights), 0.0
+        for (_, display), weight in zip(run, weights):
+            out.append({"text": display, "t": round(a + (b - a) * acc / total, 3)})
+            acc += weight
+        i = k
+    if any(b["t"] <= a["t"] for a, b in zip(out, out[1:])):
+        return [], cursor
+    used = got[-1][1]
+    pos = lo
+    while pos < len(audio) and audio[pos]["t"] < used - 1e-6:
+        pos += 1
+    return out, pos
 
 
 def _align(key: str, path: str, lines: list[dict], plain: bool = False) -> None:
