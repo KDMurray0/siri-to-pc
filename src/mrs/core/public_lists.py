@@ -141,8 +141,7 @@ def for_listener(genres: list[str], me: str, limit: int = 16) -> list[dict]:
 
     mine = [r for r in catalogue() if r["owner"] != me]
     mine.sort(key=lambda r: (-score(r), -r["at"]))
-    return [{k: v for k, v in r.items() if not k.startswith("_")} | {"fit": round(score(r), 3)}
-            for r in mine[:limit]]
+    return [describe(r) | {"fit": round(score(r), 3)} for r in mine[:limit]]
 
 
 def suggest_tags(store, name: str) -> list[str]:
@@ -163,5 +162,6 @@ def suggest_tags(store, name: str) -> list[str]:
 
 
 def describe(row: dict) -> dict:
-    return {k: v for k, v in row.items() if not k.startswith("_")}
+    """What a listener may see: never whose library it's in, only the name they gave."""
+    return {k: v for k, v in row.items() if not k.startswith("_") and k != "owner"}
 

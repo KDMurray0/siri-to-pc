@@ -358,6 +358,8 @@ div.qi::after{content:"";position:absolute;inset:24%;opacity:.4;
 .navtab.on::after{content:"";position:absolute;left:22%;right:22%;bottom:-9px;
   height:2px;background:var(--accent);border-radius:2px}
 .navgear{flex:0 0 34px}
+#sidehide{display:none}
+@media (min-width:900px) and (min-height:520px){ body:not(.mini) #sidehide{display:block} }
 .panel{display:none;margin-top:8px;overflow-y:auto;overflow-x:hidden;flex:1;position:relative}
 .panel.open{display:block}
 .muted{color:var(--sub);font-size:12px;text-align:center;padding:18px 8px}
@@ -375,8 +377,15 @@ div.qi::after{content:"";position:absolute;inset:24%;opacity:.4;
 .q:hover .why{opacity:.75}
 .q.cur .qn{color:var(--accent)}
 .qctl{display:flex;gap:2px;opacity:0;transition:opacity .15s}
-/* The whole row is the handle: press and move, no dots to aim for. */
+/* The whole row is the handle: press and move, no dots to aim for. A finger
+   gets the dots back -- anywhere else on the row, moving it is a scroll. */
 .q{cursor:grab}
+.grip{display:none}
+@media (pointer:coarse){
+  .grip{display:grid;grid-template-columns:1fr 1fr;gap:2px;padding:6px 4px;touch-action:none;opacity:.55;align-content:center;flex:0 0 auto}
+  .grip i{width:3px;height:3px;border-radius:50%;background:var(--sub);display:block}
+  .qctl{opacity:1}          /* no hover on a phone: the remove and the dots are just there */
+}
 .q.dragging{opacity:.9;background:color-mix(in srgb,var(--accent) 16%,var(--panel));
   box-shadow:0 8px 20px rgba(0,0,0,.45);cursor:grabbing;position:relative;z-index:5}
 /* carried out of the list in the full player: the page around it has it now */
@@ -3602,6 +3611,7 @@ function qRow(t) {
     `<div class="qa">${esc(t.artist||"")}${why}</div></div>${eq}` +
     `<div class="qctl">` +
       `<button class="qc danger" data-act="del" data-i="${t.index}" title="Remove">✕</button>` +
+      `<span class="grip" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>` +
     `</div></div>`;
 }
 let dragging = () => false;   // replaced once the queue drag is wired
@@ -3637,6 +3647,7 @@ function enableDrag(box, rowSel, onDrop) {
     const row = e.target.closest(rowSel);
     if (!row) return;
     press = { row, x: e.clientX, y: e.clientY, id: e.pointerId, touch: e.pointerType === "touch" };
+    if (press.touch && e.target.closest(".grip")) { e.preventDefault(); begin(press); return; }
     if (press.touch) { const p = press; p.hold = setTimeout(() => { if (press === p) begin(p); }, 320); }
   });
   box.addEventListener("pointermove", e => {
@@ -3740,7 +3751,7 @@ $("panel-queue").addEventListener("click", e => {
       api("/api/queue/remove?index=" + i).then(() => toast("Removed — press Z to undo"));
     return;
   }
-  if (Date.now() - justDragged < 250) return;
+  if (e.target.closest(".grip") || Date.now() - justDragged < 250) return;
   const row = e.target.closest(".q");
   if (row) api("/api/queue/jump?index=" + row.dataset.idx);
 });
@@ -3868,11 +3879,13 @@ function wordTimings(s, idx, row) {
   const next = nextLine ?? (state.duration > 0 ? state.duration : Infinity);
   const timings = line.words.map((w, i) => {
     const from = w.t;
-    // Held until the next word starts: a held note is this word, not a gap.
-    // The last word rings on to its own end, or a little past it.
+    // Its own measured end, never past the next word's start; with none
+    // measured, it lasts until the next word starts (a held note is this
+    // word, not a gap), and the last one rings on a little.
     const after = line.words[i + 1]?.t;
-    const end = Number.isFinite(after) ? Math.max(after, from + .08)
-              : (w.end ?? Math.min(from + HOLD_MAX, next));
+    const end = Number.isFinite(w.end) ? Math.min(w.end, Number.isFinite(after) ? after : Infinity)
+              : Number.isFinite(after) ? Math.max(after, from + .08)
+              : Math.min(from + HOLD_MAX, next);
     if (!Number.isFinite(from) || from < 0 || !Number.isFinite(end) || end <= from) return null;
     const to = next > from ? Math.min(next, end) : end;
     return {from, to};

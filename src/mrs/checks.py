@@ -567,7 +567,7 @@ def _run(verbose: bool = False) -> Result:
             from .core import builder as _b7
             calls7 = []
 
-            def _stretch7(what, n, clue="", brief=None, have=None, carry=False):
+            def _stretch7(what, n, clue="", brief=None, have=None, carry=False, focus=None):
                 calls7.append((n, carry, len(have or [])))
                 if len(calls7) == 3:
                     raise _b7.GroqBusy(30)
@@ -578,8 +578,15 @@ def _run(verbose: bool = False) -> Result:
                 run7 = _b7._groq_song_run("late night grunge", 240, "", None, [], None)
             c("each stretch carries on from the last", [x[1] for x in calls7] == [False, True, True], str(calls7))
             c("...told what's already there, so nothing comes twice",
-              calls7[1][2] >= 90 and len(run7) == len(set(run7)), str(calls7))
-            c("a busy Groq part-way just ends the run with what it has", len(run7) == 180, str(len(run7)))
+              calls7[1][2] >= 50 and len(run7) == len(set(run7)), str(calls7))
+            c("a busy Groq part-way just ends the run with what it has", len(run7) == 100, str(len(run7)))
+            brief7 = _cur7.Brief(artists=["Soundgarden"], note="Moody, heavy grunge.")
+            kept7 = _b7._with_brief([{"kind": "artist", "name": "moody"}, {"kind": "artist", "name": "heavy"},
+                                     {"kind": "artist", "name": "soundgarden"}], brief7, "moody and heavy soundgarden")
+            c("\"moody and heavy\" is a mood, not two bands", [a["name"] for a in kept7] == ["soundgarden"],
+              str([a["name"] for a in kept7]))
+            c("...but a planner that said nothing leaves the local reading alone",
+              len(_b7._with_brief([{"kind": "artist", "name": "Korn"}], _cur7.Brief(), "korn")) == 1)
             say("long picks", c)
 
             # -- 7g. the library keeps albums, artists, an order and pins ----
@@ -629,6 +636,7 @@ def _run(verbose: bool = False) -> Result:
             shown7 = _pub7.for_listener(["grunge", "alternative rock"], "owner")
             names7 = [r["name"] for r in shown7]
             c("your own public lists aren't suggested back to you", "Owner grunge 7h" not in names7, str(names7))
+            c("...and nobody is told whose library a list is in", all("owner" not in r for r in shown7))
             c("the one that suits what you play comes first", names7[:2] == ["Their grunge 7h", "Their jazz 7h"], str(names7))
             c("...and it can be opened and played from", _pub7.tracks(_pub7.find(shown7[0]["id"]))[0].title == "Song")
             c("its library says it's public", next(r for r in theirs7.summary() if r["name"] == "Their jazz 7h")["public"] == ["jazz"])

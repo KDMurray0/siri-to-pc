@@ -205,15 +205,39 @@ _PICK = (
     "artist twice in a row. No song twice.")
 
 
+def roster(brief: Brief, n: int) -> list[str]:
+    """A wide cast for a long list, the heart of the sound first and then the
+    many others that fit. The planner: the worker names the same eight bands
+    whatever it's asked."""
+    got = _ask(_PICK + " Name artists, not songs: a wide roster, the heart of the sound "
+               "first, then the many others that fit, well-known and less so. "
+               'Format: {"artists":[""]}',
+               f"{brief.describe()} {min(80, max(8, n))} artists.", prefer=PLANNER) or {}
+    out, seen = [], set()
+    for name in got.get("artists") or []:
+        name = re.sub(r"\s+", " ", str(name).replace("\xa0", " ")).strip()[:120]
+        key = re.sub(r"[^a-z0-9]", "", name.casefold().removeprefix("the "))
+        if name and key and key not in seen:
+            seen.add(key)
+            out.append(name)
+    return out
+
+
 def songs(brief: Brief, n: int, *, have: list[tuple[str, str]] | None = None,
-          carry: bool = False) -> list[tuple[str, str]]:
+          carry: bool = False, focus: list[str] | None = None) -> list[tuple[str, str]]:
     """(artist, title) pairs that fit the brief, in playing order. `carry`: the
     list so far is `have`, and these are the next stretch of it."""
     have = have or []
     taken = (" Already in the list, don't repeat: "
              + "; ".join(f"{t} by {a}" for a, t in have[-40:]) + ".") if have else ""
     if carry and have:
-        taken += " Carry on from the last of those, keeping the flow."
+        from collections import Counter
+        used = ", ".join(f"{a} {n}" for a, n in Counter(a for a, _ in have).most_common(12))
+        taken += (f" Songs per artist so far: {used}. Carry on from the last of those, keeping "
+                  "the flow, leaning on fitting artists used less so far.")
+    if focus:
+        taken += (" This stretch is songs by " + ", ".join(focus) + " -- one to four each, "
+                  "as many as truly fit, none that don't.")
     user = f"{brief.describe()}{taken} {min(90, max(1, n))} songs."
     got = _ask(_PICK + ' Format: {"songs":[{"artist":"","title":""}]}', user,
                prefer=WORKER) or {}
@@ -224,11 +248,14 @@ def songs(brief: Brief, n: int, *, have: list[tuple[str, str]] | None = None,
     return out
 
 
-def artists(brief: Brief, n: int) -> list[str]:
-    """Artists that fit the brief, best known first: for lists too long to name
-    every song."""
-    got = _ask(_PICK + ' Name artists, not songs. Format: {"artists":[""]}',
-               f"{brief.describe()} {min(120, max(4, n))} artists.", prefer=WORKER) or {}
+def artists(brief: Brief, n: int, *, used: list[str] | None = None) -> list[str]:
+    """Artists that fit the brief, the best fit first: for lists too long to
+    name every song. `used`: already well represented, so others are wanted."""
+    have = list(dict.fromkeys(used or []))[:30]
+    taken = (" Already well represented: " + ", ".join(have) +
+             ". Name other artists that fit too.") if have else ""
+    got = _ask(_PICK + ' Name artists, not songs, the best fit first. Format: {"artists":[""]}',
+               f"{brief.describe()}{taken} {min(120, max(4, n))} artists.", prefer=WORKER) or {}
     return _strings(got.get("artists"), 120, 120)
 
 

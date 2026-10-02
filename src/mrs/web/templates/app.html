@@ -1005,7 +1005,7 @@ function closeOverlay() {
   o.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160 }).onfinish = () => o.remove();
   setTimeout(() => o.remove(), 220);
 }
-function openSheet(build) {
+function openSheet(build, { live = false } = {}) {
   closeOverlay();
   const scrim = document.createElement("div");
   scrim.className = "scrim";
@@ -1015,7 +1015,7 @@ function openSheet(build) {
   overlay = scrim;
   const root = scrim.querySelector(".scroll");
   build(root, false);
-  scrim.rebuild = async () => {
+  if (live) scrim.rebuild = async () => {
     const y = root.scrollTop, q = (root.querySelector(".infind input") || {}).value || "";
     await build(root, true);
     root.scrollTop = y;
@@ -1056,7 +1056,7 @@ function openList(p) {
     const people = [...new Set(tracks.map(t => (t.artist || "").split(",")[0].trim()).filter(Boolean))].slice(0, 14)
       .map(name => ({ name, art: (tracks.find(t => (t.artist || "").startsWith(name)) || {}).art || "" }));
     if (people.length > 1) { root.insertAdjacentHTML("beforeend", part(2, "Who's on it", faceRow(people))); wireCards(root, { artists: people }); }
-  });
+  }, { live: true });
   if (overlay) overlay.dataset.list = p.name;
 }
 function pickCover(p) {
@@ -1094,7 +1094,7 @@ function openLiked() {
     wireSelect(root, tracks, { kind: "liked" });
     wireFind(root, tracks);
     paintPlayButtons();
-  });
+  }, { live: true });
 }
 function openArtist(name) {
   openSheet(async root => {

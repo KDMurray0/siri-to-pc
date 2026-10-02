@@ -305,11 +305,13 @@ def _brief_or_request(brief, what: str, context: str = ""):
 
 
 def _groq_songs(what: str, n: int, context: str = "", brief=None,
-                have: list[tuple[str, str]] | None = None, carry: bool = False) -> list[tuple[str, str]]:
+                have: list[tuple[str, str]] | None = None, carry: bool = False,
+                focus: list[str] | None = None) -> list[tuple[str, str]]:
     """The worker's songs for the brief, in the order it would play them."""
     from . import curator
     try:
-        return curator.songs(_brief_or_request(brief, what, context), n, have=have, carry=carry)
+        return curator.songs(_brief_or_request(brief, what, context), n, have=have, carry=carry,
+                             focus=focus)
     except curator.Busy as busy:
         raise GroqBusy(busy.wait) from None
 
@@ -319,17 +321,25 @@ def _groq_songs(what: str, n: int, context: str = "", brief=None,
 SONG_PICK_MAX = 360
 
 
-def _groq_song_run(what: str, n: int, clue: str, brief, first: list[Track], progress) -> list[tuple[str, str]]:
-    """A long list picked as songs, not dealt out band by band: the worker
-    names the next stretch each time, carrying on from where it left off. A
-    busy Groq after the first stretch just ends the run early."""
+def _groq_song_run(what: str, n: int, clue: str, brief, first: list[Track], progress,
+                   cast: list[str] | None = None) -> list[tuple[str, str]]:
+    """A long list picked as songs, not dealt out band by band. With a cast,
+    each stretch is songs by the next handful of it, as many as fit; without
+    one, the worker carries on from where it left off. The stretches are then
+    spread through each other, so no part of the list is one handful's. A busy
+    Groq after the first stretch just ends the run early."""
     asks: list[tuple[str, str]] = []
+    lanes: list[list[tuple[str, str]]] = []
     seen: set[tuple[str, str]] = set()
-    while len(asks) < n:
-        want = min(90, n - len(asks))
+    groups = [cast[i:i + 8] for i in range(0, len(cast), 8)] if cast else []
+    thin = rounds = 0
+    while len(asks) < n and rounds < max(6, len(groups)):
+        focus = groups[rounds] if rounds < len(groups) else None
+        rounds += 1
+        want = min(40 if focus else 50, n - len(asks))
         have = [(t.artist, t.title) for t in first] + asks
         try:
-            got = _groq_songs(what, want, clue, brief, have=have, carry=bool(asks))
+            got = _groq_songs(what, want, clue, brief, have=have, carry=bool(asks), focus=focus)
         except GroqBusy:
             if not asks:
                 raise
@@ -340,19 +350,25 @@ def _groq_song_run(what: str, n: int, clue: str, brief, first: list[Track], prog
             if k not in seen:
                 seen.add(k)
                 fresh.append((a, t))
-        if len(fresh) < max(3, want // 6):
-            asks += fresh
-            break
         asks += fresh
+        if fresh:
+            lanes.append(fresh)
+        thin = thin + 1 if len(fresh) < max(3, want // 5) else 0
+        if thin >= 2 and rounds >= len(groups):
+            break
         if progress:
             progress(f"Picked {len(asks)} songs so far")
-    return asks
+    # Each stretch spread across the whole list, in its own running order.
+    placed = [((j + .5) / len(lane), k, song) for k, lane in enumerate(lanes)
+              for j, song in enumerate(lane)]
+    return [song for *_, song in sorted(placed)]
 
 
-def _groq_artists(what: str, n: int, context: str = "", brief=None) -> list[str]:
+def _groq_artists(what: str, n: int, context: str = "", brief=None,
+                  used: list[str] | None = None) -> list[str]:
     from . import curator
     try:
-        return curator.artists(_brief_or_request(brief, what, context), n)
+        return curator.artists(_brief_or_request(brief, what, context), n, used=used)
     except curator.Busy as busy:
         raise GroqBusy(busy.wait) from None
 
@@ -517,7 +533,7 @@ def _covers(bands: list[list[Track]]) -> set[str]:
 
 
 def _fill(names: list[str], songs: int, taste, core: list[str], progress=None,
-          label: str = "bands") -> tuple[list[Track], list[Track]]:
+          label: str = "bands", taper: bool = False) -> tuple[list[Track], list[Track]]:
     """(fitting, held back) for a set of bands.
 
     Each band's best-known songs that sound like the rest of the list, dealt
@@ -559,6 +575,22 @@ def _fill(names: list[str], songs: int, taste, core: list[str], progress=None,
         held += [t for t, m in zip(ranked, marks) if not m]
         if good:
             lanes.append(good)
+    if taper and len(lanes) > 1:
+        # Bands nobody named come best fit first: the first gets the most and
+        # the rest taper off, rather than every band an equal ration -- which
+        # is what made a long list read as band, band, band, in turn.
+        weights = [1 / (i + 1.5) ** .5 for i in range(len(lanes))]
+        whole = songs * 1.1
+        cap = max(2, round(songs * .05))
+        quota = [min(cap, max(1, round(whole * w / sum(weights)))) for w in weights]
+        chosen = [lane[:q] for lane, q in zip(lanes, quota)]
+        short = songs - sum(len(c) for c in chosen)
+        while short > 0 and any(len(l) > len(c) for l, c in zip(lanes, chosen)):
+            for i, lane in enumerate(lanes):
+                if short > 0 and len(lane) > len(chosen[i]):
+                    chosen[i] = lane[:len(chosen[i]) + 1]
+                    short -= 1
+        return _weave(chosen, seed=",".join(names)), held
     take = per
     while take < songs and sum(min(len(lane), take) for lane in lanes) < songs \
             and any(len(lane) > take for lane in lanes):
@@ -661,11 +693,18 @@ def _fits(what: str, anchors: list[dict], songs: int, taste, progress,
         if room <= SONG_PICK_MAX:
             if progress:
                 progress("Asking Groq for songs that fit")
-            if room <= 80:
+            if room <= 40:
                 asks = _groq_songs(what, round(room * 1.3), clue, brief,
                                    have=[(t.artist, t.title) for t in first])
             else:
-                asks = _groq_song_run(what, round(room * 1.2), clue, brief, first, progress)
+                from . import curator
+                try:
+                    cast = curator.roster(_brief_or_request(brief, what, clue), max(24, room // 3))
+                except curator.Busy:
+                    cast = []
+                asks = _groq_song_run(what, round(room * 1.2), clue, brief, first, progress, cast=cast)
+                # Short of songs: the rest from the cast's own songs, best fit first.
+                artists = cast
             if progress:
                 progress(f"Checking {len(asks)} songs")
             with ThreadPoolExecutor(max_workers=6) as pool:
@@ -695,10 +734,16 @@ def _fits(what: str, anchors: list[dict], songs: int, taste, progress,
         rest = _blend(rest, got)
         held += off
     if len(first) + len(rest) < songs:
-        more = [a for a in artists if a.casefold() not in {n.casefold() for n in named}]
-        more = more or _kin_bands(named, core, max(8, (songs - len(first) - len(rest)) // 3))
+        # The top-up goes to the cast the picks used least: a band already
+        # four songs in has had its say.
+        heard = Counter(t.primary_artist() for t in first + rest)
+        more = [a for a in artists if a.casefold() not in {n.casefold() for n in named}
+                and heard[Track(title="", artist=a).primary_artist()] < 4]
+        # With nobody named, the bands the picks themselves lean on.
+        seeds = named or list(dict.fromkeys(t.artist.split(",")[0].strip() for t in rest if t.artist))[:8]
+        more = more or _kin_bands(seeds, core, max(8, (songs - len(first) - len(rest)) // 3))
         got, off = _fill(more, songs - len(first) - len(rest), taste, core, progress,
-                         label="more bands")
+                         label="more bands", taper=True)
         rest = _blend(rest, got)
         held += off
     if len(first) + len(rest) < songs:
@@ -727,7 +772,11 @@ def build(what: str, *, songs: int = 0, minutes: int = 0, taste=None,
     if llm.available():
         if progress:
             progress("Reading what you asked for")
-        hint = _listener_context(taste) + LEANS.get(lean, "")
+        # Their taste only when it's asked for: handed in every time, the
+        # planner built every list around their top artists, one each in turn.
+        personal = lean == "mine" or re.search(
+            r"\b(?:my|me|mine|i|i've|i'm|i'd|liked|favou?rites?)\b", what, re.I)
+        hint = (_listener_context(taste) if personal else "") + LEANS.get(lean, "")
         if context:
             hint += " Adding to a list with: " + "; ".join(
                 f"{t.title} by {t.artist}" for t in context[:15])[:500]
@@ -779,9 +828,14 @@ def build(what: str, *, songs: int = 0, minutes: int = 0, taste=None,
 
 
 def _with_brief(anchors: list[dict], brief, what: str) -> list[dict]:
-    """The local reading plus what the planner adds -- never minus. A song or
-    band the request doesn't actually mention is left out."""
-    out = list(anchors)
+    """The local reading plus what the planner adds. A song or band the request
+    doesn't actually mention is left out -- and so is a "band" the planner
+    didn't read as one: "moody and heavy" is a mood, not two acts."""
+    said = {n.casefold() for n in brief.artists} | {a.casefold() for a, _ in brief.literal}
+    # Only when the planner actually read it: an empty brief is a planner
+    # that said nothing, and then the local reading stands.
+    read = bool(brief.describe() or brief.artists or brief.literal)
+    out = [a for a in anchors if a["kind"] != "artist" or not read or a["name"].casefold() in said]
     songs = {(a.get("artist", "").casefold(), a["name"].casefold())
              for a in out if a["kind"] == "song"}
     for artist, title in brief.literal:
@@ -988,12 +1042,14 @@ def start_change(name: str, what: str, *, store, taste=None, job_id: str = "") -
     def work() -> None:
         try:
             got = change(name, what, store=store, taste=taste, progress=note)
+            # What happened, not what the planner meant to happen: it can say
+            # "removed the slow songs" and then find none to remove.
             bits = []
             if got["dropped"]:
-                bits.append(f"took out {got['dropped']}")
+                bits.append(f"took out {got['dropped']} song{'s' if got['dropped'] != 1 else ''}")
             if got["added"]:
                 bits.append(f"added {got['added']}")
-            detail = (got.get("summary") or "Changed it") + (f" ({' and '.join(bits)})" if bits else "")
+            detail = (" and ".join(bits) or "nothing needed changing").capitalize()
             with _lock:
                 _jobs[job].update(state="done", count=got["added"], dropped=got["dropped"],
                                   gone=got.get("gone", []), undo=bool(bits), detail=detail)
